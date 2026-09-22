@@ -1,0 +1,29 @@
+/*
+** mme.rc - Windows resources: the program icon and version details.
+** The icon is mme.ico. Keep the version the same as MME_VERSION in mme.h.
+*/
+
+1 ICON "mme.ico"
+
+1 VERSIONINFO
+FILEVERSION 0,7,0,0
+PRODUCTVERSION 0,7,0,0
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Marjon Mangindo Cajocon"
+      VALUE "FileDescription", "mme - VS Code for the terminal"
+      VALUE "FileVersion", "0.7.0"
+      VALUE "InternalName", "mme"
+      VALUE "OriginalFilename", "mme.exe"
+      VALUE "ProductName", "mme"
+      VALUE "ProductVersion", "0.7.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0409, 0x04B0
+  END
+END

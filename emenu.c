@@ -1,0 +1,1214 @@
+/*
+** emenu.c - VS Code's chrome: the menu bar and its menus, the quick
+** input box (QuickPick) that pickers and questions use, the modal dialog,
+** and the notification in the corner
+**
+** Each of them runs its own little key loop: ui_background draws the
+** window under it, then it draws itself on top and waits for a key.
+*/
+
+#include "mme.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+
+void (*ui_background) (void);
+char ui_title[512];
+
+
+/*
+** {==================================================================
+** Commands
+** ===================================================================
+*/
+
+static const char *const names[CMD_N] = {
+  "", "New File", "Open File...", "Open Folder...", "Open Project...",
+  "Save", "Save As...", "Close Editor", "Exit",
+  "Undo", "Redo", "Cut", "Copy", "Paste", "Find",
+  "Find in Files", "Select All", "Move Line Up", "Move Line Down",
+  "Explorer", "Search", "Source Control", "Toggle Primary Side Bar",
+  "Go to Line/Column...", "Next Change", "Previous Change", "Go to File...",
+  "Command Palette...", "About", "Toggle Terminal", "Kill Terminal", "Toggle Minimap",
+  "Add Cursor Above", "Add Cursor Below", "Add Next Occurrence", "Select All Occurrences",
+  "Settings", "New Terminal", "Split Editor", "Focus First Editor Group",
+  "Focus Second Editor Group",
+  "Go to Definition", "Trigger Suggest", "Next Problem", "Previous Problem",
+  "Rename Symbol", "Quick Fix...", "Show Hover", "Problems", "Color Theme", "Zen Mode",
+  "Word Wrap", "Replace", "Fold", "Unfold", "Fold All", "Unfold All", "Keyboard Shortcuts",
+  "Toggle Line Comment", "Toggle Block Comment", "Copy Line Up", "Copy Line Down", "Delete Line",
+  "Expand Line Selection", "Go Back", "Go Forward", "Go to Symbol in Editor...", "Format Document",
+  "Insert Snippet...", "Insert Line Below", "Insert Line Above", "Indent Line", "Outdent Line",
+  "Configure Snippets", "Extensions", "Install from VSIX...",
+  "Git: Checkout to...", "Git: Create Branch...", "Git: Create Branch From...", "Git: Delete Branch...",
+  "Git: Rename Branch...", "Git: Merge...", "Git: Pull", "Git: Push", "Git: Fetch", "Git: Sync",
+  "Git: Stash", "Git: Pop Latest Stash", "Git: Apply Stash...", "Git: Undo Last Commit", "Git: Commit",
+  "Git: Commit Staged (Amend)", "Git: View File History", "Git: Toggle Git Blame Editor Decoration",
+  "Git: Refresh", "Toggle Inline View", "Source Control: More Actions...",
+  "Go to References", "Go to Implementations", "Go to Type Definition", "Peek Definition",
+  "Go to Symbol in Workspace...", "Transform to Uppercase", "Transform to Lowercase",
+  "Transform to Title Case", "Sort Lines Ascending", "Sort Lines Descending", "Join Lines",
+  "Trim Trailing Whitespace", "Delete Duplicate Lines", "Duplicate Selection", "Go to Bracket",
+  "Select to Bracket", "Trigger Parameter Hints", "Reopen Closed Editor", "Change Language Mode",
+  "Change End of Line Sequence", "Change Indentation...", "Indent Using Spaces", "Indent Using Tabs",
+  "Convert Indentation to Spaces", "Convert Indentation to Tabs", "Detect Indentation from Content",
+  "Toggle Render Whitespace", "Toggle Sticky Scroll", "Column Selection Mode",
+  "Preferences: Open User Settings (JSON)", "Welcome", "Notifications: Show Notifications",
+  "Explorer: New File...", "Explorer: New Folder...", "Explorer: Refresh", "Explorer: Collapse Folders",
+  "Copy Path of Active File", "Copy Relative Path of Active File", "Reveal in File Explorer",
+  "Open in Integrated Terminal",
+  "Run and Debug", "Start Debugging", "Run Without Debugging", "Stop Debugging", "Restart Debugging",
+  "Step Over", "Step Into", "Step Out", "Pause", "Toggle Breakpoint", "Debug Console",
+  "Open Configurations", "Select and Start Debugging", "Run Task...", "Run Build Task...", "Configure Tasks",
+  "Terminal: Split Terminal", "Terminal: Focus Previous Terminal in Terminal Group",
+  "Terminal: Focus Next Terminal in Terminal Group", "Terminal: Find", "Terminal: Clear",
+  "Terminal: Rename...", "Terminal: Select Default Profile", "Terminal: Create New Terminal (With Profile)",
+  "View: Toggle Output", "Output: Show Output Channels...", "Output: Clear Output",
+  "View: Toggle Maximized Panel",
+  "Replace in Files", "View: Close Other Editors in Group", "View: Close Editors to the Right in Group",
+  "View: Close Saved Editors in Group", "View: Close All Editors in Group", "View: Close All Editors",
+  "View: Pin Editor", "View: Unpin Editor", "View: Keep Editor",
+  "File: Reveal Active File in Explorer View", "View: Quick Open Previous Recently Used Editor in Group",
+  "View: Show All Editors By Most Recently Used", "Local History: Find Entry to Restore...",
+  "Markdown: Open Preview", "Markdown: Open Preview to the Side", "Explorer: Focus on Open Editors View",
+  "Explorer: Focus on Timeline View", "Local History: Compare with File", "Focus and Select Breadcrumbs",
+  "Auto Save", "File: Compare Active File with Saved", "File: Compare Active File With...",
+  "File: Compare Active File with Clipboard", "Select for Compare", "Compare with Selected",
+  "Change File Encoding", "File: Revert File", "View: Toggle Primary Side Bar Position",
+  "Type", "Terminal: Send Custom Sequence to Terminal", "Preferences: Import VS Code Settings",
+  "Open Workspace from File...", "Add Folder to Workspace...", "Save Workspace As...", "Close Workspace",
+  "View: Split Editor Down", "View: Split Editor Left", "View: Split Editor Up",
+  "View: Focus Third Editor Group", "View: Focus Fourth Editor Group", "View: Focus Left Editor Group",
+  "View: Focus Right Editor Group", "View: Focus Editor Group Above", "View: Focus Editor Group Below",
+  "View: Move Editor into Next Group", "View: Move Editor into Previous Group",
+  "View: Join Editor Group with Next Group", "View: Join All Editor Groups", "View: Toggle Editor Group Sizes",
+  "View: Reset Editor Group Sizes", "View: Single Column Editor Layout", "View: Two Columns Editor Layout",
+  "View: Three Columns Editor Layout", "View: Two Rows Editor Layout", "View: Grid Editor Layout (2x2)",
+  "View: Toggle Centered Layout", "View: Toggle Menu Bar", "View: Toggle Status Bar Visibility",
+  "View: Toggle Activity Bar Visibility", "Editor Layout...", "Appearance...",
+  "Format Selection", "Organize Imports", "Source Action...", "Expand Selection", "Shrink Selection",
+  "Fold All Regions", "Unfold All Regions", "Fold All Block Comments", "Fold Level 1", "Fold Level 2",
+  "Fold Level 3", "Fold Level 4", "Fold Level 5", "Fold Level 6", "Fold Level 7",
+  "Show Call Hierarchy", "Show Outgoing Calls", "Show Supertypes", "Show Subtypes",
+  "Show Next Change", "Show Previous Change", "Go to Next Change", "Go to Previous Change",
+  "Git: Stage Change", "Git: Revert Change", "Git: Stage Selected Ranges", "Git: Unstage Selected Ranges",
+  "Git: Revert Selected Ranges", "Merge Conflict: Accept Current", "Merge Conflict: Accept Incoming",
+  "Merge Conflict: Accept Both", "Merge Conflict: Accept All Current", "Merge Conflict: Accept All Incoming",
+  "Merge Conflict: Accept All Both", "Merge Conflict: Next Conflict", "Merge Conflict: Previous Conflict",
+  "Merge Conflict: Compare Current Conflict", "Git: Clone", "Git: Initialize Repository", "Git: Publish Branch",
+  "Testing: Focus on Test Explorer View", "Test: Run All Tests", "Test: Run Test at Cursor",
+  "Test: Run Tests in Current File", "Test: Rerun Last Run", "Test: Debug Test at Cursor",
+  "Test: Refresh Tests", "Test: Show Output", "Test: Cancel Test Run", "Test: Collapse All Tests",
+  "Problems: Focus Filter", "Problems: Collapse All", "Problems: Toggle Show Active File Only",
+  "Problems: Copy Message", "Outline: Toggle Follow Cursor", "Outline: Sort By...", "Outline: Collapse All",
+  "Debug: Add Conditional Breakpoint...", "Debug: Add Logpoint...", "Debug: Edit Breakpoint",
+  "Debug: Enable or Disable Breakpoint", "Debug: Remove All Breakpoints", "Debug: Enable All Breakpoints",
+  "Debug: Disable All Breakpoints", "Debug: Run to Cursor", "Debug: Jump to Cursor", "Debug: Add to Watch",
+  "Add Cursors to Line Ends", "Cursor Undo", "Cursor Redo", "Move Last Selection to Next Find Match",
+  "Change All Occurrences", "Select All Occurrences of Find Match", "Reindent Lines", "Reindent Selected Lines",
+  "Delete All Left", "Delete All Right", "Transpose Characters around the Cursor", "Cursor Word Part Left",
+  "Cursor Word Part Right", "Delete Word Part Left", "Delete Word Part Right", "Toggle Tab Key Moves Focus",
+  "Add Line Comment", "Remove Line Comment", "Scroll Page Up", "Scroll Page Down",
+  "Terminal: Run Selected Text In Active Terminal", "Terminal: Run Active File In Active Terminal",
+  "Terminal: Focus Terminal", "Terminal: Scroll To Previous Command", "Terminal: Scroll To Next Command",
+  "Terminal: Select All", "Terminal: Copy Selection", "Terminal: Paste into Active Terminal",
+  "Terminal: Run Recent Command...", "Terminal: Go to Recent Directory...", "Terminal: Change Color...",
+  "Terminal: Change Icon...", "Developer: Inspect Editor Tokens and Scopes",
+  "Explorer: Open to the Side", "Find in Folder..."
+};
+
+static const char *const keys[CMD_N] = {
+  "", "Ctrl+N", "Ctrl+O", "", "Ctrl+R",
+  "Ctrl+S", "Ctrl+Shift+S", "Ctrl+W", "Ctrl+Q",
+  "Ctrl+Z", "Ctrl+Y", "Ctrl+X", "Ctrl+C", "Ctrl+V", "Ctrl+F",
+  "Ctrl+Shift+F", "Ctrl+A", "Alt+Up", "Alt+Down",
+  "Ctrl+Shift+E", "Ctrl+Shift+F", "Ctrl+Shift+G", "Ctrl+B",
+  "Ctrl+G", "F7", "Shift+F7", "Ctrl+P",
+  "Ctrl+Shift+P", "", "Ctrl+`", "", "",
+  "Ctrl+Alt+Up", "Ctrl+Alt+Down", "Ctrl+D", "Ctrl+Shift+L",
+  "Ctrl+,", "Ctrl+Shift+`", "Ctrl+\\", "Ctrl+1", "Ctrl+2",
+  "F12", "Ctrl+Space", "F8", "Shift+F8",
+  "F2", "Ctrl+.", "Ctrl+K Ctrl+I", "Ctrl+Shift+M", "Ctrl+K Ctrl+T", "Ctrl+K Z",
+  "Alt+Z", "Ctrl+H", "Ctrl+Shift+[", "Ctrl+Shift+]", "Ctrl+K Ctrl+0", "Ctrl+K Ctrl+J",
+  "Ctrl+K Ctrl+S",
+  "Ctrl+/", "Shift+Alt+A", "Shift+Alt+Up", "Shift+Alt+Down", "Ctrl+Shift+K",
+  "Ctrl+L", "Alt+Left", "Alt+Right", "Ctrl+Shift+O", "Shift+Alt+F",
+  "", "Ctrl+Enter", "Ctrl+Shift+Enter", "Ctrl+]", "Ctrl+[",
+  "", "Ctrl+Shift+X", "",
+  "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+  "Shift+F12", "Ctrl+F12", "", "Alt+F12", "Ctrl+T", "", "", "", "", "", "", "Ctrl+K Ctrl+X", "", "",
+  "Ctrl+Shift+\\", "", "Ctrl+Shift+Space", "Ctrl+Shift+T", "Ctrl+K M", "", "", "", "", "", "", "", "", "", "",
+  "", "", "", "", "", "", "", "Shift+Alt+C", "Ctrl+K Ctrl+Shift+C", "Shift+Alt+R", "",
+  "Ctrl+Shift+D", "F5", "Ctrl+F5", "Shift+F5", "Ctrl+Shift+F5",
+  "F10", "F11", "Shift+F11", "F6", "F9", "Ctrl+Shift+Y",
+  "", "", "", "Ctrl+Shift+B", "",
+  "Ctrl+Shift+5", "Alt+Left", "Alt+Right", "Ctrl+F", "", "", "", "",
+  "Ctrl+Shift+U", "", "", "",
+  "Ctrl+Shift+H", "", "", "Ctrl+K U", "Ctrl+K W", "Ctrl+K Ctrl+W", "Ctrl+K Shift+Enter", "Ctrl+K Shift+Enter",
+  "Ctrl+K Enter", "", "Ctrl+Tab", "", "", "Ctrl+Shift+V", "Ctrl+K V", "", "", "", "Ctrl+Shift+.",
+  "", "Ctrl+K D", "", "Ctrl+K C", "", "", "", "", "",
+  "", "", "", "", "", "", "",
+  "Ctrl+K Ctrl+\\", "", "", "Ctrl+3", "Ctrl+4", "Ctrl+K Ctrl+Left", "Ctrl+K Ctrl+Right", "Ctrl+K Ctrl+Up",
+  "Ctrl+K Ctrl+Down", "Ctrl+Alt+Right", "Ctrl+Alt+Left", "", "", "Ctrl+K Ctrl+M", "", "", "", "", "", "",
+  "", "", "", "", "", "",
+  "Ctrl+K Ctrl+F", "Shift+Alt+O", "", "Shift+Alt+Right", "Shift+Alt+Left",
+  "Ctrl+K Ctrl+8", "Ctrl+K Ctrl+9", "Ctrl+K Ctrl+/", "Ctrl+K Ctrl+1", "Ctrl+K Ctrl+2",
+  "Ctrl+K Ctrl+3", "Ctrl+K Ctrl+4", "Ctrl+K Ctrl+5", "Ctrl+K Ctrl+6", "Ctrl+K Ctrl+7",
+  "Shift+Alt+H", "", "", "",
+  "Alt+F3", "Shift+Alt+F3", "Alt+F5", "Shift+Alt+F5", "", "", "Ctrl+K Ctrl+Alt+S", "Ctrl+K Ctrl+N",
+  "Ctrl+K Ctrl+R", "", "", "", "", "", "", "", "", "", "", "", "",
+  "", "Ctrl+; A", "Ctrl+; C", "Ctrl+; F", "Ctrl+; L", "Ctrl+; Ctrl+C", "", "Ctrl+; Ctrl+O", "Ctrl+; Ctrl+X", "",
+  "", "", "", "", "", "", "",
+  "", "", "", "", "", "", "", "", "", "",
+  "Shift+Alt+I", "Ctrl+U", "", "Ctrl+K Ctrl+D", "Ctrl+F2", "Alt+Enter", "", "", "", "", "", "", "", "", "",
+  "Ctrl+M", "Ctrl+K Ctrl+C", "Ctrl+K Ctrl+U", "Alt+PageUp", "Alt+PageDown",
+  "", "", "", "Ctrl+Up", "Ctrl+Down", "", "Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+Alt+R", "Ctrl+G", "", "", "",
+  "Ctrl+Enter", "Shift+Alt+F"
+};
+
+static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
+  "", "workbench.action.files.newUntitledFile", "workbench.action.files.openFile",
+  "workbench.action.files.openFolder", "workbench.action.openRecent",
+  "workbench.action.files.save", "workbench.action.files.saveAs",
+  "workbench.action.closeActiveEditor", "workbench.action.quit",
+  "undo", "redo", "editor.action.clipboardCutAction", "editor.action.clipboardCopyAction",
+  "editor.action.clipboardPasteAction", "actions.find",
+  "workbench.action.findInFiles", "editor.action.selectAll",
+  "editor.action.moveLinesUpAction", "editor.action.moveLinesDownAction",
+  "workbench.view.explorer", "workbench.view.search", "workbench.view.scm",
+  "workbench.action.toggleSidebarVisibility",
+  "workbench.action.gotoLine", "workbench.action.compareEditor.nextChange",
+  "workbench.action.compareEditor.previousChange", "workbench.action.quickOpen",
+  "workbench.action.showCommands", "workbench.action.showAboutDialog",
+  "workbench.action.terminal.toggleTerminal", "workbench.action.terminal.kill",
+  "editor.action.toggleMinimap",
+  "editor.action.insertCursorAbove", "editor.action.insertCursorBelow",
+  "editor.action.addSelectionToNextFindMatch", "editor.action.selectHighlights",
+  "workbench.action.openSettings", "workbench.action.terminal.new",
+  "workbench.action.splitEditor", "workbench.action.focusFirstEditorGroup",
+  "workbench.action.focusSecondEditorGroup",
+  "editor.action.revealDefinition", "editor.action.triggerSuggest",
+  "editor.action.marker.next", "editor.action.marker.prev",
+  "editor.action.rename", "editor.action.quickFix", "editor.action.showHover",
+  "workbench.actions.view.problems", "workbench.action.selectTheme",
+  "workbench.action.toggleZenMode", "editor.action.toggleWordWrap",
+  "editor.action.startFindReplaceAction", "editor.fold", "editor.unfold",
+  "editor.foldAll", "editor.unfoldAll", "workbench.action.openGlobalKeybindings",
+  "editor.action.commentLine", "editor.action.blockComment", "editor.action.copyLinesUpAction",
+  "editor.action.copyLinesDownAction", "editor.action.deleteLines", "expandLineSelection",
+  "workbench.action.navigateBack", "workbench.action.navigateForward", "workbench.action.gotoSymbol",
+  "editor.action.formatDocument", "editor.action.insertSnippet", "editor.action.insertLineAfter",
+  "editor.action.insertLineBefore", "editor.action.indentLines", "editor.action.outdentLines",
+  "workbench.action.openSnippets", "workbench.view.extensions",
+  "workbench.extensions.action.installVSIX",
+  "git.checkout", "git.branch", "git.branchFrom", "git.deleteBranch", "git.renameBranch", "git.merge",
+  "git.pull", "git.push", "git.fetch", "git.sync", "git.stash", "git.stashPopLatest", "git.stashApply",
+  "git.undoCommit", "git.commit", "git.commitStagedAmend", "git.viewFileHistory",
+  "git.blame.toggleEditorDecoration", "git.refresh", "toggle.diff.renderSideBySide", "scm.moreActions",
+  "editor.action.goToReferences", "editor.action.goToImplementation", "editor.action.goToTypeDefinition",
+  "editor.action.peekDefinition", "workbench.action.showAllSymbols", "editor.action.transformToUppercase",
+  "editor.action.transformToLowercase", "editor.action.transformToTitlecase",
+  "editor.action.sortLinesAscending", "editor.action.sortLinesDescending", "editor.action.joinLines",
+  "editor.action.trimTrailingWhitespace", "editor.action.removeDuplicateLines",
+  "editor.action.duplicateSelection", "editor.action.jumpToBracket", "editor.action.selectToBracket",
+  "editor.action.triggerParameterHints", "workbench.action.reopenClosedEditor",
+  "workbench.action.editor.changeLanguageMode", "workbench.action.editor.changeEOL",
+  "workbench.action.editor.changeIndentation", "editor.action.indentUsingSpaces",
+  "editor.action.indentUsingTabs", "editor.action.indentationToSpaces", "editor.action.indentationToTabs",
+  "editor.action.detectIndentation", "editor.action.toggleRenderWhitespace",
+  "editor.action.toggleStickyScroll", "editor.action.toggleColumnSelection",
+  "workbench.action.openSettingsJson", "workbench.action.showWelcomePage", "notifications.showList",
+  "explorer.newFile", "explorer.newFolder", "workbench.files.action.refreshFilesExplorer",
+  "workbench.files.action.collapseExplorerFolders", "copyFilePath", "copyRelativeFilePath",
+  "revealFileInOS", "openInTerminal",
+  "workbench.view.debug", "workbench.action.debug.start", "workbench.action.debug.run",
+  "workbench.action.debug.stop", "workbench.action.debug.restart", "workbench.action.debug.stepOver",
+  "workbench.action.debug.stepInto", "workbench.action.debug.stepOut", "workbench.action.debug.pause",
+  "editor.debug.action.toggleBreakpoint", "workbench.debug.action.toggleRepl",
+  "workbench.action.debug.configure", "workbench.action.debug.selectandstart",
+  "workbench.action.tasks.runTask", "workbench.action.tasks.build", "workbench.action.tasks.configureTaskRunner",
+  "workbench.action.terminal.split", "workbench.action.terminal.focusPreviousPane",
+  "workbench.action.terminal.focusNextPane", "workbench.action.terminal.focusFind",
+  "workbench.action.terminal.clear", "workbench.action.terminal.rename",
+  "workbench.action.terminal.selectDefaultShell", "workbench.action.terminal.newWithProfile",
+  "workbench.action.output.toggleOutput", "workbench.action.showOutputChannels",
+  "workbench.output.action.clearOutput", "workbench.action.toggleMaximizedPanel",
+  "workbench.action.replaceInFiles", "workbench.action.closeOtherEditors",
+  "workbench.action.closeEditorsToTheRight", "workbench.action.closeUnmodifiedEditors",
+  "workbench.action.closeEditorsInGroup", "workbench.action.closeAllEditors", "workbench.action.pinEditor",
+  "workbench.action.unpinEditor", "workbench.action.keepEditor",
+  "workbench.files.action.showActiveFileInExplorer",
+  "workbench.action.quickOpenPreviousRecentlyUsedEditorInGroup",
+  "workbench.action.showAllEditorsByMostRecentlyUsed", "workbench.action.localHistory.restoreViaPicker",
+  "markdown.showPreview", "markdown.showPreviewToSide", "workbench.files.action.focusOpenEditorsView",
+  "timeline.focus", "workbench.action.localHistory.compareWithFile", "breadcrumbs.focusAndSelect",
+  "workbench.action.toggleAutoSave", "workbench.files.action.compareWithSaved",
+  "workbench.files.action.compareFileWith", "workbench.files.action.compareWithClipboard",
+  "selectForCompare", "compareFiles", "workbench.action.editor.changeEncoding",
+  "workbench.action.files.revert", "workbench.action.toggleSidebarPosition",
+  "type", "workbench.action.terminal.sendSequence", "mme.importVSCodeSettings",
+  "workbench.action.openWorkspace", "workbench.action.addRootFolder", "workbench.action.saveWorkspaceAs",
+  "workbench.action.closeFolder",
+  "workbench.action.splitEditorDown", "workbench.action.splitEditorLeft", "workbench.action.splitEditorUp",
+  "workbench.action.focusThirdEditorGroup", "workbench.action.focusFourthEditorGroup",
+  "workbench.action.focusLeftGroup", "workbench.action.focusRightGroup", "workbench.action.focusAboveGroup",
+  "workbench.action.focusBelowGroup", "workbench.action.moveEditorToNextGroup",
+  "workbench.action.moveEditorToPreviousGroup", "workbench.action.joinTwoGroups",
+  "workbench.action.joinAllGroups", "workbench.action.toggleEditorWidths", "workbench.action.evenEditorWidths",
+  "workbench.action.editorLayoutSingle", "workbench.action.editorLayoutTwoColumns",
+  "workbench.action.editorLayoutThreeColumns", "workbench.action.editorLayoutTwoRows",
+  "workbench.action.editorLayoutTwoByTwoGrid", "workbench.action.toggleCenteredLayout",
+  "workbench.action.toggleMenuBar", "workbench.action.toggleStatusbarVisibility",
+  "workbench.action.toggleActivityBarVisibility", "mme.editorLayout", "mme.appearance",
+  "editor.action.formatSelection", "editor.action.organizeImports", "editor.action.sourceAction",
+  "editor.action.smartSelect.expand", "editor.action.smartSelect.shrink", "editor.foldAllMarkerRegions",
+  "editor.unfoldAllMarkerRegions", "editor.foldAllBlockComments", "editor.foldLevel1", "editor.foldLevel2",
+  "editor.foldLevel3", "editor.foldLevel4", "editor.foldLevel5", "editor.foldLevel6", "editor.foldLevel7",
+  "references-view.showCallHierarchy", "references-view.showOutgoingCalls", "editor.showSupertypes",
+  "editor.showSubtypes",
+  "editor.action.dirtydiff.next", "editor.action.dirtydiff.previous", "workbench.action.editor.nextChange",
+  "workbench.action.editor.previousChange", "git.stageChange", "git.revertChange", "git.stageSelectedRanges",
+  "git.unstageSelectedRanges", "git.revertSelectedRanges", "merge-conflict.accept.current",
+  "merge-conflict.accept.incoming", "merge-conflict.accept.both", "merge-conflict.accept.all-current",
+  "merge-conflict.accept.all-incoming", "merge-conflict.accept.all-both", "merge-conflict.next",
+  "merge-conflict.previous", "merge-conflict.compare", "git.clone", "git.init", "git.publish",
+  "workbench.view.testing.focus", "testing.runAll", "testing.runAtCursor", "testing.runCurrentFile",
+  "testing.reRunLastRun", "testing.debugAtCursor", "testing.refreshTests", "testing.showMostRecentOutput",
+  "testing.cancelRun", "testing.collapseAll", "problems.action.focusFilter", "problems.action.collapseAll",
+  "problems.action.toggleActiveFile", "problems.action.copyMessage", "outline.toggleFollowCursor",
+  "outline.sortBy", "outline.collapse",
+  "editor.debug.action.conditionalBreakpoint", "editor.debug.action.addLogPoint",
+  "editor.debug.action.editBreakpoint", "editor.debug.action.toggleEnableBreakpoint",
+  "workbench.debug.viewlet.action.removeAllBreakpoints", "workbench.debug.viewlet.action.enableAllBreakpoints",
+  "workbench.debug.viewlet.action.disableAllBreakpoints", "editor.debug.action.runToCursor",
+  "debug.jumpToCursor", "editor.debug.action.selectionToWatch",
+  "editor.action.insertCursorAtEndOfEachLineSelected", "cursorUndo", "cursorRedo",
+  "editor.action.moveSelectionToNextFindMatch", "editor.action.changeAll", "editor.action.selectAllMatches",
+  "editor.action.reindentlines", "editor.action.reindentselectedlines", "deleteAllLeft", "deleteAllRight",
+  "editor.action.transposeLetters", "cursorWordPartLeft", "cursorWordPartRight", "deleteWordPartLeft",
+  "deleteWordPartRight", "editor.action.toggleTabFocusMode", "editor.action.addCommentLine",
+  "editor.action.removeCommentLine", "scrollPageUp", "scrollPageDown",
+  "workbench.action.terminal.runSelectedText", "workbench.action.terminal.runActiveFile",
+  "workbench.action.terminal.focus", "workbench.action.terminal.scrollToPreviousCommand",
+  "workbench.action.terminal.scrollToNextCommand", "workbench.action.terminal.selectAll",
+  "workbench.action.terminal.copySelection", "workbench.action.terminal.paste",
+  "workbench.action.terminal.runRecentCommand", "workbench.action.terminal.goToRecentDirectory",
+  "workbench.action.terminal.changeColor", "workbench.action.terminal.changeIcon",
+  "editor.action.inspectTMScopes",
+  "explorer.openToSide", "filesExplorer.findInFolder"
+};
+
+static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
+
+
+const char *cmd_name (int cmd) {
+  return (cmd > 0 && cmd < CMD_N) ? names[cmd] : "";
+}
+
+
+const char *cmd_keys (int cmd) {
+  if (cmd <= 0 || cmd >= CMD_N) return "";
+  return user_keys[cmd] ? user_keys[cmd] : keys[cmd];
+}
+
+
+const char *cmd_default_keys (int cmd) {
+  return (cmd > 0 && cmd < CMD_N) ? keys[cmd] : "";
+}
+
+
+void cmd_set_keys (int cmd, const char *k) {
+  if (cmd <= 0 || cmd >= CMD_N) return;
+  free(user_keys[cmd]);
+  user_keys[cmd] = k ? xstrdup(k) : NULL;
+}
+
+
+const char *cmd_id (int cmd) {
+  return (cmd > 0 && cmd < CMD_N) ? ids[cmd] : "";
+}
+
+
+int cmd_by_id (const char *id) {
+  int c;
+  for (c = 1; c < CMD_N; c++)
+    if (strcmp(ids[c], id) == 0) return c;
+  return CMD_NONE;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The menu bar
+** ===================================================================
+*/
+
+/* 0 is a line between groups, -1 the end */
+static const int m_file[] = {CMD_NEW, 0, CMD_OPEN_FILE, CMD_OPEN_FOLDER, CMD_OPEN_WORKSPACE, CMD_OPEN_PROJECT,
+                             0, CMD_ADD_FOLDER, CMD_SAVE_WORKSPACE, 0, CMD_SAVE, CMD_SAVE_AS, 0, CMD_AUTO_SAVE, CMD_REVERT, 0, CMD_SETTINGS, CMD_SETTINGS_JSON, CMD_KEYS, CMD_SNIPPETS, CMD_IMPORT_VSCODE, 0, CMD_CLOSE, CMD_CLOSE_WORKSPACE, 0, CMD_QUIT, -1};
+static const int m_edit[] = {CMD_UNDO, CMD_REDO, 0, CMD_CUT, CMD_COPY, CMD_PASTE,
+                             0, CMD_FIND, CMD_REPLACE, CMD_FIND_FILES, 0, CMD_COMMENT, CMD_BLOCK_COMMENT, 0, CMD_UPPER, CMD_LOWER, CMD_SORT_ASC, CMD_JOIN, CMD_TRIM,
+                             0, CMD_FORMAT, CMD_FORMAT_SEL, CMD_ORGANIZE_IMPORTS, CMD_SOURCE_ACTION, CMD_INSERT_SNIPPET, 0, CMD_SUGGEST, CMD_QUICKFIX, CMD_RENAME, -1};
+static const int m_sel[] = {CMD_SELECT_ALL, CMD_SELECT_LINE, CMD_SELECT_BRACKET, CMD_EXPAND_SEL, CMD_SHRINK_SEL, CMD_CURSORS_LINE_ENDS, 0, CMD_DUP_SEL, CMD_COPY_UP, CMD_COPY_DOWN, CMD_LINE_UP,
+                            CMD_LINE_DOWN, CMD_DELETE_LINE, 0,
+                            CMD_CURSOR_UP, CMD_CURSOR_DOWN, CMD_NEXT_MATCH, CMD_ALL_MATCHES, 0, CMD_COLUMN_SELECT, -1};
+static const int m_view[] = {CMD_PALETTE, 0, CMD_EXPLORER, CMD_SEARCH, CMD_GIT, CMD_EXTENSIONS, CMD_TEST_VIEW,
+                             0, CMD_PROBLEMS, CMD_OUTPUT, CMD_DEBUG_CONSOLE, CMD_TERMINAL, CMD_PANEL_MAX, 0, CMD_SPLIT, CMD_SPLIT_DOWN, CMD_LAYOUT_MENU,
+                             0, CMD_SIDEBAR, CMD_SIDEBAR_POS, CMD_MINIMAP, CMD_STICKY, CMD_RENDER_WS, CMD_WORDWRAP, CMD_ZEN,
+                             CMD_APPEARANCE_MENU, 0, CMD_THEME, -1};
+static const int m_go[] = {CMD_NAV_BACK, CMD_NAV_FORWARD, 0, CMD_QUICK_OPEN, CMD_GOTO_SYMBOL, CMD_WORKSPACE_SYMBOL, CMD_GOTO, CMD_GOTO_BRACKET, 0, CMD_DEFINITION, CMD_TYPE_DEF, CMD_IMPLEMENTATION, CMD_REFERENCES, CMD_CALL_HIERARCHY, CMD_PEEK_DEF, CMD_HOVER, 0, CMD_NEXT_PROBLEM,
+                           CMD_PREV_PROBLEM, 0, CMD_NEXT_CHANGE, CMD_PREV_CHANGE, -1};
+static const int m_run[] = {CMD_DEBUG_START, CMD_DEBUG_RUN, CMD_DEBUG_STOP, CMD_DEBUG_RESTART, 0,
+                            CMD_DEBUG_CONFIG, CMD_DEBUG_SELECT, 0, CMD_DEBUG_STEP_OVER, CMD_DEBUG_STEP_INTO,
+                            CMD_DEBUG_STEP_OUT, CMD_DEBUG_PAUSE, CMD_RUN_TO_CURSOR, 0, CMD_BREAKPOINT,
+                            CMD_BP_CONDITIONAL, CMD_BP_LOG, CMD_BP_ENABLE_ALL, CMD_BP_DISABLE_ALL, CMD_BP_REMOVE_ALL, 0,
+                            CMD_DEBUG_VIEW, CMD_DEBUG_CONSOLE, -1};
+static const int m_term[] = {CMD_TERMINAL_NEW, CMD_TERMINAL_SPLIT, CMD_TERMINAL_NEW_PROFILE, 0, CMD_TASK_RUN,
+                             CMD_TASK_BUILD, CMD_TERM_RUN_FILE, CMD_TERM_RUN_SEL, 0, CMD_TERMINAL, CMD_TERM_RECENT,
+                             CMD_TERMINAL_FIND, CMD_TERMINAL_CLEAR, CMD_TERMINAL_RENAME, CMD_TERMINAL_KILL, 0,
+                             CMD_TERMINAL_PROFILE, CMD_TASK_CONFIGURE, -1};
+static const int m_help[] = {CMD_WELCOME, CMD_PALETTE, 0, CMD_NOTIFICATIONS, 0, CMD_ABOUT, -1};
+
+static const struct {
+  const char *name;
+  const int *cmd;
+} menus[] = {
+  {"File", m_file}, {"Edit", m_edit}, {"Selection", m_sel},
+  {"View", m_view}, {"Go", m_go}, {"Run", m_run}, {"Terminal", m_term}, {"Help", m_help}
+};
+
+#define NMENU	((int)(sizeof(menus) / sizeof(menus[0])))
+
+
+static int title_x (int m) {
+  int i, x = 3;	/* after the app's icon */
+  for (i = 0; i < m; i++) x += (int)strlen(menus[i].name) + 2;
+  return x;
+}
+
+
+int menubar_hit (int x) {
+  int i;
+  for (i = 0; i < NMENU; i++) {
+    int x0 = title_x(i);
+    if (x >= x0 && x < x0 + (int)strlen(menus[i].name) + 2) return i;
+  }
+  return -1;
+}
+
+
+void menubar_draw (int open) {
+  int i, end = title_x(NMENU), cols = scr_cols(), w;
+  scr_fill(0, 0, cols, S_MENUBAR);
+  scr_put(1, 0, 0xF121, S_APPICON);	/* the app's icon: </> */
+  for (i = 0; i < NMENU; i++) {
+    int x = title_x(i), st = (i == open) ? S_MENUBAR_ON : S_MENUBAR;
+    scr_fill(x, 0, (int)strlen(menus[i].name) + 2, st);
+    scr_puts(x + 1, 0, menus[i].name, st);
+  }
+  w = (int)str_cols(ui_title);	/* the title, in the middle when there is room */
+  if (w > 0 && w < cols - 2 * end) scr_puts((cols - w) / 2, 0, ui_title, S_MENUBAR);
+  else if (w > 0 && end + 2 + w < cols) scr_puts(cols - w - 1, 0, ui_title, S_MENUBAR);
+}
+
+
+static struct {
+  int x, y, w, h;	/* the open menu on the screen */
+} g_drop;
+
+
+static int count (const int *cmd) {
+  int n = 0;
+  while (cmd[n] >= 0) n++;
+  return n;
+}
+
+
+static void drop_draw (int m, int sel) {
+  const int *cmd = menus[m].cmd;
+  int n = count(cmd), i, w = 24;
+  for (i = 0; i < n; i++) {
+    int need = (int)strlen(names[cmd[i]]) + (int)strlen(keys[cmd[i]]) + 8;
+    if (cmd[i] && need > w) w = need;
+  }
+  g_drop.x = title_x(m);
+  if (g_drop.x + w > scr_cols()) g_drop.x = scr_cols() - w;
+  if (g_drop.x < 0) g_drop.x = 0;
+  g_drop.y = 1;
+  g_drop.w = w;
+  g_drop.h = n + 2;
+  scr_box(g_drop.x, g_drop.y, w, g_drop.h, S_MENU);
+  for (i = 0; i < n; i++) {
+    int y = g_drop.y + 1 + i, on = (i == sel);
+    if (cmd[i] == 0) {
+      int x;
+      for (x = g_drop.x + 1; x < g_drop.x + w - 1; x++) scr_put(x, y, 0x2500, S_MENU_LINE);
+      continue;
+    }
+    scr_fill(g_drop.x + 1, y, w - 2, on ? S_MENU_SEL : S_MENU);
+    if (cmd_checked(cmd[i])) scr_put(g_drop.x + 1, y, 0xEAB2, on ? S_MENU_SEL : S_MENU);	/* codicon check */
+    scr_puts(g_drop.x + 3, y, names[cmd[i]], on ? S_MENU_SEL : S_MENU);
+    scr_puts(g_drop.x + w - 3 - (int)strlen(keys[cmd[i]]), y, keys[cmd[i]],
+             on ? S_MENU_KEY_SEL : S_MENU_KEY);
+  }
+}
+
+
+/* the next item that is not a line, from sel in direction d */
+static int step (const int *cmd, int sel, int d) {
+  int n = count(cmd), i;
+  for (i = 0; i < n; i++) {
+    sel = (sel + d + n) % n;
+    if (cmd[sel] != 0) return sel;
+  }
+  return sel;
+}
+
+
+/*
+** A menu at x, y (a right-click's): cmd lists CMD_s, 0 a line, -1 the
+** end; label[i] (when not NULL) is what item i says instead of its
+** command's name. The command picked, CMD_NONE for Esc or a click outside.
+*/
+int menu_popup (int x, int y, const int *cmd, const char *const *label) {
+  int n = count(cmd), i, w = 20, h = n + 2, sel = step(cmd, -1, 1);
+  for (i = 0; i < n; i++) {
+    const char *s = label && label[i] ? label[i] : names[cmd[i]];
+    int need = (int)str_cols(s) + (int)strlen(keys[cmd[i]]) + 8;
+    if (cmd[i] && need > w) w = need;
+  }
+  if (x + w > scr_cols()) x = scr_cols() - w;
+  if (y + h > scr_rows()) y = scr_rows() - h;
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  for (;;) {
+    int k, code;
+    ui_background();
+    scr_box(x, y, w, h, S_MENU);
+    for (i = 0; i < n; i++) {
+      int ry = y + 1 + i, on = (i == sel), cx;
+      const char *s = label && label[i] ? label[i] : names[cmd[i]];
+      if (cmd[i] == 0) {
+        for (cx = x + 1; cx < x + w - 1; cx++) scr_put(cx, ry, 0x2500, S_MENU_LINE);
+        continue;
+      }
+      scr_fill(x + 1, ry, w - 2, on ? S_MENU_SEL : S_MENU);
+      scr_puts(x + 3, ry, s, on ? S_MENU_SEL : S_MENU);
+      scr_puts(x + w - 3 - (int)strlen(keys[cmd[i]]), ry, keys[cmd[i]], on ? S_MENU_KEY_SEL : S_MENU_KEY);
+    }
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(200);
+    if (k == K_NONE) continue;
+    code = KEY_CODE(k);
+    if (code == K_ESC) return CMD_NONE;
+    if (code == K_UP) sel = step(cmd, sel, -1);
+    else if (code == K_DOWN) sel = step(cmd, sel, 1);
+    else if (code == K_ENTER || code == ' ') return cmd[sel];
+    else if (code == K_MOUSE) {
+      Mouse *mo = &term_mouse;
+      int inside = mo->x >= x && mo->x < x + w && mo->y > y && mo->y < y + h - 1;
+      if (mo->wheel) continue;
+      if (inside) {
+        int it = mo->y - y - 1;
+        if (cmd[it] == 0) continue;
+        sel = it;
+        if (mo->button == 0 && !mo->press && !mo->drag) return cmd[it];	/* the button came up here */
+      }
+      else if (mo->press && !mo->drag) return CMD_NONE;	/* a click outside closes */
+    }
+  }
+}
+
+
+int menu_run (int m) {
+  int sel = step(menus[m].cmd, -1, 1);
+  for (;;) {
+    const int *cmd = menus[m].cmd;
+    int k, code;
+    ui_background();
+    menubar_draw(m);
+    drop_draw(m, sel);
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(200);
+    if (k == K_NONE) continue;
+    code = KEY_CODE(k);
+    if (code == K_ESC || code == K_F10) return CMD_NONE;
+    if (code == K_UP) sel = step(cmd, sel, -1);
+    else if (code == K_DOWN) sel = step(cmd, sel, 1);
+    else if (code == K_LEFT || code == K_RIGHT) {
+      m = (m + (code == K_LEFT ? NMENU - 1 : 1)) % NMENU;
+      sel = step(menus[m].cmd, -1, 1);
+    }
+    else if (code == K_ENTER || code == ' ') return cmd[sel];
+    else if (code == K_MOUSE) {
+      Mouse *mo = &term_mouse;
+      int inside = mo->x >= g_drop.x && mo->x < g_drop.x + g_drop.w &&
+                   mo->y > g_drop.y && mo->y < g_drop.y + g_drop.h - 1;
+      if (mo->wheel || mo->button != 0) continue;
+      if (inside) {
+        int i = mo->y - g_drop.y - 1;
+        if (cmd[i] == 0) continue;
+        sel = i;
+        if (!mo->press && !mo->drag) return cmd[i];	/* the button came up here */
+      }
+      else if (mo->y == 0 && mo->press && !mo->drag) {
+        int hit = menubar_hit(mo->x);
+        if (hit < 0 || hit == m) return CMD_NONE;
+        m = hit;
+        sel = step(menus[m].cmd, -1, 1);
+      }
+      else if (mo->press && !mo->drag) return CMD_NONE;	/* a click outside closes */
+    }
+  }
+}
+
+/*
+** A context menu (the right button): at x, y (or as near as it fits);
+** label[i] NULL is a line between groups, keys[] may be NULL. The item
+** picked, or -1.
+*/
+int context_menu (int x, int y, const char *const *label, const char *const *keys, int n) {
+  int sel = -1, i, w = 20, h = n + 2;
+  for (i = n - 1; i >= 0; i--)	/* the first item selected, for the keys */
+    if (label[i]) sel = i;
+  for (i = 0; i < n; i++)
+    if (label[i]) {
+      int need = (int)str_cols(label[i]) + (keys && keys[i] ? (int)strlen(keys[i]) : 0) + 8;
+      if (need > w) w = need;
+    }
+  if (x + w > scr_cols()) x = scr_cols() - w;
+  if (y + h > scr_rows() - 1) y = scr_rows() - 1 - h;
+  if (x < 0) x = 0;
+  if (y < 1) y = 1;
+  for (;;) {
+    int k, code;
+    ui_background();
+    scr_box(x, y, w, h, S_MENU);
+    for (i = 0; i < n; i++) {
+      int ry = y + 1 + i, on = i == sel;
+      if (label[i] == NULL) {
+        int cx;
+        for (cx = x + 1; cx < x + w - 1; cx++) scr_put(cx, ry, 0x2500, S_MENU_LINE);
+        continue;
+      }
+      scr_fill(x + 1, ry, w - 2, on ? S_MENU_SEL : S_MENU);
+      scr_puts(x + 3, ry, label[i], on ? S_MENU_SEL : S_MENU);
+      if (keys && keys[i] && keys[i][0])
+        scr_puts(x + w - 3 - (int)strlen(keys[i]), ry, keys[i], on ? S_MENU_KEY_SEL : S_MENU_KEY);
+    }
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(200);
+    if (k == K_NONE) continue;
+    code = KEY_CODE(k);
+    if (code == K_ESC) return -1;
+    if (code == K_UP || code == K_DOWN) {
+      int d = code == K_UP ? -1 : 1, t;
+      for (t = 0; t < n; t++) {
+        sel = sel < 0 ? (d > 0 ? 0 : n - 1) : (sel + d + n) % n;
+        if (label[sel]) break;
+      }
+    }
+    else if ((code == K_ENTER || code == ' ') && sel >= 0) return sel;
+    else if (code == K_MOUSE) {
+      Mouse *m = &term_mouse;
+      int inside = m->x >= x && m->x < x + w && m->y > y && m->y < y + h - 1;
+      if (m->wheel) continue;
+      if (inside) {
+        int at = m->y - y - 1;
+        if (label[at] == NULL) continue;
+        sel = at;
+        if (!m->press && !m->drag && m->button != 3) return at;	/* let go here */
+      }
+      else if (m->button == 3) sel = -1;	/* moving outside */
+      else if (m->press && !m->drag) return -1;	/* a click outside */
+    }
+  }
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The quick input box
+** ===================================================================
+*/
+
+void pick_init (Pick *p, const char *title) {
+  memset(p, 0, sizeof(*p));
+  p->title = title;
+}
+
+
+void pick_add (Pick *p, const char *label, const char *detail, int icon) {
+  PickItem *it;
+  if (p->n == p->cap) {
+    p->cap = p->cap ? p->cap * 2 : 32;
+    p->item = (PickItem *)xrealloc(p->item, p->cap * sizeof(PickItem));
+  }
+  it = &p->item[p->n++];
+  it->label = xstrdup(label);
+  it->detail = detail ? xstrdup(detail) : NULL;
+  it->icon = icon;
+}
+
+
+void pick_clear (Pick *p) {
+  size_t i;
+  for (i = 0; i < p->n; i++) {
+    free(p->item[i].label);
+    free(p->item[i].detail);
+  }
+  p->n = 0;
+}
+
+
+void pick_free (Pick *p) {
+  pick_clear(p);
+  free(p->item);
+  p->item = NULL;
+  p->cap = 0;
+}
+
+
+static int lower (int c) {
+  return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
+
+/*
+** Does label match what is typed? The letters in order, not always side by
+** side, like VS Code. hit[i] marks the bytes that matched; a lower score is
+** a better match: the whole text in one piece first, then the fewest gaps.
+*/
+static int fuzzy (const char *s, const char *pat, char *hit, int *score) {
+  size_t n = strlen(s), m = strlen(pat), i, j;
+  long first = -1, last = -1, gaps = 0;
+  if (hit) memset(hit, 0, n + 1);
+  *score = 0;
+  if (m == 0) return 1;
+  for (i = 0; i + m <= n; i++) {	/* in one piece */
+    for (j = 0; j < m && lower((unsigned char)s[i + j]) == lower((unsigned char)pat[j]); j++) ;
+    if (j == m) {
+      if (hit) memset(hit + i, 1, m);
+      *score = (int)i;
+      return 1;
+    }
+  }
+  for (i = 0, j = 0; i < n && j < m; i++) {
+    if (lower((unsigned char)s[i]) != lower((unsigned char)pat[j])) continue;
+    if (hit) hit[i] = 1;
+    if (first < 0) first = (long)i;
+    if (last >= 0 && (long)i != last + 1) gaps++;
+    last = (long)i;
+    j++;
+  }
+  if (j < m) return 0;
+  *score = 1000 + (int)gaps * 20 + (int)first;
+  return 1;
+}
+
+
+typedef struct Vis {
+  size_t *v;
+  int *score;
+  size_t n;
+} Vis;
+
+static const int *g_scores;
+
+static int cmp_vis (const void *a, const void *b) {
+  size_t x = *(const size_t *)a, y = *(const size_t *)b;
+  int d = g_scores[x] - g_scores[y];
+  if (d) return d;
+  return x < y ? -1 : x > y;
+}
+
+
+static void filter (const Pick *p, Vis *vis) {
+  size_t i;
+  vis->n = 0;
+  for (i = 0; i < p->n; i++) {
+    int sc;
+    if (!fuzzy(p->item[i].label, p->text, NULL, &sc)) continue;
+    vis->score[i] = sc;
+    vis->v[vis->n++] = i;
+  }
+  if (!p->keep_order && p->text[0]) {
+    g_scores = vis->score;
+    qsort(vis->v, vis->n, sizeof(size_t), cmp_vis);
+  }
+}
+
+
+static struct {
+  int x, y, w, rows;	/* the box on the screen; rows: of the list */
+} g_box;
+
+
+static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
+  int cols = scr_cols(), maxrows = scr_rows() - 6, i, x, cx;
+  size_t hn = 256;
+  char *hit = (char *)xmalloc(hn);
+  g_box.w = cols - 4 < 90 ? cols - 4 : 90;
+  if (g_box.w < 20) g_box.w = cols;
+  g_box.x = (cols - g_box.w) / 2;
+  g_box.y = 1;
+  if (maxrows > 15) maxrows = 15;
+  if (maxrows < 1) maxrows = 1;
+  g_box.rows = (int)vis->n < maxrows ? (int)vis->n : maxrows;
+  if (vis->n == 0 && p->hint) g_box.rows = 1;
+  scr_box(g_box.x, g_box.y, g_box.w, g_box.rows > 0 ? g_box.rows + 4 : 3, S_BOX);
+  /* the input */
+  scr_fill(g_box.x + 1, g_box.y + 1, g_box.w - 2, S_INPUT);
+  x = g_box.x + 2;
+  if (p->prefix) {	/* a long path: its end, where the typing goes on */
+    const char *s = p->prefix;
+    int room = g_box.w / 2;
+    if ((int)str_cols(s) > room) {
+      while (*s && (int)str_cols(s) > room - 1) s++;
+      while (((unsigned char)*s & 0xC0) == 0x80) s++;
+      x += scr_put(x, g_box.y + 1, 0x2026, S_INPUT_HINT);
+    }
+    x += scr_putsw(x, g_box.y + 1, g_box.x + g_box.w - 3 - x, s, S_INPUT);
+  }
+  if (p->text[0] == '\0' && p->title && !p->prefix)
+    scr_putsw(x, g_box.y + 1, g_box.x + g_box.w - 3 - x, p->title, S_INPUT_HINT);
+  cx = x + scr_putsw(x, g_box.y + 1, g_box.x + g_box.w - 3 - x, p->text, S_INPUT_ON);
+  scr_cursor(cx, g_box.y + 1);
+  /* the list */
+  if (vis->n == 0 && p->hint)
+    scr_putsw(g_box.x + 2, g_box.y + 3, g_box.w - 4, p->hint, S_BOX_DIM);
+  for (i = 0; i < g_box.rows && vis->n > 0; i++) {
+    size_t k = top + (size_t)i;
+    const PickItem *it;
+    int y = g_box.y + 3 + i, on, st, hst, sc, lx;
+    size_t b, n;
+    if (k >= vis->n) break;
+    it = &p->item[vis->v[k]];
+    on = (k == sel);
+    st = on ? S_BOX_SEL : S_BOX;
+    hst = on ? S_BOX_HIT_SEL : S_BOX_HIT;
+    scr_fill(g_box.x + 1, y, g_box.w - 2, st);
+    lx = g_box.x + 2;
+    if (it->icon) {
+      scr_put(lx, y, (uint32_t)it->icon, st);
+      lx += 2;
+    }
+    n = strlen(it->label);
+    if (n + 1 > hn) {
+      hn = n + 1;
+      hit = (char *)xrealloc(hit, hn);
+    }
+    fuzzy(it->label, p->text, hit, &sc);
+    for (b = 0; b < n && lx < g_box.x + g_box.w - 2;) {	/* the matched letters in blue */
+      size_t len;
+      uint32_t cp = utf8_decode(it->label + b, n - b, &len);
+      lx += scr_put(lx, y, cp, hit[b] ? hst : st);
+      b += len;
+    }
+    if (it->detail && lx + 2 < g_box.x + g_box.w - 2)
+      scr_putsw(lx + 2, y, g_box.x + g_box.w - 3 - (lx + 2), it->detail,
+                on ? S_MENU_KEY_SEL : S_BOX_DIM);
+  }
+  free(hit);
+}
+
+
+int pick_run (Pick *p) {
+  Vis vis;
+  size_t sel = 0, top = 0;
+  int r;
+  int shown = -1;
+  vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
+  vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
+  filter(p, &vis);
+  if (p->start > 0 && (size_t)p->start < vis.n) sel = (size_t)p->start;
+  for (;;) {
+    int k, code, changed = 0;
+    size_t len = strlen(p->text);
+    if (sel >= vis.n) sel = vis.n ? vis.n - 1 : 0;
+    if (p->on_move && vis.n && (int)vis.v[sel] != shown) {	/* the preview follows */
+      shown = (int)vis.v[sel];
+      p->on_move(shown);
+    }
+    if (sel < top) top = sel;
+    ui_background();
+    pick_draw(p, &vis, sel, top);
+    if (g_box.rows > 0 && sel >= top + (size_t)g_box.rows) {
+      top = sel - (size_t)g_box.rows + 1;
+      continue;
+    }
+    scr_flush();
+    k = term_key(p->on_tick ? 40 : 200);
+    if (k == K_NONE) {
+      int t = p->on_tick ? p->on_tick(p, 0) : 0;
+      if (t == 2) {
+        r = PICK_SWITCH;
+        break;
+      }
+      if (t == 1) {	/* new items: the selection stays on top */
+        free(vis.v);
+        free(vis.score);
+        vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
+        vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
+        filter(p, &vis);
+      }
+      continue;
+    }
+    code = KEY_CODE(k);
+    if (code == K_ESC) {
+      r = PICK_CANCEL;
+      break;
+    }
+    if (p->fresh && !IS_TEXT(k) && code != K_ENTER) p->fresh = 0;
+    if (code == K_ENTER) {
+      r = vis.n ? (int)vis.v[sel] : PICK_TEXT;
+      break;
+    }
+    if (code == K_UP || (code == K_TAB && (k & KM_CTRL) && (k & KM_SHIFT)))
+      sel = sel > 0 ? sel - 1 : (vis.n ? vis.n - 1 : 0);
+    else if (code == K_DOWN || (code == K_TAB && (k & KM_CTRL))) sel = (sel + 1 < vis.n) ? sel + 1 : 0;
+    else if (code == K_PGUP) sel = sel > (size_t)g_box.rows ? sel - (size_t)g_box.rows : 0;
+    else if (code == K_PGDN) sel += (size_t)g_box.rows;
+    else if (code == K_BS) {
+      if (len == 0) {
+        r = PICK_UP;
+        break;
+      }
+      while (len > 0 && ((unsigned char)p->text[len - 1] & 0xC0) == 0x80) len--;
+      if (len > 0) len--;
+      p->text[len] = '\0';
+      changed = 1;
+    }
+    else if (code == K_PASTE) {
+      Buf b;
+      size_t i;
+      buf_init(&b);
+      term_paste(&b);
+      for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(p->text); i++)
+        p->text[len++] = b.s[i];
+      p->text[len] = '\0';
+      buf_free(&b);
+      changed = 1;
+    }
+    else if (IS_TEXT(k) && len + 4 < sizeof(p->text)) {
+      if (p->fresh) len = 0;	/* like a selected text: typing replaces it */
+      len += (size_t)utf8_encode((uint32_t)k, p->text + len);
+      p->text[len] = '\0';
+      changed = 1;
+    }
+    else if (code == K_MOUSE) {
+      Mouse *m = &term_mouse;
+      int row = m->y - g_box.y - 3;
+      int inside = m->x >= g_box.x && m->x < g_box.x + g_box.w &&
+                   m->y >= g_box.y && m->y < g_box.y + g_box.rows + 4;
+      if (m->wheel) {
+        if (m->wheel < 0) top = top > 3 ? top - 3 : 0;
+        else if (vis.n > (size_t)g_box.rows) {
+          top += 3;
+          if (top > vis.n - (size_t)g_box.rows) top = vis.n - (size_t)g_box.rows;
+        }
+        if (sel < top) sel = top;
+        if (g_box.rows > 0 && sel >= top + (size_t)g_box.rows) sel = top + (size_t)g_box.rows - 1;
+      }
+      else if (m->button == 0 && m->press && !m->drag) {
+        if (!inside) {
+          r = PICK_CANCEL;
+          break;
+        }
+        if (row >= 0 && row < g_box.rows && top + (size_t)row < vis.n) {
+          r = (int)vis.v[top + (size_t)row];
+          break;
+        }
+      }
+    }
+    if (p->on_tick) {
+      int t = p->on_tick(p, changed);
+      if (t == 2) {
+        r = PICK_SWITCH;
+        break;
+      }
+      if (t == 1) {
+        free(vis.v);
+        free(vis.score);
+        vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
+        vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
+        changed = 1;
+      }
+    }
+    if (changed && p->modes && p->text[0] && strchr(p->modes, p->text[0])) {
+      r = PICK_MODE;	/* ">" commands, "@" symbols ...: the caller shows those */
+      break;
+    }
+    if (changed) {
+      p->fresh = 0;
+      filter(p, &vis);
+      sel = top = 0;
+    }
+  }
+  free(vis.v);
+  free(vis.score);
+  return r;
+}
+
+
+char *ask_text (const char *title, const char *init) {
+  Pick p;
+  int r;
+  pick_init(&p, title);
+  p.hint = "Press 'Enter' to confirm or 'Escape' to cancel";
+  if (init) snprintf(p.text, sizeof(p.text), "%s", init);
+  p.fresh = init && *init;
+  r = pick_run(&p);
+  pick_free(&p);
+  return r == PICK_TEXT ? xstrdup(p.text) : NULL;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The dialog
+** ===================================================================
+*/
+
+/*
+** VS Code's "Press desired key combination and then press ENTER": one key,
+** or two for a chord (the third starts again). Esc: 0.
+*/
+int key_capture (const char *title, int *k2) {
+  int got[2] = {0, 0}, n = 0;
+  for (;;) {
+    int cols = scr_cols(), rows = scr_rows(), w = 60, h = 6, x, y, k, code;
+    char a[48], b[48], shown[100];
+    if (w > cols - 2) w = cols - 2;
+    x = (cols - w) / 2;
+    y = rows / 3;
+    scr_box(x, y, w, h, S_BOX);
+    scr_putsw(x + 2, y + 1, w - 4, title, S_BOX_DIM);
+    scr_putsw(x + 2, y + 2, w - 4, "Press desired key combination and then press ENTER.", S_BOX);
+    scr_fill(x + 2, y + 4, w - 4, S_INPUT);
+    shown[0] = '\0';
+    if (n > 0) {
+      key_name(got[0], 1, a, sizeof(a));
+      if (n > 1) {
+        key_name(got[1], 1, b, sizeof(b));
+        snprintf(shown, sizeof(shown), "%s %s", a, b);
+      }
+      else snprintf(shown, sizeof(shown), "%s", a);
+    }
+    scr_putsw(x + 3, y + 4, w - 6, shown, S_INPUT_ON);
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(-1);
+    code = KEY_CODE(k);
+    if (k == K_NONE || code == K_MOUSE || code == K_PASTE) continue;
+    if (k == K_ESC) return 0;
+    if (k == K_ENTER) {
+      if (n == 0) continue;
+      *k2 = n > 1 ? got[1] : 0;
+      return got[0];
+    }
+    if (n == 2) n = 0;
+    got[n++] = k;
+  }
+}
+
+
+int dialog (const char *msg, const char *detail, const char *const *button, int n) {
+  int sel = 0, i;
+  int bx[8], bw[8];
+  if (n > 8) n = 8;
+  for (;;) {
+    int cols = scr_cols(), rows = scr_rows(), w, h = 7, x, y, k, code;
+    int need = (int)str_cols(msg) + 8, bsum = 0;
+    for (i = 0; i < n; i++) bsum += (int)strlen(button[i]) + 5;
+    if (detail && (int)str_cols(detail) + 8 > need) need = (int)str_cols(detail) + 8;
+    if (bsum + 4 > need) need = bsum + 4;
+    w = need < cols - 2 ? need : cols - 2;
+    if (w < 30 && cols > 32) w = 30;
+    x = (cols - w) / 2;
+    y = (rows - h) / 2;
+    ui_background();
+    scr_box(x, y, w, h, S_BOX);
+    scr_put(x + 2, y + 1, 0xEA6C, S_TOAST_WARN);	/* codicon: warning */
+    scr_putsw(x + 5, y + 1, w - 7, msg, S_BOX);
+    if (detail) scr_putsw(x + 5, y + 2, w - 7, detail, S_BOX_DIM);
+    {
+      int bxx = x + w - 2;	/* the buttons, from the right */
+      for (i = n - 1; i >= 0; i--) {
+        bw[i] = (int)strlen(button[i]) + 4;
+        bxx -= bw[i];
+        bx[i] = bxx;
+        bxx -= 1;
+      }
+      for (i = 0; i < n; i++) {
+        int st = (i == sel) ? S_STATUS : S_INPUT;
+        scr_fill(bx[i], y + 5, bw[i], st);
+        scr_puts(bx[i] + 2, y + 5, button[i], st);
+      }
+    }
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(200);
+    if (k == K_NONE) continue;
+    code = KEY_CODE(k);
+    if (code == K_ESC) return -1;
+    if (code == K_ENTER || code == ' ') return sel;
+    if (code == K_LEFT || (code == K_TAB && (k & KM_SHIFT))) sel = (sel + n - 1) % n;
+    else if (code == K_RIGHT || code == K_TAB) sel = (sel + 1) % n;
+    else if (code == K_MOUSE && term_mouse.button == 0 && term_mouse.press) {
+      for (i = 0; i < n; i++)
+        if (term_mouse.y == y + 5 && term_mouse.x >= bx[i] && term_mouse.x < bx[i] + bw[i])
+          return i;
+    }
+  }
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** Notifications
+** ===================================================================
+*/
+
+#define TOAST_TIME	4000000	/* us */
+
+static char g_toast[256];
+static int g_toast_warn;
+static long long g_toast_time;
+
+
+/* the notifications that came, for the notification center: the last one last */
+#define NOTE_MAX	50
+
+static struct {
+  char msg[NOTE_MAX][256];
+  int warn[NOTE_MAX];
+  int n, unread;
+} g_note;
+
+
+static void note_add (const char *msg, int warn) {
+  if (msg[0] == '\0' || strstr(msg, "chord") || strstr(msg, "Chord")) return;	/* the Ctrl+K notice is not one */
+  if (g_note.n > 0 && strcmp(g_note.msg[g_note.n - 1], msg) == 0) return;	/* the same again */
+  if (g_note.n == NOTE_MAX) {
+    memmove(g_note.msg, g_note.msg + 1, (NOTE_MAX - 1) * sizeof(g_note.msg[0]));
+    memmove(g_note.warn, g_note.warn + 1, (NOTE_MAX - 1) * sizeof(g_note.warn[0]));
+    g_note.n--;
+  }
+  snprintf(g_note.msg[g_note.n], sizeof(g_note.msg[0]), "%s", msg);
+  g_note.warn[g_note.n++] = warn;
+  g_note.unread++;
+}
+
+
+void toast (int warn, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(g_toast, sizeof(g_toast), fmt, ap);
+  va_end(ap);
+  g_toast_warn = warn;
+  g_toast_time = os_now_us();
+  note_add(g_toast, warn);
+}
+
+
+int toast_unread (void) {
+  return g_note.unread;
+}
+
+
+/*
+** The notification center (the bell in the status bar): every notification
+** so far, the newest on top, above the status bar at the right; the x of
+** one clears it, "Clear All" every one. Esc or a click outside closes it.
+*/
+void note_center (void) {
+  int sel = 0;
+  g_note.unread = 0;
+  g_toast[0] = '\0';	/* the toast goes: it is in the list */
+  for (;;) {
+    int cols = scr_cols(), rows = scr_rows(), w = cols < 62 ? cols - 2 : 60, x = cols - w - 1;
+    int n = g_note.n, shown, h, y, i, k, code, clear_x, close_x;
+    shown = n ? n : 1;
+    if (shown > rows - 8) shown = rows - 8;
+    if (shown < 1) shown = 1;
+    h = shown + 1;
+    y = rows - 2 - h;
+    if (y < 1 || w < 20) return;
+    if (sel >= n) sel = n ? n - 1 : 0;
+    ui_background();
+    scr_box(x, y, w, h, S_TOAST);
+    scr_fill(x, y, w, S_BOX_TITLE);
+    scr_puts(x + 2, y, n ? "NOTIFICATIONS" : "NO NEW NOTIFICATIONS", S_BOX_TITLE);
+    clear_x = x + w - 5;
+    close_x = x + w - 3;
+    scr_put(clear_x, y, 0xEABF, S_BOX_TITLE);	/* codicon clear-all */
+    scr_put(close_x, y, 0xEAB4, S_BOX_TITLE);	/* chevron-down: hide */
+    for (i = 0; i < shown && i < n; i++) {	/* the newest first */
+      int k2 = n - 1 - i, st = i == sel ? S_BOX_SEL : S_TOAST, ry = y + 1 + i;
+      scr_fill(x, ry, w, st);
+      scr_put(x + 2, ry, g_note.warn[k2] ? 0xEA6C : 0xEA74, g_note.warn[k2] ? S_TOAST_WARN : st);
+      scr_putsw(x + 5, ry, w - 9, g_note.msg[k2], st);
+      if (i == sel) scr_put(x + w - 3, ry, 0xEA76, st);	/* its x */
+    }
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(200);
+    if (k == K_NONE) continue;
+    code = KEY_CODE(k);
+    if (code == K_ESC || code == K_ENTER) return;
+    if (code == K_UP && sel > 0) sel--;
+    else if (code == K_DOWN && sel + 1 < n) sel++;
+    else if ((code == K_DEL || code == K_BS) && n > 0) {	/* that one goes */
+      int at = n - 1 - sel;
+      memmove(g_note.msg + at, g_note.msg + at + 1, (size_t)(n - at - 1) * sizeof(g_note.msg[0]));
+      memmove(g_note.warn + at, g_note.warn + at + 1, (size_t)(n - at - 1) * sizeof(g_note.warn[0]));
+      g_note.n--;
+    }
+    else if (code == K_MOUSE && term_mouse.press && !term_mouse.drag && !term_mouse.wheel) {
+      Mouse *m = &term_mouse;
+      if (m->x < x || m->x >= x + w || m->y < y || m->y >= y + h) return;	/* outside */
+      if (m->y == y && m->x == clear_x) g_note.n = 0;
+      else if (m->y == y && m->x == close_x) return;
+      else if (m->y > y && m->y - y - 1 < n) {
+        sel = m->y - y - 1;
+        if (m->x == x + w - 3) {	/* its x */
+          int at = n - 1 - sel;
+          memmove(g_note.msg + at, g_note.msg + at + 1, (size_t)(n - at - 1) * sizeof(g_note.msg[0]));
+          memmove(g_note.warn + at, g_note.warn + at + 1, (size_t)(n - at - 1) * sizeof(g_note.warn[0]));
+          g_note.n--;
+        }
+      }
+    }
+  }
+}
+
+
+void toast_draw (void) {
+  int cols = scr_cols(), rows = scr_rows(), w, x, y;
+  if (g_toast[0] == '\0' || os_now_us() - g_toast_time > TOAST_TIME) return;
+  w = (int)str_cols(g_toast) + 7;
+  if (w > cols - 2) w = cols - 2;
+  x = cols - w - 1;
+  y = rows - 4;
+  if (y < 1) return;
+  scr_box(x, y, w, 3, S_TOAST);
+  scr_put(x + 2, y + 1, g_toast_warn ? 0xEA6C : 0xEA74, g_toast_warn ? S_TOAST_WARN : S_TOAST);
+  scr_putsw(x + 5, y + 1, w - 6, g_toast, S_TOAST);
+}
+
+/* }================================================================== */
