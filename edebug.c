@@ -2236,6 +2236,7 @@ void debug_draw (int x, int y, int w, int h, int focus) {
         break;
     }
   }
+  side_bar(x, y + VHEAD, w, g_h, (size_t)g_nrow, (size_t)g_top, (size_t)g_h);
 }
 
 
@@ -2455,7 +2456,7 @@ void debug_click (int row, int col, SideAct *act) {
 
 
 void debug_wheel (int d) {
-  g_top += d * 3;
+  g_top += d * wheel_step(0);
   if (g_top < 0) g_top = 0;
   if (g_top > g_nrow - 1) g_top = g_nrow > 0 ? g_nrow - 1 : 0;
 }
@@ -2571,7 +2572,7 @@ void console_paste (const char *s, size_t n) {
 
 
 void console_wheel (int d) {
-  CN.top -= d * 3;
+  CN.top -= d * wheel_step(0);
   if (CN.top < 0) CN.top = 0;
 }
 

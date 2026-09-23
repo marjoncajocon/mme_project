@@ -287,11 +287,28 @@ static char *text_of (const char *path, size_t *len) {
 }
 
 
+/* a file that is surely not text, by its name: not read at all */
+static int binary_name (const char *name) {
+  static const char *const ext[] = {".exe", ".dll", ".so", ".dylib", ".o", ".obj", ".a", ".lib", ".pdb",
+                                    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".pdf",
+                                    ".zip", ".gz", ".tgz", ".xz", ".7z", ".rar", ".jar", ".class", ".wasm",
+                                    ".mp3", ".mp4", ".mov", ".avi", ".wav", ".ogg", ".ttf", ".otf", ".woff",
+                                    ".woff2", ".bin", ".dat", ".db", ".sqlite", ".pyc", ".vsix"};
+  const char *dot = strrchr(name, '.');
+  size_t i;
+  if (dot == NULL) return 0;
+  for (i = 0; i < sizeof(ext) / sizeof(ext[0]); i++)
+    if (m_fncmp(dot, ext[i]) == 0) return 1;
+  return 0;
+}
+
+
 static void search_file (const char *path, const char *rel) {
   size_t len, i, from = 0, line = 1, m = strlen(g_ran), before = g_nhit, ml;
   char *s;
   if (g_field[FD_INC][0] && !globs_match(g_field[FD_INC], rel)) return;
-  s = text_of(path, &len);
+  s = open_doc_text(path, &len);
+  if (s == NULL) s = read_file(path, &len);	/* the walk has looked at its size */
   if (s == NULL) return;
   if (memchr(s, '\0', len < 8000 ? len : 8000)) {	/* binary */
     free(s);
@@ -337,25 +354,103 @@ static int skip_dir (const char *name) {
 }
 
 
-static void walk (const char *dir, const char *rel) {
-  Vec v;
-  size_t i;
-  vec_init(&v);
-  if (os_listdir(dir, &v) != 0) return;
-  vec_sort(&v);
-  for (i = 0; i < v.n && g_nhit < MAX_HITS; i++) {
-    char *path = path_join(dir, v.v[i]);
-    char *r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
+/*
+** The walk goes a little at a time (search_idle), so the results show while
+** it goes on and a new query stops it: a stack of what is still to look
+** at, the last pushed first; a folder read pushes its entries, the first
+** one last.
+*/
+static struct {
+  Vec path, rel;	/* still to look at */
+  int busy;
+  size_t files;	/* looked at so far */
+} WK;
+
+
+static void wk_push (char *path, char *rel) {
+  vec_push(&WK.path, path);
+  vec_push(&WK.rel, rel);
+}
+
+
+static void walk_stop (void) {
+  vec_free(&WK.path);
+  vec_free(&WK.rel);
+  vec_init(&WK.path);
+  vec_init(&WK.rel);
+  WK.busy = 0;
+}
+
+
+static void walk_start (void) {
+  int i;
+  walk_stop();
+  WK.files = 0;
+  for (i = ws_count() - 1; i >= 0; i--)	/* every folder of a workspace, by its name */
+    wk_push(xstrdup(ws_folder(i)), xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
+  WK.busy = 1;
+}
+
+
+/* on with the walk for about budget us; 0: it is done */
+static int walk_step (long long budget) {
+  long long end = os_now_us() + budget;
+  while (WK.path.n > 0 && g_nhit < MAX_HITS) {
+    char *path = WK.path.v[--WK.path.n], *rel = WK.rel.v[--WK.rel.n];
+    const char *name = path_basename(path);
     OsStat st;
-    if (excluded(r) || files_excluded(r)) ;	/* files.exclude too */
-    else if (os_stat(path, &st) == 0 && st.is_dir) {
-      if (!skip_dir(v.v[i])) walk(path, r);
+    if (rel[0] && (excluded(rel) || files_excluded(rel))) {	/* files.exclude too */
+      free(path);
+      free(rel);
+      continue;
     }
-    else search_file(path, r);
+    if (os_stat(path, &st) == 0 && st.is_dir) {
+      Vec v;
+      vec_init(&v);
+      if ((!rel[0] || !skip_dir(name)) && os_listdir(path, &v) == 0) {
+        size_t i;
+        vec_sort(&v);
+        for (i = v.n; i-- > 0;)	/* the first one last: it comes off the stack first */
+          wk_push(path_join(path, v.v[i]), rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]));
+      }
+      vec_free(&v);
+    }
+    else if (st.size <= MAX_FILE && !binary_name(name)) {
+      WK.files++;
+      search_file(path, rel);
+    }
     free(path);
-    free(r);
+    free(rel);
+    if (os_now_us() > end) break;
   }
-  vec_free(&v);
+  if (WK.path.n == 0 || g_nhit >= MAX_HITS) {
+    if (g_nhit >= MAX_HITS) g_cut = 1;
+    walk_stop();
+  }
+  return WK.busy;
+}
+
+
+/* a search is going on: the main loop comes back soon */
+int search_busy (void) {
+  return WK.busy;
+}
+
+
+/*
+** For Go to File: is rel (from the folder, '/' between) left out by the
+** folder's .gitignore or the folders search always skips?
+*/
+int search_ignored (const char *rel) {
+  static char *root;
+  const char *b = strrchr(rel, '/');
+  if (root == NULL || strcmp(root, side_root()) != 0) {	/* another folder: its .gitignore */
+    free(root);
+    root = xstrdup(side_root());
+    load_ignore();
+  }
+  if (skip_dir(b ? b + 1 : rel)) return 1;
+  return g_ignore && globs_match(g_ignore, rel);
 }
 
 
@@ -389,10 +484,10 @@ static void run (void) {
     const char *err = NULL;
     g_re = re_compile(g_ran, !g_case, &err);
   }
+  walk_stop();
   if (g_ran[0] && !(g_regex && g_re == NULL)) {
-    int i;
-    for (i = 0; i < ws_count(); i++)	/* every folder of a workspace, by its name */
-      walk(ws_folder(i), ws_count() > 1 ? ws_folder_name(i) : "");
+    walk_start();
+    walk_step(60000);	/* a small folder is done at once */
   }
   rows();
   g_sel = sel < g_nrow ? sel : (g_nrow ? g_nrow - 1 : 0);
@@ -400,6 +495,13 @@ static void run (void) {
 
 
 int search_idle (void) {
+  if (WK.busy && !g_pending) {	/* on with the walk; the results so far show */
+    size_t sel = g_sel;
+    walk_step(60000);
+    rows();
+    g_sel = sel < g_nrow ? sel : (g_nrow ? g_nrow - 1 : 0);
+    return 1;
+  }
   if (!g_pending || os_now_us() - g_changed < DELAY) return 0;
   run();
   return 1;
@@ -532,6 +634,8 @@ static void replace_all (void) {
   char msg[512];
   size_t i, n = 0, files = 0, done = 0;
   if (g_pending) run();
+  while (WK.busy) walk_step(1000000);	/* every match first */
+  rows();
   for (i = 0; i < g_nfile; i++)
     if (g_file[i].n) {
       n += g_file[i].n;
@@ -675,6 +779,12 @@ void search_draw (int x, int y, int w, int h, int focus) {
   V.sum = ry;
   if (g_ran[0] && !g_pending) {
     if (g_regex && g_re == NULL) snprintf(sum, sizeof(sum), "Invalid regular expression.");
+    else if (WK.busy) {	/* the walk goes on: VS Code's progress, in words */
+      static const char *const spin[] = {"|", "/", "-", "\\"};
+      snprintf(sum, sizeof(sum), "%s Searching %lu files: %lu result%s in %lu file%s", spin[(os_now_us() / 150000) % 4],
+               (unsigned long)WK.files, (unsigned long)g_nhit, g_nhit == 1 ? "" : "s", (unsigned long)g_nfile,
+               g_nfile == 1 ? "" : "s");
+    }
     else if (g_nhit == 0) snprintf(sum, sizeof(sum), "No results found. Review your settings for configured exclusions.");
     else snprintf(sum, sizeof(sum), "%lu result%s in %lu file%s%s",
                   (unsigned long)g_nhit, g_nhit == 1 ? "" : "s",
@@ -725,6 +835,7 @@ void search_draw (int x, int y, int w, int h, int focus) {
       }
     }
   }
+  side_bar(x, y + V.head, w, g_h, g_nrow, g_top, (size_t)g_h);
 }
 
 /* }================================================================== */
@@ -956,10 +1067,10 @@ void search_click (int row, int col, SideAct *act) {
 
 
 void search_wheel (int d) {
-  size_t h = (size_t)g_h;
-  if (d < 0) g_top = g_top > 3 ? g_top - 3 : 0;
+  size_t h = (size_t)g_h, st = (size_t)wheel_step(0);
+  if (d < 0) g_top = g_top > st ? g_top - st : 0;
   else if (g_nrow > h) {
-    g_top += 3;
+    g_top += st;
     if (g_top > g_nrow - h) g_top = g_nrow - h;
   }
   if (g_sel < g_top) g_sel = g_top;

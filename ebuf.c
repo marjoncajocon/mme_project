@@ -87,6 +87,8 @@ static void rows_free (Doc *d) {
 static Pos raw_insert (Doc *d, Pos at, const char *s, size_t n) {
   Row *r = &d->row[at.y];
   if (at.y < d->hl_from) d->hl_from = at.y;
+  if (at.y < d->br_from) d->br_from = at.y;
+  if (at.y < d->tm_from) d->tm_from = at.y;
   char *tail = xstrndup(r->s ? r->s + at.x : "", r->len - at.x);
   size_t tlen = r->len - at.x, i, from = 0;
   r->len = at.x;
@@ -111,6 +113,8 @@ static void raw_delete (Doc *d, Pos a, Pos b) {
   Row *ra = &d->row[a.y], *rb = &d->row[b.y];
   size_t i;
   if (a.y < d->hl_from) d->hl_from = a.y;
+  if (a.y < d->br_from) d->br_from = a.y;
+  if (a.y < d->tm_from) d->tm_from = a.y;
   if (a.y == b.y) {
     memmove(ra->s + a.x, ra->s + b.x, ra->len - b.x);
     ra->len -= b.x - a.x;
@@ -338,7 +342,7 @@ void doc_set_text (Doc *d, const char *s, size_t len) {
   size_t i, from = 0;
   rows_free(d);
   d->n = 0;
-  d->hl_n = d->hl_from = 0;	/* the highlighter starts again */
+  d->hl_n = d->hl_from = d->br_from = d->tm_from = 0;	/* the highlighter starts again */
   d->edits++;
   for (i = 0; i <= len; i++) {
     if (i < len && s[i] != '\n') continue;

@@ -375,6 +375,19 @@ void scr_cursor_shape (int decscusr) {
 }
 
 
+/*
+** The mouse pointer's shape: OSC 22 ; <name> ST, which xterm, kitty and
+** WezTerm understand ("default" the arrow, "text" the I beam, "pointer" the
+** hand over what can be clicked). A terminal that does not know it drops
+** the sequence.
+*/
+static int g_ptr = PTR_TEXT, g_ptr_sent = -1;
+
+void scr_pointer (int shape) {
+  g_ptr = shape;
+}
+
+
 void scr_flush (void) {
   Buf o;
   int x, y, st = -1;
@@ -420,6 +433,11 @@ void scr_flush (void) {
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
   S.full = 0;
+  if (g_ptr != g_ptr_sent) {	/* the hand over buttons, the I beam over text */
+    static const char *const name[] = {"default", "text", "pointer"};
+    buf_printf(&o, "\033]22;%s\033\\", name[g_ptr]);
+    g_ptr_sent = g_ptr;
+  }
   if (g_shape != g_shape_sent) {
     buf_printf(&o, "\033[%d q", g_shape);
     g_shape_sent = g_shape;

@@ -50,7 +50,8 @@ int term_open (void) {
 void term_close (void) {
   if (!g_open) return;
   g_open = 0;
-  term_puts("\033[0m\033[0 q\033[<u\033[?2004l"
+  term_puts("\033]22;default\033\\"	/* the mouse pointer back to the terminal's own */
+            "\033[0m\033[0 q\033[<u\033[?2004l"
             "\033[?1006l\033[?1003l\033[?1000l"
             "\033[?25h\033[?1049l");
   os_tty_raw(0);
@@ -251,7 +252,44 @@ static int read_utf8 (int c) {
 }
 
 
+/*
+** A wheel notch is several events in some terminals (mmc-term sends three),
+** so one notch would scroll three times as far as in another. The events of
+** a notch come together: the ones already waiting are read and counted as
+** one, and the key read past them is kept for the next call.
+*/
+static int g_pending = K_NONE;	/* the key read while draining a notch */
+static Mouse g_pending_mouse;
+
+
+static int read_key (int ms);
+
 int term_key (int ms) {
+  int k;
+  if (g_pending != K_NONE) {	/* what was read ahead */
+    k = g_pending;
+    g_pending = K_NONE;
+    if (KEY_CODE(k) == K_MOUSE) term_mouse = g_pending_mouse;
+    return k;
+  }
+  k = read_key(ms);
+  if (KEY_CODE(k) == K_MOUSE && term_mouse.wheel) {
+    Mouse notch = term_mouse;
+    while (ready(0)) {
+      int n = read_key(0);
+      if (n == K_NONE) break;
+      if (KEY_CODE(n) == K_MOUSE && term_mouse.wheel == notch.wheel) continue;	/* the same notch */
+      g_pending = n;
+      g_pending_mouse = term_mouse;
+      break;
+    }
+    term_mouse = notch;
+  }
+  return k;
+}
+
+
+static int read_key (int ms) {
   int c = getb(ms);
   if (c < 0) return K_NONE;
   if (c == 27) {

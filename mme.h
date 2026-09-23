@@ -28,7 +28,7 @@
 #include "mmc.h"
 
 #define MME_NAME	"mme"
-#define MME_VERSION	"0.7.0"	/* also in mme.rc */
+#define MME_VERSION	"0.9.0"	/* also in mme.rc */
 
 #define TABW		(opt.tab_size)	/* columns a tab goes to */
 
@@ -129,6 +129,7 @@ typedef struct Opt {
   int term_confirm_kill;	/* terminal.integrated.confirmOnKill: 0 never, 1 editor, 2 panel, 3 always */
   int term_confirm_exit;	/* terminal.integrated.confirmOnExit: 0 never, 1 always, 2 hasChildProcesses */
   char term_cwd[512];	/* terminal.integrated.cwd */
+  int preview_tabs;	/* workbench.editor.enablePreview: a click replaces the tab */
   int textmate;	/* editor.textmateGrammars: VS Code's grammars color the code */
   int exp_confirm_dnd;	/* explorer.confirmDragAndDrop */
   int exp_confirm_del;	/* explorer.confirmDelete */
@@ -167,11 +168,27 @@ typedef struct EdOpt {	/* the editing settings: edit_settings reads them */
   int surround;	/* editor.cursorSurroundingLines */
   int beyond_last;	/* editor.scrollBeyondLastLine */
   int line_nums;	/* editor.lineNumbers: 0 off, 1 on, 2 relative, 3 interval */
+  int wheel_lines;	/* editor.mouseWheelScrollSensitivity: lines a notch scrolls */
   unsigned char sep[128];	/* editor.wordSeparators: 1 for each of them */
 } EdOpt;
 
 extern EdOpt eopt;
+int wheel_step (int mods);	/* the lines a wheel notch scrolls (Alt: faster) */
 void edit_settings (const Json *j);	/* eopt from settings.json (settings_load) */
+
+typedef struct VOpt {	/* the minimap's and the diff editor's settings: view_settings reads them */
+  int mm_left;	/* editor.minimap.side: "left" */
+  int mm_slider;	/* editor.minimap.showSlider: 0 mouseover, 1 always */
+  int mm_chars;	/* editor.minimap.renderCharacters */
+  int mm_maxcol;	/* editor.minimap.maxColumn */
+  int mm_scale;	/* editor.minimap.scale: 1, 2 or 3 */
+  int diff_trim;	/* diffEditor.ignoreTrimWhitespace */
+  int diff_hide;	/* diffEditor.hideUnchangedRegions.enabled */
+  int diff_side;	/* diffEditor.renderSideBySide */
+} VOpt;
+
+extern VOpt vopt;
+void view_settings (const Json *j);	/* vopt from settings.json (settings_load) */
 
 void data_init (const char *argv0);	/* mme-data, next to the program */
 const char *data_dir (void);
@@ -230,6 +247,8 @@ typedef struct Doc {
   long group;
   long changes, saved;	/* dirty when they differ */
   size_t hl_from;	/* the first line changed since the highlighter looked */
+  size_t br_from;	/* and since the bracket depths were counted */
+  size_t tm_from;	/* and since the grammar tokenized it */
   unsigned char *hl;	/* the highlighter's state at the start of each line */
   size_t hl_n, hl_cap;	/* known for lines 0 .. hl_n - 1 */
   const void *hl_sx;	/* the language they are for */
@@ -416,7 +435,9 @@ void scr_fill (int x, int y, int w, int st);
 void scr_box (int x, int y, int w, int h, int st);	/* a filled rectangle */
 void scr_restyle (int x, int y, int w, int st);	/* the colors of cells, not their text */
 void scr_cursor (int x, int y);
-void scr_cursor_shape (int decscusr);	/* 1 .. 6: block, underline, bar; blinking or not */	/* y < 0: hidden */
+void scr_cursor_shape (int decscusr);	/* 1 .. 6: block, underline, bar; blinking or not */
+enum { PTR_DEFAULT, PTR_TEXT, PTR_POINTER };	/* the mouse pointer: an arrow, an I beam, a hand */
+void scr_pointer (int shape);	/* over what can be clicked: PTR_POINTER */
 void scr_flush (void);
 void scr_redraw (void);	/* send everything on the next flush */
 
@@ -520,6 +541,8 @@ enum {
   CMD_TERM_COLOR, CMD_TERM_ICON,
   CMD_INSPECT_TOKENS,
   CMD_EXP_OPEN_SIDE, CMD_EXP_FIND_FOLDER,
+  CMD_HELP_KEYS, CMD_HELP_TIPS, CMD_HELP_COMMANDS,
+  CMD_DIFF_WS, CMD_DIFF_HIDE,
   CMD_N
 };
 
@@ -636,6 +659,8 @@ typedef struct Pick {
   int (*on_tick) (struct Pick *p, int changed);	/* after each key and while waiting: 1 the items changed, 2 stop (PICK_SWITCH) */
   int start;	/* the item selected first */
   const char *modes;	/* Go to File: one of these typed first switches (PICK_MODE) */
+  int match_detail;	/* the detail is a path: what is typed matches "detail/label" too */
+  const char *status;	/* dim, at the input's right end ("Indexing... 1200 files"), or NULL */
   char text[512];	/* what is typed */
 } Pick;
 
@@ -718,6 +743,10 @@ enum { SA_NONE, SA_OPEN, SA_GO, SA_DIFF, SA_SHOW_DIFF, SA_CMD, SA_FOCUS_SCM,
        SA_TERMINAL, SA_CLIP,	/* a terminal in folder path; path to the clipboard */
        SA_OPEN_SIDE, SA_FIND_FOLDER };	/* path opened in the group beside; Search in folder path (from the root) */
 
+void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t shown);	/* a pane's scrollbar */
+int files_bar_y (void);	/* the tree's scrollbar: the row it starts at */
+int files_bar_rows (void);	/* its rows, 0 when everything fits */
+void files_bar_to (int row, int rows);	/* dragged there */
 int side_width (void);	/* mme.c: the sidebar's width now */
 void act_draw (int x, int y, int h, int view, int shown);
 int act_hit (int y);	/* the view whose icon is on row y of the body, -1 none */
@@ -802,6 +831,9 @@ int search_key (int k, SideAct *act);
 void search_click (int row, int col, SideAct *act);
 void search_wheel (int d);
 int search_idle (void);
+void files_index_stale (void);	/* mme.c: a file was made, renamed or deleted: Go to File walks again */
+int search_busy (void);	/* a search is walking the folder: the main loop comes back soon */
+int search_ignored (const char *rel);	/* for Go to File: .gitignore'd, or a folder search skips */
 void search_set (const char *text);	/* Find in Files with the selection */
 void search_replace_mode (const char *text);	/* Replace in Files: the replace box open */
 
@@ -870,14 +902,19 @@ int diff_active (void);
 void diff_close (void);
 const char *diff_title (void);
 const char *diff_path (void);
-size_t diff_line (void);	/* the line of the file at the top, from 1 */
+size_t diff_line (void);	/* the line of the file at the cursor, from 1 */
 void diff_draw (int x, int y, int w, int h);
 int diff_key (int k);	/* DIFF_* */
 void diff_wheel (int d);
 void diff_change (int back);
 void diff_toggle_inline (void);	/* side by side, or one above the other */	/* F7 / Shift+F7 */
 
-enum { DIFF_NO, DIFF_YES, DIFF_CLOSE, DIFF_EDIT };	/* EDIT: open the file at diff_line */
+enum { DIFF_NO, DIFF_YES, DIFF_CLOSE, DIFF_EDIT, DIFF_REVERT };	/* EDIT: open the file at diff_line; REVERT: the block clicked */
+int diff_title_draw (int x1, int y);	/* the diff's icons in the tab bar, before x1; where they start */
+int diff_title_click (int x);	/* DIFF_* */
+int diff_click (int mx, int my);	/* DIFF_* */
+void diff_toggle_trim (void);	/* diffEditor.ignoreTrimWhitespace */
+void diff_toggle_hide (void);	/* diffEditor.hideUnchangedRegions.enabled */
 
 int diff_range (int act);	/* Stage (0) / Unstage (1) / Revert (2) Selected Ranges: 0 done */
 
@@ -942,6 +979,7 @@ void syntax_comment (const Syntax *sx, const char **line, const char **open, con
 int syntax_scan (const Syntax *sx, const char *s, size_t n, int state, unsigned char *tok);
 /* the tokens of line y of d, with the states of the lines before kept up to date */
 void syntax_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok);
+void syntax_line_quick (Doc *d, const Syntax *sx, size_t y, unsigned char *tok);	/* without the grammar: for bulk work */
 /* a language mme only knows from a VS Code extension (its grammar colors it) */
 const Syntax *syntax_extra (const char *name, const char *id, const char *line, const char *open, const char *close);
 const char *syntax_lang (const Syntax *sx);	/* its VS Code language id */

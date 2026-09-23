@@ -87,10 +87,10 @@ it wider, the editor with its tab and breadcrumbs, and the status bar with
 the branch, the position, the indentation, the line ends and the language.
 With no file open the editor shows the keys to start with.
 
-- **Tabs** — every file opens in a tab. A single click in the Explorer (or
-  Space, or a search result) opens a preview tab, in italics, which the next
-  one replaces until you edit it; Enter opens it to stay. The x or
-  a middle click closes a tab, a dot says it is not saved.
+- **Tabs** — every file opens in a tab of its own, also when it is clicked
+  once in the Explorer. VS Code instead reuses one preview tab (in italics)
+  until the file is edited: `"workbench.editor.enablePreview": true` does the
+  same here. The x or a middle click closes a tab, a dot says it is not saved.
 - **Colors** — C, C++, JavaScript, TypeScript, Go, Python, Rust, Zig, Java,
   Lua, shell, batch, PowerShell, JSON, Markdown, Makefile, YAML, TOML, CSS,
   HTML: keywords, types, functions, strings, numbers and comments in Dark+'s
@@ -103,7 +103,10 @@ With no file open the editor shows the keys to start with.
   typescript-language-server, zls, lua-language-server). Suggestions come as
   you type (Ctrl+Space asks), Enter or Tab takes one; F12 or Ctrl+Click goes
   to the definition; problems are squiggles, counted in the status bar, and
-  F8 / Shift+F8 go through them. The server must be in the PATH.
+  F8 / Shift+F8 go through them. The server must be in the PATH. The text
+  goes to the server when the typing stops (a fifth of a second), so a key
+  does not send a big file again and again; anything asked for (a suggestion,
+  a hover) sends it at once first.
 - **Hover** — the mouse resting on a name (or Ctrl+K Ctrl+I) shows what the
   server knows of it, its code in the file's colors. Resting on a squiggle
   shows its problem first, with a "Quick Fix... (Ctrl+.)" link.
@@ -206,8 +209,10 @@ With no file open the editor shows the keys to start with.
   VS Code's icon for each kind; Enter or a click goes there, a symbol with
   others in it folds (its chevron, Left / Right). Typing filters it (Filter on
   Type; Esc clears), the selection follows the cursor, and its "..." sorts by
-  position, name or category; the icon next to it collapses all. The
-  breadcrumbs over the text show the symbol the cursor is in.
+  position, name or category; the icon next to it collapses all. Its title's
+  chevron folds the whole section, as OPEN EDITORS' and TIMELINE's do, and
+  the folded sections come back with the folder next time. The breadcrumbs
+  over the text show the symbol the cursor is in.
 - **Testing** — the TESTING view (the beaker in the activity bar): the tests of
   the folder, found in their files — Go (`func TestXxx` in `*_test.go`, run by
   `go test -json`), Python (`def test_` in `test_*.py`; pytest when it is
@@ -368,6 +373,14 @@ With no file open the editor shows the keys to start with.
   over yours. Add Folder to Workspace... turns a folder into one, Save
   Workspace As... writes it. A folder's `.vscode/settings.json` applies over
   your settings too, like VS Code.
+- **The wheel** — a notch scrolls three lines, in the text and in every list
+  (editor.mouseWheelScrollSensitivity multiplies it); Alt+wheel five times as
+  far, Shift+wheel to the side. Terminals that send several events for one
+  notch (mmc-term sends three) still scroll one notch's worth.
+- **The mouse pointer** — a hand over what a click does something with (the
+  menus, tabs, the side bar, the panel's tabs, the status bar, the pages) and
+  an I beam over the text, for terminals that understand OSC 22 (xterm,
+  kitty, WezTerm; a terminal that does not just keeps its own pointer).
 - **Scrollbar** — at the right of the text, with the problems, the find
   matches and the cursor marked in it like VS Code's overview ruler; click or
   drag it. A line wider than the text gives a horizontal one under it (and
@@ -418,8 +431,20 @@ With no file open the editor shows the keys to start with.
 - **Multiple cursors** — typing, deleting, moving and selecting happen at
   every cursor; a paste with as many lines as cursors gives each its line.
 - **Minimap** — the whole file in small (Braille dots, a dot for a few
-  letters) on the right of the text, in its colors, with the part the editor shows lighter. Click or drag it to go
-  there; View > Toggle Minimap hides it.
+  letters) on the right of the text, in its colors. The box of what the
+  editor shows (its slider) appears with the mouse over it and is dragged;
+  a click elsewhere goes there. The git changes are marked on its left edge
+  (green added, blue modified, red deleted), and problems, find matches and
+  the occurrences of the symbol at the cursor tint where they are.
+  editor.minimap.side puts it on the left, showSlider "always" keeps the box,
+  renderCharacters false draws blocks of color, maxColumn and scale say how
+  much of a line and how many lines a row holds. Its colors come from mme's
+  own scanner, not from the TextMate grammar: a dot stands for a few letters,
+  and a grammar over the hundreds of lines it shows would cost a frame too
+  much. View > Toggle Minimap hides
+  it. The scrollbar next to it is VS Code's overview ruler: the cursor, the
+  git changes, the occurrences, the find matches, the warnings and the
+  errors, each in its color.
 - **Terminal** — Ctrl+` or Ctrl+J opens the panel under the editor with a
   shell in the folder that is open: `mmc-shell` when it is in the PATH (else
   cmd / $SHELL; `MME_SHELL` chooses another). It is mmc-term's own terminal
@@ -494,7 +519,8 @@ With no file open the editor shows the keys to start with.
   icon themes and TextMate grammars do nothing here (its page says which it
   has). A language server an extension downloads can still be used by naming
   it in `mme.languageServers`.
-- **Explorer** — the folder tree. Enter opens (Space only shows), Left /
+- **Explorer** — the folder tree, with a scrollbar at its right edge (every
+  list of the side bar has one). Enter opens (Space only shows), Left /
   Right fold, typing a letter jumps, F5 reads the folder again. Changed files
   are colored like VS Code's git decorations. The folder's row has New File,
   New Folder, Refresh and Collapse Folders; the name is typed in the tree
@@ -526,10 +552,19 @@ With no file open the editor shows the keys to start with.
   comma separated: `*.c, src, ./lib`); .gitignore, .git and node_modules are
   left out. Files open in the editor are searched and changed there (one undo
   step). Tab goes from box to box; refresh, clear and collapse are on the title.
+  A big folder is walked a little at a time: the results and "Searching N
+  files" show while it goes on, and typing again starts it over.
 - **Quick Open** — Ctrl+P lists the files opened lately first. What is typed
   first switches it, like VS Code: `>` commands, `@` the file's symbols, `:`
   a line (`:12:5`), `?` the list of these; Backspace over the sign goes back to
   files. Ctrl+R (Open Recent) lists recent folders, then recent files.
+  What is typed matches the name and the path, as VS Code does: the letters in
+  order, letters side by side and at the start of a word or a part of the path
+  worth more, `src/ma` finds `src/main.c`, several words each have to match,
+  and the letters that matched are lit blue. The folder's files are found once
+  and kept: a big one shows "Indexing... N files" and fills while you type
+  (100,000 files in about 15 s here), and it is walked again when a file is
+  made, renamed or deleted.
 - **Tabs** — right-click a tab: Close, Close Others, Close to the Right, Close
   Saved, Close All, Copy Path, Reveal in Explorer View, Keep Open, Pin, Split
   Right. Pinned tabs stay first with a pin and survive Close Others / All; the
@@ -602,9 +637,18 @@ With no file open the editor shows the keys to start with.
   (git.enableSmartCommit), Never (git.suggestSmartCommit).
 - **Diff editor** — the whole file, old on the left and new on the right
   (one above the other when it is narrow, or with `i` / **Toggle Inline
-  View**), changed lines red and green, changed letters brighter. F7 /
-  Shift+F7 go from change to change, Enter opens the file at that line, Esc
-  closes it.
+  View**), changed lines red and green, the changed words in them brighter
+  (VS Code's character diff). Up and Down move the cursor, Enter opens the
+  file at its line, F7 / Shift+F7 go from change to change, Esc closes it.
+  It has a minimap of its own, green where lines came and red where they
+  went; a click in it goes there. The tab bar carries its actions, like VS
+  Code's editor title: previous and next change, ¶ (**Diff: Toggle Ignore
+  Trim Whitespace**: spaces at the ends of lines are not changes,
+  diffEditor.ignoreTrimWhitespace), fold (**Diff: Toggle Collapse Unchanged
+  Regions**: long runs with no change become one "⋯ N hidden lines" row that
+  a click opens, diffEditor.hideUnchangedRegions.enabled), inline or side by
+  side (diffEditor.renderSideBySide), and open the file. A → by a change of
+  the working tree reverts that block.
 
 ## Keys
 
@@ -612,6 +656,7 @@ With no file open the editor shows the keys to start with.
 |---|---|
 | Ctrl+Shift+P, F1 | Command Palette |
 | Ctrl+P, Ctrl+E | Go to File (`>` `@` `:` `?` switch it) |
+| Help > Keyboard Shortcuts Reference | this table, made from your keys |
 | Ctrl+N / Ctrl+O / Ctrl+R | New File / Open File / Open Project (recent folders) |
 | Ctrl+S / Ctrl+Shift+S | Save / Save As |
 | Ctrl+W / Ctrl+Q | Close Editor / Exit (asks when not saved) |
@@ -684,5 +729,13 @@ Alt+1 and Ctrl+PgDn there.
 
 ## What comes next
 
-The Settings editor (a UI over settings.json), conditional breakpoints and
-logpoints, git blame and history, and extensions.
+VS Code's own quick open ranking (matched letters lit, and the file list kept
+between searches for folders with tens of thousands of files), the language
+server's progress in the status bar, notifications with buttons, the minimap's
+slider dragged with the mouse, editing in the diff editor, the command center
+in the title bar, and the Manage gear.
+
+An extension's JavaScript cannot run here: mme reads what an extension
+*describes* (its color themes, snippets, languages and TextMate grammars) and
+uses the language servers and debug adapters it ships. Notebooks, remote
+development and settings sync are not planned.

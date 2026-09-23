@@ -203,5 +203,5 @@ void out_key (int k) {
 
 
 void out_wheel (int d) {
-  if (g_cur >= 0) scroll(&g_chan[g_cur], d * 3);
+  if (g_cur >= 0) scroll(&g_chan[g_cur], d * wheel_step(0));
 }

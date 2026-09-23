@@ -2380,7 +2380,7 @@ void panel_wheel (int d) {
                                        : (P.g->app_cursor ? "\033OB" : "\033[B"));
     return;
   }
-  grid_set_view(P.g, P.g->view - d * 3);	/* the scrollback */
+  grid_set_view(P.g, P.g->view - d * wheel_step(0));	/* the scrollback */
 }
 
 /* }================================================================== */

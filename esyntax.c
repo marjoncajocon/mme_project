@@ -1277,10 +1277,15 @@ static unsigned char *g_tmp;	/* the tokens of lines only scanned for their state
 static size_t g_tmpcap;
 
 
-void syntax_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
+/*
+** The line's tokens from this file's own scanner, never the TextMate
+** grammar: the minimap and the bracket depths ask for hundreds of lines at
+** once, and a grammar costs too much for that (the eye cannot tell in a
+** minimap dot anyway).
+*/
+static void scan_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
   size_t k;
   const Row *r = &d->row[y];
-  if (tm_line(d, sx, y, tok)) return;	/* VS Code's grammar colors it */
   if (d->hl_sx != (const void *)sx) {	/* another language: all again */
     d->hl_sx = sx;
     d->hl_n = 0;
@@ -1306,6 +1311,18 @@ void syntax_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
   }
   if (d->hl_n < y + 1) d->hl_n = y + 1;
   syntax_scan(sx, r->s, r->len, d->hl[y], tok);
+}
+
+
+void syntax_line_quick (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
+  if (sx == NULL || y >= d->n) return;
+  scan_line(d, sx, y, tok);
+}
+
+
+void syntax_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
+  if (tm_line(d, sx, y, tok)) return;	/* VS Code's grammar colors it */
+  scan_line(d, sx, y, tok);
 }
 
 /* }================================================================== */

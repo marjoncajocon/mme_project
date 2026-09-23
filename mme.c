@@ -66,6 +66,7 @@ typedef struct Ed {
   int side, view, side_w;	/* the sidebar: shown, which view, how wide */
   int focus;
   int resizing;	/* dragging the sidebar's edge */
+  int bar_drag;	/* the side bar's scrollbar is held */
   int drag_text;	/* selecting with the mouse */
   int drag_unit;	/* 2: a double click drags by words, 3: a triple one by lines */
   Pos drag_a, drag_b;	/* the word or line clicked first */
@@ -155,6 +156,7 @@ typedef struct Layout {
   int ed_x, ed_w;	/* the editor group */
   int text_y, text_h;	/* its text, under the tab and the breadcrumbs */
   int mm_w;	/* the minimap's width, 0: none */
+  int mml_w, mm_x;	/* editor.minimap.side "left": its width there (mm_w 0 then); where it is */
   int sb_w;	/* the scrollbar's: 1, or 0 */
   int hsb;	/* the horizontal scrollbar under the text: 1, or 0 */
   int text_h0;	/* the text's rows before it */
@@ -170,6 +172,7 @@ static Layout L;
 
 /* the Outline, at the bottom of the Explorer */
 static struct {
+  int open;	/* the section is not collapsed (the chevron on its title) */
   size_t sel, top;	/* in vis */
   int y0, h;	/* where it is */
   size_t *vis;	/* the symbols shown, in their order: sorted, collapsed, filtered */
@@ -237,6 +240,9 @@ static int tl_height (void);
 static void draw_open_editors (int x, int y, int w, int h, int focus);
 static void draw_timeline (int x, int y, int w, int h, int focus);
 static void md_preview (int side);
+static void help_page (const char *name, void (*make) (Buf *b));
+static void help_keys_md (Buf *b);
+static void help_tips_md (Buf *b);
 static const Sym *symbols (size_t *n);
 static size_t ih_shift (size_t y, size_t x);
 static int screen_at (Pos p, int *sx, int *sy);
@@ -636,6 +642,20 @@ static int pair_of (int c) {
 }
 
 
+/* as line_tokens, but never the TextMate grammar: for whole-file work */
+static const unsigned char *line_tokens_quick (size_t y) {
+  static unsigned char *tok;
+  static size_t cap;
+  const Row *r = row_at(y);
+  if (r->len + 1 > cap) {
+    cap = r->len + 256;
+    tok = (unsigned char *)xrealloc(tok, cap);
+  }
+  syntax_line_quick(T->doc, T->sx, y, tok);
+  return tok;
+}
+
+
 /* the tokens of line y: a bracket in a string or a comment does not count */
 static const unsigned char *line_tokens (size_t y) {
   static unsigned char *tok;
@@ -706,31 +726,46 @@ static int cursor_brackets (Pos *a, Pos *b) {
 static size_t *g_depth;
 static size_t g_ndepth;
 static const Doc *g_depth_doc;
-static unsigned long g_depth_at;
+
+/*
+** The depths are kept between frames: an edit only counts the lines from it
+** on (the text above them cannot have changed), and the count stops at the
+** last line the editor shows, so a huge file costs no more than a screen.
+*/
+static size_t g_depth_n;	/* counted for lines 0 .. g_depth_n - 1 */
 
 static size_t depth_at (size_t y) {
-  size_t k, d = 0;
-  if (g_depth_doc != T->doc || g_depth_at != T->doc->edits + 1 || g_ndepth != T->doc->n + 1) {
+  size_t k, d, want = y + 1, last = T->top + (size_t)L.text_h + 1;
+  if (g_depth_doc != T->doc || g_ndepth != T->doc->n + 1) {	/* another file, or lines came or went */
     g_ndepth = T->doc->n + 1;
     g_depth = (size_t *)xrealloc(g_depth, g_ndepth * sizeof(size_t));
-    for (k = 0; k < T->doc->n; k++) {
-      const Row *r = row_at(k);
-      const unsigned char *tok = r->len > 0 && T->doc->n < 20000 ? line_tokens(k) : NULL;
-      size_t x;
-      g_depth[k] = d;
-      if (tok == NULL) continue;
-      for (x = 0; x < r->len; x++) {
-        int c = (unsigned char)r->s[x];
-        if (!code_at(tok, x)) continue;
-        if (is_open(c)) d++;
-        else if (is_close(c) && d > 0) d--;
-      }
-    }
-    g_depth[T->doc->n] = d;
+    g_depth_n = 0;
     g_depth_doc = T->doc;
-    g_depth_at = T->doc->edits + 1;
   }
-  return y < g_ndepth ? g_depth[y] : 0;
+  if (T->doc->br_from < g_depth_n) g_depth_n = T->doc->br_from;	/* an edit: from its line on again */
+  T->doc->br_from = (size_t)-1;
+  if (want < last) want = last;	/* what the screen needs now, in one go */
+  if (want > T->doc->n) want = T->doc->n;
+  if (g_depth_n == 0) g_depth[0] = 0;
+  for (k = g_depth_n, d = g_depth[g_depth_n]; k < want; k++) {
+    const Row *r = row_at(k);
+    const unsigned char *tok = r->len > 0 ? line_tokens_quick(k) : NULL;
+    size_t x;
+    g_depth[k] = d;
+    if (tok == NULL) {
+      g_depth[k + 1] = d;
+      continue;
+    }
+    for (x = 0; x < r->len; x++) {
+      int c = (unsigned char)r->s[x];
+      if (!code_at(tok, x)) continue;
+      if (is_open(c)) d++;
+      else if (is_close(c) && d > 0) d--;
+    }
+    g_depth[k + 1] = d;
+  }
+  if (want > g_depth_n) g_depth_n = want;
+  return y < g_depth_n ? g_depth[y] : 0;
 }
 
 
@@ -1320,6 +1355,15 @@ static size_t doc_width (void) {
 static void group_layout (void) {
   L.mm_w = (E.minimap && HAS_DOC && !G->diff && !T->page && L.ed_w >= 60) ? MM_W : 0;
   L.sb_w = (HAS_DOC && !G->diff && !T->page && L.ed_w >= 30) ? 1 : 0;
+  L.mml_w = 0;
+  L.mm_x = L.ed_x + L.ed_w - L.sb_w - L.mm_w;
+  if (L.mm_w > 0 && vopt.mm_left) {	/* editor.minimap.side "left": left of the text, which moves over */
+    L.mml_w = L.mm_w;
+    L.mm_w = 0;
+    L.mm_x = L.ed_x;
+    L.ed_x += L.mml_w;
+    L.ed_w -= L.mml_w;
+  }
   L.text_h = L.text_h0;
   L.hsb = 0;
   if (HAS_DOC && !G->diff && !T->page && !E.wrap && L.text_h0 > 3) {	/* a line wider than the text */
@@ -2670,12 +2714,33 @@ static void update_title (void) {
 
 /*
 ** The minimap, as VS Code's: the text in small. Every cell is a Braille
-** character, 2 x 4 dots: a dot is MM_CH characters of a line, 4 lines in a
-** row, so words come out as little dashes in their token's color. When the
-** file is longer than it can show it scrolls along with the editor.
+** character, 2 x 4 dots: a dot is a few characters of a line (as many as
+** editor.minimap.maxColumn asks for), 4 lines in a row (fewer with
+** editor.minimap.scale), so words come out as little dashes in their
+** token's color. When the file is longer than it can show it scrolls
+** along with the editor. Its left edge has the git changes; problems,
+** find matches and the symbol's occurrences tint where they are.
 */
+static int g_mm_hover;	/* the mouse is over it: editor.minimap.showSlider "mouseover" */
+
+static int mm_width (void) {
+  return L.mm_w + L.mml_w;
+}
+
+
+static size_t mm_lpr (void) {	/* lines of text in one row of it */
+  return vopt.mm_scale >= 3 ? 1 : vopt.mm_scale == 2 ? 2 : MM_LINES;
+}
+
+
+static size_t mm_ch (void) {	/* characters of text in one dot */
+  size_t c = ((size_t)vopt.mm_maxcol + 2 * MM_W - 1) / (2 * MM_W);
+  return c ? c : 1;
+}
+
+
 static size_t mm_top (void) {
-  size_t cap = (size_t)L.text_h * MM_LINES, n = T->doc->n, t;
+  size_t lpr = mm_lpr(), cap = (size_t)L.text_h * lpr, n = T->doc->n, t;
   if (n <= cap || n <= (size_t)L.text_h) return 0;
   t = (size_t)((double)T->top * (double)(n - cap) / (double)(n - (size_t)L.text_h));
   return t > n - cap ? n - cap : t;
@@ -2697,7 +2762,7 @@ static void mm_line (size_t y, uint32_t *dot) {
   static unsigned char *tok;
   static size_t cap;
   const Row *r;
-  size_t x = 0, c = 0, len;
+  size_t x = 0, c = 0, len, ch = mm_ch();
   int i;
   for (i = 0; i < 2 * MM_W; i++) dot[i] = MM_NONE;
   if (y >= T->doc->n) return;
@@ -2706,31 +2771,89 @@ static void mm_line (size_t y, uint32_t *dot) {
     cap = r->len + 256;
     tok = (unsigned char *)xrealloc(tok, cap);
   }
-  syntax_line(T->doc, T->sx, y, tok);
-  while (x < r->len && c / MM_CH < 2 * MM_W) {
+  syntax_line_quick(T->doc, T->sx, y, tok);	/* the grammar is too slow for hundreds of lines a frame */
+  while (x < r->len && c / ch < 2 * MM_W) {
     size_t w = char_width(r, x, c, &len);
-    unsigned char ch = (unsigned char)r->s[x];
-    if (ch != ' ' && ch != '\t' && dot[c / MM_CH] == MM_NONE) dot[c / MM_CH] = tok_color(tok[x]);
+    unsigned char b = (unsigned char)r->s[x];
+    if (b != ' ' && b != '\t' && dot[c / ch] == MM_NONE) dot[c / ch] = tok_color(tok[x]);
     c += w;
     x += len;
   }
 }
 
 
+/* the minimap's marks: its cell of line y, column x (a byte), tinted col when it is stronger (pri) */
+static void mm_mark (uint32_t *tint, unsigned char *pri, size_t top, size_t y, size_t x, uint32_t col, int p) {
+  size_t lpr = mm_lpr(), cell;
+  long row;
+  if (y < top || y >= T->doc->n) return;
+  row = (long)((y - top) / lpr);
+  if (row >= L.text_h) return;
+  cell = col_of(row_at(y), x) / (2 * mm_ch());
+  if (cell >= (size_t)mm_width()) return;
+  if (pri[row * MM_W + cell] < p) {
+    pri[row * MM_W + cell] = (unsigned char)p;
+    tint[row * MM_W + cell] = col;
+  }
+}
+
+
+#define MM_ADD	0x2EA043	/* the git changes: editorGutter.addedBackground ... Dark Modern's */
+#define MM_MOD	0x0078D4
+#define MM_DEL	0xF85149
+
 static void draw_minimap (void) {
   /* the Braille dots: bit[line][left, right] */
   static const unsigned char bit[MM_LINES][2] = {{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}};
-  int row, i, k, x0 = L.ed_x + L.ed_w - L.sb_w - L.mm_w;
-  size_t top = mm_top();
+  int row, i, k, x0 = L.mm_x, mw = mm_width();
+  size_t top = mm_top(), lpr = mm_lpr(), last = top + (size_t)L.text_h * lpr, y;
+  int slider = vopt.mm_slider || g_mm_hover || E.drag_mm;
   uint32_t dot[MM_LINES][2 * MM_W];
+  uint32_t *tint = (uint32_t *)calloc((size_t)L.text_h * MM_W + 1, sizeof(uint32_t));
+  unsigned char *pri = (unsigned char *)calloc((size_t)L.text_h * MM_W + 1, 1);
+  if (tint == NULL || pri == NULL) {
+    free(tint);
+    free(pri);
+    return;
+  }
+  if (last > T->doc->n) last = T->doc->n;
+  {	/* the marks: occurrences, find matches, warnings, errors (the strongest shows) */
+    size_t nd, nh, d;
+    const Diag *dv = lsp_diags(T->doc, &nd);
+    const Pos *hv = hl_ranges(&nh);
+    for (d = 0; d < nh; d++) mm_mark(tint, pri, top, hv[d * 2].y, hv[d * 2].x, 0xA0A0A0, 1);
+    if (E.find_open && E.find[0])
+      for (y = top; y < last; y++) {
+        const Row *r = row_at(y);
+        size_t xx;
+        for (xx = 0; xx < r->len; xx++)
+          if (match_at(y, xx)) mm_mark(tint, pri, top, y, xx, 0xD18616, 2);
+      }
+    for (d = 0; d < nd; d++)
+      if (dv[d].sev <= 2) {
+        size_t x1 = dv[d].b.y == dv[d].a.y ? dv[d].b.x : (dv[d].a.y < T->doc->n ? row_at(dv[d].a.y)->len : 0), xx;
+        for (xx = dv[d].a.x; xx <= x1 && xx < dv[d].a.x + 400; xx += 2 * mm_ch())
+          mm_mark(tint, pri, top, dv[d].a.y, xx, ui_color(dv[d].sev == 1 ? C_ERROR : C_WARNING), dv[d].sev == 1 ? 4 : 3);
+      }
+  }
   for (row = 0; row < L.text_h; row++) {
-    size_t y0 = top + (size_t)row * MM_LINES;
-    int in_view = (y0 + MM_LINES > T->top && y0 < T->top + (size_t)L.text_h);
-    uint32_t bg = ui_color(in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG);	/* the slider: what the editor shows */
-    for (k = 0; k < MM_LINES; k++) mm_line(y0 + (size_t)k, dot[k]);
-    for (i = 0; i < L.mm_w; i++) {
-      uint32_t fg = MM_NONE;
+    size_t y0 = top + (size_t)row * lpr;
+    int in_view = slider && (y0 + lpr > T->top && y0 < T->top + (size_t)L.text_h);
+    uint32_t bg = ui_color(in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG), git = 0;
+    for (k = 0; k < MM_LINES; k++) mm_line(y0 + (size_t)k * lpr / MM_LINES, dot[k]);
+    if (opt.scm_decor && T->real && !T->page) {	/* the git changes of its lines: the left edge */
+      size_t j;
+      for (j = 0; j < lpr; j++) {
+        int qm = quick_mark(T->doc, T->real, y0 + j);
+        if (qm & QM_MOD) git = MM_MOD;
+        else if ((qm & QM_ADD) && git != MM_MOD) git = MM_ADD;
+        else if (qm && !git) git = MM_DEL;
+      }
+    }
+    for (i = 0; i < mw; i++) {
+      uint32_t fg = MM_NONE, cbg = bg;
       unsigned m = 0;
+      uint32_t ch;
       for (k = 0; k < MM_LINES; k++) {
         int d;
         for (d = 0; d < 2; d++)
@@ -2739,9 +2862,49 @@ static void draw_minimap (void) {
             if (fg == MM_NONE) fg = dot[k][2 * i + d];
           }
       }
-      scr_put_rgb(x0 + i, L.text_y + row, m ? 0x2800 + m : ' ', m ? blend(fg, bg, 80) : bg, bg, 0);
+      if (i < MM_W && pri[row * MM_W + i]) cbg = blend(tint[row * MM_W + i], bg, 55);
+      if (vopt.mm_chars) ch = m ? 0x2800 + m : ' ';
+      else {	/* editor.minimap.renderCharacters false: blocks of color */
+        int up = (m & 0x1B) != 0, down = (m & 0xE4) != 0;
+        ch = up && down ? 0x2588 : up ? 0x2580 : down ? 0x2584 : ' ';
+      }
+      if (i == 0 && git) scr_put_rgb(x0 + i, L.text_y + row, 0x258E, git, cbg, 0);	/* ▎ */
+      else scr_put_rgb(x0 + i, L.text_y + row, ch, m ? blend(fg, cbg, vopt.mm_chars ? 80 : 45) : cbg, cbg, 0);
     }
   }
+  free(tint);
+  free(pri);
+}
+
+
+/* a click or a drag on the minimap: the slider taken follows the mouse; elsewhere, that line in the middle */
+static void minimap_mouse (Mouse *m) {
+  size_t n = T->doc->n, h = (size_t)L.text_h, lpr = mm_lpr(), top0 = mm_top(), top;
+  long ry = m->y - L.text_y, s0, sh = (long)((h + lpr - 1) / lpr), want;
+  if (n <= h) {
+    T->top = 0;
+    E.drag_mm = 1;
+    return;
+  }
+  s0 = (long)((T->top > top0 ? T->top - top0 : 0) / lpr);
+  if (!E.drag_mm) {
+    if (ry >= s0 && ry < s0 + sh) E.drag_mm = 1 + (int)(ry - s0);	/* the slider is taken */
+    else {
+      size_t line = top0 + (size_t)(ry < 0 ? 0 : ry) * lpr, half = h / 2;
+      T->top = line > half ? line - half : 0;
+      if (T->top > n - h) T->top = n - h;
+      E.drag_mm = 1 + (int)(sh / 2);
+      return;
+    }
+  }
+  want = ry - (E.drag_mm - 1);	/* the slider's top row wanted */
+  if (want < 0) want = 0;
+  if (n <= h * lpr) top = (size_t)want * lpr;
+  else {
+    double f = (double)want / (double)(L.text_h - sh > 0 ? L.text_h - sh : 1);
+    top = (size_t)((f > 1 ? 1 : f) * (double)(n - h) + 0.5);
+  }
+  T->top = top > n - h ? n - h : top;
 }
 
 
@@ -2768,12 +2931,21 @@ static void draw_scrollbar (void) {
   size_t n = T->doc->n, nd, i;
   const Diag *dv = lsp_diags(T->doc, &nd);
   unsigned char *mark = (unsigned char *)calloc((size_t)L.text_h + 1, 1);
-  /* the marks: 1 cursor, 2 find match, 3 warning, 4 error; the strongest shows */
+  /* the marks: 1 cursor, 2 3 4 git added, modified, deleted, 5 occurrence, 6 find match, 7 warning, 8 error; the strongest shows */
 #define MARK(line, m)	do { double d_ = (double)(line) * L.text_h / (double)(n > 0 ? n : 1); \
     int r_ = d_ < (double)L.text_h ? (int)d_ : L.text_h - 1;	/* a line past the end (a server's): the last row */ \
     if (r_ < 0) r_ = 0; if (mark[r_] < (m)) mark[r_] = (unsigned char)(m); } while (0)
   if (mark == NULL) return;
   MARK(T->cur.y, 1);
+  if (opt.scm_decor && T->real && !T->page) {	/* the git changes, VS Code's left lane */
+    size_t nq, q, j;
+    const QHunk *qh = quick_hunks(T->doc, T->real, &nq);
+    for (q = 0; qh && q < nq; q++) {
+      int kind = qh[q].nn == 0 ? 4 : qh[q].on == 0 ? 2 : 3;
+      if (qh[q].nn == 0) MARK(qh[q].n0 ? qh[q].n0 - 1 : 0, kind);
+      for (j = 0; j < qh[q].nn && j < 100000; j++) MARK(qh[q].n0 + j, kind);
+    }
+  }
   if (E.find_open && E.find[0] && n < 20000) {
     size_t y;
     for (y = 0; y < n; y++) {
@@ -2781,7 +2953,7 @@ static void draw_scrollbar (void) {
       size_t xx;
       for (xx = 0; xx < r->len; xx++)
         if (match_at(y, xx)) {
-          MARK(y, 2);
+          MARK(y, 6);
           break;
         }
     }
@@ -2789,21 +2961,25 @@ static void draw_scrollbar (void) {
   {	/* the occurrences of the symbol at the cursor */
     size_t nh, k;
     const Pos *hv = hl_ranges(&nh);
-    for (k = 0; k < nh; k++) MARK(hv[k * 2].y, 2);
+    for (k = 0; k < nh; k++) MARK(hv[k * 2].y, 5);
   }
   for (i = 0; i < nd; i++)
-    if (dv[i].sev <= 2) MARK(dv[i].a.y, dv[i].sev == 1 ? 4 : 3);
+    if (dv[i].sev <= 2) MARK(dv[i].a.y, dv[i].sev == 1 ? 8 : 7);
 #undef MARK
   for (row = 0; row < L.text_h; row++) {
     int on = row >= pos && row < pos + size && size < L.text_h;
     uint32_t bg = ui_color(on ? (E.drag_sb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
-    uint32_t col[5];
+    uint32_t col[9];
     col[0] = 0;
     col[1] = ui_color(C_GUTTER_ON);
-    col[2] = 0xD18616u;
-    col[3] = ui_color(C_WARNING);
-    col[4] = ui_color(C_ERROR);
-    if (mark[row]) scr_put_rgb(x, L.text_y + row, mark[row] == 1 ? 0x2500 : 0x25AC, col[mark[row]], bg, 0);
+    col[2] = MM_ADD;	/* editorOverviewRuler.addedForeground ... */
+    col[3] = MM_MOD;
+    col[4] = MM_DEL;
+    col[5] = 0xA0A0A0u;	/* selectionHighlightForeground */
+    col[6] = 0xD18616u;	/* findMatchForeground */
+    col[7] = ui_color(C_WARNING);
+    col[8] = ui_color(C_ERROR);
+    if (mark[row]) scr_put_rgb(x, L.text_y + row, mark[row] == 1 ? 0x2500 : mark[row] <= 4 ? 0x258C : 0x25AC, col[mark[row]], bg, 0);
     else scr_put_rgb(x, L.text_y + row, ' ', bg, bg, 0);
   }
   free(mark);
@@ -3053,22 +3229,59 @@ static void draw_exception (void) {
 }
 
 
+/* the diff's file opened at the line of its cursor (Enter, or the title's icon) */
+static void diff_edit_file (void) {
+  size_t line = diff_line();
+  char *path = xstrdup(diff_path());
+  if (open_file(path, 0) == 0) {
+    Pos p;
+    p.y = line - 1;
+    p.x = 0;
+    move_h(doc_clamp(T->doc, p), 0);
+    center_cursor();
+  }
+  free(path);
+}
+
+
+/* the tab bar and the breadcrumbs go over the whole group, a minimap on the left too */
+static void draw_tabs_full (void) {
+  int sw = L.mml_w;
+  L.ed_x -= sw;
+  L.ed_w += sw;
+  draw_tabs();
+  L.ed_x += sw;
+  L.ed_w -= sw;
+}
+
+
+static void draw_crumbs_full (void) {
+  int sw = L.mml_w;
+  L.ed_x -= sw;
+  L.ed_w += sw;
+  draw_crumbs();
+  L.ed_x += sw;
+  L.ed_w -= sw;
+}
+
+
 static void draw_group (int other) {
   int gw = gutter_width(), sy, ns;
   Pos sa, sb;
-  draw_tabs();
+  draw_tabs_full();
   if (G->diff && HAS_DIFF) {
-    draw_crumbs();
+    draw_crumbs_full();
     diff_draw(L.ed_x, L.text_y, L.ed_w, L.text_h);
+    diff_title_draw(L.ed_x + L.ed_w, L.ed_y);	/* its actions in the tab bar, like VS Code's */
   }
   else if (!HAS_DOC) draw_watermark();
   else if (T->page) page_draw(other);
   else if (T->md) {	/* the Markdown preview */
-    draw_crumbs();
+    draw_crumbs_full();
     md_draw(T->doc, L.ed_x, L.text_y, L.ed_w, L.text_h + L.hsb, &T->top);
   }
   else {
-    draw_crumbs();
+    draw_crumbs_full();
     sel_range(&sa, &sb);
     {
       Pos ba, bb;
@@ -3101,7 +3314,7 @@ static void draw_group (int other) {
       if (screen_at(E.drag_drop && E.drop_moved ? E.drop : T->cur, &cx, &cy) && cy >= L.text_y + ns)
         scr_cursor(cx, cy);
     }
-    if (L.mm_w > 0) draw_minimap();
+    if (mm_width() > 0) draw_minimap();
     if (L.sb_w > 0) draw_scrollbar();
     if (L.hsb) draw_hscrollbar();
     if (!other) draw_peek();
@@ -3192,8 +3405,8 @@ static void compose (void) {
       oe_h = oe_height();
       tl_h = tl_height();
       tree_h = L.body_h - oe_h - tl_h;
-      if (HAS_DOC && T->sx && tree_h > 12) {
-        ol_h = tree_h * 2 / 5;
+      if (HAS_DOC && T->sx && (tree_h > 12 || !OL.open)) {
+        ol_h = OL.open ? tree_h * 2 / 5 : 2;	/* collapsed: its title only */
         tree_h -= ol_h;
       }
       if (tree_h < 4) {
@@ -4335,6 +4548,7 @@ static void recent_file_add (const char *path);
 */
 static int open_file (const char *path, int preview) {
   int i, r;
+  if (!opt.preview_tabs) preview = 0;	/* every file in a tab of its own */
   char *p = xstrdup(path), *real = os_realpath(path);
   for (i = 0; i < G->ntab; i++)	/* it is open: to the front ("main.go" and its full path are one) */
     if (!G->tab[i]->md && G->tab[i]->doc->path && (m_fncmp(G->tab[i]->doc->path, p) == 0 ||
@@ -4618,7 +4832,7 @@ static void walk_files (const char *dir, const char *rel, Pick *p, Vec *paths, c
   Vec v;
   size_t i, k;
   vec_init(&v);
-  if (depth > 12 || p->n > 20000 || os_listdir(dir, &v) != 0) return;
+  if (depth > 32 || p->n > 2000000 || os_listdir(dir, &v) != 0) return;
   vec_sort(&v);
   for (i = 0; i < v.n; i++) {
     char *path = path_join(dir, v.v[i]);
@@ -4670,12 +4884,186 @@ static int quick_tick (Pick *p, int changed) {
 }
 
 
+/*
+** {==================================================================
+** The folder's files for Go to File
+** ===================================================================
+*/
+
+/*
+** Found once and kept, like VS Code's file search cache: the walk goes a
+** little at a time (Go to File shows what there is and adds the rest as it
+** comes), a small folder is walked again each time, a big one when a file
+** was made, renamed or deleted (files_index_stale) or after a while.
+*/
+static struct {
+  char *key;	/* the folders it is for */
+  Vec name, dir, path;	/* each file: its name, its folder from the root (NULL none), its path */
+  Vec todo, todo_rel;	/* folders still to read, the last first */
+  int done, stale;
+  long long made;	/* when the walk started */
+} FI;
+
+
+void files_index_stale (void) {
+  FI.stale = 1;
+}
+
+
+/* left out of Go to File (VS Code: files.exclude, search.exclude, .gitignore) */
+static int fi_skip (const char *name, const char *rel) {
+  if (strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0 || strcmp(name, "mme-data") == 0) return 1;
+  return search_ignored(rel);
+}
+
+
+static char *fi_key (void) {
+  Buf b;
+  int i;
+  buf_init(&b);
+  for (i = 0; i < ws_count(); i++) buf_printf(&b, "%s\n", ws_folder(i));
+  buf_putc(&b, '\0');
+  return buf_take(&b);
+}
+
+
+static void fi_reset (char *key) {
+  int i;
+  free(FI.key);
+  FI.key = key;
+  vec_free(&FI.name);
+  vec_free(&FI.path);
+  vec_free(&FI.todo);
+  vec_free(&FI.todo_rel);
+  {	/* dir may hold NULLs: freed by hand */
+    size_t k;
+    for (k = 0; k < FI.dir.n; k++) free(FI.dir.v[k]);
+    free(FI.dir.v);
+    FI.dir.v = NULL;
+    FI.dir.n = FI.dir.cap = 0;
+  }
+  vec_init(&FI.name);
+  vec_init(&FI.path);
+  vec_init(&FI.todo);
+  vec_init(&FI.todo_rel);
+  for (i = ws_count() - 1; i >= 0; i--) {	/* every folder of a workspace, by its name */
+    vec_push(&FI.todo, xstrdup(ws_folder(i)));
+    vec_push(&FI.todo_rel, xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
+  }
+  FI.done = 0;
+  FI.stale = 0;
+  FI.made = os_now_us();
+}
+
+
+/* on with the walk for about budget us; 1 when it is done */
+static int fi_step (long long budget) {
+  long long end = os_now_us() + budget;
+  while (FI.todo.n > 0 && FI.name.n < 2000000) {
+    char *dir = FI.todo.v[--FI.todo.n], *rel = FI.todo_rel.v[--FI.todo_rel.n];
+    Vec v, sub, subrel;
+    size_t i;
+    vec_init(&v);
+    vec_init(&sub);
+    vec_init(&subrel);
+    if (os_listdir(dir, &v) == 0) {
+      vec_sort(&v);
+      for (i = 0; i < v.n; i++) {
+        char *path = path_join(dir, v.v[i]), *r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
+        OsStat st;
+        if (fi_skip(v.v[i], r)) {
+          free(path);
+          free(r);
+          continue;
+        }
+        if (os_stat(path, &st) == 0 && st.is_dir) {
+          vec_push(&sub, path);
+          vec_push(&subrel, r);
+          continue;
+        }
+        vec_push(&FI.name, xstrdup(v.v[i]));
+        if (FI.dir.n == FI.dir.cap) {
+          FI.dir.cap = FI.dir.cap ? FI.dir.cap * 2 : 1024;
+          FI.dir.v = (char **)xrealloc(FI.dir.v, FI.dir.cap * sizeof(char *));
+        }
+        FI.dir.v[FI.dir.n++] = rel[0] ? xstrdup(rel) : NULL;
+        vec_push(&FI.path, path);
+        free(r);
+      }
+    }
+    for (i = sub.n; i-- > 0;) {	/* the first subfolder is read next */
+      vec_push(&FI.todo, sub.v[i]);
+      vec_push(&FI.todo_rel, subrel.v[i]);
+    }
+    free(sub.v);
+    free(subrel.v);
+    vec_free(&v);
+    free(dir);
+    free(rel);
+    if (os_now_us() > end) break;
+  }
+  FI.done = FI.todo.n == 0;
+  return FI.done;
+}
+
+
+/* the index made ready for Go to File: kept, or walked again */
+static void fi_begin (void) {
+  char *key = fi_key();
+  int reuse = FI.key && strcmp(FI.key, key) == 0 && !FI.stale &&
+              (!FI.done || (FI.name.n >= 5000 && os_now_us() - FI.made < 300000000LL));	/* big: 5 minutes */
+  if (reuse) free(key);
+  else fi_reset(key);
+  if (!FI.done) fi_step(150000);	/* a small folder is done before the list shows */
+}
+
+/* }================================================================== */
+
+
+/* Go to File: the items taken from the index so far, the paths of the items */
+static struct {
+  size_t added;	/* FI entries looked at */
+  Vec *paths;
+  const Vec *recent;
+  char status[64];
+} QO;
+
+
+static void qo_add (Pick *p) {
+  for (; QO.added < FI.name.n; QO.added++) {
+    size_t i = QO.added, k;
+    int ist, dup = 0;
+    for (k = 0; k < QO.recent->n && !dup; k++) dup = m_fncmp(QO.recent->v[k], FI.path.v[i]) == 0;
+    if (dup) continue;
+    pick_add(p, FI.name.v[i], FI.dir.v[i], (int)file_icon(FI.name.v[i], &ist));
+    vec_push(QO.paths, xstrdup(FI.path.v[i]));
+  }
+  if (FI.done) p->status = NULL;
+  else {
+    snprintf(QO.status, sizeof(QO.status), "Indexing... %lu files", (unsigned long)FI.name.n);
+    p->status = QO.status;
+  }
+}
+
+
+/* while Go to File shows: the walk goes on, what it finds is added */
+static int qo_tick (Pick *p, int changed) {
+  size_t n0 = p->n;
+  if (quick_tick(p, changed) == 2) return 2;
+  if (FI.done && p->status == NULL) return 0;
+  fi_step(60000);
+  qo_add(p);
+  return p->n != n0 || FI.done;
+}
+
+
 static void quick_open (void) {
   Pick p;
   Vec paths, recent;
   size_t i;
   int r;
   pick_init(&p, "Search files by name (append : to go to line, @ to go to symbol, # for the workspace's)");
+  p.match_detail = 1;
   vec_init(&paths);
   recent_files(&recent);
   for (i = 0; i < recent.n; i++) {	/* recently opened, first */
@@ -4688,9 +5076,12 @@ static void quick_open (void) {
     vec_push(&paths, xstrdup(recent.v[i]));
     free(d);
   }
-  for (i = 0; i < (size_t)ws_count(); i++)	/* every folder of a workspace, by its name */
-    walk_files(ws_folder((int)i), ws_count() > 1 ? ws_folder_name((int)i) : "", &p, &paths, &recent, 0);
-  p.on_tick = quick_tick;
+  fi_begin();
+  QO.added = 0;
+  QO.paths = &paths;
+  QO.recent = &recent;
+  qo_add(&p);
+  p.on_tick = qo_tick;
   r = pick_run(&p);
   if (r == PICK_SWITCH) {
     char text[512];
@@ -7025,16 +7416,17 @@ static const Sym *outline_rows (size_t *n) {
 }
 
 
+static void pane_title (int x, int y, int w, const char *name, int open, int focus);
+
 static void draw_outline (int x, int y, int w, int h, int focus) {
-  size_t n, path[16], np, i;
+  size_t n, path[16], np;
   const Sym *v = outline_rows(&n);
   int row;
   OL.y0 = y;
   OL.h = h;
   scr_box(x, y, w, h, S_SIDE);
-  for (i = 0; i < (size_t)w; i++) scr_put(x + (int)i, y, 0x2500, S_BORDER);
-  scr_put(x, y + 1, 0xEAB4, S_SIDE_TITLE);
-  scr_puts(x + 2, y + 1, "OUTLINE", S_SIDE_TITLE);
+  pane_title(x, y, w, "OUTLINE", OL.open, focus);
+  if (!OL.open) return;
   if (OL.filter[0] && w > 20) {	/* what is typed: the filter */
     scr_put(x + 11, y + 1, 0xEA6D, S_SIDE_DIM);	/* search */
     scr_putsw(x + 13, y + 1, w - 20, OL.filter, S_SIDE);
@@ -7047,6 +7439,7 @@ static void draw_outline (int x, int y, int w, int h, int focus) {
     scr_putsw(x + 2, y + 2, w - 3, n ? "No symbols match the filter." : "No symbols found in this file.", S_SIDE_DIM);
     return;
   }
+  side_bar(x, y + 2, w, h - 2, OL.nvis, OL.top, (size_t)(h - 2));
   np = sym_path(v, n, path, 16);
   if (!focus && !OL.nofollow && np) {	/* Follow Cursor: the deepest one shown */
     size_t k, d;
@@ -7198,6 +7591,7 @@ static void draw_open_editors (int x, int y, int w, int h, int focus) {
   h -= 2;
   if (OE.sel < OE.top) OE.top = OE.sel;
   if (OE.sel >= OE.top + (size_t)h) OE.top = OE.sel - (size_t)h + 1;
+  side_bar(x, y + 2, w, h, n, OE.top, (size_t)h);
   for (r = 0; r < h; r++) {
     size_t k = OE.top + (size_t)r;
     int sy = y + 2 + r, st;
@@ -7214,8 +7608,8 @@ static void draw_open_editors (int x, int y, int w, int h, int focus) {
       Tab *t = g->tab[row[k] % 4096];
       int ist, cx = x + 4, on = g == G && t == T;
       char *d = t->real ? rel_dir(t->real) : NULL;
-      if (doc_dirty(t->doc)) scr_put(x + 2, sy, 0x25CF, st);	/* the dot, or x on the selected one */
-      else if (k == OE.sel) scr_put(x + 2, sy, 0xEA76, st);
+      if (doc_dirty(t->doc)) scr_put(x + 2, sy, 0x25CF, st);	/* unsaved */
+      if (k == OE.sel && w > 12) scr_put(x + w - 2, sy, 0xEA76, st);	/* close, at the end of the row */
       cx += scr_put(cx, sy, file_icon(tab_name(t), &ist), st == S_SIDE ? ist : st) + 1;
       cx += scr_putsw(cx, sy, x + w - cx - 1, tab_name(t), st == S_SIDE && on ? S_SIDE_ACTIVE : st);
       if (d && cx + 2 < x + w) scr_putsw(cx + 1, sy, x + w - cx - 2, d, st == S_SIDE ? S_SIDE_DIM : st);
@@ -7268,13 +7662,22 @@ static void oe_key (int k) {
 
 
 static void oe_click (int row, int col) {
+  static long long last;	/* the x shows on the selected row: a double click must not hit it */
+  static size_t last_row;
+  size_t k;
+  long long now = os_now_us();
+  int quick;
   E.outline_focus = PANE_EDITORS;
   if (row <= 1) {
     OE.open = !OE.open;
     return;
   }
-  OE.sel = OE.top + (size_t)(row - 2);
-  oe_go(OE.sel, col == 2, 1);
+  k = OE.top + (size_t)(row - 2);
+  quick = k == last_row && now - last < 500000;
+  last = now;
+  last_row = k;
+  OE.sel = k;
+  oe_go(OE.sel, col == side_width() - 2 && !quick, 1);	/* its x; a double click only opens */
 }
 
 /* }================================================================== */
@@ -7383,6 +7786,7 @@ static void draw_timeline (int x, int y, int w, int h, int focus) {
   h -= 2;
   if (TL.sel < TL.top) TL.top = TL.sel;
   if (TL.sel >= TL.top + (size_t)h) TL.top = TL.sel - (size_t)h + 1;
+  side_bar(x, y + 2, w, h, TL.n, TL.top, (size_t)h);
   for (r = 0; r < h; r++) {
     size_t k = TL.top + (size_t)r;
     int sy = y + 2 + r, st, cx = x + 2, aw;
@@ -7556,6 +7960,10 @@ static void history_pick (int restore) {
 
 
 static void outline_key (int k) {
+  if (!OL.open) {	/* collapsed: only opening it again */
+    if (KEY_CODE(k) == K_RIGHT || KEY_CODE(k) == K_ENTER || k == ' ') OL.open = 1;
+    return;
+  }
   size_t n, len = strlen(OL.filter);
   const Sym *v = outline_rows(&n);
   int code = KEY_CODE(k);
@@ -8025,8 +8433,9 @@ static int peek_click (Mouse *m) {
     return 0;
   if (m->wheel) {
     if (m->x >= PK.lx) {
-      if (m->wheel < 0) PK.top = PK.top > 2 ? PK.top - 2 : 0;
-      else if ((int)PK.top + 2 < PK.nrows) PK.top += 2;
+      int st = wheel_step(m->mods);
+      if (m->wheel < 0) PK.top = PK.top > (size_t)st ? PK.top - (size_t)st : 0;
+      else if ((int)PK.top + st < PK.nrows) PK.top += (size_t)st;
     }
     return 1;
   }
@@ -9315,6 +9724,7 @@ static void apply_act (const SideAct *act);
 
 static void explorer_cmd (int what) {
   SideAct act;
+  files_index_stale();	/* a file may come or go: Go to File walks again */
   if (!E.side || E.view != VIEW_FILES) show_view(VIEW_FILES);
   E.side = 1;
   E.focus = F_SIDE;
@@ -10371,8 +10781,9 @@ static void session_write (int backups) {
   buf_puts(&b, "{\"folder\": ");
   json_put_str(&b, side_root(), strlen(side_root()));
   buf_printf(&b, ", \"side\": %d, \"view\": %d, \"sideWidth\": %d, \"panel\": %d, \"panelView\": %d, "
-                 "\"panelHeight\": %d, \"group\": %d, \"centered\": %d,\n \"colw\": [", E.side, E.view, E.side_w,
-             E.panel, E.panel_view, E.panel_h, g_gcur, E.centered);
+                 "\"panelHeight\": %d, \"group\": %d, \"centered\": %d, "
+                 "\"panes\": [%d, %d, %d],\n \"colw\": [", E.side, E.view, E.side_w,
+             E.panel, E.panel_view, E.panel_h, g_gcur, E.centered, OE.open, OL.open, TL.open);
   for (g = 0; g < grp_ncol(); g++) buf_printf(&b, "%s%d", g ? ", " : "", g_colw[g]);
   buf_puts(&b, "],\n \"groups\": [");
   for (g = 0; g < g_ngrp; g++) {
@@ -10543,6 +10954,14 @@ static void session_restore (void) {
     E.side = side;
   }
   E.side_w = (int)jnum(json_get(j, "sideWidth"), E.side_w, 10, 1000);
+  {	/* the panes that were folded */
+    const Json *pn = json_get(j, "panes");
+    if (pn && pn->type == J_ARR && pn->n >= 3) {
+      OE.open = (int)jnum(pn->kid[0], 0, 0, 1);
+      OL.open = (int)jnum(pn->kid[1], 1, 0, 1);
+      TL.open = (int)jnum(pn->kid[2], 0, 0, 1);
+    }
+  }
   E.panel_h = (int)jnum(json_get(j, "panelHeight"), E.panel_h, 3, 1000);
   if (json_num(json_get(j, "panel"), 0)) {
     int pv = (int)jnum(json_get(j, "panelView"), 0, 0, 3);
@@ -10831,8 +11250,9 @@ static int dirty_key (int k) {
 static int dirty_click (Mouse *m) {
   if (!DP.open || m->y < DP.y || m->y >= DP.y + DP.h || m->x < DP.x || m->x >= DP.x + DP.w) return 0;
   if (m->wheel) {
-    if (m->wheel < 0) DP.top = DP.top > 1 ? DP.top - 2 : 0;
-    else DP.top += 2;
+    size_t st = (size_t)wheel_step(m->mods);
+    if (m->wheel < 0) DP.top = DP.top > st ? DP.top - st : 0;
+    else DP.top += st;
     return 1;
   }
   if (!(m->button == 0 && m->press && !m->drag) || m->y != DP.y) return 1;
@@ -11792,6 +12212,7 @@ static void run_command (int cmd) {
       if (cmd == CMD_SAVE_AS || T->doc->path == NULL) {
         char *was = T->doc->path ? xstrdup(T->doc->path) : NULL;
         save_as();
+        files_index_stale();
         if (T->doc->path && (was == NULL || m_fncmp(was, T->doc->path) != 0)) doc_stamp(T->doc);	/* a new file: nothing newer */
         free(was);
       }
@@ -11913,6 +12334,8 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_OUTLINE_COLLAPSE: outline_collapse_all(); break;
+    case CMD_DIFF_WS: diff_toggle_trim(); break;
+    case CMD_DIFF_HIDE: diff_toggle_hide(); break;
     case CMD_INSPECT_TOKENS: {	/* Developer: Inspect Editor Tokens and Scopes */
       char sc[1024];
       if (!HAS_DOC || G->diff || T->page) break;
@@ -12035,6 +12458,9 @@ static void run_command (int cmd) {
     case CMD_SWITCH_EDITOR: switch_editor(0, 0); break;
     case CMD_SHOW_EDITORS: switch_editor(1, 0); break;
     case CMD_MD_PREVIEW: md_preview(0); break;
+    case CMD_HELP_KEYS: help_page("keyboard-shortcuts.md", help_keys_md); break;
+    case CMD_HELP_TIPS: help_page("tips-and-tricks.md", help_tips_md); break;
+    case CMD_HELP_COMMANDS: palette(NULL); break;
     case CMD_MD_SIDE: md_preview(1); break;
     case CMD_OPEN_EDITORS:
     case CMD_TIMELINE:
@@ -12437,7 +12863,7 @@ static void run_command (int cmd) {
     case CMD_EXP_OPEN_SIDE: explorer_cmd(FC_OPEN_SIDE); break;
     case CMD_EXP_FIND_FOLDER: explorer_cmd(FC_FIND_FOLDER); break;
     case CMD_EXP_NEW_FOLDER: explorer_cmd(FC_NEW_FOLDER); break;
-    case CMD_EXP_REFRESH: explorer_cmd(FC_REFRESH); break;
+    case CMD_EXP_REFRESH: files_index_stale(); explorer_cmd(FC_REFRESH); break;
     case CMD_EXP_COLLAPSE: explorer_cmd(FC_COLLAPSE); break;
     case CMD_COPY_PATH: copy_path(0); break;
     case CMD_COPY_REL_PATH: copy_path(1); break;
@@ -12858,8 +13284,8 @@ static char *hover_expr (Pos p) {
 
 static void apply_act (const SideAct *act) {
   switch (act->what) {
-    case SA_RENAMED: tabs_renamed(act->path, act->path2); break;
-    case SA_DELETED: tabs_deleted(act->path); break;
+    case SA_RENAMED: tabs_renamed(act->path, act->path2); files_index_stale(); break;
+    case SA_DELETED: tabs_deleted(act->path); files_index_stale(); break;
     case SA_CLIP: clip_text(act->path); break;
     case SA_TERMINAL:
       panel_cwd(act->path);
@@ -14550,6 +14976,141 @@ static void md_preview (int side) {
 }
 
 
+/*
+** {==================================================================
+** Help pages: made as Markdown in mme-data/help, shown in the preview
+** ===================================================================
+*/
+
+static void help_row (Buf *b, int cmd) {
+  const char *k = cmd_keys(cmd);
+  if (k[0]) buf_printf(b, "| %s | `%s` |\n", cmd_name(cmd), k);
+}
+
+
+/* Help: Keyboard Shortcuts Reference: VS Code's sheet, with the keys as they are now (keybindings.json too) */
+static void help_keys_md (Buf *b) {
+  static const struct {
+    const char *title;
+    int cmd[24];
+  } part[] = {
+    {"General", {CMD_PALETTE, CMD_QUICK_OPEN, CMD_SETTINGS, CMD_KEYS, CMD_THEME, CMD_QUIT, 0}},
+    {"Basic editing", {CMD_CUT, CMD_COPY, CMD_PASTE, CMD_UNDO, CMD_REDO, CMD_LINE_UP, CMD_LINE_DOWN, CMD_COPY_UP,
+                       CMD_COPY_DOWN, CMD_DELETE_LINE, CMD_LINE_BELOW, CMD_LINE_ABOVE, CMD_GOTO_BRACKET, CMD_INDENT,
+                       CMD_OUTDENT, CMD_COMMENT, CMD_BLOCK_COMMENT, CMD_WORDWRAP, CMD_FOLD, CMD_UNFOLD, CMD_FOLD_ALL,
+                       CMD_UNFOLD_ALL, 0}},
+    {"Navigation", {CMD_GOTO_SYMBOL, CMD_WORKSPACE_SYMBOL, CMD_GOTO, CMD_PROBLEMS, CMD_NEXT_PROBLEM, CMD_PREV_PROBLEM,
+                    CMD_NAV_BACK, CMD_NAV_FORWARD, CMD_SWITCH_EDITOR, CMD_BREADCRUMBS, 0}},
+    {"Search and replace", {CMD_FIND, CMD_REPLACE, CMD_FIND_FILES, CMD_REPLACE_FILES, 0}},
+    {"Multi-cursor and selection", {CMD_CURSOR_UP, CMD_CURSOR_DOWN, CMD_NEXT_MATCH, CMD_ALL_MATCHES,
+                                    CMD_SELECT_LINE, CMD_CURSORS_LINE_ENDS, CMD_CURSOR_UNDO, CMD_CHANGE_ALL,
+                                    CMD_EXPAND_SEL, CMD_SHRINK_SEL, 0}},
+    {"Rich languages editing", {CMD_SUGGEST, CMD_PARAM_HINTS, CMD_FORMAT, CMD_FORMAT_SEL, CMD_DEFINITION,
+                                CMD_PEEK_DEF, CMD_REFERENCES, CMD_IMPLEMENTATION, CMD_QUICKFIX, CMD_RENAME,
+                                CMD_ORGANIZE_IMPORTS, CMD_CALL_HIERARCHY, CMD_TRIM, CMD_LANGUAGE, 0}},
+    {"Editor management", {CMD_CLOSE, CMD_SPLIT, CMD_SPLIT_DOWN, CMD_GROUP1, CMD_GROUP2, CMD_MOVE_NEXT_GROUP,
+                           CMD_MOVE_PREV_GROUP, CMD_REOPEN, CMD_PIN, 0}},
+    {"File management", {CMD_NEW, CMD_OPEN_FILE, CMD_SAVE, CMD_SAVE_AS, CMD_OPEN_PROJECT, CMD_COMPARE_SAVED,
+                         CMD_COPY_PATH, CMD_REVEAL_OS, 0}},
+    {"Display", {CMD_ZEN, CMD_SIDEBAR, CMD_EXPLORER, CMD_SEARCH, CMD_GIT, CMD_DEBUG_VIEW, CMD_EXTENSIONS,
+                 CMD_OUTPUT, CMD_MD_PREVIEW, CMD_MD_SIDE, CMD_PANEL_MAX, 0}},
+    {"Debug", {CMD_BREAKPOINT, CMD_DEBUG_START, CMD_DEBUG_RUN, CMD_DEBUG_STOP, CMD_DEBUG_STEP_OVER,
+               CMD_DEBUG_STEP_INTO, CMD_DEBUG_STEP_OUT, CMD_DEBUG_CONSOLE, CMD_TASK_BUILD, 0}},
+    {"Integrated terminal", {CMD_TERMINAL, CMD_TERMINAL_NEW, CMD_TERMINAL_SPLIT, CMD_TERMINAL_FIND, CMD_TERM_COPY,
+                             CMD_TERM_PASTE, CMD_TERM_PREV_CMD, CMD_TERM_NEXT_CMD, CMD_TERM_RECENT, 0}}
+  };
+  size_t i, k;
+  buf_puts(b, "# Keyboard Shortcuts\n\n"
+              "The keys of mme, as VS Code's reference sheet groups them. Your own keys "
+              "(Keyboard Shortcuts, Ctrl+K Ctrl+S) show as they are now. Ctrl+Shift+ keys and a "
+              "few others need a terminal with the kitty keyboard protocol (mmc-term, kitty, WezTerm).\n\n");
+  for (i = 0; i < sizeof(part) / sizeof(part[0]); i++) {
+    buf_printf(b, "## %s\n\n| Command | Keys |\n|---|---|\n", part[i].title);
+    for (k = 0; part[i].cmd[k]; k++) help_row(b, part[i].cmd[k]);
+    buf_puts(b, "\n");
+  }
+}
+
+
+static void help_tips_md (Buf *b) {
+  buf_puts(b, "# Tips and Tricks\n\n"
+              "## Find anything\n\n"
+              "- **Ctrl+P** opens a file by name: type parts of its name or path (`src/ma` finds `src/main.c`), "
+              "the letters matched are lit.\n"
+              "- In the same box, **>** runs a command, **@** goes to a symbol of the file, **#** to one of the "
+              "workspace, **:** to a line, **?** lists them.\n"
+              "- **Ctrl+Shift+F** searches every file; **Alt+C**, **Alt+W**, **Alt+R** toggle case, whole word "
+              "and regular expressions.\n\n"
+              "## Edit faster\n\n"
+              "- **Ctrl+D** selects the next place of the word; **Ctrl+Shift+L** all of them; **Alt+Click** "
+              "adds a cursor.\n"
+              "- **Alt+Up / Alt+Down** move lines, **Shift+Alt+Up / Down** copy them.\n"
+              "- **Ctrl+/** comments lines; **Ctrl+Shift+[** folds the block.\n"
+              "- Type a snippet's prefix (`for`, `if`, `main`) and press **Tab**; in HTML, Emmet: `ul>li*3` "
+              "then **Tab**.\n\n"
+              "## Understand code\n\n"
+              "- **F12** goes to the definition, **Alt+F12** peeks it, **Shift+F12** lists the references.\n"
+              "- **F2** renames a symbol everywhere; **Ctrl+.** shows the quick fixes (the lightbulb).\n"
+              "- **Ctrl+Shift+O** lists the file's symbols; the Outline in the Explorer does too.\n\n"
+              "## Work with git\n\n"
+              "- **Ctrl+Shift+G**: stage (`+`), commit (**Ctrl+Enter**), the graph of the history.\n"
+              "- The bars in the gutter are your changes: click one to see it, stage it or revert it.\n\n"
+              "## Make it yours\n\n"
+              "- **Ctrl+,** opens the Settings, **Ctrl+K Ctrl+T** the color themes, **Ctrl+K Ctrl+S** the "
+              "keyboard shortcuts; Preferences: Import VS Code Settings brings yours over.\n"
+              "- Everything mme keeps is in the folder `mme-data` next to the program.\n");
+}
+
+
+/* the page in mme-data/help/<name>, made again and shown in the Markdown preview */
+static void help_page (const char *name, void (*make) (Buf *b)) {
+  char *dir = data_path("help"), *f;
+  Buf b;
+  int fd, i;
+  Tab *src;
+  mkdir_p(dir);
+  f = path_join(dir, name);
+  free(dir);
+  buf_init(&b);
+  make(&b);
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, b.s, b.len);
+    os_close(fd);
+  }
+  buf_free(&b);
+  for (i = 0; i < G->ntab; i++) {	/* its preview is open: to the front, with the new text */
+    Tab *t = G->tab[i];
+    if (t->md && t->doc->path && m_fncmp(t->doc->path, f) == 0) {
+      focus_tab(i);
+      doc_load(t->doc, f);
+      free(f);
+      E.focus = F_EDITOR;
+      return;
+    }
+  }
+  if (open_file(f, 0) != 0) {
+    free(f);
+    return;
+  }
+  free(f);
+  src = T;
+  md_preview(0);
+  for (i = 0; i < G->ntab; i++)	/* the preview stays, the Markdown source goes */
+    if (G->tab[i] == src && src != T) {
+      int k, on = -1;
+      Tab *keep = T;
+      close_tab(i);
+      for (k = 0; k < G->ntab; k++)
+        if (G->tab[k] == keep) on = k;
+      if (on >= 0) focus_tab(on);
+      break;
+    }
+  E.focus = F_EDITOR;
+}
+
+/* }================================================================== */
+
+
 static void editor_key (int k) {
   if (E.zen && k == K_ESC) {	/* Esc Esc: out of Zen mode */
     long long now = os_now_us();
@@ -14918,19 +15479,7 @@ static void on_key (int k) {
   if (G->diff && HAS_DIFF) {
     switch (diff_key(k)) {
       case DIFF_CLOSE: run_command(CMD_CLOSE); break;
-      case DIFF_EDIT: {
-        size_t line = diff_line();
-        char *path = xstrdup(diff_path());
-        if (open_file(path, 0) == 0) {
-          Pos p;
-          p.y = line - 1;
-          p.x = 0;
-          move_h(doc_clamp(T->doc, p), 0);
-          T->top = T->cur.y;
-        }
-        free(path);
-        break;
-      }
+      case DIFF_EDIT: diff_edit_file(); break;
     }
     E.follow = 0;
     goto done;
@@ -15082,10 +15631,32 @@ static void find_click (Mouse *m) {
 }
 
 
+/*
+** The pointer's shape where the mouse is: an I beam over text a click puts
+** the cursor in, a hand over what a click does something with (the menus,
+** the tabs, the side bar, the panel's tabs, the status bar, the pages).
+** Terminals that do not know OSC 22 keep their own pointer.
+*/
+static int pointer_at (const Mouse *m) {
+  int in_editor = m->x >= L.area_x && m->y >= L.text_y && m->y < L.text_y + L.text_h &&
+                  !(L.panel_h > 0 && m->y >= L.panel_y);
+  if (L.panel_h > 0 && m->y > L.panel_y && E.panel_view == 0) return PTR_TEXT;	/* the terminal's text */
+  if (in_editor && HAS_DOC && !T->page && !G->diff) {
+    int gw = gutter_width();
+    if (m->x >= L.ed_x + gw && m->x < L.ed_x + gw + text_cols()) return E.link_y ? PTR_POINTER : PTR_TEXT;
+    return PTR_POINTER;	/* the gutter: folding, breakpoints, the changes' bars */
+  }
+  return PTR_POINTER;
+}
+
+
 static void on_mouse (void) {
   Mouse *m = &term_mouse;
   int press = m->button == 0 && m->press && !m->drag;
   E.follow = 0;
+  scr_pointer(pointer_at(m));
+  g_mm_hover = HAS_DOC && mm_width() > 0 && m->x >= L.mm_x && m->x < L.mm_x + mm_width() &&
+               m->y >= L.text_y && m->y < L.text_y + L.text_h;	/* editor.minimap.showSlider "mouseover" */
   panel_hover(m->x, m->y);	/* a link under it is underlined */
   if (panel_dragging()) {	/* a selection in the terminal: the mouse is its until the button comes up */
     PanelLink lk;
@@ -15300,8 +15871,9 @@ static void on_mouse (void) {
   if (L.panel_h > 0 && m->x >= L.area_x && m->x < L.area_x + L.area_w && m->y >= L.panel_y &&
       m->y < L.body_y + L.body_h) {
     if (m->wheel && E.panel_view == 1) {
-      if (m->wheel < 0) PB.sel = PB.sel > 3 ? PB.sel - 3 : 0;
-      else PB.sel = PB.sel + 3 < PB.n ? PB.sel + 3 : (PB.n ? PB.n - 1 : 0);
+      size_t st = (size_t)wheel_step(m->mods);
+      if (m->wheel < 0) PB.sel = PB.sel > st ? PB.sel - st : 0;
+      else PB.sel = PB.sel + st < PB.n ? PB.sel + st : (PB.n ? PB.n - 1 : 0);
     }
     else if (m->wheel && E.panel_view == 2) console_wheel(m->wheel);
     else if (m->wheel && E.panel_view == 3) out_wheel(m->wheel);
@@ -15358,23 +15930,17 @@ static void on_mouse (void) {
     else if (press) E.focus = F_PANEL;
     return;
   }
-  if (L.mm_w > 0 && (E.drag_mm || (m->x >= L.ed_x + L.ed_w - L.sb_w - L.mm_w && m->x < L.ed_x + L.ed_w - L.sb_w && m->y >= L.text_y &&
-                                   m->y < L.text_y + L.text_h))) {
-    if (m->wheel) {
-      if (m->wheel < 0) T->top = T->top > 3 ? T->top - 3 : 0;
+  if (mm_width() > 0 && (E.drag_mm || (m->x >= L.mm_x && m->x < L.mm_x + mm_width() && m->y >= L.text_y &&
+                                       m->y < L.text_y + L.text_h))) {
+    if (m->wheel) {	/* over the minimap */
+      size_t st = (size_t)wheel_step(m->mods);
+      if (m->wheel < 0) T->top = T->top > st ? T->top - st : 0;
       else if (T->doc->n > (size_t)L.text_h) {
-        T->top += 3;
+        T->top += st;
         if (T->top > T->doc->n - (size_t)L.text_h) T->top = T->doc->n - (size_t)L.text_h;
       }
     }
-    else if (m->button == 0 && (m->press || m->drag)) {	/* the line there, in the middle */
-      long ry = m->y - L.text_y;
-      size_t line = mm_top() + (size_t)(ry < 0 ? 0 : ry) * MM_LINES, half = (size_t)L.text_h / 2;
-      E.drag_mm = 1;
-      T->top = line > half ? line - half : 0;
-      if (T->doc->n <= (size_t)L.text_h) T->top = 0;
-      else if (T->top > T->doc->n - (size_t)L.text_h) T->top = T->doc->n - (size_t)L.text_h;
-    }
+    else if (m->button == 0 && (m->press || m->drag)) minimap_mouse(m);
     return;
   }
   if (m->y == 0 && SHOW_MENU) {	/* the menu bar */
@@ -15406,14 +15972,28 @@ static void on_mouse (void) {
     else show_view(v);
     return;
   }
+  if (E.bar_drag) {	/* the side bar's scrollbar, held */
+    if (m->button == 0 && !m->press && !m->drag) E.bar_drag = 0;
+    else files_bar_to(m->y - files_bar_y(), files_bar_rows());
+    return;
+  }
   if (L.side_w > 0 && (opt.side_right ? m->x >= L.edge_x : m->x <= L.edge_x)) {	/* the sidebar */
     SideAct act;
     if (m->x == L.edge_x && press) {
       E.resizing = 1;
       return;
     }
+    if (press && E.view == VIEW_FILES && files_bar_rows() > 0 && m->x == L.side_x + side_width() - 1 &&
+        m->y >= files_bar_y() && m->y < files_bar_y() + files_bar_rows()) {	/* its scrollbar */
+      E.bar_drag = 1;
+      files_bar_to(m->y - files_bar_y(), files_bar_rows());
+      return;
+    }
     if (E.view == VIEW_FILES && OE.h > 0 && m->y >= OE.y0 && m->y < OE.y0 + OE.h) {	/* OPEN EDITORS */
-      if (m->wheel) OE.top = m->wheel < 0 ? (OE.top > 0 ? OE.top - 1 : 0) : OE.top + 1;
+      if (m->wheel) {	/* OPEN EDITORS */
+        size_t st = (size_t)wheel_step(m->mods);
+        OE.top = m->wheel < 0 ? (OE.top > st ? OE.top - st : 0) : OE.top + st;
+      }
       else if (press) {
         E.focus = F_SIDE;
         oe_click(m->y - OE.y0, m->x - L.side_x);
@@ -15421,7 +16001,10 @@ static void on_mouse (void) {
       return;
     }
     if (E.view == VIEW_FILES && TL.h > 0 && m->y >= TL.y0 && m->y < TL.y0 + TL.h) {	/* TIMELINE */
-      if (m->wheel) TL.top = m->wheel < 0 ? (TL.top > 0 ? TL.top - 1 : 0) : TL.top + 1;
+      if (m->wheel) {	/* TIMELINE */
+        size_t st = (size_t)wheel_step(m->mods);
+        TL.top = m->wheel < 0 ? (TL.top > st ? TL.top - st : 0) : TL.top + st;
+      }
       else if (m->press && !m->drag && (m->button == 0 || m->button == 2)) {
         E.focus = F_SIDE;
         tl_click(m->y - TL.y0, m->x, m->button);
@@ -15445,7 +16028,9 @@ static void on_mouse (void) {
     if (E.view == VIEW_FILES && OL.h > 0 && m->y >= OL.y0 && m->y < OL.y0 + OL.h) {	/* the Outline: there */
       int col = m->x - L.side_x, w = side_width();
       E.outline_focus = PANE_OUTLINE;
-      if (m->y == OL.y0 + 1 && col >= w - 4) outline_menu();
+      if (m->y <= OL.y0 + 1 && (col <= 1 || !OL.open)) OL.open = !OL.open;	/* its chevron */
+      else if (!OL.open) ;
+      else if (m->y == OL.y0 + 1 && col >= w - 4) outline_menu();
       else if (m->y == OL.y0 + 1 && col >= w - 6) outline_collapse_all();
       else if (m->y >= OL.y0 + 2) {
         size_t n, k = OL.top + (size_t)(m->y - OL.y0 - 2);
@@ -15474,7 +16059,7 @@ static void on_mouse (void) {
     apply_act(&act);
     return;
   }
-  if (m->x >= L.area_x && m->x < L.area_x + L.area_w && (m->x < L.ed_x || m->x >= L.ed_x + L.ed_w ||
+  if (m->x >= L.area_x && m->x < L.area_x + L.area_w && (m->x < L.ed_x - L.mml_w || m->x >= L.ed_x + L.ed_w ||
       m->y < L.ed_y || m->y >= L.ed_y + L.ed_h)) return;	/* not a group: a border, the centered layout's sides */
   if (press && m->y == L.ed_y + 1 && HAS_DOC && !G->diff && !T->page) {	/* the breadcrumbs */
     int i;
@@ -15486,7 +16071,7 @@ static void on_mouse (void) {
     return;
   }
   if (m->y == L.ed_y) {	/* the tabs */
-    draw_tabs();	/* where this group's tabs are */
+    draw_tabs_full();	/* where this group's tabs are */
     if (m->wheel) {	/* the tabs scroll, like VS Code's */
       int n = G->ntab + (HAS_DIFF ? 1 : 0);
       G->first += m->wheel;
@@ -15495,6 +16080,14 @@ static void on_mouse (void) {
       return;
     }
     if (!m->press || m->drag || m->button > 2) return;
+    if (G->diff && HAS_DIFF && m->button == 0) {	/* the diff's icons */
+      int r = diff_title_click(m->x);
+      if (r == DIFF_EDIT) diff_edit_file();
+      if (r != DIFF_NO) {
+        E.focus = F_EDITOR;
+        return;
+      }
+    }
     {
       int i;
       for (i = 0; i < g_tabs.n; i++) {
@@ -15530,7 +16123,10 @@ static void on_mouse (void) {
   }
   if (G->diff && HAS_DIFF) {
     if (m->wheel) diff_wheel(m->wheel);
-    else if (press) E.focus = F_EDITOR;
+    else if (press || (m->button == 0 && m->drag)) {
+      if (press) E.focus = F_EDITOR;
+      if (diff_click(m->x, m->y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
+    }
     return;
   }
   if (!HAS_DOC) {
@@ -15545,22 +16141,23 @@ static void on_mouse (void) {
     return;
   }
   if (T->md) {	/* the Markdown preview */
-    if (m->wheel < 0) T->top = T->top > 3 ? T->top - 3 : 0;
-    else if (m->wheel > 0) T->top += 3;
+    size_t step = (size_t)wheel_step(m->mods);
+    if (m->wheel < 0) T->top = T->top > step ? T->top - step : 0;
+    else if (m->wheel > 0) T->top += step;
     else if (press) E.focus = F_EDITOR;
     return;
   }
   if (m->wheel && (m->mods & KM_SHIFT) && !E.wrap) {	/* Shift+wheel: to the side, like VS Code */
-    size_t width = doc_width() + 1, tc = (size_t)text_cols();
-    if (m->wheel < 0) T->left = T->left > 6 ? T->left - 6 : 0;
+    size_t width = doc_width() + 1, tc = (size_t)text_cols(), step = (size_t)(2 * wheel_step(0));
+    if (m->wheel < 0) T->left = T->left > step ? T->left - step : 0;
     else if (width > tc) {
-      T->left += 6;
+      T->left += step;
       if (T->left > width - tc) T->left = width - tc;
     }
     return;
   }
   if (m->wheel) {
-    size_t th = (size_t)L.text_h, step = (m->mods & KM_ALT) ? 15 : 3;	/* Alt: fast */
+    size_t th = (size_t)L.text_h, step = (size_t)wheel_step(m->mods);
     if (m->wheel < 0) T->top = T->top > step ? T->top - step : 0;
     else {	/* editor.scrollBeyondLastLine: until the last line is on top */
       size_t lim = eopt.beyond_last ? (T->doc->n ? T->doc->n - 1 : 0) : (T->doc->n > th ? T->doc->n - th : 0);
@@ -15719,6 +16316,7 @@ int main (int argc, char **argv) {
   doc_init(g_none.doc);
   E.side_w = 30;
   E.panel_h = 12;
+  OL.open = 1;	/* the Outline starts open, OPEN EDITORS and TIMELINE folded, like VS Code */
   apply_settings(0);
   keys_load();
   E.view = VIEW_FILES;
@@ -15808,7 +16406,7 @@ int main (int argc, char **argv) {
       if (E.focus == F_PANEL) E.focus = F_EDITOR;
     }
     draw();
-    k = term_key((panel_alive() || dbg_active() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the size, the shell, the servers */
+    k = term_key(search_busy() ? 1 : (panel_alive() || dbg_active() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the size, the shell, the servers */
     quickfix_idle();
     if (k == K_NONE) {
       hover_idle();

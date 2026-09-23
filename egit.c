@@ -644,6 +644,7 @@ void git_draw (int x, int y, int w, int h, int focus) {
       scr_put(x + w - 2, sy, (uint32_t)l, st == S_SIDE ? git_letter_style(l) : st);
     }
   }
+  side_bar(x, y + HEAD, w, g_h, g_nrow, g_top_row, (size_t)g_h);
 }
 
 
@@ -919,10 +920,10 @@ void git_click (int row, int col, SideAct *act) {
 
 
 void git_wheel (int d) {
-  size_t h = (size_t)g_h;
-  if (d < 0) g_top_row = g_top_row > 3 ? g_top_row - 3 : 0;
+  size_t h = (size_t)g_h, st = (size_t)wheel_step(0);
+  if (d < 0) g_top_row = g_top_row > st ? g_top_row - st : 0;
   else if (g_nrow > h) {
-    g_top_row += 3;
+    g_top_row += st;
     if (g_top_row > g_nrow - h) g_top_row = g_nrow - h;
   }
   if (g_sel > 0 && g_sel - 1 < g_top_row) g_sel = g_top_row + 1;
@@ -945,7 +946,15 @@ typedef struct DLine {
   size_t len;
   size_t h0, h1;	/* the changed bytes, brighter */
   unsigned char *tok;	/* its colors */
+  char *os;	/* ' ' with diffEditor.ignoreTrimWhitespace: the old side's text when its spaces differ */
+  size_t olen;
+  size_t *hr;	/* the changed words: nhr ranges [hr[2i], hr[2i+1]) */
+  size_t nhr;
 } DLine;
+
+typedef struct VRow {	/* a row shown: underlying row k, or a fold of hidden rows k .. k+hidden-1 */
+  size_t k, hidden;
+} VRow;
 
 typedef struct SRow {
   long l, r;	/* DLine on the left / right, -1: nothing there */
@@ -966,7 +975,23 @@ static struct {
   int kind;	/* DK_*: what old and new are, for Stage / Unstage / Revert Selected Ranges */
   char *rel;	/* DK_TREE, DK_INDEX: the file from the top */
   size_t cur;	/* the view row of the change F7 went to */
+  char *ta, *tb;	/* the old and the new text, whole: diffEditor.ignoreTrimWhitespace diffs them again */
+  size_t tna, tnb;
+  int trim;	/* the lines are for ignoreTrimWhitespace so */
+  VRow *vis;	/* diffEditor.hideUnchangedRegions: the rows shown; nvis 0: all */
+  size_t nvis, capvis;
+  unsigned char *exp;	/* a fold opened (by its first row) */
+  size_t nexp;
+  int vis_split, vis_hide;	/* what vis was made for */
+  size_t crow;	/* the row of the cursor (Enter opens the file there) */
+  int x, y, w, hw, arrow_x, mmw;	/* where it was drawn: for the mouse */
+  int act_x[6], nact;	/* the title's icons */
 } D;
+
+#define CTX	3	/* hideUnchangedRegions: the lines kept around a change */
+#define MIN_HIDE	3	/* and the fewest lines worth a fold */
+
+static int g_gaveup;	/* edit_script gave up: too different for its memory */
 
 enum { DK_OTHER, DK_TREE, DK_INDEX };	/* index -> working tree, HEAD -> index */
 
@@ -987,6 +1012,10 @@ static void dline_add (char kind, size_t o, size_t n, const char *s, size_t len)
   l->h0 = 0;
   l->h1 = len;
   l->tok = NULL;
+  l->os = NULL;
+  l->olen = 0;
+  l->hr = NULL;
+  l->nhr = 0;
   if (o > D.nmax) D.nmax = o;
   if (n > D.nmax) D.nmax = n;
 }
@@ -1012,6 +1041,106 @@ static void pair (DLine *a, DLine *b) {
   a->h0 = b->h0 = p;
   a->h1 = a->len - s;
   b->h1 = b->len - s;
+}
+
+
+static int wclass (unsigned char c) {
+  if (c == ' ' || c == '\t') return 0;
+  if (c == '_' || c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) return 1;
+  return 2;
+}
+
+
+/* the words of s: runs of letters, runs of spaces, each other character; at[k] their starts, at[count] = n */
+static size_t words (const char *s, size_t n, size_t *at) {
+  size_t i = 0, k = 0;
+  while (i < n) {
+    int c = wclass((unsigned char)s[i]);
+    at[k++] = i;
+    if (c == 2) i++;
+    else
+      while (i < n && wclass((unsigned char)s[i]) == c) i++;
+  }
+  at[k] = n;
+  return k;
+}
+
+
+/* the words of l not in the common part (keep[k] 0) as byte ranges; spaces between two changes join them */
+static void word_ranges (DLine *l, const size_t *at, size_t nt, const unsigned char *keep) {
+  size_t k = 0, cap = 0;
+  l->nhr = 0;
+  while (k < nt) {
+    size_t a;
+    if (keep[k]) {
+      k++;
+      continue;
+    }
+    a = at[k];
+    while (k < nt && (!keep[k] || (wclass((unsigned char)l->s[at[k]]) == 0 && k + 1 < nt && !keep[k + 1]))) k++;
+    if (2 * l->nhr + 2 > cap) l->hr = (size_t *)xrealloc(l->hr, (cap = cap ? cap * 2 : 8) * sizeof(size_t));
+    l->hr[2 * l->nhr] = a;
+    l->hr[2 * l->nhr + 1] = at[k];
+    l->nhr++;
+  }
+}
+
+
+/*
+** The changed words of a line and the line it became, like VS Code's
+** character diff: the longest common run of words stays plain. Very long
+** lines fall back to what is left without the same start and end.
+*/
+static void word_pair (DLine *a, DLine *b) {
+  size_t *wa, *wb, na, nb, i, j;
+  unsigned short *lcs;
+  unsigned char *ka, *kb;
+  pair(a, b);	/* the fallback, and h0 / h1 for the old way of drawing */
+  if (a->len > 2000 || b->len > 2000) return;
+  wa = (size_t *)xmalloc((a->len + 2) * sizeof(size_t));
+  wb = (size_t *)xmalloc((b->len + 2) * sizeof(size_t));
+  na = words(a->s, a->len, wa);
+  nb = words(b->s, b->len, wb);
+  if ((na + 1) * (nb + 1) > 250000) {
+    free(wa);
+    free(wb);
+    return;
+  }
+  lcs = (unsigned short *)calloc((na + 1) * (nb + 1), sizeof(unsigned short));
+  ka = (unsigned char *)calloc(na + 1, 1);
+  kb = (unsigned char *)calloc(nb + 1, 1);
+  if (lcs == NULL || ka == NULL || kb == NULL) {
+    free(lcs);
+    free(ka);
+    free(kb);
+    free(wa);
+    free(wb);
+    return;
+  }
+#define LCS(x, y)	lcs[(x) * (nb + 1) + (y)]
+  for (i = na; i-- > 0;)
+    for (j = nb; j-- > 0;) {
+      size_t la = wa[i + 1] - wa[i], lb = wb[j + 1] - wb[j];
+      if (la == lb && memcmp(a->s + wa[i], b->s + wb[j], la) == 0) LCS(i, j) = (unsigned short)(LCS(i + 1, j + 1) + 1);
+      else LCS(i, j) = LCS(i + 1, j) > LCS(i, j + 1) ? LCS(i + 1, j) : LCS(i, j + 1);
+    }
+  for (i = 0, j = 0; i < na && j < nb;) {	/* the common words, walked */
+    size_t la = wa[i + 1] - wa[i], lb = wb[j + 1] - wb[j];
+    if (la == lb && memcmp(a->s + wa[i], b->s + wb[j], la) == 0) {
+      ka[i++] = 1;
+      kb[j++] = 1;
+    }
+    else if (LCS(i + 1, j) >= LCS(i, j + 1)) i++;
+    else j++;
+  }
+#undef LCS
+  word_ranges(a, wa, na, ka);
+  word_ranges(b, wb, nb, kb);
+  free(lcs);
+  free(ka);
+  free(kb);
+  free(wa);
+  free(wb);
 }
 
 
@@ -1055,24 +1184,37 @@ static void build_split (void) {
     for (j = 0; j < d1 - d0 || j < a1 - d1; j++) {
       long l = (j < d1 - d0) ? (long)(d0 + j) : -1;
       long r = (j < a1 - d1) ? (long)(d1 + j) : -1;
-      if (l >= 0 && r >= 0) pair(&D.line[l], &D.line[r]);
+      if (l >= 0 && r >= 0) word_pair(&D.line[l], &D.line[r]);
       srow_add(l, r);
     }
   }
 }
 
 
-void diff_close (void) {
+static void lines_free (void) {
   size_t i;
   for (i = 0; i < D.nline; i++) {
     free(D.line[i].s);
     free(D.line[i].tok);
+    free(D.line[i].os);
+    free(D.line[i].hr);
   }
+  D.nline = 0;
+  D.nmax = 0;
+}
+
+
+void diff_close (void) {
+  lines_free();
   free(D.line);
   free(D.row);
   free(D.path);
   free(D.title);
   free(D.rel);
+  free(D.ta);
+  free(D.tb);
+  free(D.vis);
+  free(D.exp);
   memset(&D, 0, sizeof(D));
 }
 
@@ -1111,6 +1253,8 @@ static void parse_unified (const char *p) {
 }
 
 
+static void finish (void);
+
 /*
 ** A commit's change of a file: old (its parent, or git's empty tree for the
 ** first commit) against new; rel and old_rel from the top, with '/'.
@@ -1147,10 +1291,7 @@ int diff_open_rev (const char *path, const char *rel, const char *old_rel,
   parse_unified(b.s ? b.s : "");
   buf_free(&b);
   if (D.nline == 0) dline_add(' ', 1, 1, "", 0);	/* a change of mode only */
-  build_split();
-  color_lines(path);
-  D.open = 1;
-  diff_change(0);
+  finish();
   return 0;
 }
 
@@ -1190,10 +1331,7 @@ int diff_open_files (const char *path, const char *old_file, const char *new_fil
     free(s);
     if (D.nline == 0) dline_add(' ', 1, 1, "", 0);
   }
-  build_split();
-  color_lines(path);
-  D.open = 1;
-  diff_change(0);
+  finish();
   return 0;
 }
 
@@ -1273,6 +1411,7 @@ static char *edit_script (const TLine *a, size_t n, const TLine *b, size_t m, si
     memcpy(trace[d], v, (size_t)(2 * max + 3) * sizeof(long));
   }
   /* too different: all of a goes, all of b comes */
+  g_gaveup = 1;
   for (x = 0; x < (long)n; x++) ops[no++] = '-';
   for (y = 0; y < (long)m; y++) ops[no++] = '+';
   for (d = 0; d <= dmax; d++) free(trace[d]);
@@ -1405,11 +1544,153 @@ int diff_open_texts (const char *path, const char *a, size_t na, const char *b, 
   free(la);
   free(lb);
   if (D.nline == 0) dline_add(' ', 1, 1, "", 0);
+  finish();
+  return 0;
+}
+
+/*
+** The old and the new text, whole, from the lines the diff was made of:
+** ignoreTrimWhitespace diffs them again.
+*/
+static void texts_of_lines (void) {
+  Buf a, b;
+  size_t i;
+  if (D.ta) return;
+  buf_init(&a);
+  buf_init(&b);
+  for (i = 0; i < D.nline; i++) {
+    const DLine *l = &D.line[i];
+    if (l->kind != '+') {
+      buf_putn(&a, l->os ? l->os : l->s, l->os ? l->olen : l->len);
+      buf_putc(&a, '\n');
+    }
+    if (l->kind != '-') {
+      buf_putn(&b, l->s, l->len);
+      buf_putc(&b, '\n');
+    }
+  }
+  buf_putc(&a, '\0');
+  buf_putc(&b, '\0');
+  D.tna = a.len - 1;
+  D.tnb = b.len - 1;
+  D.ta = buf_take(&a);
+  D.tb = buf_take(&b);
+}
+
+
+/* a line for comparing: without its '\r', and with trim without its spaces at both ends */
+static void cmp_line (TLine *t, int trim) {
+  size_t j;
+  if (t->n > 0 && t->s[t->n - 1] == '\r') t->n--;
+  if (trim) {
+    while (t->n > 0 && (t->s[0] == ' ' || t->s[0] == '\t')) {
+      t->s++;
+      t->n--;
+    }
+    while (t->n > 0 && (t->s[t->n - 1] == ' ' || t->s[t->n - 1] == '\t' || t->s[t->n - 1] == '\r')) t->n--;
+  }
+  t->h = 5381;
+  for (j = 0; j < t->n; j++) t->h = t->h * 33 + (unsigned char)t->s[j];
+}
+
+
+/*
+** The lines again from the two texts, Myers' diff, the lines compared with
+** or without their spaces at both ends (VS Code's ignoreTrimWhitespace). 0
+** done; -1: too different for it, the lines as they were stay.
+*/
+static int relines (int trim) {
+  size_t n, m, nops, i, o = 0, w = 0;
+  TLine *la, *lb, *ca, *cb;
+  char *ops;
+  D.trim = trim;
+  if (D.ta == NULL) return -1;
+  la = text_lines(D.ta, D.tna, &n);
+  lb = text_lines(D.tb, D.tnb, &m);
+  ca = (TLine *)xmalloc((n + 1) * sizeof(TLine));
+  cb = (TLine *)xmalloc((m + 1) * sizeof(TLine));
+  memcpy(ca, la, n * sizeof(TLine));
+  memcpy(cb, lb, m * sizeof(TLine));
+  for (i = 0; i < n; i++) cmp_line(&ca[i], trim);
+  for (i = 0; i < m; i++) cmp_line(&cb[i], trim);
+  g_gaveup = 0;
+  ops = edit_script(ca, n, cb, m, &nops);
+  if (g_gaveup) {
+    free(ops);
+    free(la);
+    free(lb);
+    free(ca);
+    free(cb);
+    return -1;
+  }
+  lines_free();
+  i = 0;
+  while (i < nops) {
+    size_t j;
+    if (ops[i] == ' ') {
+      DLine *l;
+      dline_add(' ', o + 1, w + 1, lb[w].s, lb[w].n);
+      l = &D.line[D.nline - 1];
+      {	/* the old side's text, when only its spaces differ */
+        size_t on = la[o].n;
+        if (on > 0 && la[o].s[on - 1] == '\r') on--;
+        if (on != l->len || memcmp(la[o].s, l->s, on) != 0) {
+          l->os = xstrndup(la[o].s, on);
+          l->olen = on;
+        }
+      }
+      o++;
+      w++;
+      i++;
+      continue;
+    }
+    for (j = i; j < nops && ops[j] != ' '; j++)
+      if (ops[j] == '-') {
+        dline_add('-', o + 1, 0, la[o].s, la[o].n);
+        o++;
+      }
+    for (j = i; j < nops && ops[j] != ' '; j++)
+      if (ops[j] == '+') {
+        dline_add('+', 0, w + 1, lb[w].s, lb[w].n);
+        w++;
+      }
+    i = j;
+  }
+  if (D.nline == 0) dline_add(' ', 1, 1, "", 0);
+  free(ops);
+  free(la);
+  free(lb);
+  free(ca);
+  free(cb);
+  return 0;
+}
+
+
+static void vis_build (void);
+
+/* the rows, the words changed, the colors: again from D.line */
+static void rebuild (void) {
   build_split();
   color_lines(D.path);
+  D.vis_split = -1;	/* vis again when it is drawn */
+}
+
+
+/* every diff opened ends here */
+static void finish (void) {
+  static int side_set;
+  if (!side_set) {	/* diffEditor.renderSideBySide, the first time */
+    D.inline_mode = !vopt.diff_side;
+    side_set = 1;
+  }
+  texts_of_lines();
+  D.trim = 0;
+  if (vopt.diff_trim) relines(1);
+  rebuild();
   D.open = 1;
+  D.crow = 0;
   diff_change(0);
-  return 0;
+  D.crow = D.cur;
 }
 
 /* }================================================================== */
@@ -1470,10 +1751,7 @@ int diff_open (const char *path, int staged) {
   }
   free(rel);
   buf_free(&b);
-  build_split();
-  color_lines(path);
-  D.open = 1;
-  diff_change(0);	/* to the first change */
+  finish();
   return 0;
 }
 
@@ -1506,9 +1784,14 @@ static const DLine *row_line (size_t k) {
 }
 
 
+/* the file's line at the cursor's row (a row only on the old side: the next one's), from 1 */
 size_t diff_line (void) {
-  size_t k;
-  for (k = D.top; k < nrows(); k++) {
+  size_t k, n = nrows();
+  for (k = D.crow; k < n; k++) {
+    const DLine *l = row_line(k);
+    if (l && l->n) return l->n;
+  }
+  for (k = D.crow < n ? D.crow : n; k-- > 0;) {
     const DLine *l = row_line(k);
     if (l && l->n) return l->n;
   }
@@ -1520,6 +1803,96 @@ static int is_change (size_t k) {
   const DLine *l = row_line(k);
   if (D.split_now && k < D.nrow && D.row[k].l >= 0 && D.line[D.row[k].l].kind != ' ') return 1;
   return l && l->kind != ' ';
+}
+
+
+static void vpush (size_t k, size_t hidden) {
+  if (D.nvis == D.capvis) D.vis = (VRow *)xrealloc(D.vis, (D.capvis = D.capvis ? D.capvis * 2 : 256) * sizeof(VRow));
+  D.vis[D.nvis].k = k;
+  D.vis[D.nvis].hidden = hidden;
+  D.nvis++;
+}
+
+
+/*
+** diffEditor.hideUnchangedRegions: a run of unchanged rows keeps CTX rows
+** next to each change; the rest is one row "N hidden lines", opened by a
+** click (Enter). No change at all: everything shows.
+*/
+static void vis_build (void) {
+  size_t n = nrows(), k = 0;
+  int any = 0;
+  D.nvis = 0;
+  D.vis_split = D.split_now;
+  D.vis_hide = vopt.diff_hide;
+  if (D.nexp != n) {	/* other rows (side by side, inline): the folds opened are forgotten */
+    free(D.exp);
+    D.exp = (unsigned char *)calloc(n + 1, 1);
+    D.nexp = n;
+  }
+  if (!vopt.diff_hide) return;
+  for (k = 0; k < n && !any; k++) any = is_change(k);
+  if (!any) return;
+  k = 0;
+  while (k < n) {
+    size_t s0, e, head, tail, j;
+    if (is_change(k)) {
+      vpush(k++, 0);
+      continue;
+    }
+    s0 = k;
+    while (k < n && !is_change(k)) k++;
+    e = k;
+    head = s0 == 0 ? 0 : CTX;
+    tail = e == n ? 0 : CTX;
+    if (e - s0 > head + tail && e - s0 - head - tail >= MIN_HIDE && !(D.exp && D.exp[s0 + head])) {
+      for (j = s0; j < s0 + head; j++) vpush(j, 0);
+      vpush(s0 + head, e - s0 - head - tail);
+      for (j = e - tail; j < e; j++) vpush(j, 0);
+    }
+    else
+      for (j = s0; j < e; j++) vpush(j, 0);
+  }
+}
+
+
+static size_t vcount (void) {
+  return D.nvis ? D.nvis : nrows();
+}
+
+
+static size_t vk (size_t i) {	/* the row shown i-th */
+  return D.nvis ? D.vis[i].k : i;
+}
+
+
+static size_t vpos (size_t k) {	/* the place of row k among those shown (a hidden one: its fold's) */
+  size_t lo = 0, hi;
+  if (!D.nvis) return k;
+  hi = D.nvis;
+  while (hi - lo > 1) {
+    size_t mid = (lo + hi) / 2;
+    if (D.vis[mid].k <= k) lo = mid;
+    else hi = mid;
+  }
+  return lo;
+}
+
+
+/* the cursor d rows on (of those shown); the view follows */
+static void crow_move (long d) {
+  size_t n = vcount(), h = D.h > 0 ? (size_t)D.h : 1, i, i0;
+  long p;
+  if (n == 0) return;
+  p = (long)vpos(D.crow) + d;
+  if (p < 0) p = 0;
+  if (p >= (long)n) p = (long)n - 1;
+  i = (size_t)p;
+  D.crow = vk(i);
+  if (is_change(D.crow)) D.cur = D.crow;	/* the change Stage / Revert Selected Ranges takes */
+  i0 = vpos(D.top);
+  if (i < i0) D.top = vk(i);
+  else if (i >= i0 + h) D.top = vk(i - h + 1);
 }
 
 
@@ -1536,27 +1909,126 @@ void diff_change (int back) {
   }
   if (n == 0) return;
   D.top = k > 3 ? k - 3 : 0;	/* a little context above, like VS Code */
+  if (D.nvis) D.top = vk(vpos(D.top));
   D.cur = k;
+  D.crow = k;
 }
 
 
-static void draw_side (int x, int y, int w, const DLine *l, int left, int nw) {
+/* the changed words of a line drawn at x (from its column left on): their background brighter */
+static void paint_words (int x, int y, int w, const char *s, size_t n, const DLine *l, uint32_t rgb) {
+  size_t i = 0, col = 0, len, right = D.left + (size_t)(w > 0 ? w : 0), r = 0;
+  while (i < n && col < right && r < l->nhr) {
+    uint32_t cp = utf8_decode(s + i, n - i, &len);
+    size_t cw = cp == '\t' ? (size_t)TABW - col % (size_t)TABW : (cp < 32 || cp == 127) ? 2 : (size_t)uc_width(cp), k;
+    while (r < l->nhr && i >= l->hr[2 * r + 1]) r++;
+    if (r < l->nhr && i >= l->hr[2 * r])
+      for (k = 0; k < cw; k++)
+        if (col + k >= D.left && col + k < right) scr_set_bg(x + (int)(col + k - D.left), y, rgb);
+    col += cw;
+    i += len;
+  }
+}
+
+
+static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, int cur) {
   char num[32];
   int st, hst;
+  const char *s;
+  size_t len;
+  const unsigned char *tok;
   if (l == NULL) {	/* nothing on this side: VS Code's diagonal fill */
     int i;
     for (i = 0; i < w; i++) scr_put(x + i, y, 0x2571, S_DIFF_FILL);
     return;
   }
-  st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : S_TEXT;
+  s = l->s;
+  len = l->len;
+  tok = l->tok;
+  if (left && l->kind == ' ' && l->os) {	/* its old spaces */
+    s = l->os;
+    len = l->olen;
+    tok = NULL;
+  }
+  st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : cur ? S_LINE : S_TEXT;
   hst = l->kind == '+' ? B_ADD_HI : l->kind == '-' ? B_DEL_HI : B_EDITOR;
   snprintf(num, sizeof(num), "%*lu ", nw - 1, (unsigned long)(left ? l->o : l->n));
-  scr_puts(x, y, num, S_DIFF_NUM);
+  scr_puts(x, y, num, cur ? S_GUTTER_CUR : S_DIFF_NUM);
   scr_fill(x + nw, y, w - nw, st);
   if (l->kind != ' ') scr_put(x + nw, y, l->kind == '+' ? '+' : '-', st);
-  scr_code(x + nw + 2, y, w - nw - 2, l->s, l->len, D.left, l->tok,
-           l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : B_EDITOR,
-           l->kind == ' ' ? 0 : l->h0, l->kind == ' ' ? 0 : l->h1, hst);
+  scr_code(x + nw + 2, y, w - nw - 2, s, len, D.left, tok,
+           l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : cur ? B_LINE : B_EDITOR,
+           l->kind == ' ' || l->nhr ? 0 : l->h0, l->kind == ' ' || l->nhr ? 0 : l->h1, hst);
+  if (l->nhr) paint_words(x + nw + 2, y, w - nw - 2, s, len, l, ui_color(l->kind == '+' ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
+}
+
+
+/* a fold of hidden rows: "⋯ 12 hidden lines", VS Code's */
+static void draw_fold (int x, int y, int w, size_t hidden) {
+  char t[64];
+  snprintf(t, sizeof(t), "  \xE2\x8B\xAF  %lu hidden line%s", (unsigned long)hidden, hidden == 1 ? "" : "s");
+  scr_fill(x, y, w, S_DIFF_HUNK);
+  scr_putsw(x, y, w, t, S_DIFF_HUNK);
+}
+
+
+#define DMM_W	10	/* the diff's minimap: columns */
+#define DMM_CH	5	/* characters of a line in one of its dots */
+
+/*
+** The minimap of the diff, like VS Code's: the rows of the diff in small,
+** green where lines came and red where they went, with the part shown
+** lighter. rows: how many rows of the diff one of its rows holds.
+*/
+static void draw_dmap (int x, int y, int h, size_t i0) {
+  static const unsigned char bit[4][2] = {{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}};
+  size_t n = vcount(), per = (n + (size_t)h - 1) / (size_t)h, r;
+  if (per == 0) per = 1;
+  for (r = 0; (int)r < h; r++) {
+    size_t i, kinds = 0;
+    uint32_t dot[4][2 * DMM_W], bg;
+    int in_view = (r + 1) * per > i0 && r * per < i0 + (size_t)h, c, k;
+    for (k = 0; k < 4; k++)
+      for (c = 0; c < 2 * DMM_W; c++) dot[k][c] = 0xFFFFFFFFu;
+    for (k = 0; k < 4; k++) {	/* the lines of this row: one in each quarter */
+      const DLine *l;
+      size_t col = 0, b = 0;
+      i = r * per + (size_t)k * per / 4;
+      if (i >= n) break;
+      l = row_line(vk(i));
+      if (l == NULL) continue;
+      if (l->kind == '+') kinds |= 1;
+      else if (l->kind == '-') kinds |= 2;
+      while (b < l->len && col / DMM_CH < 2 * DMM_W) {
+        unsigned char ch = (unsigned char)l->s[b];
+        if (ch != ' ' && ch != '\t' && dot[k][col / DMM_CH] == 0xFFFFFFFFu)
+          dot[k][col / DMM_CH] = tok_color(l->tok ? l->tok[b] : 0);
+        col += ch == '\t' ? (size_t)TABW - col % (size_t)TABW : 1;
+        b++;
+      }
+    }
+    bg = ui_color(kinds == 1 ? C_DIFF_ADD : kinds ? C_DIFF_DEL : in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG);
+    if (in_view && kinds) bg = ui_color(kinds == 1 ? C_DIFF_ADD_HI : C_DIFF_DEL_HI);
+    for (c = 0; c < DMM_W; c++) {
+      uint32_t fg = 0xFFFFFFFFu;
+      unsigned m = 0;
+      for (k = 0; k < 4; k++) {
+        int d;
+        for (d = 0; d < 2; d++)
+          if (dot[k][2 * c + d] != 0xFFFFFFFFu) {
+            m |= bit[k][d];
+            if (fg == 0xFFFFFFFFu) fg = dot[k][2 * c + d];
+          }
+      }
+      scr_put_rgb(x + c, y + (int)r, m ? 0x2800 + m : ' ', m ? fg : bg, bg, 0);
+    }
+  }
+}
+
+
+/* the first row of a block of changes: a revert arrow goes there */
+static int block_start (size_t k) {
+  return is_change(k) && (k == 0 || !is_change(k - 1));
 }
 
 
@@ -1586,7 +2058,12 @@ static int in_current (size_t k) {
 
 void diff_draw (int x, int y, int w, int h) {
   int nw = 2, row;
-  size_t m = D.nmax;
+  size_t m = D.nmax, n, i0;
+  if (D.ta && D.trim != vopt.diff_trim) {	/* ignoreTrimWhitespace changed: the lines again */
+    relines(vopt.diff_trim);
+    rebuild();
+    if (D.crow >= nrows()) D.crow = 0;
+  }
   while (m >= 10) {
     m /= 10;
     nw++;
@@ -1594,24 +2071,42 @@ void diff_draw (int x, int y, int w, int h) {
   nw++;
   D.split_now = !D.inline_mode && w >= 80;
   D.h = h;
-  if (D.top + (size_t)h > nrows()) D.top = nrows() > (size_t)h ? nrows() - (size_t)h : 0;
+  D.x = x;
+  D.y = y;
+  D.w = w;
+  D.mmw = (opt.minimap && w >= 100) ? DMM_W : 0;	/* its minimap, when there is room */
+  w -= D.mmw;
+  D.hw = (w - 1) / 2;
+  D.arrow_x = 2 * nw - 1;
+  if (D.vis_split != D.split_now || D.vis_hide != vopt.diff_hide) vis_build();
+  n = vcount();
+  i0 = vpos(D.top);
+  if (i0 + (size_t)h > n) i0 = n > (size_t)h ? n - (size_t)h : 0;
+  D.top = n ? vk(i0) : 0;
   scr_box(x, y, w, h, S_TEXT);
   for (row = 0; row < h; row++) {
-    size_t k = D.top + (size_t)row;
-    int sy = y + row;
-    if (k >= nrows()) break;
+    size_t i = i0 + (size_t)row, k;
+    int sy = y + row, cur;
+    if (i >= n) break;
+    k = vk(i);
+    if (D.nvis && D.vis[i].hidden) {
+      draw_fold(x, sy, w, D.vis[i].hidden);
+      continue;
+    }
+    cur = k == D.crow;
     if (D.split_now) {
-      int hw = (w - 1) / 2;
+      int hw = D.hw;
       const SRow *r = &D.row[k];
-      draw_side(x, sy, hw, r->l >= 0 ? &D.line[r->l] : NULL, 1, nw);
+      draw_side(x, sy, hw, r->l >= 0 ? &D.line[r->l] : NULL, 1, nw, cur);
       if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);	/* the change Stage Selected Ranges takes */
-      scr_put(x + hw, sy, 0x2502, S_DIFF_FILL);
-      draw_side(x + hw + 1, sy, w - hw - 1, r->r >= 0 ? &D.line[r->r] : NULL, 0, nw);
+      if (D.kind == DK_TREE && block_start(k)) scr_put(x + hw, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
+      else scr_put(x + hw, sy, 0x2502, S_DIFF_FILL);
+      draw_side(x + hw + 1, sy, w - hw - 1, r->r >= 0 ? &D.line[r->r] : NULL, 0, nw, cur);
     }
     else {	/* inline: both numbers, then the line */
       const DLine *l = &D.line[k];
       char num[64];
-      int st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : S_TEXT;
+      int st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : cur ? S_LINE : S_TEXT;
       int hst = l->kind == '+' ? B_ADD_HI : l->kind == '-' ? B_DEL_HI : B_EDITOR;
       char a[24], b[24];
       if (l->o) snprintf(a, sizeof(a), "%lu", (unsigned long)l->o);
@@ -1619,15 +2114,106 @@ void diff_draw (int x, int y, int w, int h) {
       if (l->n) snprintf(b, sizeof(b), "%lu", (unsigned long)l->n);
       else b[0] = '\0';
       snprintf(num, sizeof(num), "%*s %*s ", nw - 1, a, nw - 1, b);
-      scr_puts(x, sy, num, S_DIFF_NUM);
+      scr_puts(x, sy, num, cur ? S_GUTTER_CUR : S_DIFF_NUM);
       scr_fill(x + 2 * nw, sy, w - 2 * nw, st);
       if (l->kind != ' ') scr_put(x + 2 * nw, sy, (uint32_t)l->kind, st);
       scr_code(x + 2 * nw + 2, sy, w - 2 * nw - 2, l->s, l->len, D.left, l->tok,
-               l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : B_EDITOR,
-               l->kind == ' ' ? 0 : l->h0, l->kind == ' ' ? 0 : l->h1, hst);
+               l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : cur ? B_LINE : B_EDITOR,
+               l->kind == ' ' || l->nhr ? 0 : l->h0, l->kind == ' ' || l->nhr ? 0 : l->h1, hst);
+      if (l->nhr)
+        paint_words(x + 2 * nw + 2, sy, w - 2 * nw - 2, l->s, l->len, l,
+                    ui_color(l->kind == '+' ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
       if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);
+      if (D.kind == DK_TREE && block_start(k)) scr_put(x + D.arrow_x, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
     }
   }
+  if (D.mmw > 0) draw_dmap(x + w, y, h, i0);
+}
+
+
+/*
+** The diff's actions in the tab bar, right-aligned before x1 like VS Code's
+** editor title: previous / next change, show whitespace changes (¶),
+** hidden unchanged regions, inline / side by side, open the file.
+*/
+int diff_title_draw (int x1, int y) {
+  static const uint32_t icon[6] = {0xEAA1, 0xEA9A, 0x00B6, 0xEAC5, 0xEB56, 0xEA94};
+  int i, x = x1 - 2 * 6 - 1;
+  if (!D.open || x < 0) {
+    D.nact = 0;
+    return x1;
+  }
+  scr_fill(x, y, x1 - x, S_TABS);
+  for (i = 0; i < 6; i++) {
+    int on = (i == 2 && !vopt.diff_trim) || (i == 3 && vopt.diff_hide) || (i == 4 && !D.split_now);
+    D.act_x[i] = x + 1 + 2 * i;
+    scr_put(D.act_x[i], y, icon[i], on ? S_TOGGLE_ON : S_TABS);
+  }
+  D.nact = 6;
+  return x;
+}
+
+
+/* diffEditor.ignoreTrimWhitespace, the ¶ toggle */
+void diff_toggle_trim (void) {
+  vopt.diff_trim = !vopt.diff_trim;
+  settings_put_json("diffEditor.ignoreTrimWhitespace", vopt.diff_trim ? "true" : "false");
+  toast(0, vopt.diff_trim ? "Changes of spaces at the ends of lines are not shown" : "Changes of spaces at the ends of lines are shown");
+}
+
+
+/* diffEditor.hideUnchangedRegions.enabled */
+void diff_toggle_hide (void) {
+  vopt.diff_hide = !vopt.diff_hide;
+  settings_put_json("diffEditor.hideUnchangedRegions.enabled", vopt.diff_hide ? "true" : "false");
+  if (D.exp) memset(D.exp, 0, D.nexp);
+}
+
+
+/* a click on the title's icons: DIFF_NO not one of them */
+int diff_title_click (int x) {
+  int i;
+  for (i = 0; i < D.nact; i++)
+    if (x == D.act_x[i] || x == D.act_x[i] + 1) {
+      switch (i) {
+        case 0: diff_change(1); break;
+        case 1: diff_change(0); break;
+        case 2: diff_toggle_trim(); break;
+        case 3: diff_toggle_hide(); break;
+        case 4: D.inline_mode = !D.inline_mode; break;
+        default: return DIFF_EDIT;
+      }
+      return DIFF_YES;
+    }
+  return DIFF_NO;
+}
+
+
+/* a click in the diff at screen mx, my: a fold opens, an arrow reverts, else the cursor goes there */
+int diff_click (int mx, int my) {
+  size_t i, k;
+  int row = my - D.y;
+  if (!D.open || row < 0 || row >= D.h) return DIFF_NO;
+  if (D.mmw > 0 && mx >= D.x + D.w - D.mmw) {	/* its minimap: the rows there */
+    size_t n = vcount(), per = (n + (size_t)D.h - 1) / (size_t)D.h, want;
+    if (per == 0) per = 1;
+    want = (size_t)row * per;
+    if (want + (size_t)D.h > n) want = n > (size_t)D.h ? n - (size_t)D.h : 0;
+    D.top = n ? vk(want) : 0;
+    return DIFF_YES;
+  }
+  i = vpos(D.top) + (size_t)row;
+  if (i >= vcount()) return DIFF_YES;
+  k = vk(i);
+  if (D.nvis && D.vis[i].hidden) {	/* the fold opens */
+    if (D.exp && k < D.nexp) D.exp[k] = 1;
+    vis_build();
+    return DIFF_YES;
+  }
+  D.crow = k;
+  if (is_change(k)) D.cur = k;
+  if (D.kind == DK_TREE && block_start(k) && mx == D.x + (D.split_now ? D.hw : D.arrow_x)) return DIFF_REVERT;
+  return DIFF_YES;
 }
 
 
@@ -1635,18 +2221,29 @@ int diff_key (int k) {
   int code = KEY_CODE(k);
   size_t h = D.h > 0 ? (size_t)D.h : 1;
   switch (code) {
-    case K_UP: if (D.top > 0) D.top--; break;
-    case K_DOWN: D.top++; break;
-    case K_PGUP: D.top = D.top > h ? D.top - h : 0; break;
-    case K_PGDN: D.top += h; break;
-    case K_HOME: D.top = 0; D.left = 0; break;
-    case K_END: D.top = nrows(); break;
+    case K_UP: crow_move(-1); break;
+    case K_DOWN: crow_move(1); break;
+    case K_PGUP: crow_move(-(long)h); break;
+    case K_PGDN: crow_move((long)h); break;
+    case K_HOME:
+      D.left = 0;
+      crow_move(-(long)vcount());
+      break;
+    case K_END: crow_move((long)vcount()); break;
     case K_LEFT: D.left = D.left > 4 ? D.left - 4 : 0; break;
     case K_RIGHT: D.left += 4; break;
     case K_F7: diff_change((k & KM_SHIFT) != 0); break;
     case 'i': D.inline_mode = !D.inline_mode; break;
     case K_ESC: return DIFF_CLOSE;
-    case K_ENTER: case 'o': return DIFF_EDIT;
+    case K_ENTER: case 'o': {
+      size_t i = vpos(D.crow);
+      if (D.nvis && i < D.nvis && D.vis[i].hidden && D.vis[i].k == D.crow) {	/* on a fold: it opens */
+        if (D.exp && D.crow < D.nexp) D.exp[D.crow] = 1;
+        vis_build();
+        break;
+      }
+      return DIFF_EDIT;
+    }
     default:
       if (k == CTRL('w')) return DIFF_CLOSE;
       return DIFF_NO;
@@ -1669,7 +2266,8 @@ static char *mixed (size_t from, size_t to, int block_new, int rest_new, const c
     int nw = (i >= from && i < to) ? block_new : rest_new;
     if (nw ? l->kind == '-' : l->kind == '+') continue;
     if (!first) buf_puts(&b, eol);
-    buf_putn(&b, l->s, l->len);
+    if (!nw && l->kind == ' ' && l->os) buf_putn(&b, l->os, l->olen);	/* its old spaces kept */
+    else buf_putn(&b, l->s, l->len);
     first = 0;
   }
   if (!first) buf_puts(&b, eol);
@@ -1757,8 +2355,10 @@ void diff_toggle_inline (void) {
 
 
 void diff_wheel (int d) {
-  if (d < 0) D.top = D.top > 3 ? D.top - 3 : 0;
-  else D.top += 3;
+  size_t i = vpos(D.top), n = vcount(), st = (size_t)wheel_step(0);
+  if (d < 0) i = i > st ? i - st : 0;
+  else i = i + st < n ? i + st : (n ? n - 1 : 0);
+  D.top = n ? vk(i) : 0;
 }
 
 /* }================================================================== */

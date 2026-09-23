@@ -54,8 +54,12 @@ typedef struct LDoc {
   char *uri;
   int version;
   unsigned long sent;	/* d->edits when the server last got the text */
+  unsigned long seen;	/* d->edits when it last changed, and when that was */
+  long long seen_at;
   int opened;	/* didOpen went */
 } LDoc;
+
+#define SYNC_WAIT	200000	/* us of quiet before the text goes: typing does not send a file a key */
 
 typedef struct DFile {
   char *uri;
@@ -1929,9 +1933,17 @@ int lsp_poll (void) {
     }
     got |= messages(s);
   }
-  for (k = 0; k < g_ndoc; k++) {	/* edits: the server gets the text again */
+  for (k = 0; k < g_ndoc; k++) {	/* edits: the server gets the text when the typing stops */
     LDoc *l = &g_doc[k];
-    if (l->s->ready && !l->s->dead && l->opened && l->sent != l->d->edits) did_change(l);
+    long long now;
+    if (!(l->s->ready && !l->s->dead && l->opened && l->sent != l->d->edits)) continue;
+    now = os_now_us();
+    if (l->seen != l->d->edits) {	/* still typing: wait for a pause */
+      l->seen = l->d->edits;
+      l->seen_at = now;
+      continue;
+    }
+    if (now - l->seen_at >= SYNC_WAIT) did_change(l);
   }
   return got;
 }

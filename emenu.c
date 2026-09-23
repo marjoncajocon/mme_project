@@ -117,7 +117,9 @@ static const char *const names[CMD_N] = {
   "Terminal: Select All", "Terminal: Copy Selection", "Terminal: Paste into Active Terminal",
   "Terminal: Run Recent Command...", "Terminal: Go to Recent Directory...", "Terminal: Change Color...",
   "Terminal: Change Icon...", "Developer: Inspect Editor Tokens and Scopes",
-  "Explorer: Open to the Side", "Find in Folder..."
+  "Explorer: Open to the Side", "Find in Folder...",
+  "Help: Keyboard Shortcuts Reference", "Help: Tips and Tricks", "Help: Show All Commands",
+  "Diff: Toggle Ignore Trim Whitespace", "Diff: Toggle Collapse Unchanged Regions"
 };
 
 static const char *const keys[CMD_N] = {
@@ -166,7 +168,8 @@ static const char *const keys[CMD_N] = {
   "Shift+Alt+I", "Ctrl+U", "", "Ctrl+K Ctrl+D", "Ctrl+F2", "Alt+Enter", "", "", "", "", "", "", "", "", "",
   "Ctrl+M", "Ctrl+K Ctrl+C", "Ctrl+K Ctrl+U", "Alt+PageUp", "Alt+PageDown",
   "", "", "", "Ctrl+Up", "Ctrl+Down", "", "Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+Alt+R", "Ctrl+G", "", "", "",
-  "Ctrl+Enter", "Shift+Alt+F"
+  "Ctrl+Enter", "Shift+Alt+F",
+  "", "", "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -298,7 +301,9 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "workbench.action.terminal.runRecentCommand", "workbench.action.terminal.goToRecentDirectory",
   "workbench.action.terminal.changeColor", "workbench.action.terminal.changeIcon",
   "editor.action.inspectTMScopes",
-  "explorer.openToSide", "filesExplorer.findInFolder"
+  "explorer.openToSide", "filesExplorer.findInFolder",
+  "workbench.action.keybindingsReference", "workbench.action.openTipsAndTricks", "workbench.action.showCommands.all",
+  "toggle.diff.ignoreTrimWhitespace", "diffEditor.toggleCollapseUnchangedRegions"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -372,7 +377,7 @@ static const int m_term[] = {CMD_TERMINAL_NEW, CMD_TERMINAL_SPLIT, CMD_TERMINAL_
                              CMD_TASK_BUILD, CMD_TERM_RUN_FILE, CMD_TERM_RUN_SEL, 0, CMD_TERMINAL, CMD_TERM_RECENT,
                              CMD_TERMINAL_FIND, CMD_TERMINAL_CLEAR, CMD_TERMINAL_RENAME, CMD_TERMINAL_KILL, 0,
                              CMD_TERMINAL_PROFILE, CMD_TASK_CONFIGURE, -1};
-static const int m_help[] = {CMD_WELCOME, CMD_PALETTE, 0, CMD_NOTIFICATIONS, 0, CMD_ABOUT, -1};
+static const int m_help[] = {CMD_WELCOME, CMD_HELP_COMMANDS, 0, CMD_HELP_KEYS, CMD_HELP_TIPS, 0, CMD_NOTIFICATIONS, 0, CMD_ABOUT, -1};
 
 static const struct {
   const char *name;
@@ -502,6 +507,7 @@ int menu_popup (int x, int y, const int *cmd, const char *const *label) {
       scr_puts(x + w - 3 - (int)strlen(keys[cmd[i]]), ry, keys[cmd[i]], on ? S_MENU_KEY_SEL : S_MENU_KEY);
     }
     scr_cursor(0, -1);
+    scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
     scr_flush();
     k = term_key(200);
     if (k == K_NONE) continue;
@@ -535,6 +541,7 @@ int menu_run (int m) {
     menubar_draw(m);
     drop_draw(m, sel);
     scr_cursor(0, -1);
+    scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
     scr_flush();
     k = term_key(200);
     if (k == K_NONE) continue;
@@ -604,6 +611,7 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
         scr_puts(x + w - 3 - (int)strlen(keys[i]), ry, keys[i], on ? S_MENU_KEY_SEL : S_MENU_KEY);
     }
     scr_cursor(0, -1);
+    scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
     scr_flush();
     k = term_key(200);
     if (k == K_NONE) continue;
@@ -685,36 +693,170 @@ static int lower (int c) {
 
 
 /*
-** Does label match what is typed? The letters in order, not always side by
-** side, like VS Code. hit[i] marks the bytes that matched; a lower score is
-** a better match: the whole text in one piece first, then the fewest gaps.
+** {==================================================================
+** Fuzzy matching, like VS Code's quick input
+** ===================================================================
 */
-static int fuzzy (const char *s, const char *pat, char *hit, int *score) {
-  size_t n = strlen(s), m = strlen(pat), i, j;
-  long first = -1, last = -1, gaps = 0;
-  if (hit) memset(hit, 0, n + 1);
-  *score = 0;
-  if (m == 0) return 1;
-  for (i = 0; i + m <= n; i++) {	/* in one piece */
-    for (j = 0; j < m && lower((unsigned char)s[i + j]) == lower((unsigned char)pat[j]); j++) ;
-    if (j == m) {
-      if (hit) memset(hit + i, 1, m);
-      *score = (int)i;
-      return 1;
+
+#define FZ_MAXN	512	/* longer texts: only their first bytes are scored */
+#define FZ_MAXM	64
+#define FZ_NONE	(-1000000)
+
+static int fz_is_sep (int c) {
+  return c == '/' || c == '\\' || c == '_' || c == '-' || c == '.' || c == ' ' || c == ':';
+}
+
+
+static int fz_is_alnum (int c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c >= 0x80;
+}
+
+
+/* what matching s[i] is worth by itself: more at the start and at word starts */
+static int fz_char (const char *s, size_t i, int pc) {
+  int c = (unsigned char)s[i], v = 1, prev;
+  if (c == pc) v++;	/* the same case */
+  if (i == 0) return v + 8;
+  prev = (unsigned char)s[i - 1];
+  if (fz_is_sep(prev)) return v + 7;	/* "src/main.c": m */
+  if (prev >= 'a' && prev <= 'z' && c >= 'A' && c <= 'Z') return v + 6;	/* camelCase */
+  if (!fz_is_alnum(prev) && fz_is_alnum(c)) return v + 5;
+  return v;
+}
+
+
+/*
+** The best alignment of pat in s[0..n) (the letters in order, not always
+** side by side), scored as VS Code does in spirit: letters side by side and
+** at word starts are worth more. FZ_NONE: no match. hit (n bytes, or NULL)
+** gets the matched bytes.
+*/
+static int fz_score (const char *s, size_t n, const char *pat, size_t m, char *hit) {
+  static int *M;	/* M[j * n + i]: the best with pat[j] at s[i] */
+  static size_t cap;
+  size_t i, j, k;
+  int best = FZ_NONE;
+  size_t bi = 0;
+  if (n > FZ_MAXN) n = FZ_MAXN;
+  if (hit) memset(hit, 0, n);
+  if (m == 0) return 0;
+  if (m > FZ_MAXM || m > n) return FZ_NONE;
+  for (i = 0, j = 0; i < n && j < m; i++)	/* the letters in order at all? (fast) */
+    if (lower((unsigned char)s[i]) == lower((unsigned char)pat[j])) j++;
+  if (j < m) return FZ_NONE;
+  if (cap < n * m) {
+    cap = n * m;
+    M = (int *)xrealloc(M, cap * sizeof(int));
+  }
+  for (j = 0; j < m; j++) {
+    int run = FZ_NONE;	/* the best of the row above, left of i - 1 */
+    int pc = (unsigned char)pat[j], lp = lower(pc);
+    for (i = 0; i < n; i++) {
+      int v = FZ_NONE;
+      if (j > 0 && i >= 2 && M[(j - 1) * n + i - 2] > run) run = M[(j - 1) * n + i - 2];
+      if (lower((unsigned char)s[i]) == lp) {
+        int c = fz_char(s, i, pc);
+        if (j == 0) v = c - (int)(i > 8 ? 8 : i);	/* earlier is better */
+        else {
+          int d = i > 0 ? M[(j - 1) * n + i - 1] : FZ_NONE;
+          if (d > FZ_NONE) v = d + c + 5;	/* side by side */
+          if (run > FZ_NONE && run + c > v) v = run + c;
+        }
+      }
+      M[j * n + i] = v;
     }
   }
-  for (i = 0, j = 0; i < n && j < m; i++) {
-    if (lower((unsigned char)s[i]) != lower((unsigned char)pat[j])) continue;
-    if (hit) hit[i] = 1;
-    if (first < 0) first = (long)i;
-    if (last >= 0 && (long)i != last + 1) gaps++;
-    last = (long)i;
-    j++;
+  for (i = 0; i < n; i++)
+    if (M[(m - 1) * n + i] > best) {
+      best = M[(m - 1) * n + i];
+      bi = i;
+    }
+  if (best == FZ_NONE || hit == NULL) return best;
+  hit[bi] = 1;	/* back along the best way */
+  for (j = m - 1; j > 0; j--) {
+    int c = fz_char(s, bi, (unsigned char)pat[j]), want = M[j * n + bi];
+    size_t pick = 0;
+    int found = 0;
+    if (bi > 0 && M[(j - 1) * n + bi - 1] > FZ_NONE && M[(j - 1) * n + bi - 1] + c + 5 == want) {
+      pick = bi - 1;
+      found = 1;
+    }
+    for (k = 0; !found && k + 1 < bi; k++)
+      if (M[(j - 1) * n + k] > FZ_NONE && M[(j - 1) * n + k] + c == want) {
+        pick = k;
+        found = 1;
+      }
+    if (!found) break;
+    bi = pick;
+    hit[bi] = 1;
   }
-  if (j < m) return 0;
-  *score = 1000 + (int)gaps * 20 + (int)first;
-  return 1;
+  return best;
 }
+
+
+/*
+** How well item matches what is typed: each word typed (split by spaces)
+** must match. A word matches the label, better, or (items with a path,
+** p->match_detail) the whole "detail/label"; a '/' in a word matches the
+** whole path only. Higher is better; FZ_NONE: no. hl, hd (or NULL): the
+** matched bytes of the label and of the detail.
+*/
+static int item_score (const Pick *p, const PickItem *it, char *hl, char *hd) {
+  const char *t = p->text;
+  size_t ln = strlen(it->label), dn = it->detail ? strlen(it->detail) : 0;
+  char full[FZ_MAXN + 1], fh[FZ_MAXN];
+  size_t fn = 0;
+  int total = 0, have_full = 0;
+  if (hl) memset(hl, 0, ln + 1);
+  if (hd) memset(hd, 0, dn + 1);
+  while (*t == ' ') t++;
+  if (*t == '\0') return 0;
+  if (p->match_detail && it->detail && dn + ln + 1 <= FZ_MAXN) {
+    size_t i;
+    memcpy(full, it->detail, dn);
+    full[dn] = '/';
+    memcpy(full + dn + 1, it->label, ln);
+    fn = dn + ln + 1;
+    full[fn] = '\0';
+    for (i = 0; i < fn; i++)
+      if (full[i] == '\\') full[i] = '/';
+    have_full = 1;
+  }
+  while (*t) {
+    char w[FZ_MAXM + 1];
+    size_t m = 0, i;
+    int sc, slash = 0;
+    while (*t && *t != ' ' && m < FZ_MAXM) {
+      w[m] = *t == '\\' ? '/' : *t;
+      if (w[m] == '/') slash = 1;
+      m++;
+      t++;
+    }
+    while (*t && *t != ' ') t++;	/* too long: the rest of the word is not looked at */
+    while (*t == ' ') t++;
+    w[m] = '\0';
+    if (m == 0) continue;
+    sc = slash ? FZ_NONE : fz_score(it->label, ln, w, m, hl ? fh : NULL);
+    if (sc > FZ_NONE) {
+      total += sc + 100 - (int)(ln > 60 ? 60 : ln) / 4;	/* the name matched: shorter names a little first */
+      if (hl)
+        for (i = 0; i < ln && i < FZ_MAXN; i++) hl[i] |= fh[i];
+      continue;
+    }
+    if (!have_full || (sc = fz_score(full, fn, w, m, hd || hl ? fh : NULL)) == FZ_NONE) return FZ_NONE;
+    total += sc - 20;
+    for (i = 0; (hd || hl) && i < fn; i++) {
+      if (!fh[i]) continue;
+      if (i < dn) {
+        if (hd) hd[i] = 1;
+      }
+      else if (i > dn && hl) hl[i - dn - 1] = 1;
+    }
+  }
+  return total;
+}
+
+/* }================================================================== */
 
 
 typedef struct Vis {
@@ -727,7 +869,7 @@ static const int *g_scores;
 
 static int cmp_vis (const void *a, const void *b) {
   size_t x = *(const size_t *)a, y = *(const size_t *)b;
-  int d = g_scores[x] - g_scores[y];
+  int d = g_scores[x] < g_scores[y] ? 1 : g_scores[x] > g_scores[y] ? -1 : 0;	/* higher first */
   if (d) return d;
   return x < y ? -1 : x > y;
 }
@@ -737,8 +879,8 @@ static void filter (const Pick *p, Vis *vis) {
   size_t i;
   vis->n = 0;
   for (i = 0; i < p->n; i++) {
-    int sc;
-    if (!fuzzy(p->item[i].label, p->text, NULL, &sc)) continue;
+    int sc = p->text[0] ? item_score(p, &p->item[i], NULL, NULL) : 0;
+    if (sc == FZ_NONE) continue;
     vis->score[i] = sc;
     vis->v[vis->n++] = i;
   }
@@ -780,9 +922,19 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
     }
     x += scr_putsw(x, g_box.y + 1, g_box.x + g_box.w - 3 - x, s, S_INPUT);
   }
-  if (p->text[0] == '\0' && p->title && !p->prefix)
-    scr_putsw(x, g_box.y + 1, g_box.x + g_box.w - 3 - x, p->title, S_INPUT_HINT);
-  cx = x + scr_putsw(x, g_box.y + 1, g_box.x + g_box.w - 3 - x, p->text, S_INPUT_ON);
+  {
+    int right = g_box.x + g_box.w - 3;	/* where the input ends: before the status */
+    if (p->status) {	/* "Indexing... 1200 files", dim at the right end */
+      int sw = (int)str_cols(p->status);
+      if (sw < g_box.w / 2) {
+        scr_putsw(right - sw, g_box.y + 1, sw, p->status, S_INPUT_HINT);
+        right -= sw + 2;
+      }
+    }
+    if (p->text[0] == '\0' && p->title && !p->prefix)
+      scr_putsw(x, g_box.y + 1, right - x, p->title, S_INPUT_HINT);
+    cx = x + scr_putsw(x, g_box.y + 1, right - x, p->text, S_INPUT_ON);
+  }
   scr_cursor(cx, g_box.y + 1);
   /* the list */
   if (vis->n == 0 && p->hint)
@@ -791,7 +943,7 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
     size_t k = top + (size_t)i;
     const PickItem *it;
     int y = g_box.y + 3 + i, on, st, hst, sc, lx;
-    size_t b, n;
+    size_t b, n, dn;
     if (k >= vis->n) break;
     it = &p->item[vis->v[k]];
     on = (k == sel);
@@ -804,20 +956,29 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
       lx += 2;
     }
     n = strlen(it->label);
-    if (n + 1 > hn) {
-      hn = n + 1;
+    dn = it->detail ? strlen(it->detail) : 0;
+    if (n + dn + 2 > hn) {
+      hn = n + dn + 2;
       hit = (char *)xrealloc(hit, hn);
     }
-    fuzzy(it->label, p->text, hit, &sc);
+    sc = p->text[0] ? item_score(p, it, hit, hit + n + 1) : 0;
+    if (sc == FZ_NONE) memset(hit, 0, n + dn + 2);
     for (b = 0; b < n && lx < g_box.x + g_box.w - 2;) {	/* the matched letters in blue */
       size_t len;
       uint32_t cp = utf8_decode(it->label + b, n - b, &len);
-      lx += scr_put(lx, y, cp, hit[b] ? hst : st);
+      lx += scr_put(lx, y, cp, (p->text[0] && hit[b]) ? hst : st);
       b += len;
     }
-    if (it->detail && lx + 2 < g_box.x + g_box.w - 2)
-      scr_putsw(lx + 2, y, g_box.x + g_box.w - 3 - (lx + 2), it->detail,
-                on ? S_MENU_KEY_SEL : S_BOX_DIM);
+    if (it->detail && lx + 2 < g_box.x + g_box.w - 2) {	/* the path, its matched letters in blue too */
+      int dst = on ? S_MENU_KEY_SEL : S_BOX_DIM, dx = lx + 2, end = g_box.x + g_box.w - 3;
+      const char *d = it->detail;
+      for (b = 0; b < dn && dx < end;) {
+        size_t len;
+        uint32_t cp = utf8_decode(d + b, dn - b, &len);
+        dx += scr_put(dx, y, cp, (p->text[0] && hit[n + 1 + b]) ? hst : dst);
+        b += len;
+      }
+    }
   }
   free(hit);
 }
@@ -912,9 +1073,10 @@ int pick_run (Pick *p) {
       int inside = m->x >= g_box.x && m->x < g_box.x + g_box.w &&
                    m->y >= g_box.y && m->y < g_box.y + g_box.rows + 4;
       if (m->wheel) {
-        if (m->wheel < 0) top = top > 3 ? top - 3 : 0;
+        size_t st = (size_t)wheel_step(m->mods);
+        if (m->wheel < 0) top = top > st ? top - st : 0;
         else if (vis.n > (size_t)g_box.rows) {
-          top += 3;
+          top += st;
           if (top > vis.n - (size_t)g_box.rows) top = vis.n - (size_t)g_box.rows;
         }
         if (sel < top) sel = top;
@@ -1059,6 +1221,7 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
       }
     }
     scr_cursor(0, -1);
+    scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
     scr_flush();
     k = term_key(200);
     if (k == K_NONE) continue;
@@ -1166,6 +1329,7 @@ void note_center (void) {
       if (i == sel) scr_put(x + w - 3, ry, 0xEA76, st);	/* its x */
     }
     scr_cursor(0, -1);
+    scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
     scr_flush();
     k = term_key(200);
     if (k == K_NONE) continue;

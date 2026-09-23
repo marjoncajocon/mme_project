@@ -1442,6 +1442,7 @@ void test_draw (int x, int y, int w, int h, int focus) {
     }
     if (k == g_sel && w > 12) scr_put(x + w - 3, sy, 0xEB2C, st);	/* run: ▷ on the selected row, like VS Code's hover */
   }
+  side_bar(x, y + VHEAD, w, g_h, (size_t)g_nrow, (size_t)g_top, (size_t)g_h);
 }
 
 
@@ -1536,7 +1537,7 @@ void test_click (int row, int col, SideAct *act) {
 
 void test_wheel (int d) {
   rows();
-  g_top += d * 3;
+  g_top += d * wheel_step(0);
   if (g_top > g_nrow - g_h) g_top = g_nrow - g_h;
   if (g_top < 0) g_top = 0;
   if (g_sel < g_top) g_sel = g_top;

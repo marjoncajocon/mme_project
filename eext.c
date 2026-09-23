@@ -1512,6 +1512,7 @@ void ext_draw (int x, int y, int w, int h, int focus) {
   }
   if (g_nitem == 0 && g_q[0] == '\0' && h > HEAD + 2)
     scr_putsw(x + 2, y + HEAD, w - 3, "None yet: type to search Open VSX", S_SIDE_DIM);
+  side_bar(x, y + HEAD, w, h - HEAD, g_nitem * (size_t)ROWS, g_top * (size_t)ROWS, (size_t)(h - HEAD));
 }
 
 
@@ -1669,8 +1670,10 @@ void ext_click (int row, int col, SideAct *act) {
 
 
 void ext_wheel (int d) {
-  if (d < 0) g_top = g_top > 1 ? g_top - 1 : 0;
-  else if (g_nitem > (size_t)g_h && g_top + (size_t)g_h < g_nitem) g_top++;
+  size_t st = (size_t)wheel_step(0);
+  if (d < 0) g_top = g_top > st ? g_top - st : 0;
+  else if (g_nitem > (size_t)g_h && g_top + (size_t)g_h < g_nitem)
+    g_top = g_top + st + (size_t)g_h <= g_nitem ? g_top + st : g_nitem - (size_t)g_h;
   if (g_sel < g_top) g_sel = g_top;
   if (g_sel >= g_top + (size_t)g_h) g_sel = g_top + (size_t)g_h - 1;
 }

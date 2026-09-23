@@ -92,6 +92,25 @@ void side_click (int view, int row, int col, SideAct *act) {
 }
 
 
+/*
+** VS Code's slim scrollbar at the right edge of a pane: the thumb over the
+** rows shown, of a list of 'total' rows starting at 'top'. Nothing is drawn
+** when everything fits.
+*/
+void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t shown) {
+  int len, at;
+  if (h < 2 || shown == 0 || total <= shown) return;
+  len = (int)((double)shown * h / (double)total + 0.5);
+  if (len < 1) len = 1;
+  if (len > h - 1) len = h - 1;
+  at = (int)((double)top * (h - len) / (double)(total - shown) + 0.5);
+  if (at < 0) at = 0;
+  if (at > h - len) at = h - len;
+  for (len += at; at < len; at++)	/* a half block, so it shows on any background */
+    scr_put_rgb(x + w - 1, y + at, 0x2590, ui_color(C_THUMB), ui_color(C_SIDE_BG), 0);
+}
+
+
 void side_wheel (int view, int d) {
   if (view == VIEW_SEARCH) search_wheel(d);
   else if (view == VIEW_GIT) git_wheel(d);
@@ -104,7 +123,7 @@ void side_wheel (int view, int d) {
 
 int side_idle (int view) {
   int r = ext_idle() | test_idle();	/* downloads and test runs go on whatever is shown */
-  return (view == VIEW_SEARCH ? search_idle() : 0) | r;
+  return (view == VIEW_SEARCH || search_busy() ? search_idle() : 0) | r;	/* a search goes on hidden too */
 }
 
 /* }================================================================== */
@@ -133,6 +152,7 @@ static int *g_vdepth;	/* the row's indent */
 static int *g_vnest;	/* a file's row: how many files are nested under it; -1: it is nested */
 static size_t g_nvis, g_capvis;
 static size_t g_sel, g_top;
+static int g_bar_y;	/* the first row of the tree on the screen */
 static int g_h = 1;	/* rows of the tree the last time it was drawn */
 static int g_gap;	/* rows under "EXPLORER" given to OPEN EDITORS (mme.c draws it) */
 static int g_sorted = -1;	/* the explorer.sortOrder the loaded folders are sorted by */
@@ -945,6 +965,7 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
   }
   problems_count();
   g_h = h - HEAD;
+  g_bar_y = y + HEAD;	/* where its scrollbar is, for the drag */
   if (g_nvis <= (size_t)g_h) g_top = 0;	/* the wheel may leave the selection out of view */
   else if (g_top > g_nvis - (size_t)g_h) g_top = g_nvis - (size_t)g_h;
   k = g_top;
@@ -1032,6 +1053,7 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
       }
     }
   }
+  side_bar(x, y + HEAD, w, g_h, g_nvis, g_top, (size_t)g_h);
 }
 
 
@@ -1812,11 +1834,33 @@ void files_menu (int row, int x, int y, SideAct *act) {
 }
 
 
+/* the tree's scrollbar: its first row on the screen, and how many rows it has */
+int files_bar_y (void) {
+  return g_bar_y;
+}
+
+
+int files_bar_rows (void) {
+  return g_nvis > (size_t)g_h ? g_h : 0;	/* 0: everything fits, no bar */
+}
+
+
+/* the bar dragged or clicked at row (from its first one) */
+void files_bar_to (int row, int rows) {
+  size_t hidden = g_nvis > (size_t)g_h ? g_nvis - (size_t)g_h : 0;
+  if (hidden == 0 || rows < 2) return;
+  if (row < 0) row = 0;
+  if (row >= rows) row = rows - 1;
+  g_top = (size_t)((double)row * (double)hidden / (double)(rows - 1) + 0.5);
+  if (g_top > hidden) g_top = hidden;
+}
+
+
 void files_wheel (int d) {
-  size_t h = (size_t)g_h;
-  if (d < 0) g_top = g_top > 3 ? g_top - 3 : 0;
+  size_t h = (size_t)g_h, st = (size_t)wheel_step(0);
+  if (d < 0) g_top = g_top > st ? g_top - st : 0;
   else if (g_nvis > h) {
-    g_top += 3;
+    g_top += st;
     if (g_top > g_nvis - h) g_top = g_nvis - h;
   }
 }

@@ -1465,11 +1465,29 @@ static Frame *root_frame (Grammar *g) {
 ** ===================================================================
 */
 
+/*
+** The lines tokenized lately, so that a line the screen draws, the brackets
+** count and the colors ask for is only tokenized once. The line's number
+** picks the slot; an edit drops the lines from it on, the ones above it
+** stand.
+*/
+#define TC_N	128	/* slots: a screen and more */
+#define TC_MAX	8192	/* a longer line is not kept */
+
+typedef struct TCell {
+  size_t y, len;
+  unsigned long edits;
+  int used;
+  Out o;
+  size_t cap;
+} TCell;
+
 typedef struct TDoc {
   const Syntax *sx;
   Grammar *g;
   Frame **st;	/* st[k]: the stack line k starts with */
   size_t n, cap;
+  TCell c[TC_N];	/* the lines tokenized lately */
 } TDoc;
 
 static struct {	/* the last line tokenized for drawing */
@@ -1477,6 +1495,7 @@ static struct {	/* the last line tokenized for drawing */
   size_t y, n, cap;
   unsigned long edits;
   Out o;
+  struct TCell *hit;	/* the slot it is in, when it is kept */
 } LAST;
 
 
@@ -1487,10 +1506,39 @@ static void td_clear (TDoc *td) {
 }
 
 
+static void tc_free (TDoc *td) {
+  int i;
+  for (i = 0; i < TC_N; i++) {
+    free(td->c[i].o.cls);
+    free(td->c[i].o.fg);
+    free(td->c[i].o.fs);
+    free(td->c[i].o.sc);
+    memset(&td->c[i], 0, sizeof(td->c[i]));
+  }
+}
+
+
+/* the lines from y on are not what they were */
+static void tc_drop (TDoc *td, size_t y) {
+  int i;
+  for (i = 0; i < TC_N; i++)
+    if (td->c[i].used && td->c[i].y >= y) td->c[i].used = 0;
+}
+
+
+/* the slot of line y, when it holds that line as the text is now */
+static TCell *tc_get (TDoc *td, const Doc *d, size_t y) {
+  TCell *c = &td->c[y % TC_N];
+  if (!c->used || c->y != y || c->edits != d->edits || c->len != d->row[y].len) return NULL;
+  return c;
+}
+
+
 void tm_doc_free (Doc *d) {
   TDoc *td = (TDoc *)d->tm;
   if (td == NULL) return;
   td_clear(td);
+  tc_free(td);
   free(td->st);
   free(td);
   d->tm = NULL;
@@ -1535,16 +1583,29 @@ int tm_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
   if ((td = (TDoc *)d->tm) == NULL) td = (TDoc *)(d->tm = calloc(1, sizeof(TDoc)));
   if (td->sx != sx || td->g != g) {
     td_clear(td);
+    tc_free(td);
     td->sx = sx;
     td->g = g;
   }
-  if (d->hl_from < td->n) {	/* an edit: the stacks after its line are made again */
+  if (d->tm_from != (size_t)-1) tc_drop(td, d->tm_from);	/* an edit: its line and the ones after it */
+  if (d->tm_from < td->n) {	/* an edit: the stacks after its line are made again */
     size_t k;
-    for (k = d->hl_from + 1; k < td->n; k++) fr_unref(td->st[k]);
-    td->n = d->hl_from + 1;
+    for (k = d->tm_from + 1; k < td->n; k++) fr_unref(td->st[k]);
+    td->n = d->tm_from + 1;
   }
-  if (d->hl_from < d->hl_n) d->hl_n = d->hl_from;	/* esyntax's too */
-  d->hl_from = (size_t)-1;
+  d->tm_from = (size_t)-1;
+  {	/* tokenized already: that is all */
+    TCell *c = tc_get(td, d, y);
+    if (c) {
+      memcpy(tok, c->o.cls, c->len);
+      LAST.d = d;
+      LAST.y = y;
+      LAST.n = c->len;
+      LAST.edits = d->edits;
+      LAST.hit = c;
+      return 1;
+    }
+  }
   if (td->n > d->n) {
     size_t k;
     for (k = d->n; k < td->n; k++) fr_unref(td->st[k]);
@@ -1579,6 +1640,28 @@ int tm_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
     return 0;
   }
   r = &d->row[y];
+  LAST.hit = NULL;
+  if (r->len <= TC_MAX) {	/* into its slot, for whoever asks next */
+    TCell *c = &td->c[y % TC_N];
+    out_size(&c->o, r->len, &c->cap);
+    after = tok_line(g, td->st[y], r->s, r->len, y == 0, &c->o);
+    c->used = 1;
+    c->y = y;
+    c->len = r->len;
+    c->edits = d->edits;
+    LAST.hit = c;
+    memcpy(tok, c->o.cls, r->len);
+    if (td->n == y + 1) {	/* the frontier moved on: that counts */
+      td->st[td->n++] = after;
+      used += os_now_us() - t0;
+    }
+    else fr_unref(after);
+    LAST.d = d;
+    LAST.y = y;
+    LAST.n = r->len;
+    LAST.edits = d->edits;
+    return 1;
+  }
   out_size(&LAST.o, r->len, &LAST.cap);
   after = tok_line(g, td->st[y], r->s, r->len, y == 0, &LAST.o);
   if (td->n == y + 1) {	/* the frontier moved on: that counts */
@@ -1597,10 +1680,12 @@ int tm_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
 
 /* the theme's own colors of line y, when tm_line just did it: fg (0x1000000 | rgb, 0 none), its style, the classes */
 int tm_colors (const Doc *d, size_t y, const uint32_t **fg, const unsigned char **fs, const unsigned char **cls) {
+  const Out *o;
   if (LAST.d != d || LAST.y != y || LAST.edits != d->edits || !opt.textmate) return 0;
-  *fg = LAST.o.fg;
-  *fs = LAST.o.fs;
-  *cls = LAST.o.cls;
+  o = LAST.hit ? &((TCell *)LAST.hit)->o : &LAST.o;
+  *fg = o->fg;
+  *fs = o->fs;
+  *cls = o->cls;
   return 1;
 }
 
@@ -1618,7 +1703,10 @@ int tm_scopes (Doc *d, const Syntax *sx, size_t y, size_t x, char *out, size_t n
     return 0;
   }
   free(tok);
-  for (s = LAST.o.sc[x]; s && k < 64; s = s->parent) v[k++] = s;
+  {
+    const Out *o = LAST.hit ? &((TCell *)LAST.hit)->o : &LAST.o;
+    for (s = o->sc[x]; s && k < 64; s = s->parent) v[k++] = s;
+  }
   out[0] = '\0';
   while (k-- > 0 && o + 2 < n) {
     int w = snprintf(out + o, n - o, "%s%s", o ? " " : "", g_atom[v[k]->atom]);

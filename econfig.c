@@ -26,7 +26,7 @@
 
 Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, {0}, 0, 1, 1, 1, 1, 1, 1, 1, 1,
            0, 1000, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-           1, 1, 1, 0, 1, 1, 0, 0, 1000, 1, 0, "", 1,
+           1, 1, 1, 0, 1, 1, 0, 0, 1000, 1, 0, "", 0, 1,	/* term_cwd, preview_tabs, textmate */
            1, 1, 1, 1, 1, 0, 1, 0, 1};
 
 static Json *g_json;	/* the file as read, for what is looked up later */
@@ -93,6 +93,9 @@ static const char default_file1[] =
   "  \"files.trimTrailingWhitespace\": false,\n"
   "  \"files.insertFinalNewline\": false,\n"
   "  \"workbench.sideBar.visible\": true,\n"
+  "  // a file clicked once opens in a tab that the next one replaces, as VS Code does;\n"
+  "  // false (mme's default): every file gets its own tab\n"
+  "  \"workbench.editor.enablePreview\": false,\n"
   "  // \"welcomePage\" or \"none\": what shows at startup when no file is opened\n"
   "  \"workbench.startupEditor\": \"welcomePage\",\n"
   "  // \"left\" or \"right\": where the side bar and the activity bar are\n"
@@ -132,6 +135,8 @@ static const char default_file1[] =
   "  \"editor.textmateGrammars\": true,\n"
   ;
 static const char default_edit[] =	/* the editing settings */
+  "  // how far a mouse wheel notch scrolls: 1 is three lines, like VS Code\n"
+  "  \"editor.mouseWheelScrollSensitivity\": 1,\n"
   "  // \"none\", \"keep\", \"brackets\", \"advanced\" or \"full\": how Enter and typing indent\n"
   "  \"editor.autoIndent\": \"full\",\n"
   "  // pasted lines are moved to the cursor's indent\n"
@@ -158,6 +163,22 @@ static const char default_edit[] =	/* the editing settings */
   "  // lines kept visible above and below the cursor\n"
   "  \"editor.cursorSurroundingLines\": 0,\n"
   "  \"editor.scrollBeyondLastLine\": true,\n"
+  ;
+static const char default_view[] =	/* the minimap's and the diff editor's */
+  "  // \"right\" or \"left\"; \"mouseover\" or \"always\": the box of what the editor shows\n"
+  "  \"editor.minimap.side\": \"right\",\n"
+  "  \"editor.minimap.showSlider\": \"mouseover\",\n"
+  "  // true: the text in small; false: blocks of color\n"
+  "  \"editor.minimap.renderCharacters\": true,\n"
+  "  // the columns it shows, and 1, 2 or 3: how big a line is in it\n"
+  "  \"editor.minimap.maxColumn\": 120,\n"
+  "  \"editor.minimap.scale\": 1,\n"
+  "  // the diff editor: spaces at the start and end of lines are not changes\n"
+  "  \"diffEditor.ignoreTrimWhitespace\": true,\n"
+  "  // long runs of lines with no change fold into one row (a click opens them)\n"
+  "  \"diffEditor.hideUnchangedRegions.enabled\": false,\n"
+  "  // false: the old lines above the new ones (inline)\n"
+  "  \"diffEditor.renderSideBySide\": true,\n"
   ;
 static const char default_term[] =	/* the terminal's; a part of its own (4095 bytes a literal at most) */
   "  // the shell marks its prompts and commands: circles by them, Run Recent Command (Ctrl+Alt+R)\n"
@@ -294,6 +315,7 @@ void settings_create (void) {
       os_write(fd, default_file, sizeof(default_file) - 1);
       os_write(fd, default_file1, sizeof(default_file1) - 1);
       os_write(fd, default_edit, sizeof(default_edit) - 1);
+      os_write(fd, default_view, sizeof(default_view) - 1);
       os_write(fd, default_term, sizeof(default_term) - 1);
       os_write(fd, default_explorer, sizeof(default_explorer) - 1);
       os_write(fd, default_file2, sizeof(default_file2) - 1);
@@ -422,6 +444,7 @@ int settings_load (void) {
     opt.cursor_blink = strcmp(json_str(json_get(j, "editor\\.cursorBlinking"), "blink"), "solid") != 0;
     opt.side_right = strcmp(json_str(json_get(j, "workbench\\.sideBar\\.location"), "left"), "right") == 0;
     opt.test_gutter = json_bool(json_get(j, "testing\\.gutterEnabled"), 1);
+    opt.preview_tabs = json_bool(json_get(j, "workbench\\.editor\\.enablePreview"), 0);	/* VS Code: true */
     opt.inline_values = strcmp(json_str(json_get(j, "debug\\.inlineValues"), "auto"), "off") != 0;
     {	/* the terminal */
       const Json *d = json_get(j, "terminal\\.integrated\\.shellIntegration\\.decorationsEnabled");
@@ -513,6 +536,7 @@ int settings_load (void) {
   }
   opt.lightbulb = strcmp(json_str(json_get(j, "editor\\.lightbulb\\.enabled"), "onCode"), "off") != 0;
   edit_settings(j);
+  view_settings(j);
   return 0;
 }
 
@@ -727,6 +751,12 @@ static int on_off (const Json *v, int def) {
 }
 
 
+int wheel_step (int mods) {	/* VS Code: 3 lines a notch, 5 times with Alt */
+  int n = eopt.wheel_lines > 0 ? eopt.wheel_lines : 3;
+  return (mods & KM_ALT) ? n * 5 : n;
+}
+
+
 void edit_settings (const Json *j) {
   static const char *const ai[] = {"none", "keep", "brackets", "advanced", "full"};
   static const char *const tc[] = {"off", "on", "onlySnippets"};
@@ -761,10 +791,25 @@ void edit_settings (const Json *j) {
   eopt.line_hl = name_of(json_str(json_get(j, "editor\\.renderLineHighlight"), "line"), lh, 4, 2);
   eopt.surround = clamp((int)json_num(json_get(j, "editor\\.cursorSurroundingLines"), 0), 0, 50);
   eopt.beyond_last = json_bool(json_get(j, "editor\\.scrollBeyondLastLine"), 1);
+  eopt.wheel_lines = clamp((int)(json_num(json_get(j, "editor\\.mouseWheelScrollSensitivity"), 1) * 3 + 0.5), 1, 60);
   eopt.line_nums = name_of(json_str(json_get(j, "editor\\.lineNumbers"), "on"), ln, 4, 1);
   memset(eopt.sep, 0, sizeof(eopt.sep));
   for (; *sep; sep++)
     if ((unsigned char)*sep < 128) eopt.sep[(unsigned char)*sep] = 1;
+}
+
+VOpt vopt = {0, 0, 1, 120, 1, 1, 0, 1};
+
+
+void view_settings (const Json *j) {
+  vopt.mm_left = strcmp(json_str(json_get(j, "editor\\.minimap\\.side"), "right"), "left") == 0;
+  vopt.mm_slider = strcmp(json_str(json_get(j, "editor\\.minimap\\.showSlider"), "mouseover"), "always") == 0;
+  vopt.mm_chars = json_bool(json_get(j, "editor\\.minimap\\.renderCharacters"), 1);
+  vopt.mm_maxcol = clamp((int)json_num(json_get(j, "editor\\.minimap\\.maxColumn"), 120), 24, 1000);
+  vopt.mm_scale = clamp((int)json_num(json_get(j, "editor\\.minimap\\.scale"), 1), 1, 3);
+  vopt.diff_trim = json_bool(json_get(j, "diffEditor\\.ignoreTrimWhitespace"), 1);
+  vopt.diff_hide = json_bool(json_get(j, "diffEditor\\.hideUnchangedRegions\\.enabled"), 0);
+  vopt.diff_side = json_bool(json_get(j, "diffEditor\\.renderSideBySide"), 1);
 }
 
 /* }================================================================== */
