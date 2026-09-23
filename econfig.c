@@ -29,7 +29,9 @@ Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1
            1, 1, 1, 0, 1, 1, 0, 0, 1000, 1, 0, "", 0, 1,	/* term_cwd, preview_tabs, textmate */
            300, 1,	/* hover_delay, hover_sticky */
            1, 1, 1, 1, 1, 0, 1, 0, 1,	/* explorer.* */
-           1, "", 0, 0};	/* command_center, win_title, panel_loc, panel_justify */
+           1, "", 0, 0,	/* command_center, win_title, panel_loc, panel_justify */
+           1, 1,	/* markdown.preview.scroll* */
+           1};	/* merge_editor */
 
 static Json *g_json;	/* the file as read, for what is looked up later */
 
@@ -56,6 +58,8 @@ static const char default_file[] =
   "  \"editor.bracketPairColorization.enabled\": true,\n"
   "  // the scopes the top line is in stay at the top of the editor\n"
   "  \"editor.stickyScroll.enabled\": true,\n"
+  "  // how many scopes it keeps at the top at most\n"
+  "  \"editor.stickyScroll.maxLineCount\": 5,\n"
   "  // the other places of the symbol at the cursor are lit\n"
   "  \"editor.occurrencesHighlight\": true,\n"
   "  // thin lines at each indent level, the block of the cursor brighter\n"
@@ -125,6 +129,8 @@ static const char default_file1[] =
   "  \"git.blame.statusBarItem.enabled\": true,\n"
   "  // commit all the changes when none is staged (Ctrl+Enter)\n"
   "  \"git.enableSmartCommit\": false,\n"
+  "  // a file with merge conflicts opens in the merge editor (Incoming, Current, Result)\n"
+  "  \"git.mergeEditor\": true,\n"
   "  // \"all\" or \"none\": the gutter's bars of the changes against git's index\n"
   "  \"scm.diffDecorations\": \"all\",\n"
   "  // the terminal's shell; empty: mmc-shell, else cmd / $SHELL\n"
@@ -271,7 +277,11 @@ static const char default_file2[] =	/* the rest: one literal may not be longer t
   "    \"shellscript\": \"bash-language-server start\",\n"
   "    \"yaml\": \"yaml-language-server --stdio\",\n"
   "    \"dockerfile\": \"docker-langserver --stdio\"\n"
-  "  }\n"
+  "  },\n"
+  "\n"
+  "  // the Markdown preview follows the editor it is beside, and the editor follows it\n"
+  "  \"markdown.preview.scrollPreviewWithEditor\": true,\n"
+  "  \"markdown.preview.scrollEditorWithPreview\": true\n"
   "}\n";
 
 
@@ -468,6 +478,8 @@ int settings_load (void) {
     opt.side_right = strcmp(json_str(json_get(j, "workbench\\.sideBar\\.location"), "left"), "right") == 0;
     opt.test_gutter = json_bool(json_get(j, "testing\\.gutterEnabled"), 1);
     opt.preview_tabs = json_bool(json_get(j, "workbench\\.editor\\.enablePreview"), 0);	/* VS Code: true */
+    opt.md_scroll_preview = json_bool(json_get(j, "markdown\\.preview\\.scrollPreviewWithEditor"), 1);
+    opt.md_scroll_editor = json_bool(json_get(j, "markdown\\.preview\\.scrollEditorWithPreview"), 1);
     opt.inline_values = strcmp(json_str(json_get(j, "debug\\.inlineValues"), "auto"), "off") != 0;
     {	/* the terminal */
       const Json *d = json_get(j, "terminal\\.integrated\\.shellIntegration\\.decorationsEnabled");
@@ -523,6 +535,7 @@ int settings_load (void) {
       if (strcmp(json_str(ca->kid[k], ""), "source.organizeImports") == 0) opt.organize_save = 1;
   }
   opt.smart_commit = json_bool(json_get(j, "git\\.enableSmartCommit"), 0);
+  opt.merge_editor = json_bool(json_get(j, "git\\.mergeEditor"), 1);
   opt.suggest_smart_commit = json_bool(json_get(j, "git\\.suggestSmartCommit"), 1);
   opt.scm_decor = strcmp(json_str(json_get(j, "scm\\.diffDecorations"), "all"), "none") != 0;
   opt.guides = json_bool(json_get(j, "editor\\.guides\\.indentation"), 1);
@@ -822,6 +835,7 @@ void edit_settings (const Json *j) {
   eopt.uni_invisible = json_bool(json_get(j, "editor\\.unicodeHighlight\\.invisibleCharacters"), 1);
   eopt.line_hl = name_of(json_str(json_get(j, "editor\\.renderLineHighlight"), "line"), lh, 4, 2);
   eopt.surround = clamp((int)json_num(json_get(j, "editor\\.cursorSurroundingLines"), 0), 0, 50);
+  eopt.sticky_max = clamp((int)json_num(json_get(j, "editor\\.stickyScroll\\.maxLineCount"), 5), 1, 20);
   eopt.beyond_last = json_bool(json_get(j, "editor\\.scrollBeyondLastLine"), 1);
   eopt.wheel_lines = clamp((int)(json_num(json_get(j, "editor\\.mouseWheelScrollSensitivity"), 1) * 3 + 0.5), 1, 60);
   eopt.line_nums = name_of(json_str(json_get(j, "editor\\.lineNumbers"), "on"), ln, 4, 1);

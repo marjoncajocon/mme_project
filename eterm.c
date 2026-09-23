@@ -56,7 +56,8 @@ int term_open (void) {
             "\033[?1000h\033[?1003h\033[?1006h"	/* mouse: clicks, drags, moves (hover), SGR */
             "\033[?2004h"	/* bracketed paste */
             "\033[>1u"	/* kitty keys: Ctrl+Shift+P is not Ctrl+P */
-            "\033[5 q");	/* a blinking bar, like VS Code */
+            "\033[5 q"	/* a blinking bar, like VS Code */
+            "\033[?2;1;0S");	/* how many pixels a picture may have (sixel) */
   return 0;
 }
 
@@ -208,13 +209,37 @@ static int kitty_key (int code, int k) {
 
 
 /* after ESC [ or ESC O */
+static int g_px_w, g_px_h;	/* the screen in pixels, as XTSMGRAPHICS answered */
+
+
+/*
+** How big a cell is: the terminal says how many pixels a full screen of
+** images may be (CSI ? 2 ; 1 ; 0 S), which over the columns and rows is
+** the size of one cell. 0 when it did not answer (no pictures then).
+*/
+void term_ask_pixels (void) {
+  term_puts("\033[?2;1;0S");
+}
+
+
+int term_cell_px (int *w, int *h) {
+  int cols, rows;
+  term_size(&cols, &rows);
+  if (g_px_w <= 0 || g_px_h <= 0 || cols <= 0 || rows <= 0) return 0;
+  *w = g_px_w / cols;
+  *h = g_px_h / rows;
+  return *w > 0 && *h > 0;
+}
+
+
 static int read_csi (void) {
-  int p[8], np = 0, c, lt = 0, k;
+  int p[8], np = 0, c, lt = 0, qm = 0, k;
   memset(p, 0, sizeof(p));
   for (;;) {
     c = getb(ESC_WAIT);
     if (c < 0) return K_NONE;
     if (c == '<') lt = 1;
+    else if (c == '?') qm = 1;
     else if (c >= '0' && c <= '9') {
       if (np == 0) np = 1;
       if (np <= 8) p[np - 1] = p[np - 1] * 10 + (c - '0');
@@ -227,6 +252,14 @@ static int read_csi (void) {
   }
   if (np > 8) np = 8;
   if (lt) return mouse_key(p, np, c);
+  if (qm && c == 'S') {	/* CSI ? 2 ; 0 ; w ; h S: the pixels a picture may have */
+    if (np >= 4 && p[0] == 2 && p[1] == 0) {
+      g_px_w = p[2];
+      g_px_h = p[3];
+    }
+    return K_NONE;
+  }
+  if (qm) return K_NONE;	/* another answer of the terminal, not a key */
   k = (np >= 2) ? mods_of(p[1]) : 0;
   switch (c) {
     case 'A': return K_UP | k;

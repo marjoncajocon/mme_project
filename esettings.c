@@ -190,6 +190,8 @@ static const Setting set[] = {
    "Controls whether suggestions should automatically show up when typing trigger characters."},
   {"editor.stickyScroll.enabled", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Shows the nested current scopes during the scroll at the top of the editor."},
+  {"editor.stickyScroll.maxLineCount", C_EDITOR, ST_NUM, 0, "5", NULL,
+   "Defines the maximum number of sticky lines to show."},
   {"editor.dragAndDrop", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Controls whether the editor should allow moving selections via drag and drop."},
   {"emmet.triggerExpansionOnTab", C_EMMET, ST_BOOL, 0, "true", NULL,
@@ -228,6 +230,8 @@ static const Setting set[] = {
    "Commit all changes when there are no staged changes."},
   {"git.suggestSmartCommit", C_SCM, ST_BOOL, 0, "true", NULL,
    "Suggests to enable smart commit (commit all changes when there are no staged changes)."},
+  {"git.mergeEditor", C_SCM, ST_BOOL, 0, "true", NULL,
+   "Open merge conflicts in the merge editor: Incoming and Current above, the Result below."},
   {"scm.diffDecorations", C_SCM, ST_ENUM, 0, "\"all\"", "all|gutter|none",
    "Controls diff decorations in the editor."},
   {"mme.extensions.useVSCodeExtensions", C_EXT, ST_BOOL, 0, "true", NULL,
@@ -266,6 +270,10 @@ static const Setting set[] = {
    "Controls the default location of the panel (Terminal, Debug Console, Output, Problems)."},
   {"workbench.panel.alignment", C_LOOK, ST_ENUM, 0, "\"center\"", "left|right|center|justify",
    "Controls the alignment of the panel (Terminal, Debug Console, Output, Problems) when it is at the bottom: center under the editors, or justify across the whole width."},
+  {"markdown.preview.scrollPreviewWithEditor", C_FEATURES, ST_BOOL, 0, "true", NULL,
+   "When the Markdown preview is open beside its file, scrolling the file scrolls the preview to the same place."},
+  {"markdown.preview.scrollEditorWithPreview", C_FEATURES, ST_BOOL, 0, "true", NULL,
+   "And the other way round: scrolling the Markdown preview scrolls the file it was made from."},
   {"mme.languageServers", C_EXT, ST_OBJ, 0, "{}", NULL,
    "The language server (IntelliSense) of each language: the command that starts it, by language id (\"c\", \"go\", \"python\" ...)."}
 };

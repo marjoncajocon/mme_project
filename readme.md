@@ -49,9 +49,12 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `esearch.c` | the Search view: find and replace in files, include / exclude globs |
 | `ehistory.c` | Local History: a copy of a file at each save, for the Timeline |
 | `emd.c` | the Markdown preview |
+| `ehex.c` | the hex viewer for binary files (read-only) |
+| `eimage.c` | the picture preview: PNG, BMP, GIF and ICO read here, drawn as sixel |
 | `egit.c` | the Source Control view (stage, unstage, commit) and the diff editor |
 | `egitlog.c` | the Source Control Graph, branches, pull / push / sync, stash, blame |
 | `equick.c` | quick diff (the gutter's changes against the index) and merge conflicts |
+| `emerge.c` | the merge editor: Incoming and Current over the Result, three panes |
 | `esyntax.c` | syntax highlighting in VS Code's Dark+ colors, for about sixty languages, with VS Code's language ids |
 | `eemmet.c` | Emmet: HTML and CSS abbreviations, as VS Code expands them |
 | `epanel.c` | the panel: the integrated terminals, split, links, find, profiles |
@@ -76,6 +79,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `efiles.c` | the Explorer's file operations: rename, copy, delete to the Recycle Bin / Trash, reveal |
 | `etheme.c` | the color themes: Dark Modern, Dark+, Light+, Monokai, Solarized Dark |
 | `mme.rc`, `mme.ico` | Windows only: the program's icon and version details |
+| `ethread.c` | the worker threads Search and Go to File walk a folder on, and the lock between them |
 | `mmc.h`, `mutil.c` `mos.c` `mpath.c` | copied from [mmc](https://github.com/marjoncajocon/mmc-shell) as they are |
 | `mterm.h`, `tpty.c` `tvt.c` `tgrid.c` | mmc-term's terminal core, copied as it is: the pseudo terminal, the escape sequences, the screen |
 
@@ -148,9 +152,10 @@ With no file open the editor shows the keys to start with.
 - **Semantic highlighting** — the server says what each name is (a type, a
   parameter, a package, a constant ...) and it gets that color
   (editor.semanticHighlighting.enabled).
-- **Code lens** — the server's actions over functions ("run test",
-  "3 references") after the end of their line, dim; a click runs one
-  (editor.codeLens).
+- **Code lens** — the server's actions over functions ("3 references | run
+  test | debug test") on a dim row of their own over the line, the lines
+  below pushed down; a click runs one, Code Lens: Run... the ones on the
+  cursor's line (editor.codeLens).
 - **Lightbulb** — in the gutter when the cursor's line has code actions (with
   a spark when one is a quick fix); a click opens them (editor.lightbulb.enabled).
 - **Signature help** — typing a call, its parameters show over the line,
@@ -201,13 +206,19 @@ With no file open the editor shows the keys to start with.
   replace text), Alt+L find in the selection. The Search view has `.*` too.
 - **References and peek** — Shift+F12 lists every place a name is used in a
   box under the line, like VS Code's peek: the file's text on the left, the
-  places by file on the right (Up / Down, Enter goes there, Esc closes).
+  places by file on the right (Up / Down, Enter goes there, Esc closes). The
+  box does not cover the text: the lines under it move down while it is open,
+  as they do in VS Code (the dirty diff peek and the debugger's exception peek
+  too).
   Ctrl+F12 Go to Implementations, Go to Type Definition, Alt+F12 Peek
   Definition; Ctrl+T (or `#` in Go to File) finds a symbol in the whole
   project. The other places of the name at the cursor are lit, and marked in
   the scrollbar (editor.occurrencesHighlight).
-- **Sticky Scroll** — the first lines of the blocks the top line is in stay
-  at the top of the editor; a click goes there (editor.stickyScroll.enabled).
+- **Sticky Scroll** — the headers of the functions, classes and namespaces
+  the top line is inside stay at the top of the editor, from the symbols of
+  the file (the server's, else mme's own; by indentation when there are
+  none), with word wrap too; a click goes there
+  (editor.stickyScroll.enabled, editor.stickyScroll.maxLineCount).
 - **Indent guides and rulers** — a thin line at each indent level, the one of
   the cursor's block brighter (editor.guides.indentation,
   editor.guides.highlightActiveIndentation); lines at the columns of
@@ -281,14 +292,19 @@ With no file open the editor shows the keys to start with.
 - **More cursors** — Shift+Alt+I puts a cursor at the end of each selected
   line, Ctrl+F2 selects every place of the word, Ctrl+K Ctrl+D moves the last
   selection to the next match, Alt+Enter in Find selects every match, Ctrl+U
-  (Cursor Undo) brings the cursors back as they were.
+  (Cursor Undo) brings the cursors back as they were (each tab keeps its
+  own history, so switching tabs does not lose it).
   editor.multiCursorModifier "ctrlCmd" swaps Alt+Click and Ctrl+Click;
   editor.multiCursorPaste "full" pastes all of it at every cursor.
 - **Auto indent** (editor.autoIndent "full") — Enter after `{`, `(`, `[`, a
   Python `:`, Lua's `then` / `do`, Ruby's `def` ... indents one more; typing
   `}`, `end`, `else:` ... puts the line back to its block's indent. Reindent
   Lines / Reindent Selected Lines re-do the indent of a file; with
-  editor.autoIndentOnPaste pasted lines follow the cursor's indent.
+  editor.autoIndentOnPaste pasted lines follow the cursor's indent. Enter
+  follows the language's rules as well: one indent less after Python's
+  `return`, `pass`, `raise`, `break` and `continue`, ` * ` inside a
+  `/* ... */` comment, the next bullet or number of a markdown list (on an
+  empty one the list ends).
 - **Suggestions** — editor.tabCompletion ("on": a snippet's prefix, then Tab),
   editor.acceptSuggestionOnEnter ("on", "smart", "off"),
   editor.suggestSelection ("recentlyUsed"), editor.quickSuggestions (by
@@ -299,8 +315,9 @@ With no file open the editor shows the keys to start with.
   editor.wordSeparators.
 - **Rendering** — control characters as their pictures (␀ ␛,
   editor.renderControlCharacters), characters easy to take for ASCII ones
-  (Cyrillic а, “ ”, fullwidth ...) and invisible ones tinted, the hover says
-  what they are (editor.unicodeHighlight.*), editor.renderLineHighlight,
+  (Cyrillic а, “ ”, fullwidth ...) tinted, invisible ones (U+200B, U+FEFF
+  ...) as a tinted box of their own although they take no column, the hover
+  says what they are (editor.unicodeHighlight.*), editor.renderLineHighlight,
   editor.cursorSurroundingLines, editor.scrollBeyondLastLine, and
   editor.lineNumbers "relative" / "interval".
 - **Go Back / Go Forward** — Alt+Left / Alt+Right: to where the cursor was
@@ -571,9 +588,13 @@ With no file open the editor shows the keys to start with.
   comma separated: `*.c, src, ./lib`); .gitignore, .git and node_modules are
   left out. Files open in the editor are searched and changed there (one undo
   step). Tab goes from box to box; refresh, clear and collapse are on the title.
-  A big folder is walked a little at a time: the results and "Searching N
-  files" show while it goes on, and typing again starts it over.
-- **Quick Open** — Ctrl+P lists the files opened lately first. What is typed
+  A big folder is walked on worker threads, one for each core: the results and
+  "Searching N files" show while it goes on, and typing again starts it over.
+  The editor draws and answers keys throughout; the results settle into the
+  folder's order once the walk is over.
+- **Quick Open** — Ctrl+P lists the files opened lately first. The folder is
+  walked on worker threads as well, so the list shows at once on a big one and
+  "Indexing... N files" counts up while the rest arrives. What is typed
   first switches it, like VS Code: `>` commands, `@` the file's symbols, `:`
   a line (`:12:5`), `?` the list of these; Backspace over the sign goes back to
   files. Ctrl+R (Open Recent) lists recent folders, then recent files.
@@ -602,9 +623,38 @@ With no file open the editor shows the keys to start with.
   Tab goes from pane to pane (folders, OPEN EDITORS, OUTLINE, TIMELINE). Here
   the panes are under the folder tree rather than above it.
 - **Markdown preview** — Ctrl+Shift+V opens a preview tab of a .md file,
-  Ctrl+K V opens it to the side (the file keeps the keys): headings, lists and
-  tasks, quotes, code blocks in their language's colors, tables in boxes,
-  links underlined; it follows the typing; the wheel and the keys scroll it.
+  Ctrl+K V opens it to the side (the file keeps the keys): headings (with
+  `===` / `---` under them too), lists nested as far as they go, task boxes,
+  quotes with a bar for each `>` deep, code blocks in their language's
+  colors, tables in boxes with their `:---:` alignment, **bold**, *italic*,
+  ~~struck~~, footnotes, HTML shown as the words it says rather than its
+  tags, and pictures as `🖼 alt (120x80 png, 12 KB)`. Links are underlined
+  and Ctrl+click follows them: `#a-heading` jumps down the page, `http` and
+  `https` open the browser, and a file next to the document opens in its own
+  editor. Side by side with the file the two scroll together
+  (`markdown.preview.scrollPreviewWithEditor` and
+  `markdown.preview.scrollEditorWithPreview`, both on); the page is only
+  measured again when the text or the width changes, so a file of a few
+  thousand lines stays smooth. It follows the typing; the wheel and the keys
+  scroll it.
+- **Picture preview** — .png, .jpg, .gif, .bmp, .webp, .ico and .svg open in
+  an editor of their own, from the Explorer, Go to File or the command line.
+  The picture is drawn in the editor area by terminals that draw pictures
+  (sixel), scaled to fit, with `1920x1080 • PNG • 240 KB` under it; `+` and
+  `-` zoom, `0` fits it again (Ctrl+wheel too), and the command palette has
+  Image Preview: Zoom In / Out / Reset. A terminal without pictures gets the
+  same picture in Braille dots instead. mme reads PNG, BMP, GIF and ICO
+  itself, with no libraries; a JPEG, WEBP or SVG shows its size and kind
+  from the file's header and says why it is not drawn.
+- **Hex viewer** — a binary file (one with a zero byte near its start) opens
+  as `offset | 16 bytes | the letters`, like VS Code's Hex Editor, instead of
+  the noise a text editor makes of it. It is **read-only**: mme does not
+  write binaries. The arrows, PgUp / PgDn and Home / End (Ctrl+Home / End for
+  the whole file) move through the bytes, a click puts the cursor on one,
+  Ctrl+G goes to an offset (`1f40`, `0x1f40` or `#8000` for decimal), Ctrl+F
+  looks for bytes or text (`4d 5a` or `MZ`) and F3 finds the next one. The
+  status bar shows the offset and the byte there, the line under it the file
+  and its size. View: Reopen Editor With Hex Editor opens any file this way.
 - **Source Control** — Staged Changes and Changes. Enter or a click opens the
   diff; `s` / `+` stages, `u` / `-` unstages, `o` opens the file. The message
   box on top commits with Ctrl+Enter. The title's buttons commit, refresh and
@@ -648,6 +698,23 @@ With no file open the editor shows the keys to start with.
   Compare Changes**. Merge Conflict: Accept All Current / Incoming / Both,
   Next / Previous Conflict are in the palette. Source Control lists the files
   under **Merge Changes**; `+` on one marks it resolved.
+- **The merge editor** — opening a conflicted file gives VS Code's three
+  panes: **Incoming** (theirs) and **Current** (ours) side by side, with the
+  branches from `MERGE_HEAD` in their titles, and the **Result** under them,
+  which says how many conflicts are left. The three versions come from git's
+  index (`:1:` base, `:2:` ours, `:3:` theirs), so the conflicts are worked
+  out the way diff3 does and everything only one side changed is merged at
+  once; a file with markers but no index entry is read from the markers.
+  Each conflict is tinted in all three panes and is taken with **Accept
+  Incoming**, **Accept Current** or **Accept Combination** (a click, or Enter
+  in the pane), F7 and Shift+F7 walk them, and Merge Conflict: Accept All
+  Current / Incoming / Both do the lot. The Result is ordinary text: type in
+  it, Ctrl+Z, Ctrl+Y. **Complete Merge** (the button, or Ctrl+Enter) writes
+  the file and stages it; closing the tab with conflicts left asks first.
+  `git.mergeEditor` (default true) decides whether a conflicted file goes
+  straight there: with it off a **Resolve in Merge Editor** banner offers it,
+  and **Git: Open Merge Editor** is always in the palette. A binary file, or
+  one deleted on one side, says so instead.
 - **Repositories** — in a folder without git, Source Control offers
   **Initialize Repository** and **Clone Repository** (**Git: Clone** asks the
   URL and the folder, then opens the clone). A branch with no upstream gets
@@ -659,6 +726,11 @@ With no file open the editor shows the keys to start with.
   View**), changed lines red and green, the changed words in them brighter
   (VS Code's character diff). Up and Down move the cursor, Enter opens the
   file at its line, F7 / Shift+F7 go from change to change, Esc closes it.
+  The modified side of a working tree diff is the file itself and is typed
+  in, like VS Code's: the keys, undo, the tab's dirty dot and Ctrl+S are the
+  editor's own, and the diff is made again a moment after the typing stops.
+  There `i` and `o` go into the text, so Alt+I toggles inline and Alt+O opens
+  the file; Enter on a "⋯ N hidden lines" row still opens it.
   It has a minimap of its own, green where lines came and red where they
   went; a click in it goes there. The tab bar carries its actions, like VS
   Code's editor title: previous and next change, ¶ (**Diff: Toggle Ignore
@@ -701,6 +773,8 @@ With no file open the editor shows the keys to start with.
 | Ctrl+Tab | the editors by use |
 | Ctrl+Shift+H | Replace in Files |
 | Ctrl+Shift+V, Ctrl+K V | Markdown preview, to the side |
+| Ctrl+G, Ctrl+F, F3 | in the hex viewer: go to offset, find bytes or text, find next |
+| + / - / 0 | in the picture preview: zoom in, out, fit |
 | Ctrl+K W / Ctrl+K Ctrl+W / Ctrl+K U | close the group's / all / the saved editors |
 | Ctrl+B | Toggle the sidebar |
 | Ctrl+\\, Ctrl+K Ctrl+\\, Ctrl+1 .. 4 | Split Editor right / down, group 1 .. 4 |

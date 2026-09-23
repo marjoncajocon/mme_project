@@ -388,9 +388,32 @@ void scr_pointer (int shape) {
 }
 
 
+/* the picture waiting to be sent (one is enough: the editor shows one at a time) */
+static struct {
+  int x, y, w, h;
+  char *data;
+  size_t n;
+} IMG;
+
+
+static struct { int x, y; char *data; size_t n; } SENT;	/* what the terminal already has */
+
+
+void scr_image (int x, int y, int w, int h, const char *data, size_t n) {
+  free(IMG.data);
+  IMG.data = (char *)xmalloc(n + 1);
+  memcpy(IMG.data, data, n);
+  IMG.n = n;
+  IMG.x = x;
+  IMG.y = y;
+  IMG.w = w;
+  IMG.h = h;
+}
+
+
 void scr_flush (void) {
   Buf o;
-  int x, y, st = -1;
+  int x, y, st = -1, img_dirty = 0;
   uint32_t fg = 0, bg = 0, at = 0, ul = 0;
   size_t row = (size_t)S.cols * sizeof(ECell);
   buf_init(&o);
@@ -398,6 +421,7 @@ void scr_flush (void) {
   for (y = 0; y < S.rows; y++) {
     ECell *b = &S.back[y * S.cols];
     if (!S.full && memcmp(b, &S.front[y * S.cols], row) == 0) continue;
+    if (IMG.data && y >= IMG.y && y < IMG.y + IMG.h) img_dirty = 1;	/* its cells were written over */
     buf_printf(&o, "\033[%d;1H", y + 1);
     for (x = 0; x < S.cols; x++) {
       char u[4];
@@ -409,9 +433,9 @@ void scr_flush (void) {
       if (b[x].st == S_RGB) {	/* its own colors: sent when they change */
         const ECell *c = &b[x];
         if (st != S_RGB || c->fg != fg || c->bg != bg || c->at != at || c->ul != ul) {
-          buf_printf(&o, "\033[0;%s%s%s38;2;%u;%u;%u;48;2;%u;%u;%um",
+          buf_printf(&o, "\033[0;%s%s%s%s38;2;%u;%u;%u;48;2;%u;%u;%um",
                      (c->at & RGB_BOLD) ? "1;" : "", (c->at & RGB_ITALIC) ? "3;" : "",
-                     (c->at & RGB_UNDER) ? "4;" : "",
+                     (c->at & RGB_UNDER) ? "4;" : "", (c->at & RGB_STRIKE) ? "9;" : "",
                      (unsigned)(c->fg >> 16), (unsigned)((c->fg >> 8) & 255), (unsigned)(c->fg & 255),
                      (unsigned)(c->bg >> 16), (unsigned)((c->bg >> 8) & 255), (unsigned)(c->bg & 255));
           if (c->at & RGB_CURLY)	/* a squiggle: curly, in its own color */
@@ -432,6 +456,28 @@ void scr_flush (void) {
     }
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
+  if (IMG.data) {	/* a picture: sent only when the terminal has not got this one */
+    int again = S.full || img_dirty || SENT.data == NULL || SENT.n != IMG.n ||
+                SENT.x != IMG.x || SENT.y != IMG.y || memcmp(SENT.data, IMG.data, IMG.n) != 0;
+    if (again) {
+      buf_printf(&o, "\033[%d;%dH", IMG.y + 1, IMG.x + 1);
+      buf_putn(&o, IMG.data, IMG.n);
+      free(SENT.data);
+      SENT.data = IMG.data;
+      SENT.n = IMG.n;
+      SENT.x = IMG.x;
+      SENT.y = IMG.y;
+      IMG.data = NULL;
+    }
+  }
+  else if (SENT.data) {	/* nothing is shown now: the next one must be sent again */
+    free(SENT.data);
+    SENT.data = NULL;
+    SENT.n = 0;
+  }
+  free(IMG.data);	/* the drawing asks for it again every time */
+  IMG.data = NULL;
+  IMG.n = 0;
   S.full = 0;
   if (g_ptr != g_ptr_sent) {	/* the hand over buttons, the I beam over text */
     static const char *const name[] = {"default", "text", "pointer"};

@@ -984,6 +984,9 @@ static struct {
   size_t nexp;
   int vis_split, vis_hide;	/* what vis was made for */
   size_t crow;	/* the row of the cursor (Enter opens the file there) */
+  size_t ccol;	/* its byte in the new side's line: the modified side is typed in */
+  int edit;	/* the new side is the file in the working tree: it can be typed in */
+  int cx, cy;	/* where the caret was drawn, -1 none */
   int x, y, w, hw, arrow_x, mmw;	/* where it was drawn: for the mouse */
   int act_x[6], nact;	/* the title's icons */
 } D;
@@ -1711,6 +1714,7 @@ int diff_open (const char *path, int staged) {
   D.inline_mode = inl;
   D.path = xstrdup(path);
   D.kind = staged ? DK_INDEX : (c->y == '?' ? DK_OTHER : DK_TREE);
+  D.edit = !staged;	/* the new side is the file itself: VS Code types in it */
   D.rel = xstrdup(c->rel);
   buf_init(&b);
   if (!staged && c->y == '?') {	/* untracked: every line is new */
@@ -1761,6 +1765,15 @@ int diff_active (void) {
 }
 
 
+/*
+** The modified side is the file in the working tree: VS Code lets it be
+** typed in, so mme does too (a commit's or the index's diff is read only).
+*/
+int diff_editable (void) {
+  return D.open && D.edit && D.path && D.path[0];
+}
+
+
 const char *diff_title (void) {
   return D.title ? D.title : "";
 }
@@ -1781,6 +1794,18 @@ static const DLine *row_line (size_t k) {
   if (!D.split_now) return k < D.nline ? &D.line[k] : NULL;
   if (k >= D.nrow) return NULL;
   return &D.line[D.row[k].r >= 0 ? D.row[k].r : D.row[k].l];
+}
+
+
+/* the new side's line of row k (0: the row has none) */
+static size_t new_line_of (size_t k) {
+  const DLine *l;
+  if (D.split_now) {
+    if (k >= D.nrow || D.row[k].r < 0) return 0;
+    return D.line[D.row[k].r].n;
+  }
+  l = k < D.nline ? &D.line[k] : NULL;
+  return l ? l->n : 0;
 }
 
 
@@ -1880,6 +1905,65 @@ static size_t vpos (size_t k) {	/* the place of row k among those shown (a hidde
 
 
 /* the cursor d rows on (of those shown); the view follows */
+/* the column byte c of s is drawn at (tabs expanded, like scr_code) */
+static size_t dcol (const char *s, size_t n, size_t c) {
+  size_t i = 0, col = 0, len;
+  while (i < n && i < c) {
+    uint32_t cp = utf8_decode(s + i, n - i, &len);
+    col += cp == '\t' ? (size_t)TABW - col % (size_t)TABW : (uc_width(cp) ? (size_t)uc_width(cp) : 1);
+    i += len;
+  }
+  return col;
+}
+
+
+/* the byte of s drawn at column col */
+static size_t dbyte (const char *s, size_t n, size_t col) {
+  size_t i = 0, c = 0, len;
+  while (i < n && c < col) {
+    uint32_t cp = utf8_decode(s + i, n - i, &len);
+    c += cp == '\t' ? (size_t)TABW - c % (size_t)TABW : (uc_width(cp) ? (size_t)uc_width(cp) : 1);
+    i += len;
+  }
+  return i;
+}
+
+
+/* the new side's line at the caret's row, "" when the row has none */
+static const DLine *caret_dline (void) {
+  if (D.split_now) return (D.crow < D.nrow && D.row[D.crow].r >= 0) ? &D.line[D.row[D.crow].r] : NULL;
+  return (D.crow < D.nline && D.line[D.crow].kind != '-') ? &D.line[D.crow] : NULL;
+}
+
+
+static const char *caret_line (void) {
+  const DLine *l = caret_dline();
+  return l ? l->s : "";
+}
+
+
+static size_t caret_len (void) {
+  const DLine *l = caret_dline();
+  return l ? l->len : 0;
+}
+
+
+/* the byte before / after c in s (UTF-8) */
+static size_t prev_byte (const char *s, size_t c) {
+  while (c > 0 && ((unsigned char)s[--c] & 0xC0) == 0x80) ;
+  return c;
+}
+
+
+static size_t next_byte (const char *s, size_t c) {
+  size_t len = strlen(s);
+  if (c >= len) return len;
+  c++;
+  while (c < len && ((unsigned char)s[c] & 0xC0) == 0x80) c++;
+  return c;
+}
+
+
 static void crow_move (long d) {
   size_t n = vcount(), h = D.h > 0 ? (size_t)D.h : 1, i, i0;
   long p;
@@ -1893,6 +1977,57 @@ static void crow_move (long d) {
   i0 = vpos(D.top);
   if (i < i0) D.top = vk(i);
   else if (i >= i0 + h) D.top = vk(i - h + 1);
+}
+
+
+/* where the caret is in the file: its line (from 1) and byte; 0: nowhere to type */
+size_t diff_caret (size_t *col) {
+  size_t line, i = vpos(D.crow);
+  if (D.nvis && i < D.nvis && D.vis[i].hidden && D.vis[i].k == D.crow) return 0;	/* a hidden region: Enter opens it */
+  line = new_line_of(D.crow);
+  if (line == 0) line = diff_line();	/* a row of the old side only: the next line of the file */
+  if (col) *col = D.ccol;
+  return line;
+}
+
+
+/* the caret on the file's line (from 1) and byte, the row shown */
+void diff_set_caret (size_t line, size_t col) {
+  size_t n = nrows(), k, best = (size_t)-1, h = D.h > 0 ? (size_t)D.h : 1, i, i0;
+  for (k = 0; k < n; k++) {
+    size_t l = new_line_of(k);
+    if (l == line) {
+      best = k;
+      break;
+    }
+    if (l && l < line) best = k;
+  }
+  if (best == (size_t)-1) return;
+  D.crow = best;
+  D.ccol = col;
+  i = vpos(D.crow);
+  i0 = vpos(D.top);
+  if (i < i0) D.top = vk(i);
+  else if (i >= i0 + h) D.top = vk(i + 1 > h ? i - h + 1 : 0);
+}
+
+
+/*
+** The modified side's text now (the editor's buffer, as it is typed in):
+** the lines are made again from it, so the diff follows the typing.
+*/
+void diff_new_text (const char *s, size_t n) {
+  size_t top = D.top, crow = D.crow, cur = D.cur;
+  if (!D.open || D.ta == NULL) return;
+  free(D.tb);
+  D.tb = xstrndup(s ? s : "", n);
+  D.tnb = n;
+  if (relines(vopt.diff_trim) != 0) return;	/* too different for it: what is drawn stays */
+  rebuild();
+  vis_build();
+  D.top = top < nrows() ? top : 0;
+  D.crow = crow < nrows() ? crow : 0;
+  D.cur = cur < nrows() ? cur : 0;
 }
 
 
@@ -2070,6 +2205,7 @@ void diff_draw (int x, int y, int w, int h) {
   }
   nw++;
   D.split_now = !D.inline_mode && w >= 80;
+  D.cx = D.cy = -1;
   D.h = h;
   D.x = x;
   D.y = y;
@@ -2102,6 +2238,12 @@ void diff_draw (int x, int y, int w, int h) {
       if (D.kind == DK_TREE && block_start(k)) scr_put(x + hw, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
       else scr_put(x + hw, sy, 0x2502, S_DIFF_FILL);
       draw_side(x + hw + 1, sy, w - hw - 1, r->r >= 0 ? &D.line[r->r] : NULL, 0, nw, cur);
+      if (cur && diff_editable() && r->r >= 0) {	/* the caret: the modified side is typed in */
+        const DLine *l = &D.line[r->r];
+        size_t c = D.ccol < l->len ? D.ccol : l->len;
+        D.cx = x + hw + 1 + nw + 2 + (int)(dcol(l->s, l->len, c) - D.left);
+        D.cy = sy;
+      }
     }
     else {	/* inline: both numbers, then the line */
       const DLine *l = &D.line[k];
@@ -2125,9 +2267,15 @@ void diff_draw (int x, int y, int w, int h) {
                     ui_color(l->kind == '+' ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
       if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);
       if (D.kind == DK_TREE && block_start(k)) scr_put(x + D.arrow_x, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
+      if (cur && diff_editable() && l->kind != '-') {	/* the caret */
+        size_t c = D.ccol < l->len ? D.ccol : l->len;
+        D.cx = x + 2 * nw + 2 + (int)(dcol(l->s, l->len, c) - D.left);
+        D.cy = sy;
+      }
     }
   }
   if (D.mmw > 0) draw_dmap(x + w, y, h, i0);
+  if (D.cx >= x && D.cx < x + w && D.cy >= y) scr_cursor(D.cx, D.cy);
 }
 
 
@@ -2211,6 +2359,18 @@ int diff_click (int mx, int my) {
     return DIFF_YES;
   }
   D.crow = k;
+  if (diff_editable()) {	/* the caret where it was clicked, on the new side */
+    int nw = 2, cx;
+    size_t m = D.nmax;
+    while (m >= 10) {
+      m /= 10;
+      nw++;
+    }
+    nw++;
+    cx = mx - (D.split_now ? D.x + D.hw + 1 + nw + 2 : D.x + 2 * nw + 2);
+    D.ccol = cx > 0 ? dbyte(caret_line(), caret_len(), D.left + (size_t)cx) : 0;
+    if (D.ccol > caret_len()) D.ccol = caret_len();
+  }
   if (is_change(k)) D.cur = k;
   if (D.kind == DK_TREE && block_start(k) && mx == D.x + (D.split_now ? D.hw : D.arrow_x)) return DIFF_REVERT;
   return DIFF_YES;
@@ -2221,21 +2381,48 @@ int diff_key (int k) {
   int code = KEY_CODE(k);
   size_t h = D.h > 0 ? (size_t)D.h : 1;
   switch (code) {
-    case K_UP: crow_move(-1); break;
-    case K_DOWN: crow_move(1); break;
+    case K_UP:
+      crow_move(-1);
+      if (D.ccol > caret_len()) D.ccol = caret_len();
+      break;
+    case K_DOWN:
+      crow_move(1);
+      if (D.ccol > caret_len()) D.ccol = caret_len();
+      break;
     case K_PGUP: crow_move(-(long)h); break;
     case K_PGDN: crow_move((long)h); break;
     case K_HOME:
       D.left = 0;
-      crow_move(-(long)vcount());
+      if (diff_editable()) D.ccol = 0;
+      else crow_move(-(long)vcount());
       break;
-    case K_END: crow_move((long)vcount()); break;
-    case K_LEFT: D.left = D.left > 4 ? D.left - 4 : 0; break;
-    case K_RIGHT: D.left += 4; break;
+    case K_END:
+      if (diff_editable()) D.ccol = caret_len();
+      else crow_move((long)vcount());
+      break;
+    case K_LEFT:
+      if (!diff_editable()) D.left = D.left > 4 ? D.left - 4 : 0;
+      else if (D.ccol > 0) D.ccol = prev_byte(caret_line(), D.ccol);
+      else crow_move(-1), D.ccol = caret_len();
+      break;
+    case K_RIGHT:
+      if (!diff_editable()) D.left += 4;
+      else if (D.ccol < caret_len()) D.ccol = next_byte(caret_line(), D.ccol);
+      else {
+        crow_move(1);
+        D.ccol = 0;
+      }
+      break;
     case K_F7: diff_change((k & KM_SHIFT) != 0); break;
-    case 'i': D.inline_mode = !D.inline_mode; break;
+    case 'i':
+      if (diff_editable() && !(k & KM_ALT)) return DIFF_NO;	/* it is typed there: Alt+I toggles instead */
+      D.inline_mode = !D.inline_mode;
+      break;
     case K_ESC: return DIFF_CLOSE;
-    case K_ENTER: case 'o': {
+    case 'o':
+      if (diff_editable() && !(k & KM_ALT)) return DIFF_NO;	/* Alt+O opens the file instead */
+      /* fall through */
+    case K_ENTER: {
       size_t i = vpos(D.crow);
       if (D.nvis && i < D.nvis && D.vis[i].hidden && D.vis[i].k == D.crow) {	/* on a fold: it opens */
         if (D.exp && D.crow < D.nexp) D.exp[D.crow] = 1;

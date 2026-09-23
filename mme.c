@@ -43,6 +43,8 @@ typedef struct Tab {
   Cur *mc;	/* the other cursors (Alt+Click, Ctrl+D ...); the main one is cur */
   int nmc, capmc;
   int page;	/* PAGE_SETTINGS, PAGE_WELCOME: a page, not a file (its doc stays empty) */
+  void *pdata;	/* PAGE_IMAGE, PAGE_HEX: what that editor keeps (eimage.c, ehex.c) */
+  char *ppath;	/* and the file it shows */
   int pinned;	/* VS Code's pinned tab: first, and Close Others / All leave it */
   int md;	/* the Markdown preview of doc (top counts the page's rows) */
   long used;	/* when it was last in front: Ctrl+Tab's order */
@@ -240,9 +242,13 @@ static int editor_shape (void);
 static void apply_act (const SideAct *act);
 static int text_cols (void);
 static void page_draw (int other);
+static int page_file_open (int kind, const char *path, int preview);
 static void fold_shift (int ins, Pos a, Pos b);
 static void editor_key (int k);
 static int indent_more (const char *s, size_t n);
+static void cursor_forget (Tab *t);	/* Ctrl+U: the tab is closing */
+static const char *doc_lang_id (void);	/* the language of the file in front ("python") */
+static void doc_comment (const char **line, const char **open, const char **close);
 static void outdent_typed (void);
 static void paste_text (const char *s, size_t n);
 static uint32_t uni_flag (uint32_t cp, uint32_t *ascii);
@@ -266,6 +272,10 @@ static void help_page (const char *name, void (*make) (Buf *b));
 static void help_keys_md (Buf *b);
 static void help_tips_md (Buf *b);
 static const Sym *symbols (size_t *n);
+static void draw_rulers (int sy, int gw, size_t left);
+static int lens_row_at (size_t y);	/* editor.codeLens: a row of its own over line y */
+static size_t lens_rows_in (size_t y0, size_t y1);
+static int uni_flag_of (uint32_t cp);	/* editor.unicodeHighlight, for the width of what is invisible */
 static size_t ih_shift (size_t y, size_t x);
 static int screen_at (Pos p, int *sx, int *sy);
 static size_t sym_path (const Sym *v, size_t n, size_t *out, size_t cap);
@@ -283,6 +293,7 @@ static int draw_sticky (int gw, Pos sa, Pos sb);
 static void hl_row (int sy, size_t y, int gw, size_t from, size_t to, size_t left);
 static const Pos *hl_ranges (size_t *n);
 static void draw_peek (void);
+static void view_blocks_update (int other);
 static void draw_quick (int sy, size_t y, int gw, int is_cur);
 static void draw_dirty_peek (void);
 static void conflict_row (int sy, size_t y, int gw, size_t from, int other);
@@ -320,6 +331,7 @@ static size_t char_width (const Row *r, size_t x, size_t col, size_t *len) {
   uint32_t cp = utf8_decode(r->s + x, r->len - x, len);
   if (cp == '\t') return TABW - col % TABW;
   if (cp < 32 || cp == 127) return eopt.control_chars ? 1 : 2;	/* shown as the control picture, or ^X */
+  if (uc_width(cp) == 0 && uni_flag_of(cp) == 2) return 1;	/* invisible (U+200B, U+FEFF ...): a box of its own */
   return (size_t)uc_width(cp);
 }
 
@@ -1491,13 +1503,101 @@ static size_t seg_of (size_t y, size_t x) {
 }
 
 
-/* screen row sy of the text: its line, the bytes from..to, the column it starts at; 0: past the end */
-static int vis_goto (int sy, size_t *line, size_t *from, size_t *to, size_t *left) {
-  size_t y = T->top, k, st[MAXSEG], n;
+/*
+** {==================================================================
+** Rows put into the view under a line: VS Code's peeks
+**
+** A peek (references, the dirty diff, an exception) does not cover the
+** lines under it: they move down, as they do in VS Code. The view keeps
+** one block, whichever peek is open (view_blocks_update picks it before
+** the rows are drawn); the row walk below leaves its rows out, so a click
+** and the cursor still find the right line.
+** ===================================================================
+*/
+
+static struct {
+  int on;
+  size_t after;	/* the block sits under this line */
+  int rows;	/* how many rows of the screen it takes */
+} VB;
+
+
+static void view_block_set (size_t after, int rows) {
+  VB.on = rows > 0;
+  VB.after = after;
+  VB.rows = rows > 0 ? rows : 0;
+}
+
+
+static void view_block_clear (void) {
+  VB.on = 0;
+  VB.rows = 0;
+}
+
+
+/* the screen row its first row is at (it may be under the text's last row); -1: its line is not shown */
+static int vb_start (void) {
+  size_t y, rows = 0, st[MAXSEG];
+  if (!VB.on || !HAS_DOC || VB.after >= T->doc->n || VB.after < T->top) return -1;
+  if (T->nfold && hidden_in(VB.after) != (size_t)-1) return -1;
   if (!E.wrap) {
-    if (T->nfold) {	/* folded regions: line by line */
+    if (T->nfold == 0) return (int)(VB.after - T->top) + 1;
+    for (y = T->top; y < VB.after; y = line_next(y)) rows++;
+    return (int)rows + 1;
+  }
+  for (y = T->top; y < VB.after; y = line_next(y)) rows += wrap_segs(y, st);
+  rows += wrap_segs(VB.after, st);
+  if (rows < T->sub) return -1;
+  return (int)(rows - T->sub);
+}
+
+
+/* the rows a line below the block is pushed down by */
+static int vb_shift (size_t y) {
+  return (VB.on && y > VB.after && vb_start() >= 0) ? VB.rows : 0;
+}
+
+
+/* is screen row sy (from the top of the text) one of the block's own? */
+static int vb_at (int sy) {
+  int s = vb_start();
+  return s >= 0 && sy >= s && sy < s + VB.rows;
+}
+
+/* }================================================================== */
+
+
+/*
+** Screen row sy of the text: its line, the bytes from..to, the column it
+** starts at; 0 past the end. *lens: the row is a code lens's own row,
+** over the line (the text of the line is on the row under it). The rows
+** of a view block (a peek) are none of the text's.
+*/
+static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *left, int *lens) {
+  size_t y = T->top, k, st[MAXSEG], n;
+  *lens = 0;
+  {	/* the block's rows are not the text's: under it the lines moved down */
+    int s = vb_start();
+    if (s >= 0) {
+      if (sy >= s && sy < s + VB.rows) return 0;
+      if (sy >= s + VB.rows) sy -= VB.rows;
+    }
+  }
+  if (!E.wrap) {
+    if (T->nfold || lens_rows_in(T->top, T->doc->n) > 0) {	/* folded regions, lens rows: line by line */
       size_t yy = T->top;
-      while (sy-- > 0 && yy < T->doc->n) yy = line_next(yy);
+      while (yy < T->doc->n) {
+        if (lens_row_at(yy)) {	/* the lens's own row comes first */
+          if (sy == 0) {
+            *lens = 1;
+            break;
+          }
+          sy--;
+        }
+        if (sy == 0) break;
+        sy--;
+        yy = line_next(yy);
+      }
       if (yy >= T->doc->n) return 0;
       *line = yy;
       *from = 0;
@@ -1512,11 +1612,33 @@ static int vis_goto (int sy, size_t *line, size_t *from, size_t *to, size_t *lef
     *left = T->left;
     return 1;
   }
+  if (T->sub == 0 && lens_row_at(y)) {	/* the top line's own lens row */
+    if (sy == 0) {
+      *lens = 1;
+      *line = y;
+      *from = 0;
+      *to = row_at(y)->len;
+      *left = 0;
+      return 1;
+    }
+    sy--;
+  }
   n = wrap_segs(y, st);
   k = T->sub < n ? T->sub : n - 1;
   while (sy > 0) {
     if (++k >= n) {
       if ((y = line_next(y)) >= T->doc->n) return 0;
+      if (lens_row_at(y)) {
+        sy--;
+        if (sy == 0) {
+          *lens = 1;
+          *line = y;
+          *from = 0;
+          *to = row_at(y)->len;
+          *left = 0;
+          return 1;
+        }
+      }
       n = wrap_segs(y, st);
       k = 0;
     }
@@ -1527,6 +1649,13 @@ static int vis_goto (int sy, size_t *line, size_t *from, size_t *to, size_t *lef
   *to = k + 1 < n ? st[k + 1] : row_at(y)->len;
   *left = col_of(row_at(y), st[k]);
   return 1;
+}
+
+
+/* the line at screen row sy (a lens row gives the line it is over) */
+static int vis_goto (int sy, size_t *line, size_t *from, size_t *to, size_t *left) {
+  int lens;
+  return vis_goto_k(sy, line, from, to, left, &lens);
 }
 
 
@@ -1709,6 +1838,8 @@ static struct {
   const Doc *d;
   Lens *v;
   size_t n;
+  size_t *ln;	/* the lines that have a lens, sorted, each once: a row over them */
+  size_t nln;
   const Doc *ask_d;
   unsigned long ask_edits, seen;
   long long since;
@@ -1718,13 +1849,52 @@ static struct {
 } LN;
 
 
+static int cmp_lens_line (const void *a, const void *b) {
+  size_t x = *(const size_t *)a, y = *(const size_t *)b;
+  return x < y ? -1 : x > y;
+}
+
+
 void on_lens (Doc *d, Lens *v, size_t n) {
-  size_t i;
+  size_t i, k = 0;
   for (i = 0; i < LN.n; i++) free(LN.v[i].title);
   free(LN.v);
+  free(LN.ln);
   LN.v = v;
   LN.n = n;
   LN.d = d;
+  LN.ln = n ? (size_t *)xmalloc(n * sizeof(size_t)) : NULL;
+  for (i = 0; i < n; i++)
+    if (v[i].title[0]) LN.ln[k++] = v[i].y;
+  qsort(LN.ln, k, sizeof(size_t), cmp_lens_line);
+  LN.nln = 0;
+  for (i = 0; i < k; i++)	/* each line once */
+    if (LN.nln == 0 || LN.ln[LN.nln - 1] != LN.ln[i]) LN.ln[LN.nln++] = LN.ln[i];
+}
+
+
+/* the lens rows over the lines y0 .. y1 - 1 (they are drawn over their line, like VS Code) */
+static size_t lens_rows_in (size_t y0, size_t y1) {
+  size_t lo, hi, a, b;
+  if (LN.nln == 0 || !opt.codelens || !HAS_DOC || LN.d != T->doc || T->md || T->page || G->diff) return 0;
+  for (lo = 0, hi = LN.nln; lo < hi;) {	/* the first line >= y0 */
+    size_t mid = (lo + hi) / 2;
+    if (LN.ln[mid] < y0) lo = mid + 1;
+    else hi = mid;
+  }
+  a = lo;
+  for (hi = LN.nln; lo < hi;) {	/* the first line >= y1 */
+    size_t mid = (lo + hi) / 2;
+    if (LN.ln[mid] < y1) lo = mid + 1;
+    else hi = mid;
+  }
+  b = lo;
+  return b - a;
+}
+
+
+static int lens_row_at (size_t y) {
+  return lens_rows_in(y, y + 1) > 0;
 }
 
 
@@ -1773,55 +1943,68 @@ static void extras_idle (void) {
 }
 
 
-/* the lenses of line y as one text: "run test | 3 references"; its width, 0: none */
-static int lens_text (size_t y, char *out, size_t cap) {
-  size_t i, o = 0;
-  out[0] = '\0';
-  if (!opt.codelens || LN.d != T->doc) return 0;
-  for (i = 0; i < LN.n; i++) {
-    if (LN.v[i].y != y || LN.v[i].title[0] == '\0') continue;
-    o += (size_t)snprintf(out + o, o < cap ? cap - o : 0, "%s%s", o ? " | " : "", LN.v[i].title);
-    if (o >= cap) break;
+/*
+** editor.codeLens: a row of its own over the line, dim, like VS Code's:
+** "3 references | run test"; each lens is remembered for a click.
+*/
+static void draw_lens_row (int sy, size_t y, int gw) {
+  int x = L.ed_x + gw, end = L.ed_x + gw + text_cols(), first = 1;
+  size_t i, ind = 0;
+  scr_fill(L.ed_x, sy, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+  if (y < T->doc->n) {	/* under the indent of the line, like VS Code */
+    const Row *r = row_at(y);
+    ind = col_of(r, indent_end(r));
+    if (ind > (size_t)text_cols() / 2) ind = 0;
   }
-  return (int)str_cols(out);
-}
-
-
-/* editor.codeLens: after the end of their lines, dim; each remembered for a click */
-static void draw_lenses (int gw) {
-  size_t i;
-  int end = L.ed_x + gw + text_cols();
-  LN.nhit = 0;
-  if (!opt.codelens || LN.d != T->doc) return;
-  for (i = 0; i < LN.n; i++) {
-    Pos e;
-    int cx, cy, k, w;
-    size_t j;
-    if (LN.v[i].title[0] == '\0') continue;
-    e.y = LN.v[i].y;
-    if (e.y >= T->doc->n) continue;
-    e.x = row_at(e.y)->len;
-    if (!screen_at(e, &cx, &cy)) continue;
-    cx += 3;
-    for (j = 0; j < i; j++)	/* after the ones before it on the line */
-      if (LN.v[j].y == e.y && LN.v[j].title[0]) cx += (int)str_cols(LN.v[j].title) + 3;
-    if (j > 0 && cx > L.ed_x + gw + 3) {
-      size_t m;
-      for (m = 0; m < i; m++)
-        if (LN.v[m].y == e.y && LN.v[m].title[0]) break;
-      if (m < i) scr_puts(cx - 2, cy, "|", TOK(T_WS, B_EDITOR)), scr_set_fg(cx - 2, cy, ui_color(C_LENS));
+  x += (int)ind;
+  for (i = 0; i < LN.n && x < end - 1; i++) {
+    int w, k;
+    if (LN.v[i].y != y || LN.v[i].title[0] == '\0') continue;
+    if (!first) {
+      w = scr_putsw(x, sy, end - x, " | ", S_TEXT);
+      for (k = 0; k < w; k++) scr_set_fg(x + k, sy, ui_color(C_LENS));
+      x += w;
     }
-    if (cx >= end - 3) continue;
-    w = scr_putsw(cx, cy, end - cx, LN.v[i].title, TOK(T_WS, e.y == T->cur.y && !T->sel ? B_LINE : B_EDITOR));
-    for (k = 0; k < w; k++) scr_set_fg(cx + k, cy, ui_color(C_LENS));
+    first = 0;
+    w = scr_putsw(x, sy, end - x, LN.v[i].title, S_TEXT);
+    for (k = 0; k < w; k++) scr_set_fg(x + k, sy, ui_color(C_LENS));
     if (LN.nhit < MAX_LENS_HIT) {
-      LN.hx0[LN.nhit] = cx;
-      LN.hx1[LN.nhit] = cx + w;
-      LN.hy[LN.nhit] = cy;
+      LN.hx0[LN.nhit] = x;
+      LN.hx1[LN.nhit] = x + w;
+      LN.hy[LN.nhit] = sy;
       LN.hidx[LN.nhit] = i;
       LN.nhit++;
     }
+    x += w;
   }
+  draw_rulers(sy, gw, E.wrap ? 0 : T->left);
+}
+
+
+/* the lenses of the cursor's line, for the keyboard (Code Lens: Run...) */
+static void lens_run_here (void) {
+  size_t i, idx[MAX_LENS_HIT], n = 0;
+  Pick p;
+  int r;
+  if (!HAS_DOC || G->diff || T->page || LN.d != T->doc) {
+    toast(0, "No code lens here");
+    return;
+  }
+  for (i = 0; i < LN.n && n < MAX_LENS_HIT; i++)
+    if (LN.v[i].y == T->cur.y && LN.v[i].title[0]) idx[n++] = i;
+  if (n == 0) {
+    toast(0, "No code lens on this line");
+    return;
+  }
+  if (n == 1) {
+    lsp_lens_run(idx[0]);
+    return;
+  }
+  pick_init(&p, "Select a code lens");
+  for (i = 0; i < n; i++) pick_add(&p, LN.v[idx[i]].title, NULL, 0);
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r >= 0) lsp_lens_run(idx[(size_t)r]);
 }
 
 /* }================================================================== */
@@ -1829,19 +2012,26 @@ static void draw_lenses (int gw) {
 
 /* the screen row of p (from the top of the text), -1 when not shown */
 static int vis_row (Pos p) {
-  size_t y, rows = 0, st[MAXSEG];
+  size_t y, rows = 0, st[MAXSEG], shift = (size_t)vb_shift(p.y);	/* a peek's rows over it */
   if (T->nfold && hidden_in(p.y) != (size_t)-1) return -1;
-  if (!E.wrap && T->nfold == 0)
-    return (p.y >= T->top && p.y < T->top + (size_t)L.text_h) ? (int)(p.y - T->top) : -1;
   if (p.y < T->top) return -1;
+  if (!E.wrap && T->nfold == 0) {
+    size_t lr = lens_rows_in(T->top, p.y + 1);	/* the lens rows over the lines above it, and its own */
+    rows = p.y - T->top + lr + shift;
+    return rows < (size_t)L.text_h ? (int)rows : -1;
+  }
   if (!E.wrap) {
-    for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y)) rows++;
+    for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y)) rows += 1 + (size_t)lens_row_at(y);
+    rows += (size_t)lens_row_at(p.y) + shift;
     return (y == p.y && rows < (size_t)L.text_h) ? (int)rows : -1;
   }
-  for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y)) rows += wrap_segs(y, st);
+  for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y))
+    rows += wrap_segs(y, st) + (size_t)(y == T->top ? (T->sub == 0 && lens_row_at(y)) : lens_row_at(y));
+  if (lens_row_at(p.y) && (p.y != T->top || T->sub == 0)) rows++;
   rows += seg_of(p.y, p.x);
   if (rows < T->sub) return -1;
   rows -= T->sub;
+  rows += shift;
   return rows < (size_t)L.text_h ? (int)rows : -1;
 }
 
@@ -1904,6 +2094,7 @@ static void scroll_to_cursor (void) {
   T->sub = 0;
 
   size_t th = (size_t)L.text_h, tw = (size_t)text_cols();
+  if (VB.on && VB.after <= T->cur.y && (size_t)VB.rows + 2 < th) th -= (size_t)VB.rows;	/* a peek's rows */
   {
     size_t col = vcol(row_at(T->cur.y), T->cur.y, T->cur.x);
     if (T->cur.y < T->top) T->top = T->cur.y;
@@ -1914,7 +2105,7 @@ static void scroll_to_cursor (void) {
       if (T->cur.y + sl >= T->top + th) T->top = T->cur.y + sl - th + 1;
       if (T->top >= T->doc->n) T->top = T->doc->n ? T->doc->n - 1 : 0;
     }
-    else {	/* folded regions: row by row */
+    {	/* folded regions and the code lens rows take room: row by row */
       size_t guard = 0;
       while (vis_row(T->cur) < 0 && guard++ < 1000000 && T->top < T->cur.y) T->top = line_next(T->top);
     }
@@ -2149,6 +2340,7 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     else if (x < hit_end) bg = B_MATCH;
     st = TOK(tok[x], bg);
     uh = cp >= 0x80 && tok[x] != T_COMMENT && uni_flag(cp, NULL);	/* editor.unicodeHighlight */
+    if (uc_width(cp) == 0 && uni_flag_of(cp) == 2) cp = ' ';	/* the cell char_width gave it, drawn empty */
     if ((cp == ' ' || cp == '\t') && (opt.render_ws == 2 || (opt.render_ws == 1 && bg == B_SEL)))
       st = TOK(T_WS, bg), cp = (cp == ' ') ? 0xB7 : 0x2192;	/* editor.renderWhitespace */
     for (i = 0; i < w; i++) {	/* column by column: a tab, ^X, a cut wide one */
@@ -2261,6 +2453,9 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
 static const char *tab_name (const Tab *t) {
   static char pv[2][300];	/* two at once: the tab bar draws while a list is made */
   static int k;
+  if (t->page == PAGE_MERGE) return merge_tab_name();
+  if (t->page == PAGE_IMAGE || t->page == PAGE_HEX)	/* a picture or a binary: the file's name */
+    return t->ppath ? path_basename(t->ppath) : "Untitled";
   if (t->page) return t->page == PAGE_SETTINGS ? "Settings" : "Welcome";
   if (t->md) {
     k = !k;
@@ -2311,7 +2506,8 @@ static uint32_t git_fg (int mark) {
 static int draw_tab (int x, int y, const char *name, int on, int dirty, int preview, int pinned, int *close_x,
                      int page, int gmark) {
   int ist, w = tab_width(name), x1, n;
-  uint32_t icon = page == PAGE_SETTINGS ? 0xEAF8 : page == PAGE_WELCOME ? 0xF121 : file_icon(name, &ist);	/* a page: gear, </> */
+  uint32_t icon = page == PAGE_SETTINGS ? 0xEAF8 : page == PAGE_WELCOME ? 0xF121
+                : page == PAGE_MERGE ? 0xEAFB : file_icon(name, &ist);	/* a page: gear, </>, merge */
   int st = on ? S_TAB_ON : S_TAB;
   if (x + w > L.ed_x + L.ed_w) w = L.ed_x + L.ed_w - x;
   if (w <= 0) return x;
@@ -2458,6 +2654,7 @@ static void draw_crumbs (void) {
 
 
 static int open_file (const char *path, int preview);
+static int merge_offer (const char *path);
 static void move_h (Pos p, int extend);
 static void key_home (int extend);
 static void center_cursor (void);
@@ -2812,6 +3009,11 @@ static void status_items (void) {
       else snprintf(tip, sizeof(tip), "No Problems");
       status_add("status.problems", "Problems", 0, 85, t, tip, CMD_PROBLEMS);
     }
+  }
+  if (HAS_DOC && !G->diff && (T->page == PAGE_HEX || T->page == PAGE_IMAGE)) {	/* what the custom editor shows */
+    snprintf(t, sizeof(t), "%s", T->page == PAGE_HEX ? hex_status(T->pdata) : img_status(T->pdata));
+    status_add("status.editorInfo", T->page == PAGE_HEX ? "Hex Editor" : "Image Preview", 0, 30, t,
+               T->page == PAGE_HEX ? "The offset, and the byte there" : "Its size, kind and bytes", CMD_NONE);
   }
   if (!HAS_DOC || G->diff || T->page) return;
   if (opt.blame_status && T->real && !doc_dirty(T->doc)) {	/* git.blame.statusBarItem */
@@ -3482,11 +3684,6 @@ static void draw_blame (int gw) {
   e.x = row_at(e.y)->len;
   if (!screen_at(e, &cx, &cy)) return;
   cx += 3;	/* VS Code leaves a little room */
-  {
-    char lt[256];
-    int lw = lens_text(e.y, lt, sizeof(lt));
-    if (lw > 0) cx += lw + 3;	/* after the code lenses */
-  }
   if (cx >= end - 4) return;
   n = scr_putsw(cx, cy, end - cx, bl, TOK(T_WS, T->sel ? B_EDITOR : B_LINE));
   for (i = 0; i < n; i++) scr_set_fg(cx + i, cy, ui_color(C_DIM));
@@ -3523,27 +3720,32 @@ static void draw_inline_values (int gw) {
 }
 
 
+/* stopped on an exception: the line it is on, and the rows its peek takes */
+static int exception_at (size_t *after, int *rows) {
+  const char *title, *desc;
+  size_t y;
+  if (!HAS_DOC || T->real == NULL || G->diff || T->page || !dbg_stopped()) return 0;
+  for (y = T->top; y < T->doc->n && y < T->top + (size_t)L.text_h + 50; y++)
+    if (dbg_exception(T->real, y, &title, &desc)) {
+      *after = y;
+      *rows = desc[0] ? 4 : 3;
+      return 1;
+    }
+  return 0;
+}
+
+
 /* stopped on an exception: VS Code's peek under the line, its name and message */
 static void draw_exception (void) {
   const char *title, *desc;
   Pos p;
   int r, y0, w = L.ed_w - L.sb_w, i, rows;
-  if (T->real == NULL || !dbg_stopped()) return;
-  p.y = T->cur.y;
-  {	/* the frame's line: where the arrow is */
-    size_t y;
-    for (y = T->top; y < T->doc->n && y < T->top + (size_t)L.text_h + 50; y++)
-      if (dbg_exception(T->real, y, &title, &desc)) break;
-    if (y >= T->doc->n || y >= T->top + (size_t)L.text_h + 50) return;
-    p.y = y;
-  }
+  if (!exception_at(&p.y, &rows)) return;
+  if (!dbg_exception(T->real, p.y, &title, &desc)) return;
   p.x = 0;
-  r = vis_row(p);
-  if (r < 0 || r >= L.text_h) return;
-  rows = desc[0] ? 4 : 3;
-  y0 = L.text_y + r + 1;
-  if (y0 + rows > L.text_y + L.text_h) y0 = L.text_y + L.text_h - rows;
-  if (y0 <= L.text_y) return;
+  r = vb_start();	/* its block's rows, under the line it stopped on */
+  if (r < 0 || r + rows > L.text_h) return;
+  y0 = L.text_y + r;
   for (i = 0; i < w; i++) {	/* the red frame, top and bottom */
     scr_put_rgb(L.ed_x + i, y0, 0x2500, 0xF14C4C, ui_color(C_EDITOR_BG), 0);
     scr_put_rgb(L.ed_x + i, y0 + rows - 1, 0x2500, 0xF14C4C, ui_color(C_EDITOR_BG), 0);
@@ -3602,6 +3804,7 @@ static void draw_group (int other) {
   int gw = gutter_width(), sy, ns;
   Pos sa, sb;
   draw_tabs_full();
+  view_blocks_update(other);	/* a peek's rows, before the lines are drawn */
   if (G->diff && HAS_DIFF) {
     draw_crumbs_full();
     diff_draw(L.ed_x, L.text_y, L.ed_w, L.text_h);
@@ -3620,16 +3823,22 @@ static void draw_group (int other) {
       Pos ba, bb;
       int lit = !other && cursor_brackets(&ba, &bb);
       if (!other) conflict_reset();	/* the conflicts' links, drawn again */
+      LN.nhit = 0;
       for (sy = 0; sy < L.text_h; sy++) {
         size_t y, from, to, left;
-        if (!vis_goto(sy, &y, &from, &to, &left)) break;
+        int lens;
+        if (vb_at(sy)) continue;	/* a peek's own row: it draws there */
+        if (!vis_goto_k(sy, &y, &from, &to, &left, &lens)) break;
+        if (lens) {	/* editor.codeLens: its own row over the line */
+          draw_lens_row(L.text_y + sy, y, gw);
+          continue;
+        }
         draw_row(L.text_y + sy, y, gw, sa, sb, from, to, left);
         if (T->sx) color_brackets(L.text_y + sy, y, gw, from, to, left, ba, bb, lit);
         conflict_row(L.text_y + sy, y, gw, from, other);
       }
       for (; sy < L.text_h; sy++) draw_rulers(L.text_y + sy, gw, E.wrap ? 0 : T->left);	/* under the end too */
     }
-    draw_lenses(gw);
     if (!other) draw_blame(gw);
     if (!other) draw_inline_values(gw);
     ns = draw_sticky(gw, sa, sb);
@@ -3977,17 +4186,151 @@ static void insert_char (uint32_t cp) {
 }
 
 
+/*
+** A markdown line's list marker: where its text starts (0: none), *num the
+** number it has (0: a bullet), *bullet its character, *close "." or ")",
+** *task 1 when a [ ] box follows it.
+*/
+static size_t md_marker (const Row *r, size_t *num, int *bullet, int *close, int *task) {
+  size_t i = indent_end(r), k;
+  *num = 0;
+  *bullet = 0;
+  *close = '.';
+  *task = 0;
+  if (i >= r->len) return 0;
+  if ((r->s[i] == '-' || r->s[i] == '*' || r->s[i] == '+') && i + 1 < r->len && r->s[i + 1] == ' ') {
+    *bullet = (unsigned char)r->s[i];
+    i += 2;
+  }
+  else {
+    for (k = i; k < r->len && r->s[k] >= '0' && r->s[k] <= '9'; k++) ;
+    if (k == i || k + 1 >= r->len || (r->s[k] != '.' && r->s[k] != ')') || r->s[k + 1] != ' ') return 0;
+    *num = (size_t)strtoul(r->s + i, NULL, 10);
+    *close = (unsigned char)r->s[k];
+    i = k + 2;
+  }
+  while (i < r->len && r->s[i] == ' ') i++;
+  if (i + 3 < r->len && r->s[i] == '[' && (r->s[i + 1] == ' ' || r->s[i + 1] == 'x' || r->s[i + 1] == 'X') &&
+      r->s[i + 2] == ']' && r->s[i + 3] == ' ') {
+    *task = 1;
+    i += 4;
+  }
+  return i;
+}
+
+
+/* is x on line y inside a comment that runs over lines? (what colors it says) */
+static int in_block_comment (size_t y, size_t x) {
+  const Row *r = row_at(y);
+  const char *lc, *bo, *bc;
+  const unsigned char *tok;
+  size_t c0, i;
+  doc_comment(&lc, &bo, &bc);
+  if (bo == NULL || bc == NULL || x == 0 || x > r->len) return 0;
+  tok = line_tokens_quick(y);
+  if (tok[x - 1] != T_COMMENT) return 0;
+  for (c0 = x - 1; c0 > 0 && tok[c0 - 1] == T_COMMENT; c0--) ;	/* where the comment begins on this line */
+  if (lc && r->len - c0 >= strlen(lc) && strncmp(r->s + c0, lc, strlen(lc)) == 0) return 0;	/* to the end of the line */
+  for (i = c0; i + strlen(bc) <= x; i++)	/* already closed before the cursor */
+    if (strncmp(r->s + i, bc, strlen(bc)) == 0) return 0;
+  return 1;
+}
+
+
+/*
+** VS Code's onEnterRules: what the new line begins with besides the indent
+** (the next bullet of a markdown list, " * " inside a block comment), and
+** what makes it dedent (Python's return, pass ...). *kill: the line is an
+** empty list marker, so Enter ends the list instead.
+*/
+static char *enter_rule (size_t *len, int *less, int *kill) {
+  const Row *r = row_at(T->cur.y);
+  const char *id = doc_lang_id();
+  size_t i = indent_end(r), n;
+  Buf b;
+  *len = 0;
+  *less = *kill = 0;
+  if (eopt.auto_indent == 0 || T->nmc > 0 || id == NULL) return NULL;
+  if (strcmp(id, "python") == 0) {	/* one indent back after these */
+    static const char *const out[] = {"return", "pass", "raise", "break", "continue"};
+    size_t k;
+    for (k = 0; k < sizeof(out) / sizeof(out[0]); k++) {
+      n = strlen(out[k]);
+      if (T->cur.x >= i + n && r->len >= i + n && strncmp(r->s + i, out[k], n) == 0 &&
+          (r->len == i + n || r->s[i + n] == ' ' || r->s[i + n] == '\t' || r->s[i + n] == ';'))
+        *less = 1;
+    }
+    return NULL;
+  }
+  if (strcmp(id, "markdown") == 0) {	/* the next bullet, or the end of the list */
+    size_t num, m;
+    int bullet, close, task;
+    m = md_marker(r, &num, &bullet, &close, &task);
+    if (m == 0 || T->cur.x < m) return NULL;
+    if (m >= r->len) {	/* nothing written after it */
+      *kill = 1;
+      return NULL;
+    }
+    buf_init(&b);
+    buf_putn(&b, r->s, i);
+    if (bullet) buf_printf(&b, "%c ", bullet);
+    else buf_printf(&b, "%lu%c ", (unsigned long)num + 1, close);
+    if (task) buf_puts(&b, "[ ] ");
+    *len = b.len;
+    return buf_take(&b);
+  }
+  if (in_block_comment(T->cur.y, T->cur.x)) {	/* under the star of the line before, as VS Code does */
+    buf_init(&b);
+    buf_putn(&b, r->s, i);
+    buf_puts(&b, i < r->len && r->s[i] == '*' ? "* " : " * ");
+    *len = b.len;
+    return buf_take(&b);
+  }
+  return NULL;
+}
+
+
 static void newline (void) {
   const Row *r;
-  char *s;
-  size_t ind, more = 0, i;
+  char *s, *pre;
+  size_t ind, more = 0, i, plen = 0;
+  int less = 0, kill = 0;
   delete_sel();
   r = row_at(T->cur.y);
+  pre = enter_rule(&plen, &less, &kill);
+  if (kill) {	/* an empty bullet: it goes and the list ends, no new line (VS Code) */
+    Pos a, b;
+    a.y = b.y = T->cur.y;
+    a.x = indent_end(r);
+    b.x = r->len;
+    ed_delete(a, b);
+    T->cur = a;
+    T->want = col_of(row_at(a.y), a.x);
+    return;
+  }
+  if (pre) {	/* the rule writes the beginning of the new line itself */
+    char *t = (char *)xmalloc(plen + 1);
+    t[0] = '\n';
+    memcpy(t + 1, pre, plen);
+    insert(t, plen + 1);
+    free(t);
+    free(pre);
+    return;
+  }
   ind = indent_end(r);
   if (ind > T->cur.x) ind = T->cur.x;
   if (eopt.auto_indent == 0) ind = 0;	/* editor.autoIndent "none" */
   else if (eopt.auto_indent >= 2 && indent_more(r->s, T->cur.x))	/* after "{", ":" ...: one more */
     more = T->doc->tabs ? 1 : (size_t)T->doc->indent;
+  if (less && more == 0) {	/* Python's return, pass ...: one unit less */
+    size_t unit = T->doc->tabs ? 1 : (size_t)T->doc->indent;
+    if (ind > 0 && r->s[ind - 1] == '\t') ind--;
+    else
+      while (ind > 0 && unit > 0 && r->s[ind - 1] == ' ') {
+        ind--;
+        unit--;
+      }
+  }
   s = (char *)xmalloc(ind + more + 1);	/* the new line keeps this one's indent */
   s[0] = '\n';
   memcpy(s + 1, r->s, ind);
@@ -4763,6 +5106,10 @@ static void tab_new (void) {
 /* tab i goes; the one after it comes to the front, like VS Code */
 static void tab_free (int i) {
   Tab *t = G->tab[i];
+  cursor_forget(t);	/* its cursor history, Ctrl+U's */
+  if (t->page == PAGE_HEX) hex_close(t->pdata);
+  else if (t->page == PAGE_IMAGE) img_close(t->pdata);
+  free(t->ppath);
   if (--t->doc->refs <= 0) {	/* the last tab that shows it */
     lsp_close(t->doc);
     doc_free(t->doc);
@@ -4804,6 +5151,11 @@ static void close_tab (int i) {
   int k;
   if (i < 0 || i >= G->ntab) return;
   keep = (i != G->active) ? T : NULL;	/* closing another tab keeps this one in front */
+  if (G->tab[i]->page == PAGE_MERGE) {
+    focus_tab(i);	/* show it while asking */
+    if (!merge_may_close()) return;
+    keep = NULL;
+  }
   if (doc_dirty(G->tab[i]->doc) && G->tab[i]->doc->refs == 1) {
     focus_tab(i);	/* show it while asking */
     if (!save_changes()) return;
@@ -4823,6 +5175,7 @@ static int save_all_changes (void) {
   static const char *const bt[] = {"Save All", "Don't Save", "Cancel"};
   char msg[160], detail[512];
   int i, n = 0;
+  if (merge_active() && !merge_may_close()) return 0;	/* a merge with conflicts left */
   for (i = 0; i < G->ntab; i++) n += doc_dirty(G->tab[i]->doc);
   if (n == 0) return 1;
   if (n == 1) {
@@ -4884,9 +5237,30 @@ static void recent_file_add (const char *path);
 ** Opens path in a tab; 0 when it did. A preview (a single click, like VS
 ** Code) takes the place of the preview tab there is, until it is edited.
 */
+/*
+** A file with a zero byte near its start is not text: VS Code opens such
+** a file in its Hex Editor, and so does mme, instead of the noise the
+** text editor would show.
+*/
+static int file_is_binary (const char *path) {
+  char head[8000];
+  long n;
+  int fd = os_open(path, OS_READ), i;
+  if (fd < 0) return 0;
+  n = os_read(fd, head, sizeof(head));
+  os_close(fd);
+  for (i = 0; i < (int)n; i++)
+    if (head[i] == '\0') return 1;
+  return 0;
+}
+
+
 static int open_file (const char *path, int preview) {
   int i, r;
+  if (merge_offer(path)) return 0;	/* a conflicted file: the merge editor takes it */
   if (!opt.preview_tabs) preview = 0;	/* every file in a tab of its own */
+  if (img_is_image(path)) return page_file_open(PAGE_IMAGE, path, preview);	/* its own editor, as VS Code has */
+  if (file_is_binary(path)) return page_file_open(PAGE_HEX, path, preview);
   char *p = xstrdup(path), *real = os_realpath(path);
   for (i = 0; i < G->ntab; i++)	/* it is open: to the front ("main.go" and its full path are one) */
     if (!G->tab[i]->md && G->tab[i]->doc->path && (m_fncmp(G->tab[i]->doc->path, p) == 0 ||
@@ -5003,6 +5377,8 @@ static int is_workspace_file (const char *path) {
 
 /* a .code-workspace: its folders in the Explorer, its settings over the user's */
 static void open_workspace (const char *file) {
+  search_stop();	/* as with a folder: the old walk ends here */
+  files_index_stop();
   if (ws_open(file) != 0) {
     toast(1, "'%s' is not a workspace that can be opened", path_basename(file));
     return;
@@ -5022,6 +5398,8 @@ static void open_folder (const char *dir) {
     open_workspace(dir);
     return;
   }
+  search_stop();	/* the workers were walking the folder being left */
+  files_index_stop();
   ws_forget();
   side_open(dir);
   recent_add(side_root());
@@ -5234,12 +5612,31 @@ static int quick_tick (Pick *p, int changed) {
 ** comes), a small folder is walked again each time, a big one when a file
 ** was made, renamed or deleted (files_index_stale) or after a while.
 */
+#define FI_WORK 8
+
+/*
+** One entry a worker found. The editor's thread takes these off FI.out
+** and puts them in FI.name/dir/path, which are its own: a worker never
+** reads them.
+*/
+typedef struct FIPack {
+  char **name, **dir, **path;
+  size_t n;
+  struct FIPack *next;
+} FIPack;
+
 static struct {
   char *key;	/* the folders it is for */
-  Vec name, dir, path;	/* each file: its name, its folder from the root (NULL none), its path */
-  Vec todo, todo_rel;	/* folders still to read, the last first */
+  Vec name, dir, path;	/* each file: its name, its folder from the root (NULL none), its path; the editor's */
+  Vec todo, todo_rel;	/* folders still to read, the last first; the workers' */
   int done, stale;
   long long made;	/* when the walk started */
+  Mutex *mx;	/* todo, out, found, active, alive and cancel are under it */
+  FIPack *out, *tail;	/* what the workers found, for the editor's thread */
+  size_t found;	/* how many they have found, for "Indexing..." */
+  int cancel, active, alive, nth, running;
+  char *exc;	/* .gitignore as globs, taken before they start */
+  Thread *th[FI_WORK];
 } FI;
 
 
@@ -5248,10 +5645,14 @@ void files_index_stale (void) {
 }
 
 
-/* left out of Go to File (VS Code: files.exclude, search.exclude, .gitignore) */
-static int fi_skip (const char *name, const char *rel) {
+/*
+** Left out of Go to File (VS Code: files.exclude, search.exclude,
+** .gitignore). exc is the glob list taken before the workers started:
+** search_ignored() keeps a cache of its own and is the editor's alone.
+*/
+static int fi_skip (const char *name, const char *rel, const char *exc) {
   if (strcmp(name, ".git") == 0 || strcmp(name, "node_modules") == 0 || strcmp(name, "mme-data") == 0) return 1;
-  return search_ignored(rel);
+  return exc && exc[0] && search_globs(exc, rel);
 }
 
 
@@ -5265,8 +5666,11 @@ static char *fi_key (void) {
 }
 
 
+static void fi_stop (void);
+
 static void fi_reset (char *key) {
   int i;
+  fi_stop();	/* the old walk is over before its lists go */
   free(FI.key);
   FI.key = key;
   vec_free(&FI.name);
@@ -5294,54 +5698,229 @@ static void fi_reset (char *key) {
 }
 
 
-/* on with the walk for about budget us; 1 when it is done */
-static int fi_step (long long budget) {
-  long long end = os_now_us() + budget;
-  while (FI.todo.n > 0 && FI.name.n < 2000000) {
-    char *dir = FI.todo.v[--FI.todo.n], *rel = FI.todo_rel.v[--FI.todo_rel.n];
-    Vec v, sub, subrel;
+/* a folder for a worker to read; FI.mx is held */
+static void fi_push (char *dir, char *rel) {
+  vec_push(&FI.todo, dir);
+  vec_push(&FI.todo_rel, rel);
+}
+
+
+/*
+** A worker: takes a folder off the stack, reads it, puts the folders it
+** holds back and leaves the files on FI.out. It touches nothing of the
+** editor's. "the stack is empty and no one is reading" is the end.
+*/
+static void fi_worker (void *ud) {
+  (void)ud;
+  for (;;) {
+    char *dir, *rel;
+    Vec v;
+    FIPack *pk = NULL;
     size_t i;
+    mx_lock(FI.mx);
+    if (FI.cancel) {
+      mx_unlock(FI.mx);
+      break;
+    }
+    if (FI.todo.n == 0) {
+      int quiet = FI.active == 0;
+      mx_unlock(FI.mx);
+      if (quiet) break;	/* nothing left and no one is making more */
+      th_nap(1);
+      continue;
+    }
+    dir = FI.todo.v[--FI.todo.n];
+    rel = FI.todo_rel.v[--FI.todo_rel.n];
+    FI.active++;
+    mx_unlock(FI.mx);
     vec_init(&v);
-    vec_init(&sub);
-    vec_init(&subrel);
     if (os_listdir(dir, &v) == 0) {
+      char **sub, **subrel;
+      size_t ns = 0, cap = v.n ? v.n : 1;
       vec_sort(&v);
+      pk = (FIPack *)xmalloc(sizeof(FIPack));
+      pk->name = (char **)xmalloc(cap * sizeof(char *));
+      pk->dir = (char **)xmalloc(cap * sizeof(char *));
+      pk->path = (char **)xmalloc(cap * sizeof(char *));
+      pk->n = 0;
+      pk->next = NULL;
+      sub = (char **)xmalloc(cap * sizeof(char *));
+      subrel = (char **)xmalloc(cap * sizeof(char *));
       for (i = 0; i < v.n; i++) {
         char *path = path_join(dir, v.v[i]), *r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
         OsStat st;
-        if (fi_skip(v.v[i], r)) {
+        if (fi_skip(v.v[i], r, FI.exc)) {
           free(path);
           free(r);
           continue;
         }
         if (os_stat(path, &st) == 0 && st.is_dir) {
-          vec_push(&sub, path);
-          vec_push(&subrel, r);
+          sub[ns] = path;
+          subrel[ns] = r;
+          ns++;
           continue;
         }
-        vec_push(&FI.name, xstrdup(v.v[i]));
-        if (FI.dir.n == FI.dir.cap) {
-          FI.dir.cap = FI.dir.cap ? FI.dir.cap * 2 : 1024;
-          FI.dir.v = (char **)xrealloc(FI.dir.v, FI.dir.cap * sizeof(char *));
-        }
-        FI.dir.v[FI.dir.n++] = rel[0] ? xstrdup(rel) : NULL;
-        vec_push(&FI.path, path);
+        pk->name[pk->n] = xstrdup(v.v[i]);
+        pk->dir[pk->n] = rel[0] ? xstrdup(rel) : NULL;
+        pk->path[pk->n] = path;
+        pk->n++;
         free(r);
       }
+      mx_lock(FI.mx);
+      for (i = ns; i-- > 0;)	/* the first subfolder is read next */
+        fi_push(sub[i], subrel[i]);
+      mx_unlock(FI.mx);
+      free(sub);
+      free(subrel);
     }
-    for (i = sub.n; i-- > 0;) {	/* the first subfolder is read next */
-      vec_push(&FI.todo, sub.v[i]);
-      vec_push(&FI.todo_rel, subrel.v[i]);
-    }
-    free(sub.v);
-    free(subrel.v);
     vec_free(&v);
     free(dir);
     free(rel);
-    if (os_now_us() > end) break;
+    if (pk && pk->n == 0) {
+      free(pk->name);
+      free(pk->dir);
+      free(pk->path);
+      free(pk);
+      pk = NULL;
+    }
+    mx_lock(FI.mx);
+    FI.active--;
+    if (pk) {
+      if (FI.tail) FI.tail->next = pk;
+      else FI.out = pk;
+      FI.tail = pk;
+      FI.found += pk->n;
+    }
+    mx_unlock(FI.mx);
   }
-  FI.done = FI.todo.n == 0;
+  mx_lock(FI.mx);
+  FI.alive--;
+  mx_unlock(FI.mx);
+}
+
+
+static void fi_pack_free (FIPack *p) {
+  size_t i;
+  for (i = 0; i < p->n; i++) {
+    free(p->name[i]);
+    free(p->dir[i]);
+    free(p->path[i]);
+  }
+  free(p->name);
+  free(p->dir);
+  free(p->path);
+  free(p);
+}
+
+
+/* what the workers found so far, into the editor's own lists */
+static void fi_take (void) {
+  FIPack *p, *next;
+  if (FI.mx == NULL) return;
+  mx_lock(FI.mx);
+  p = FI.out;
+  FI.out = FI.tail = NULL;
+  mx_unlock(FI.mx);
+  for (; p; p = next) {
+    size_t i;
+    next = p->next;
+    for (i = 0; i < p->n; i++) {	/* the names are the editor's now */
+      vec_push(&FI.name, p->name[i]);
+      if (FI.dir.n == FI.dir.cap) {
+        FI.dir.cap = FI.dir.cap ? FI.dir.cap * 2 : 1024;
+        FI.dir.v = (char **)xrealloc(FI.dir.v, FI.dir.cap * sizeof(char *));
+      }
+      FI.dir.v[FI.dir.n++] = p->dir[i];
+      vec_push(&FI.path, p->path[i]);
+    }
+    free(p->name);
+    free(p->dir);
+    free(p->path);
+    free(p);
+  }
+}
+
+
+/* the workers end and what they had not handed over is thrown away */
+static void fi_stop (void) {
+  int i;
+  if (FI.mx == NULL) return;
+  mx_lock(FI.mx);
+  FI.cancel = 1;
+  mx_unlock(FI.mx);
+  for (i = 0; i < FI.nth; i++) th_join(FI.th[i]);
+  FI.nth = 0;
+  FI.alive = 0;
+  FI.active = 0;
+  FI.running = 0;
+  while (FI.out) {	/* no one is left to hand them to */
+    FIPack *n = FI.out->next;
+    fi_pack_free(FI.out);
+    FI.out = n;
+  }
+  FI.tail = NULL;
+  vec_free(&FI.todo);	/* vec_free frees what is in them too */
+  vec_free(&FI.todo_rel);
+  free(FI.exc);
+  FI.exc = NULL;
+  FI.cancel = 0;
+}
+
+
+/* another folder, or the editor is quitting: the workers end */
+void files_index_stop (void) {
+  fi_stop();
+}
+
+
+/* the workers start on the folders still to read */
+static void fi_run (void) {
+  int i, n;
+  if (FI.running || FI.todo.n == 0) return;
+  if (FI.mx == NULL) FI.mx = mx_new();
+  FI.cancel = 0;
+  FI.found = FI.name.n;
+  free(FI.exc);
+  FI.exc = search_ignore_list();	/* the globs once: a worker may not read the cache */
+  FI.running = 1;
+  n = th_cpus();
+  for (i = 0; i < n && i < FI_WORK; i++) {
+    Thread *t = th_start(fi_worker, NULL);
+    if (t == NULL) break;
+    FI.th[FI.nth++] = t;
+    FI.alive++;
+  }
+  if (FI.nth == 0) {	/* no thread could start: walk here, as it used to */
+    FI.alive = 1;
+    FI.cancel = 0;
+    fi_worker(NULL);
+    fi_take();
+    FI.running = 0;
+    FI.done = FI.todo.n == 0;
+  }
+}
+
+
+/* takes what the workers found; 1 when the walk is over */
+static int fi_pump (void) {
+  int over;
+  if (FI.done) return 1;
+  if (!FI.running) return FI.done = FI.todo.n == 0;
+  fi_take();
+  mx_lock(FI.mx);
+  over = FI.alive == 0 && FI.out == NULL;
+  mx_unlock(FI.mx);
+  if (over || FI.name.n >= 2000000) {
+    fi_stop();
+    FI.done = 1;
+  }
   return FI.done;
+}
+
+
+/* the walk goes on while the editor has nothing else to do */
+void files_index_idle (void) {
+  if (FI.running) fi_pump();
 }
 
 
@@ -5352,7 +5931,11 @@ static void fi_begin (void) {
               (!FI.done || (FI.name.n >= 5000 && os_now_us() - FI.made < 300000000LL));	/* big: 5 minutes */
   if (reuse) free(key);
   else fi_reset(key);
-  if (!FI.done) fi_step(150000);	/* a small folder is done before the list shows */
+  if (!FI.done) {	/* a small folder is done before the list shows */
+    long long end = os_now_us() + 150000;
+    fi_run();
+    while (!fi_pump() && os_now_us() < end) th_nap(1);
+  }
 }
 
 /* }================================================================== */
@@ -5389,7 +5972,7 @@ static int qo_tick (Pick *p, int changed) {
   size_t n0 = p->n;
   if (quick_tick(p, changed) == 2) return 2;
   if (FI.done && p->status == NULL) return 0;
-  fi_step(60000);
+  fi_pump();
   qo_add(p);
   return p->n != n0 || FI.done;
 }
@@ -7086,6 +7669,26 @@ static Tab *open_tab_of (const char *path, Group **in) {
       if (t->doc->path && m_fncmp(path_basename(t->doc->path), base) == 0) return tab_of(path, in);
     }
   return NULL;
+}
+
+
+/*
+** Search: the files the editor has open, for the workers to leave alone
+** (the search thread reads the disk; these are looked at on this thread,
+** in their edited text)
+*/
+void open_docs_list (Vec *out) {
+  int g, i;
+  vec_init(out);
+  for (g = 0; g < g_ngrp; g++)
+    for (i = 0; i < g_grp[g].ntab; i++) {
+      const Tab *t = g_grp[g].tab[i];
+      size_t k;
+      int dup = 0;
+      if (t->doc->path == NULL || t->page || t->md) continue;
+      for (k = 0; k < out->n && !dup; k++) dup = m_fncmp(out->v[k], t->doc->path) == 0;
+      if (!dup) vec_push(out, xstrdup(t->doc->path));
+    }
 }
 
 
@@ -8867,6 +9470,16 @@ static struct {
 } PK;
 
 
+/* how many rows the peek takes under its line (its block's) */
+static int peek_rows (void) {
+  int ph = L.text_h * 45 / 100;
+  if (ph < 8) ph = 8;
+  if (ph > 18) ph = 18;
+  if (ph > L.text_h - 1) ph = L.text_h - 1;
+  return ph < 3 ? 3 : ph;
+}
+
+
 static void peek_close (void) {
   size_t i;
   for (i = 0; i < PK.n; i++) free(PK.v[i].path);
@@ -8874,6 +9487,7 @@ static void peek_close (void) {
   PK.v = NULL;
   PK.n = 0;
   PK.open = 0;
+  view_block_clear();
   ft_clear();
 }
 
@@ -8929,8 +9543,8 @@ static void peek_show (int what, const Loc *v, size_t n) {
   }
   PK.open = 1;
   E.focus = F_EDITOR;
-  ph = L.text_h * 45 / 100;	/* room under the line */
-  if (ph < 8) ph = 8;
+  ph = peek_rows();	/* its rows go under the line: the ones below move down */
+  view_block_set(PK.anchor.y, ph);
   if (vis_row(PK.anchor) < 0 || vis_row(PK.anchor) + ph + 1 > L.text_h) T->top = PK.anchor.y > 2 ? PK.anchor.y - 2 : 0;
 }
 
@@ -9034,13 +9648,12 @@ static void draw_peek (void) {
   static size_t tokcap;
   if (!PK.open || PK.n == 0 || !HAS_DOC || T->doc != PK.d || G->diff) return;
   if (PK.sel >= PK.n) PK.sel = PK.n - 1;
-  ph = L.text_h * 45 / 100;
-  if (ph < 8) ph = 8;
-  if (ph > 18) ph = 18;
-  if (ph > L.text_h) ph = L.text_h;
-  row = vis_row(PK.anchor);
-  PK.y = L.text_y + (row < 0 ? 0 : row + 1);
-  if (PK.y + ph > L.text_y + L.text_h) PK.y = L.text_y + L.text_h - ph;
+  ph = peek_rows();
+  row = vb_start();	/* the rows of its block, under its line */
+  if (row < 0) return;	/* its line scrolled away */
+  PK.y = L.text_y + row;
+  if (PK.y + ph > L.text_y + L.text_h) ph = L.text_y + L.text_h - PK.y;
+  if (ph < 3) return;
   PK.x = L.ed_x;
   PK.w = L.ed_w - L.sb_w;
   PK.h = ph;
@@ -9476,8 +10089,10 @@ static void hl_row (int sy, size_t y, int gw, size_t from, size_t to, size_t lef
 ** ===================================================================
 */
 
+#define STICKY_MAX	20	/* editor.stickyScroll.maxLineCount at most */
+
 static struct {
-  size_t line[5];
+  size_t line[STICKY_MAX];
   int n;
 } SS;
 
@@ -9510,6 +10125,53 @@ static int scopes_of (size_t y, size_t *got, int max) {
 }
 
 
+/* a symbol whose header VS Code keeps at the top: a scope, not a field or a variable */
+static int sym_sticky_kind (int kind) {
+  switch (kind) {
+    case 2: case 3: case 4:	/* module, namespace, package */
+    case 5: case 6: case 9: case 10: case 11: case 12:	/* class, method, constructor, enum, interface, function */
+    case 15: case 23: case 24:	/* a markdown heading, struct, event */
+      return 1;
+  }
+  return 0;
+}
+
+
+/*
+** The symbols the sticky lines are drawn from: the ones found for the text
+** as it is, and while it is being typed the ones from just before (VS Code
+** keeps its outline model too). Scanning them every keystroke is too slow.
+*/
+static const Sym *sticky_symbols (size_t *n) {
+  static const Doc *ask_d;
+  static unsigned long ask_edits, seen;
+  static long long since;
+  if (!HAS_DOC) return NULL;
+  if (SY.d != T->doc || time_to_ask(&ask_d, &ask_edits, &seen, &since, 200000)) return symbols(n);
+  *n = SY.n;	/* still typing: a line or two off at worst */
+  return SY.v;
+}
+
+
+/*
+** The lines to keep at the top for line y: the symbols it is inside (the
+** language server's, or the ones mme finds), the outermost first; how
+** many. Without symbols, the indentation says (scopes_of).
+*/
+static int sticky_scopes (size_t y, size_t *got, int max) {
+  size_t n = 0, i, k = 0;
+  const Sym *v = sticky_symbols(&n);
+  if (v == NULL || n == 0) return scopes_of(y, got, max);
+  for (i = 0; i < n; i++) {
+    if (!sym_sticky_kind(v[i].kind) || v[i].line >= y || v[i].end < y) continue;
+    while (k > 0 && v[i].line <= got[k - 1]) k--;	/* one inside the other */
+    if ((int)k < max) got[k++] = v[i].line;
+  }
+  if (k == 0) return scopes_of(y, got, max);
+  return (int)k;
+}
+
+
 /*
 ** VS Code's way: sticky line i is the (i+1)-th scope of the line shown under
 ** the i lines already stuck, until that line has no more
@@ -9517,18 +10179,27 @@ static int scopes_of (size_t y, size_t *got, int max) {
 static int draw_sticky (int gw, Pos sa, Pos sb) {
   int n = 0, i, max;
   SS.n = 0;
-  if (!opt.sticky || E.wrap || !HAS_DOC || G->diff || T->top == 0 || T->doc->n > 200000) return 0;
-  max = L.text_h / 3 < 5 ? L.text_h / 3 : 5;
+  if (!opt.sticky || !HAS_DOC || G->diff || T->page || T->md || T->doc->n > 200000) return 0;
+  if (T->top == 0 && (!E.wrap || T->sub == 0)) return 0;
+  max = eopt.sticky_max < STICKY_MAX ? eopt.sticky_max : STICKY_MAX;
+  if (max > L.text_h / 3) max = L.text_h / 3;
   while (n < max) {
-    size_t got[5];
-    int c = scopes_of(T->top + (size_t)n, got, 5);
+    size_t got[STICKY_MAX], line, from, to, left;
+    int c, lens;
+    if (!vis_goto_k(n, &line, &from, &to, &left, &lens)) break;
+    c = sticky_scopes(line, got, max);
     if (c <= n || (n > 0 && got[n - 1] != SS.line[n - 1])) break;
     SS.line[n] = got[n];
     n++;
   }
   for (i = 0; i < n; i++) {
     const Row *r = row_at(SS.line[i]);
-    draw_row(L.text_y + i, SS.line[i], gw, sa, sb, 0, r->len, T->left);
+    size_t to = r->len;
+    if (E.wrap) {	/* its first row only */
+      size_t st[MAXSEG], ns = wrap_segs(SS.line[i], st);
+      to = ns > 1 ? st[1] : r->len;
+    }
+    draw_row(L.text_y + i, SS.line[i], gw, sa, sb, 0, to, E.wrap ? 0 : T->left);
   }
   if (n > 0) {	/* a shadow under them */
     int x;
@@ -10403,10 +11074,103 @@ static void page_open (int kind) {
   }
   E.focus = F_EDITOR;
   if (kind == PAGE_SETTINGS) sui_open();
-  else {
+  else if (kind == PAGE_WELCOME) {
     vec_free(&g_wrecent);
     recent_load(&g_wrecent);
   }
+}
+
+
+/*
+** The merge editor for path, in its page tab. One file is merged at a
+** time: another one first asks about the conflicts still open.
+*/
+static void open_merge (const char *path) {
+  const char *now = merge_file();
+  if (now != NULL && m_fncmp(now, path) == 0) {	/* the same file: just show it */
+    page_open(PAGE_MERGE);
+    return;
+  }
+  if (now != NULL && !merge_may_close()) return;
+  if (merge_open(path) == 0) page_open(PAGE_MERGE);
+}
+
+
+/* the banner's button was pressed (-1: it was closed) */
+static void merge_asked (void *ud, int choice) {
+  char *path = (char *)ud;
+  if (choice == 0) open_merge(path);
+  free(path);
+}
+
+
+/*
+** A file with merge conflicts is opened: with git.mergeEditor it goes
+** straight to the merge editor (1), else a banner offers it.
+*/
+static int merge_offer (const char *path) {
+  static const char *const act[] = {"Resolve in Merge Editor"};
+  char msg[300];
+  if (!merge_candidate(path)) return 0;
+  if (opt.merge_editor) {
+    open_merge(path);
+    return 1;
+  }
+  snprintf(msg, sizeof(msg), "'%s' has merge conflicts.", path_basename(path));
+  toast_ask(1, "Git", msg, act, 1, merge_asked, xstrdup(path));
+  return 0;
+}
+
+
+/*
+** A picture or a binary in a tab of its own, the way VS Code's custom
+** editors open: the same file already open comes to the front instead.
+** 0: it is there; -1: the file could not be read.
+*/
+static int page_file_open (int kind, const char *path, int preview) {
+  void *data;
+  int i;
+  for (i = 0; i < G->ntab; i++)
+    if (G->tab[i]->page == kind && G->tab[i]->ppath && m_fncmp(G->tab[i]->ppath, path) == 0) {
+      focus_tab(i);
+      E.focus = F_EDITOR;
+      recent_file_add(path);
+      return 0;
+    }
+  data = kind == PAGE_HEX ? hex_open(path) : img_open(path);
+  if (data == NULL) {
+    if (kind == PAGE_IMAGE) return page_file_open(PAGE_HEX, path, preview);	/* not a picture after all */
+    toast(1, "Unable to open '%s'", path_basename(path));
+    return -1;
+  }
+  tab_new();
+  T->page = kind;
+  T->pdata = data;
+  T->ppath = xstrdup(path);
+  T->preview = preview;
+  T->real = os_realpath(path);
+  G->diff = 0;
+  E.focus = F_EDITOR;
+  recent_file_add(path);
+  if (E.side && E.view == VIEW_FILES) side_follow(T->real);
+  return 0;
+}
+
+
+/* View: Reopen Editor With Hex Editor - the file in front, as its bytes */
+static void reopen_hex (void) {
+  const char *path = NULL;
+  char *keep;
+  if (!HAS_DOC || G->diff) return;
+  if (T->page) path = T->ppath;
+  else if (!T->md) path = T->doc->path;
+  if (path == NULL) {
+    toast(1, "Hex Editor: save the file first.");
+    return;
+  }
+  keep = xstrdup(path);
+  page_file_open(PAGE_HEX, keep, 0);
+  free(keep);
 }
 
 
@@ -10437,21 +11201,54 @@ static void page_act (const PageAct *a) {
 static void page_draw (int other) {
   int y = L.ed_y + 1, h = L.text_y + L.text_h - y, focus = !other && E.focus == F_EDITOR;
   if (T->page == PAGE_SETTINGS) sui_draw(L.ed_x, y, L.ed_w, h, focus);
+  else if (T->page == PAGE_MERGE) merge_draw(L.ed_x, y, L.ed_w, h, focus);
+  else if (T->page == PAGE_HEX) hex_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
+  else if (T->page == PAGE_IMAGE) img_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else welcome_draw(L.ed_x, y, L.ed_w, h, focus, &g_wrecent);
 }
 
 
 static void page_key (int k) {
   PageAct a;
+  if (T->page == PAGE_HEX) {
+    hex_key(T->pdata, k);
+    return;
+  }
+  if (T->page == PAGE_IMAGE) {
+    img_key(T->pdata, k);
+    return;
+  }
   if (T->page == PAGE_SETTINGS) sui_key(k, &a);
+  else if (T->page == PAGE_MERGE) merge_key(k, &a);
   else welcome_key(k, &g_wrecent, &a);
   page_act(&a);
 }
 
 
+/*
+** The hex viewer's own Find and Go to Offset: they must come before the
+** editor's Ctrl+F and Ctrl+G, which look for lines that are not there.
+*/
+static int page_takes (int k) {
+  if (!HAS_DOC || G->diff || E.focus != F_EDITOR) return 0;
+  if (T->page == PAGE_HEX) return k == CTRL('f') || k == CTRL('g') || KEY_CODE(k) == K_F3;
+  return 0;
+}
+
+
 static void page_mouse (Mouse *m) {
   PageAct a;
+  if (T->page == PAGE_HEX) {
+    if (m->wheel) hex_wheel(T->pdata, m->wheel);
+    else if (m->press && m->button == 0) hex_click(T->pdata, m->x, m->y);
+    return;
+  }
+  if (T->page == PAGE_IMAGE) {
+    if (m->wheel && (m->mods & KM_CTRL)) img_zoom(T->pdata, m->wheel < 0 ? 1 : -1);	/* Ctrl+wheel: nearer */
+    return;
+  }
   if (T->page == PAGE_SETTINGS) sui_mouse(m, &a);
+  else if (T->page == PAGE_MERGE) merge_mouse(m, &a);
   else welcome_mouse(m, &g_wrecent, &a);
   page_act(&a);
 }
@@ -11601,7 +12398,13 @@ static void session_write (int backups) {
       Doc *d = t->doc;
       int backup = -1, s;
       buf_puts(&b, i ? ",\n    {" : "\n    {");
-      if (t->page) buf_printf(&b, "\"page\": %d", t->page);
+      if (t->page) {
+        buf_printf(&b, "\"page\": %d", t->page);
+        if (t->ppath) {	/* a picture or a binary comes back with the session */
+          buf_puts(&b, ", \"path\": ");
+          json_put_str(&b, t->ppath, strlen(t->ppath));
+        }
+      }
       else {
         if (d->path) {
           buf_puts(&b, "\"path\": ");
@@ -11696,6 +12499,10 @@ static void session_restore (void) {
       int page = (int)jnum(json_get(t, "page"), 0, 0, 100);
       if (page == PAGE_SETTINGS || page == PAGE_WELCOME) {
         page_open(page);
+        continue;
+      }
+      if ((page == PAGE_IMAGE || page == PAGE_HEX) && path) {
+        page_file_open(page, path, 0);
         continue;
       }
       if (bk) {
@@ -11804,7 +12611,84 @@ static void backup_idle (void) {
 }
 
 
+/*
+** {==================================================================
+** Typing in the diff's modified side
+**
+** The modified side of a working tree diff is the file itself, and VS
+** Code lets it be typed in. The file's tab is opened behind the diff, so
+** its text, its undo, the tab's dirty dot and Ctrl+S are the editor's own
+** ones; a moment after the typing stops the diff is made again from the
+** buffer (not from git: the file on disk is still the old one), with the
+** caret where it was left.
+** ===================================================================
+*/
+
+static struct {
+  long long at;	/* when the last key was typed, 0: the diff is up to date */
+  size_t line, col;	/* where the caret went (the line from 1) */
+} DE;
+
+
+/* does k put text into the file? (the rest is the diff's own: F7, Enter, staging ...) */
+static int diff_types (int k) {
+  int code = KEY_CODE(k);
+  if (IS_TEXT(k)) return 1;
+  if (k == CTRL('z') || k == CTRL('y') || k == CTRL('v')) return 1;
+  if (k & (KM_CTRL | KM_ALT)) return 0;
+  return code == K_ENTER || code == K_BS || code == K_DEL || code == K_TAB || code == K_PASTE;
+}
+
+
+/* k typed in the modified side: the file takes it; 0: it is not for the text */
+static int diff_edit (int k) {
+  size_t line, col = 0;
+  char *path;
+  Pos p;
+  if (!diff_editable() || !diff_types(k)) return 0;
+  if ((line = diff_caret(&col)) == 0) return 0;
+  path = xstrdup(diff_path());
+  if (open_file(path, 0) != 0) {
+    free(path);
+    return 0;
+  }
+  free(path);
+  G->diff = 1;	/* the diff stays in front: only the text under it is the file's */
+  E.focus = F_EDITOR;
+  p.y = line - 1;
+  p.x = col;
+  move_h(doc_clamp(T->doc, p), 0);
+  editor_key(k);
+  DE.line = T->cur.y + 1;
+  DE.col = T->cur.x;
+  DE.at = os_now_us();
+  diff_set_caret(DE.line, DE.col);	/* it follows at once; the lines follow when it is quiet */
+  return 1;
+}
+
+
+/* the diff made again from what was typed, a moment after the typing stopped */
+static void diff_edit_idle (void) {
+  char *s;
+  size_t n = 0;
+  if (DE.at == 0) return;
+  if (!diff_active() || !diff_editable()) {
+    DE.at = 0;
+    return;
+  }
+  if (os_now_us() - DE.at < 150000) return;
+  DE.at = 0;
+  if ((s = open_doc_text(diff_path(), &n)) == NULL) return;
+  diff_new_text(s, n);
+  diff_set_caret(DE.line, DE.col);
+  free(s);
+}
+
+/* }================================================================== */
+
+
 static void work_idle (void) {
+  diff_edit_idle();
   watch_idle();
   autosave_idle();
   backup_idle();
@@ -11913,6 +12797,18 @@ static int peek_height (const QHunk *h) {
 }
 
 
+/* the change the dirty diff peek is on: its last line and how many rows it takes */
+static int dirty_peek_at (size_t *after, int *rows) {
+  size_t n;
+  const QHunk *h = qhunks(&n);
+  if (!DP.open || h == NULL || n == 0) return 0;
+  if (DP.hi >= n) DP.hi = n - 1;
+  *after = hunk_last(&h[DP.hi]);
+  *rows = peek_height(&h[DP.hi]);
+  return 1;
+}
+
+
 /* the dirty diff peek on change i, the cursor on it, room under it */
 static void dirty_show (long i) {
   size_t n, y, last;
@@ -11920,6 +12816,7 @@ static void dirty_show (long i) {
   Pos p;
   if (h == NULL || n == 0 || i < 0 || (size_t)i >= n) {
     DP.open = 0;
+    view_block_clear();
     toast(0, "There are no changes in this file");
     return;
   }
@@ -11939,6 +12836,43 @@ static void dirty_show (long i) {
     if (T->top > y) T->top = y > 1 ? y - 1 : 0;
   }
   E.focus = F_EDITOR;
+}
+
+
+/*
+** The view scrolls until the block fits under its line, as VS Code keeps a
+** peek in sight.
+*/
+static void vb_fit (void) {
+  int guard = 0, s;
+  if (!VB.on || !HAS_DOC) return;
+  while (guard++ < 1000) {
+    s = vb_start();
+    if (s < 0 || s + VB.rows <= L.text_h) return;
+    if (T->top + 1 >= T->doc->n) return;
+    vis_scroll(1);
+  }
+}
+
+
+/*
+** Which peek puts its rows into the view, before the lines are drawn: the
+** references peek, the dirty diff's or the debugger's exception. (One is
+** enough for them; a list by line would do for code lenses as well.)
+*/
+static void view_blocks_update (int other) {
+  size_t after;
+  int rows;
+  view_block_clear();
+  if (other || !HAS_DOC || G->diff || T->page || T->md) return;
+  if (peek_is_open() && PK.n > 0) {
+    after = PK.anchor.y;
+    rows = peek_rows();
+  }
+  else if (!dirty_peek_at(&after, &rows) && !exception_at(&after, &rows)) return;
+  if (after >= T->doc->n) return;
+  view_block_set(after, rows);
+  vb_fit();
 }
 
 
@@ -11971,6 +12905,7 @@ static void draw_dirty_peek (void) {
   hv = qhunks(&n);
   if (hv == NULL || n == 0) {
     DP.open = 0;
+    view_block_clear();
     return;
   }
   if (DP.hi >= n) DP.hi = n - 1;
@@ -11979,9 +12914,11 @@ static void draw_dirty_peek (void) {
   ph = peek_height(h);
   p.y = hunk_last(h);
   p.x = 0;
-  r = vis_row(p);
-  y0 = L.text_y + (r < 0 ? 0 : r + 1);
-  if (y0 + ph > L.text_y + L.text_h) y0 = L.text_y + L.text_h - ph;
+  r = vb_start();	/* its block's rows, under the change */
+  if (r < 0) return;	/* the change scrolled away */
+  y0 = L.text_y + r;
+  if (y0 + ph > L.text_y + L.text_h) ph = L.text_y + L.text_h - y0;
+  if (ph < 3) return;
   DP.x = L.ed_x;
   DP.w = L.ed_w - L.sb_w;
   DP.y = y0;
@@ -13149,6 +14086,7 @@ static void run_command (int cmd) {
     case CMD_ZOOM_RESET: term_font(0); break;
     case CMD_DIFF_WS: diff_toggle_trim(); break;
     case CMD_DIFF_HIDE: diff_toggle_hide(); break;
+    case CMD_LENS_RUN: lens_run_here(); break;
     case CMD_MANAGE: manage_menu(); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
@@ -13248,8 +14186,27 @@ static void run_command (int cmd) {
     case CMD_MERGE_CURRENT: case CMD_MERGE_INCOMING: case CMD_MERGE_BOTH: case CMD_MERGE_ALL_CURRENT:
     case CMD_MERGE_ALL_INCOMING: case CMD_MERGE_ALL_BOTH: case CMD_MERGE_NEXT: case CMD_MERGE_PREV:
     case CMD_MERGE_COMPARE:
-      merge_cmd(cmd);
+      if (HAS_DOC && T->page == PAGE_MERGE) {
+        PageAct a;
+        merge_command(cmd, &a);
+        page_act(&a);
+      }
+      else merge_cmd(cmd);
       break;
+    case CMD_MERGE_COMPLETE:
+      if (HAS_DOC && T->page == PAGE_MERGE) {
+        PageAct a;
+        merge_command(cmd, &a);
+        page_act(&a);
+      }
+      else toast(1, "The merge editor is not open");
+      break;
+    case CMD_MERGE_EDITOR: {	/* Git: Open Merge Editor */
+      const char *f = HAS_DOC && !T->page && !G->diff ? (T->real ? T->real : T->doc->path) : merge_file();
+      if (f == NULL) toast(1, "Open a file with merge conflicts first");
+      else open_merge(f);
+      break;
+    }
     case CMD_GIT_INIT: git_init_repo(); break;
     case CMD_GIT_PUBLISH: git_publish(); break;
     case CMD_GIT_CLONE: {
@@ -13286,6 +14243,10 @@ static void run_command (int cmd) {
     case CMD_SWITCH_EDITOR: switch_editor(0, 0); break;
     case CMD_SHOW_EDITORS: switch_editor(1, 0); break;
     case CMD_MD_PREVIEW: md_preview(0); break;
+    case CMD_HEX_OPEN: reopen_hex(); break;
+    case CMD_IMG_ZOOM_IN: if (HAS_DOC && T->page == PAGE_IMAGE) img_zoom(T->pdata, 1); break;
+    case CMD_IMG_ZOOM_OUT: if (HAS_DOC && T->page == PAGE_IMAGE) img_zoom(T->pdata, -1); break;
+    case CMD_IMG_ZOOM_RESET: if (HAS_DOC && T->page == PAGE_IMAGE) img_zoom(T->pdata, 0); break;
     case CMD_HELP_KEYS: help_page("keyboard-shortcuts.md", help_keys_md); break;
     case CMD_HELP_TIPS: help_page("tips-and-tricks.md", help_tips_md); break;
     case CMD_HELP_COMMANDS: palette(NULL); break;
@@ -15002,22 +15963,64 @@ static void select_find_matches (void) {
 */
 #define CUR_HIST	64
 
-static struct {
+#define CUR_TABS	8	/* the editors that keep one, so switching tabs does not lose it */
+
+typedef struct CurHist {
   Tab *t;	/* whose */
   Cur *c[CUR_HIST];	/* a state: the main cursor, then the others */
   int nc[CUR_HIST];
   unsigned long edits[CUR_HIST];	/* the text's changes then: an edit moves cursors, it is no cursor step */
   int n, at;	/* how many; the one now */
-} CH;
+  unsigned long used;	/* when it was last asked for: the oldest tab's slot is taken */
+} CurHist;
+
+static CurHist g_ch[CUR_TABS];
+static unsigned long g_ch_clock;
 
 
-static int ch_same (int i) {
+static void ch_drop (CurHist *h) {
+  int i;
+  for (i = 0; i < h->n; i++) free(h->c[i]);
+  h->n = h->at = 0;
+}
+
+
+/* the history of the editor in front: every tab keeps its own, the oldest gives its slot up */
+static CurHist *ch_of (void) {
+  int i, spare = -1, old = 0;
+  for (i = 0; i < CUR_TABS; i++) {
+    if (g_ch[i].t == T) break;
+    if (spare < 0 && g_ch[i].t == NULL) spare = i;
+    if (g_ch[i].used < g_ch[old].used) old = i;
+  }
+  if (i == CUR_TABS) {	/* it has none yet */
+    i = spare >= 0 ? spare : old;
+    ch_drop(&g_ch[i]);
+    g_ch[i].t = T;
+  }
+  g_ch[i].used = ++g_ch_clock;
+  return &g_ch[i];
+}
+
+
+/* its tab is closing: the cursor history goes with it (the next tab may be at the same address) */
+static void cursor_forget (Tab *t) {
+  int i;
+  for (i = 0; i < CUR_TABS; i++)
+    if (g_ch[i].t == t) {
+      ch_drop(&g_ch[i]);
+      g_ch[i].t = NULL;
+    }
+}
+
+
+static int ch_same (const CurHist *h, int i) {
   int k;
   Cur now;
   cur_get(&now);
-  if (CH.nc[i] != T->nmc + 1) return 0;
+  if (h->nc[i] != T->nmc + 1) return 0;
   for (k = 0; k <= T->nmc; k++) {
-    const Cur *a = &CH.c[i][k], *b = k ? &T->mc[k - 1] : &now;
+    const Cur *a = &h->c[i][k], *b = k ? &T->mc[k - 1] : &now;
     if (pos_cmp(a->cur, b->cur) != 0 || a->sel != b->sel || (a->sel && pos_cmp(a->anchor, b->anchor) != 0)) return 0;
   }
   return 1;
@@ -15025,46 +16028,46 @@ static int ch_same (int i) {
 
 
 static void cursor_record (void) {
+  CurHist *h;
   int i;
   if (!HAS_DOC || G->diff || T->page || T->md) return;
-  if (CH.t != T) {	/* another editor: a history of its own */
-    for (i = 0; i < CH.n; i++) free(CH.c[i]);
-    CH.n = CH.at = 0;
-    CH.t = T;
+  h = ch_of();
+  if (h->n > 0 && ch_same(h, h->at)) return;
+  for (i = h->at + 1; i < h->n; i++) free(h->c[i]);	/* a new way: the redo ones go */
+  if (h->n > 0) h->n = h->at + 1;
+  if (h->n > 0 && h->edits[h->at] != T->doc->edits) {	/* moved by typing: that state, now */
+    free(h->c[h->at]);
+    h->n--;
   }
-  if (CH.n > 0 && ch_same(CH.at)) return;
-  for (i = CH.at + 1; i < CH.n; i++) free(CH.c[i]);	/* a new way: the redo ones go */
-  if (CH.n > 0) CH.n = CH.at + 1;
-  if (CH.n > 0 && CH.edits[CH.at] != T->doc->edits) {	/* moved by typing: that state, now */
-    free(CH.c[CH.at]);
-    CH.n--;
+  if (h->n == CUR_HIST) {
+    free(h->c[0]);
+    memmove(h->c, h->c + 1, (CUR_HIST - 1) * sizeof(h->c[0]));
+    memmove(h->nc, h->nc + 1, (CUR_HIST - 1) * sizeof(h->nc[0]));
+    memmove(h->edits, h->edits + 1, (CUR_HIST - 1) * sizeof(h->edits[0]));
+    h->n--;
   }
-  if (CH.n == CUR_HIST) {
-    free(CH.c[0]);
-    memmove(CH.c, CH.c + 1, (CUR_HIST - 1) * sizeof(CH.c[0]));
-    memmove(CH.nc, CH.nc + 1, (CUR_HIST - 1) * sizeof(CH.nc[0]));
-    memmove(CH.edits, CH.edits + 1, (CUR_HIST - 1) * sizeof(CH.edits[0]));
-    CH.n--;
-  }
-  CH.nc[CH.n] = T->nmc + 1;
-  CH.edits[CH.n] = T->doc->edits;
-  CH.c[CH.n] = (Cur *)xmalloc((size_t)(T->nmc + 1) * sizeof(Cur));
-  cur_get(&CH.c[CH.n][0]);
-  if (T->nmc) memcpy(CH.c[CH.n] + 1, T->mc, (size_t)T->nmc * sizeof(Cur));
-  CH.at = CH.n++;
+  h->nc[h->n] = T->nmc + 1;
+  h->edits[h->n] = T->doc->edits;
+  h->c[h->n] = (Cur *)xmalloc((size_t)(T->nmc + 1) * sizeof(Cur));
+  cur_get(&h->c[h->n][0]);
+  if (T->nmc) memcpy(h->c[h->n] + 1, T->mc, (size_t)T->nmc * sizeof(Cur));
+  h->at = h->n++;
 }
 
 
 /* d -1: Cursor Undo, 1: Cursor Redo */
 static void cursor_back (int d) {
+  CurHist *h;
   int to, i;
+  if (!HAS_DOC || G->diff || T->page || T->md) return;
   cursor_record();
-  to = CH.at + d;
-  if (CH.t != T || to < 0 || to >= CH.n) return;
-  CH.at = to;
+  h = ch_of();
+  to = h->at + d;
+  if (to < 0 || to >= h->n) return;
+  h->at = to;
   T->nmc = 0;
-  for (i = 1; i < CH.nc[to]; i++) {
-    Cur c = CH.c[to][i];
+  for (i = 1; i < h->nc[to]; i++) {
+    Cur c = h->c[to][i];
     if (T->nmc == T->capmc) {
       T->capmc = T->capmc ? T->capmc * 2 : 8;
       T->mc = (Cur *)xrealloc(T->mc, (size_t)T->capmc * sizeof(Cur));
@@ -15073,7 +16076,7 @@ static void cursor_back (int d) {
     c.anchor = doc_clamp(T->doc, c.anchor);
     T->mc[T->nmc++] = c;
   }
-  cur_set(&CH.c[to][0]);
+  cur_set(&h->c[to][0]);
   T->cur = doc_clamp(T->doc, T->cur);
   T->anchor = doc_clamp(T->doc, T->anchor);
   if (T->cur.y < T->top || T->cur.y >= T->top + (size_t)L.text_h) center_cursor();
@@ -15497,6 +16500,12 @@ static const struct {
 };
 
 
+/* what char_width asks of uni_flag: how wide is a character that takes no room */
+static int uni_flag_of (uint32_t cp) {
+  return (int)uni_flag(cp, NULL);
+}
+
+
 /* 1 ambiguous (*ascii: the character it looks like), 2 invisible; 0 neither (or the setting is off) */
 static uint32_t uni_flag (uint32_t cp, uint32_t *ascii) {
   size_t i;
@@ -15743,6 +16752,71 @@ static void md_key (int k) {
     case K_HOME: T->top = 0; break;
     case K_END: T->top = (size_t)-1 / 2; break;	/* md_draw keeps it inside */
   }
+}
+
+
+/*
+** Ctrl+click in the preview follows the link there: a heading of the
+** page itself, an address in the browser, or a file next to the
+** document (which opens in its own editor).
+*/
+static void md_follow (const Mouse *m) {
+  char *url = NULL;
+  if (!md_link_at(m->x, m->y, &url)) return;
+  if (url[0] == '#') {	/* a place on this page */
+    size_t row;
+    if (md_anchor_row(T->doc, md_width(), url, &row)) T->top = row;
+    else toast(0, "Markdown: there is no heading '%s'.", url);
+  }
+  else if (m_strnicmp(url, "http://", 7) == 0 || m_strnicmp(url, "https://", 8) == 0 ||
+           m_strnicmp(url, "mailto:", 7) == 0) open_url(url);
+  else {	/* a file, named from the document's folder */
+    char *dir = T->doc->path ? path_dirname(T->doc->path) : NULL, *full;
+    char *cut = strpbrk(url, "#?");
+    OsStat st;
+    if (cut) *cut = '\0';
+    full = dir ? path_join(dir, url) : xstrdup(url);
+    if (os_stat(full, &st) == 0 && st.exists) open_file(full, 0);
+    else toast(1, "Markdown: '%s' is not there.", path_basename(full));
+    free(dir);
+    free(full);
+  }
+  free(url);
+}
+
+
+/*
+** markdown.preview.scrollPreviewWithEditor and its other half: with the
+** file and its preview side by side, scrolling one moves the other to
+** the same place in the text.
+*/
+static void md_sync (void) {
+  static struct { const Doc *d; size_t stop, ptop; } SY;
+  Tab *src = NULL, *pv = NULL;
+  int g, w = md_width();
+  if (!opt.md_scroll_preview && !opt.md_scroll_editor) return;
+  for (g = 0; g < g_ngrp; g++) {
+    Group *gp = &g_grp[g];
+    Tab *t = gp->ntab ? gp->tab[gp->active] : NULL;
+    if (t == NULL || gp->diff) continue;
+    if (t->md) pv = t;
+    else if (!t->page) src = t;
+  }
+  if (src == NULL || pv == NULL || src->doc != pv->doc) {
+    SY.d = NULL;
+    return;
+  }
+  if (SY.d != src->doc || w < 10) {	/* just put side by side: where they are, to follow from */
+    SY.d = src->doc;
+  }
+  else if (src->top != SY.stop && opt.md_scroll_preview)
+    pv->top = md_row_of_line(src->doc, w, src->top);
+  else if (pv->top != SY.ptop && opt.md_scroll_editor) {
+    size_t line = md_line_of_row(src->doc, w, pv->top);
+    src->top = line < src->doc->n ? line : (src->doc->n ? src->doc->n - 1 : 0);
+  }
+  SY.stop = src->top;
+  SY.ptop = pv->top;
 }
 
 
@@ -16296,6 +17370,11 @@ static void on_key (int k) {
     E.follow = 0;
     goto done;
   }
+  if (page_takes(k)) {	/* the hex viewer's Find and Go to Offset */
+    page_key(k);
+    E.follow = 0;
+    goto done;
+  }
   if (global_key(k)) goto done;
   if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus) {	/* a pane under the folders */
     if (E.outline_focus == PANE_OUTLINE && OL.h > 0) outline_key(k);
@@ -16315,6 +17394,10 @@ static void on_key (int k) {
     goto done;
   }
   if (G->diff && HAS_DIFF) {
+    if (diff_edit(k)) {	/* typed in the modified side: the file takes it */
+      E.follow = 0;
+      goto done;
+    }
     switch (diff_key(k)) {
       case DIFF_CLOSE: run_command(CMD_CLOSE); break;
       case DIFF_EDIT: diff_edit_file(); break;
@@ -16331,6 +17414,7 @@ static void on_key (int k) {
 done:
   fold_reveal();
   if (E.follow && HAS_DOC && !G->diff && !T->md) scroll_to_cursor();
+  md_sync();	/* the preview and its file follow each other */
 }
 
 /* }================================================================== */
@@ -17007,7 +18091,10 @@ static void on_mouse (void) {
     size_t step = (size_t)wheel_step(m->mods);
     if (m->wheel < 0) T->top = T->top > step ? T->top - step : 0;
     else if (m->wheel > 0) T->top += step;
-    else if (press) E.focus = F_EDITOR;
+    else if (press) {
+      E.focus = F_EDITOR;
+      if (m->button == 0 && (m->mods & KM_CTRL)) md_follow(m);
+    }
     return;
   }
   if (m->wheel && (m->mods & KM_SHIFT) && !E.wrap) {	/* Shift+wheel: to the side, like VS Code */
@@ -17214,15 +18301,23 @@ int main (int argc, char **argv) {
     side_open(dir);
     free(dir);
     free(real);
-    tab_new();
-    if (doc_load(T->doc, argv[1]) < 0) {
-      fd_printf(2, MME_NAME ": cannot open %s\n", argv[1]);
-      return 1;
+    if (img_is_image(argv[1]) || file_is_binary(argv[1])) {	/* a picture or a binary: its own editor */
+      if (page_file_open(img_is_image(argv[1]) ? PAGE_IMAGE : PAGE_HEX, argv[1], 0) != 0) {
+        fd_printf(2, MME_NAME ": cannot open %s\n", argv[1]);
+        return 1;
+      }
     }
-    T->sx = syntax_detect(argv[1], T->doc);
-    set_real();
-    if (T->sx) lsp_open(T->doc, syntax_name(T->sx));
-    recent_file_add(argv[1]);
+    else {
+      tab_new();
+      if (doc_load(T->doc, argv[1]) < 0) {
+        fd_printf(2, MME_NAME ": cannot open %s\n", argv[1]);
+        return 1;
+      }
+      T->sx = syntax_detect(argv[1], T->doc);
+      set_real();
+      if (T->sx) lsp_open(T->doc, syntax_name(T->sx));
+      recent_file_add(argv[1]);
+    }
   }
   else {	/* mme: this folder */
     char *cwd = os_getcwd();
@@ -17248,9 +18343,10 @@ int main (int argc, char **argv) {
     page_open(PAGE_WELCOME);
     E.focus = f;
   }
+  if (HAS_DOC && !T->page && T->real != NULL) merge_offer(T->real);	/* conflicts: the merge editor */
   check_size();
   layout();
-  if (line > 0 && HAS_DOC) {
+  if (line > 0 && HAS_DOC && !T->page) {
     Pos p;
     p.y = (size_t)line - 1;
     p.x = 0;
@@ -17269,7 +18365,7 @@ int main (int argc, char **argv) {
       if (E.focus == F_PANEL) E.focus = F_EDITOR;
     }
     draw();
-    k = term_key(search_busy() ? 1 : (panel_alive() || dbg_active() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the size, the shell, the servers */
+    k = term_key(search_busy() ? 30 : (panel_alive() || dbg_active() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
     quickfix_idle();
     if (k == K_NONE) {
       hover_idle();
@@ -17277,6 +18373,7 @@ int main (int argc, char **argv) {
       bulb_idle();
       extras_idle();
       side_idle(E.view);
+      files_index_idle();
       work_idle();
       continue;
     }
@@ -17284,5 +18381,7 @@ int main (int argc, char **argv) {
     else on_key(k);
     autosave_focus();
   }
+  search_stop();	/* the workers end before the editor does */
+  files_index_stop();
   return 0;
 }

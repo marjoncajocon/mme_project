@@ -199,11 +199,6 @@ static void load_ignore (void) {
 }
 
 
-/* is rel left out: search.exclude, .gitignore, "files to exclude" */
-static int excluded (const char *rel) {
-  return globs_match(g_field[FD_EXC], rel) || (g_ignore && globs_match(g_ignore, rel));
-}
-
 /* }================================================================== */
 
 
@@ -231,14 +226,27 @@ static int is_word (int c) {
 }
 
 
-/* where q is in s[from..n), or n; its length in *ml (a regex's varies) */
-static size_t find_in (const char *s, size_t n, size_t from, const char *q, size_t m, size_t *ml) {
+/*
+** What a search looks for. A worker has one of its own (its own Regex:
+** one cannot be used by two threads at once), so nothing of the editor's
+** is read while it matches.
+*/
+typedef struct Match {
+  const char *q;
+  size_t m;
+  int icase, word;
+  Regex *re;	/* NULL: the plain text above */
+} Match;
+
+
+/* where the match is in s[from..n), or n; its length in *ml (a regex's varies) */
+static size_t find_in (const Match *M, const char *s, size_t n, size_t from, size_t *ml) {
   size_t i, j;
-  *ml = m;
-  if (g_re) {
+  *ml = M->m;
+  if (M->re) {
     size_t a, b;
-    while (from < n && re_find(g_re, s, n, from, &a, &b)) {
-      if (!g_word || !((a > 0 && is_word((unsigned char)s[a - 1])) || (b < n && is_word((unsigned char)s[b])))) {
+    while (from < n && re_find(M->re, s, n, from, &a, &b)) {
+      if (!M->word || !((a > 0 && is_word((unsigned char)s[a - 1])) || (b < n && is_word((unsigned char)s[b])))) {
         *ml = b - a;
         return a;
       }
@@ -246,14 +254,14 @@ static size_t find_in (const char *s, size_t n, size_t from, const char *q, size
     }
     return n;
   }
-  for (i = from; i + m <= n; i++) {
-    for (j = 0; j < m; j++) {
-      int a = (unsigned char)s[i + j], b = (unsigned char)q[j];
-      if (g_case ? a != b : lower(a) != lower(b)) break;
+  for (i = from; i + M->m <= n; i++) {
+    for (j = 0; j < M->m; j++) {
+      int a = (unsigned char)s[i + j], b = (unsigned char)M->q[j];
+      if (!M->icase ? a != b : lower(a) != lower(b)) break;
     }
-    if (j < m) continue;
-    if (g_word && ((i > 0 && is_word((unsigned char)s[i - 1])) ||
-                   (i + m < n && is_word((unsigned char)s[i + m]))))
+    if (j < M->m) continue;
+    if (M->word && ((i > 0 && is_word((unsigned char)s[i - 1])) ||
+                    (i + M->m < n && is_word((unsigned char)s[i + M->m]))))
       continue;
     return i;
   }
@@ -261,19 +269,13 @@ static size_t find_in (const char *s, size_t n, size_t from, const char *q, size
 }
 
 
-static void add_hit (size_t file, size_t line, const char *s, size_t n, size_t col, size_t m) {
-  SHit *h;
-  if (g_nhit == g_caphit) {
-    g_caphit = g_caphit ? g_caphit * 2 : 256;
-    g_hit = (SHit *)xrealloc(g_hit, g_caphit * sizeof(SHit));
-  }
-  h = &g_hit[g_nhit++];
-  h->file = file;
-  h->line = line;
-  h->col = col;
-  h->len = m;
-  h->tlen = n < MAX_TEXT ? n : MAX_TEXT;
-  h->text = xstrndup(s, h->tlen);
+/* the Match the editor's own thread uses (Replace, and the files it has open) */
+static void ui_match (Match *M) {
+  M->q = g_ran;
+  M->m = strlen(g_ran);
+  M->icase = !g_case;
+  M->word = g_word;
+  M->re = g_re;
 }
 
 
@@ -303,48 +305,6 @@ static int binary_name (const char *name) {
 }
 
 
-static void search_file (const char *path, const char *rel) {
-  size_t len, i, from = 0, line = 1, m = strlen(g_ran), before = g_nhit, ml;
-  char *s;
-  if (g_field[FD_INC][0] && !globs_match(g_field[FD_INC], rel)) return;
-  s = open_doc_text(path, &len);
-  if (s == NULL) s = read_file(path, &len);	/* the walk has looked at its size */
-  if (s == NULL) return;
-  if (memchr(s, '\0', len < 8000 ? len : 8000)) {	/* binary */
-    free(s);
-    return;
-  }
-  if (g_nfile == g_capfile) {
-    g_capfile = g_capfile ? g_capfile * 2 : 64;
-    g_file = (SFile *)xrealloc(g_file, g_capfile * sizeof(SFile));
-  }
-  for (i = 0; i <= len && g_nhit < MAX_HITS; i++) {
-    size_t end, at;
-    if (i < len && s[i] != '\n') continue;
-    end = (i > from && s[i - 1] == '\r') ? i - 1 : i;
-    for (at = find_in(s + from, end - from, 0, g_ran, m, &ml); at < end - from;
-         at = find_in(s + from, end - from, at + (ml ? ml : 1), g_ran, m, &ml)) {
-      add_hit(g_nfile, line, s + from, end - from, at, ml);
-      if (g_nhit >= MAX_HITS) {
-        g_cut = 1;
-        break;
-      }
-    }
-    line++;
-    from = i + 1;
-  }
-  free(s);
-  if (g_nhit > before) {
-    SFile *f = &g_file[g_nfile++];
-    f->path = xstrdup(path);
-    f->rel = xstrdup(rel);
-    f->first = before;
-    f->n = g_nhit - before;
-    f->open = 1;
-  }
-}
-
-
 static int skip_dir (const char *name) {
   static const char *const skip[] = {".git", ".svn", ".hg", "node_modules", "bower_components", "mme-data"};
   size_t i;
@@ -355,79 +315,436 @@ static int skip_dir (const char *name) {
 
 
 /*
-** The walk goes a little at a time (search_idle), so the results show while
-** it goes on and a new query stops it: a stack of what is still to look
-** at, the last pushed first; a folder read pushes its entries, the first
-** one last.
+** {==================================================================
+** The walk: the workers
+** ===================================================================
+*/
+
+/*
+** One file's matches, made by a worker and taken by the editor's thread
+** (esearch never lets a worker touch g_file / g_hit): the strings are
+** made in the worker and belong to the editor once it has taken them.
+*/
+typedef struct SPack {
+  char *path, *rel;
+  SHit *hit;
+  size_t n;
+  struct SPack *next;
+} SPack;
+
+#define MAX_WORK	8
+
+/*
+** The folder is walked by a few workers: each takes a folder or a file
+** off one stack, and a folder read puts what is in it back on, so the
+** walking and the reading go together. Everything they share is under
+** WK.mx; what they found waits on WK.out for search_idle to take. What
+** is looked for (q, the globs, the flags) is set before they start and
+** not touched until they have ended.
 */
 static struct {
-  Vec path, rel;	/* still to look at */
-  int busy;
-  size_t files;	/* looked at so far */
+  Mutex *mx;
+  Vec path, rel;	/* still to look at, the last first */
+  SPack *out, *tail;	/* found, for the editor's thread */
+  size_t files, hits;	/* looked at, found */
+  int cancel, active, alive;
+  int busy;	/* the editor's own: a search is on */
+  char q[256], inc[256];
+  char *exc;	/* "files to exclude", .gitignore and files.exclude, as globs */
+  int icase, word, regex;
+  Vec skip;	/* the files the editor has open: it searched them itself */
+  Thread *th[MAX_WORK];
+  int nth;
 } WK;
 
+static size_t g_seen;	/* WK.files, copied for the summary */
 
-static void wk_push (char *path, char *rel) {
+
+static void wk_push (char *path, char *rel) {	/* WK.mx is held */
   vec_push(&WK.path, path);
   vec_push(&WK.rel, rel);
 }
 
 
-static void walk_stop (void) {
-  vec_free(&WK.path);
-  vec_free(&WK.rel);
-  vec_init(&WK.path);
-  vec_init(&WK.rel);
-  WK.busy = 0;
+/* one file read and matched; NULL when it has nothing (a worker, or the editor's thread) */
+static SPack *scan_text (const Match *M, const char *path, const char *rel, char *s, size_t len) {
+  size_t i, from = 0, line = 1, n = 0, cap = 0, ml;
+  SHit *hit = NULL;
+  SPack *pk;
+  if (s == NULL) return NULL;
+  if (memchr(s, '\0', len < 8000 ? len : 8000)) {	/* binary */
+    free(s);
+    return NULL;
+  }
+  for (i = 0; i <= len && n < MAX_HITS; i++) {
+    size_t end, at;
+    if (i < len && s[i] != '\n') continue;
+    end = (i > from && s[i - 1] == '\r') ? i - 1 : i;
+    for (at = find_in(M, s + from, end - from, 0, &ml); at < end - from;
+         at = find_in(M, s + from, end - from, at + (ml ? ml : 1), &ml)) {
+      SHit *h;
+      if (n == cap) {
+        cap = cap ? cap * 2 : 16;
+        hit = (SHit *)xrealloc(hit, cap * sizeof(SHit));
+      }
+      h = &hit[n++];
+      h->file = 0;	/* the editor's thread fills it in */
+      h->line = line;
+      h->col = at;
+      h->len = ml;
+      h->tlen = (end - from) < MAX_TEXT ? (end - from) : MAX_TEXT;
+      h->text = xstrndup(s + from, h->tlen);
+      if (n >= MAX_HITS) break;
+    }
+    line++;
+    from = i + 1;
+  }
+  free(s);
+  if (n == 0) {
+    free(hit);
+    return NULL;
+  }
+  pk = (SPack *)xmalloc(sizeof(SPack));
+  pk->path = xstrdup(path);
+  pk->rel = xstrdup(rel);
+  pk->hit = hit;
+  pk->n = n;
+  pk->next = NULL;
+  return pk;
 }
 
 
-static void walk_start (void) {
-  int i;
-  walk_stop();
-  WK.files = 0;
-  for (i = ws_count() - 1; i >= 0; i--)	/* every folder of a workspace, by its name */
-    wk_push(xstrdup(ws_folder(i)), xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
-  WK.busy = 1;
+/* is path one the editor has open (searched on its own thread)? */
+static int is_open_file (const char *path) {
+  size_t i;
+  for (i = 0; i < WK.skip.n; i++)
+    if (m_fncmp(WK.skip.v[i], path) == 0) return 1;
+  return 0;
 }
 
 
-/* on with the walk for about budget us; 0: it is done */
-static int walk_step (long long budget) {
-  long long end = os_now_us() + budget;
-  while (WK.path.n > 0 && g_nhit < MAX_HITS) {
-    char *path = WK.path.v[--WK.path.n], *rel = WK.rel.v[--WK.rel.n];
-    const char *name = path_basename(path);
+/* a worker: folders and files off the stack until there are none, or it is told to stop */
+static void worker (void *ud) {
+  Match M;
+  (void)ud;
+  M.q = WK.q;
+  M.m = strlen(WK.q);
+  M.icase = !WK.icase;
+  M.word = WK.word;
+  M.re = NULL;
+  if (WK.regex && WK.q[0]) {
+    const char *err = NULL;
+    M.re = re_compile(WK.q, !WK.icase, &err);	/* its own: a Regex is not shared */
+  }
+  for (;;) {
+    char *path, *rel;
+    const char *name;
     OsStat st;
-    if (rel[0] && (excluded(rel) || files_excluded(rel))) {	/* files.exclude too */
-      free(path);
-      free(rel);
+    SPack *pk = NULL;
+    int took;
+    mx_lock(WK.mx);
+    if (WK.cancel || WK.hits >= MAX_HITS) {
+      mx_unlock(WK.mx);
+      break;
+    }
+    if (WK.path.n == 0) {
+      int quiet = WK.active == 0;
+      mx_unlock(WK.mx);
+      if (quiet) break;	/* nothing left and no one is making more */
+      th_nap(1);
       continue;
     }
-    if (os_stat(path, &st) == 0 && st.is_dir) {
+    path = WK.path.v[--WK.path.n];
+    rel = WK.rel.v[--WK.rel.n];
+    WK.active++;
+    mx_unlock(WK.mx);
+    name = path_basename(path);
+    took = 0;
+    if (rel[0] && search_globs(WK.exc, rel)) ;	/* left out */
+    else if (os_stat(path, &st) != 0) ;
+    else if (st.is_dir) {
       Vec v;
       vec_init(&v);
       if ((!rel[0] || !skip_dir(name)) && os_listdir(path, &v) == 0) {
+        char **cp, **cr;
         size_t i;
         vec_sort(&v);
+        cp = (char **)xmalloc((v.n ? v.n : 1) * sizeof(char *));
+        cr = (char **)xmalloc((v.n ? v.n : 1) * sizeof(char *));
+        for (i = 0; i < v.n; i++) {	/* the names are made up here: malloc is a lock of its own */
+          cp[i] = path_join(path, v.v[i]);
+          cr[i] = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
+        }
+        mx_lock(WK.mx);
         for (i = v.n; i-- > 0;)	/* the first one last: it comes off the stack first */
-          wk_push(path_join(path, v.v[i]), rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]));
+          wk_push(cp[i], cr[i]);
+        mx_unlock(WK.mx);
+        free(cp);
+        free(cr);
       }
       vec_free(&v);
     }
-    else if (st.size <= MAX_FILE && !binary_name(name)) {
-      WK.files++;
-      search_file(path, rel);
+    else if (st.size <= MAX_FILE && !binary_name(name) && !is_open_file(path)) {
+      took = 1;
+      if (WK.inc[0] == '\0' || search_globs(WK.inc, rel)) {
+        size_t len;
+        pk = scan_text(&M, path, rel, read_file(path, &len), len);
+      }
     }
     free(path);
     free(rel);
-    if (os_now_us() > end) break;
+    mx_lock(WK.mx);
+    WK.active--;
+    if (took) WK.files++;
+    if (pk) {
+      if (WK.tail) WK.tail->next = pk;
+      else WK.out = pk;
+      WK.tail = pk;
+      WK.hits += pk->n;
+    }
+    mx_unlock(WK.mx);
   }
-  if (WK.path.n == 0 || g_nhit >= MAX_HITS) {
-    if (g_nhit >= MAX_HITS) g_cut = 1;
-    walk_stop();
+  re_free(M.re);
+  mx_lock(WK.mx);
+  WK.alive--;
+  mx_unlock(WK.mx);
+}
+
+
+static void pack_free (SPack *p) {
+  size_t i;
+  for (i = 0; i < p->n; i++) free(p->hit[i].text);
+  free(p->hit);
+  free(p->path);
+  free(p->rel);
+  free(p);
+}
+
+
+/* what the workers found so far, into the editor's own lists */
+static void wk_take (void) {
+  SPack *p, *next;
+  if (WK.mx == NULL) return;
+  mx_lock(WK.mx);
+  p = WK.out;
+  WK.out = WK.tail = NULL;
+  g_seen = WK.files;
+  mx_unlock(WK.mx);
+  for (; p; p = next) {
+    SFile *f;
+    size_t i;
+    next = p->next;
+    if (g_nhit + p->n > g_caphit) {
+      while (g_caphit < g_nhit + p->n) g_caphit = g_caphit ? g_caphit * 2 : 256;
+      g_hit = (SHit *)xrealloc(g_hit, g_caphit * sizeof(SHit));
+    }
+    if (g_nfile == g_capfile) {
+      g_capfile = g_capfile ? g_capfile * 2 : 64;
+      g_file = (SFile *)xrealloc(g_file, g_capfile * sizeof(SFile));
+    }
+    for (i = 0; i < p->n; i++) {
+      g_hit[g_nhit] = p->hit[i];	/* the text is the editor's now */
+      g_hit[g_nhit].file = g_nfile;
+      g_nhit++;
+    }
+    f = &g_file[g_nfile++];
+    f->path = p->path;
+    f->rel = p->rel;
+    f->first = g_nhit - p->n;
+    f->n = p->n;
+    f->open = 1;
+    free(p->hit);
+    free(p);
   }
-  return WK.busy;
+  if (g_nhit >= MAX_HITS) g_cut = 1;
+}
+
+
+/* the workers end and what is left is thrown away */
+static void wk_stop (void) {
+  int i;
+  if (WK.mx == NULL) return;
+  mx_lock(WK.mx);
+  WK.cancel = 1;
+  mx_unlock(WK.mx);
+  for (i = 0; i < WK.nth; i++) th_join(WK.th[i]);
+
+  WK.nth = 0;
+  while (WK.out) {
+    SPack *p = WK.out;
+    WK.out = p->next;
+    pack_free(p);
+  }
+  WK.tail = NULL;
+  vec_free(&WK.path);	/* vec_free frees what is in them too */
+  vec_free(&WK.rel);
+  vec_free(&WK.skip);
+  free(WK.exc);
+  WK.exc = NULL;
+  WK.busy = 0;
+  WK.active = 0;
+  WK.alive = 0;
+}
+
+
+void search_stop (void) {
+  wk_stop();
+}
+
+
+/* rel of path when it is in one of the folders ('/' between), else NULL */
+static char *rel_in_root (const char *path) {
+  int i;
+  for (i = 0; i < ws_count(); i++) {
+    const char *root = ws_folder(i);
+    size_t n = strlen(root);
+    if (m_fnncmp(path, root, n) == 0 && path_is_sep(path[n])) {
+      char *r = ws_count() > 1 ? xstrcat3(ws_folder_name(i), "/", path + n + 1) : xstrdup(path + n + 1);
+      char *c;
+      for (c = r; *c; c++)
+        if (*c == '\\') *c = '/';
+      return r;
+    }
+  }
+  return NULL;
+}
+
+
+/* the files the editor has open, searched in their text here, before the workers start */
+static void search_open_docs (void) {
+  Match M;
+  size_t i;
+  ui_match(&M);
+  for (i = 0; i < WK.skip.n; i++) {
+    char *rel = rel_in_root(WK.skip.v[i]);
+    size_t len;
+    SPack *pk;
+    if (rel == NULL) continue;
+    if (search_globs(WK.exc, rel) || (WK.inc[0] && !search_globs(WK.inc, rel)) ||
+        binary_name(path_basename(WK.skip.v[i]))) {
+      free(rel);
+      continue;
+    }
+    WK.files++;
+    pk = scan_text(&M, WK.skip.v[i], rel, open_doc_text(WK.skip.v[i], &len), len);
+    if (pk) {	/* straight into the editor's lists: this is its own thread */
+      pk->next = NULL;
+      WK.out = WK.tail = pk;
+      wk_take();
+    }
+    free(rel);
+  }
+}
+
+
+/* the globs a worker leaves out: "files to exclude", .gitignore, files.exclude */
+static char *exclude_list (void) {
+  Buf b;
+  char *ig = search_ignore_list(), *fx = files_exclude_list();
+  buf_init(&b);
+  buf_puts(&b, g_field[FD_EXC]);
+  if (ig && ig[0]) {
+    if (b.len) buf_putc(&b, ',');
+    buf_puts(&b, ig);
+  }
+  if (fx && fx[0]) {
+    if (b.len) buf_putc(&b, ',');
+    buf_puts(&b, fx);
+  }
+  buf_putc(&b, '\0');
+  free(ig);
+  free(fx);
+  return buf_take(&b);
+}
+
+
+static void wk_sort (void);
+
+/* the workers start on the folders of the workspace */
+static void wk_start (void) {
+  int i, n;
+  wk_stop();
+  if (WK.mx == NULL) WK.mx = mx_new();
+  WK.cancel = 0;
+  WK.files = WK.hits = 0;
+  g_seen = 0;
+  snprintf(WK.q, sizeof(WK.q), "%s", g_ran);
+  snprintf(WK.inc, sizeof(WK.inc), "%s", g_field[FD_INC]);
+  WK.exc = exclude_list();
+  WK.icase = g_case;
+  WK.word = g_word;
+  WK.regex = g_regex;
+  open_docs_list(&WK.skip);
+  search_open_docs();	/* their text here, the disk on the workers */
+  for (i = ws_count() - 1; i >= 0; i--)
+    wk_push(xstrdup(ws_folder(i)), xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
+  n = th_cpus();
+  for (i = 0; i < n && i < MAX_WORK; i++) {
+    Thread *t = th_start(worker, NULL);
+    if (t == NULL) break;
+    WK.th[WK.nth++] = t;
+    WK.alive++;
+  }
+  WK.busy = 1;
+  if (WK.nth == 0) {	/* no thread could start: walk here, as it used to */
+    WK.alive = 1;
+    worker(NULL);
+    wk_take();
+    wk_sort();
+    WK.busy = 0;
+  }
+}
+
+
+static int by_rel (const void *a, const void *b) {
+  const SFile *x = (const SFile *)a, *y = (const SFile *)b;
+  return m_fncmp(x->rel, y->rel);
+}
+
+
+/*
+** The workers hand their files over as they finish them, which is not
+** the order of the folder. Once the walk is over the list is put back in
+** that order, so the same search always reads the same way.
+*/
+static void wk_sort (void) {
+  SFile *nf;
+  SHit *nh;
+  size_t i, j, k = 0;
+  if (g_nfile < 2) return;
+  nf = (SFile *)xmalloc(g_nfile * sizeof(SFile));
+  memcpy(nf, g_file, g_nfile * sizeof(SFile));
+  qsort(nf, g_nfile, sizeof(SFile), by_rel);
+  nh = (SHit *)xmalloc((g_nhit ? g_nhit : 1) * sizeof(SHit));
+  for (i = 0; i < g_nfile; i++) {
+    size_t first = nf[i].first;
+    nf[i].first = k;
+    for (j = 0; j < nf[i].n; j++) {	/* the hits follow their file */
+      nh[k] = g_hit[first + j];
+      nh[k].file = i;
+      k++;
+    }
+  }
+  free(g_file);
+  free(g_hit);
+  g_file = nf;
+  g_hit = nh;
+  g_capfile = g_nfile;
+  g_caphit = g_nhit ? g_nhit : 1;
+}
+
+
+/* the workers have ended and nothing is left to take */
+static void wk_poll (void) {
+  int done;
+  if (!WK.busy) return;
+  wk_take();
+  mx_lock(WK.mx);
+  done = WK.alive == 0 && WK.out == NULL;
+  mx_unlock(WK.mx);
+  if (!done) return;
+  wk_sort();	/* it is all in: the folder's order again */
+  wk_stop();	/* joins them and frees what a stop at MAX_HITS left */
 }
 
 
@@ -435,6 +752,8 @@ static int walk_step (long long budget) {
 int search_busy (void) {
   return WK.busy;
 }
+
+/* }================================================================== */
 
 
 /*
@@ -451,6 +770,19 @@ int search_ignored (const char *rel) {
   }
   if (skip_dir(b ? b + 1 : rel)) return 1;
   return g_ignore && globs_match(g_ignore, rel);
+}
+
+
+/* the folder's .gitignore as globs, for a worker to use without the editor */
+char *search_ignore_list (void) {
+  load_ignore();
+  return xstrdup(g_ignore ? g_ignore : "");
+}
+
+
+/* rel against globs: nothing of esearch's is read, so a worker may call it */
+int search_globs (const char *list, const char *rel) {
+  return list && list[0] && globs_match(list, rel);
 }
 
 
@@ -474,8 +806,10 @@ static void rows (void) {
 
 static void run (void) {
   size_t sel = g_sel;
+
   snprintf(g_ran, sizeof(g_ran), "%s", Q);
   g_pending = 0;
+  wk_stop();
   clear();
   load_ignore();
   re_free(g_re);
@@ -484,20 +818,16 @@ static void run (void) {
     const char *err = NULL;
     g_re = re_compile(g_ran, !g_case, &err);
   }
-  walk_stop();
-  if (g_ran[0] && !(g_regex && g_re == NULL)) {
-    walk_start();
-    walk_step(60000);	/* a small folder is done at once */
-  }
+  if (g_ran[0] && !(g_regex && g_re == NULL)) wk_start();
   rows();
   g_sel = sel < g_nrow ? sel : (g_nrow ? g_nrow - 1 : 0);
 }
 
 
 int search_idle (void) {
-  if (WK.busy && !g_pending) {	/* on with the walk; the results so far show */
+  if (WK.busy && !g_pending) {	/* the workers go on; what they found shows */
     size_t sel = g_sel;
-    walk_step(60000);
+    wk_poll();
     rows();
     g_sel = sel < g_nrow ? sel : (g_nrow ? g_nrow - 1 : 0);
     return 1;
@@ -556,6 +886,9 @@ static char *replaced (const char *path, const char *s, size_t n, size_t line1, 
                        size_t *count, size_t *outlen, TextEdit **ev, size_t *nev) {
   Buf o;
   size_t i, from = 0, line = 1, m = strlen(g_ran), rl = strlen(R), cap = 0;
+  Match M;
+  ui_match(&M);
+  (void)m;
   *count = 0;
   *ev = NULL;
   *nev = 0;
@@ -565,8 +898,8 @@ static char *replaced (const char *path, const char *s, size_t n, size_t line1, 
     if (i < n && s[i] != '\n') continue;
     end = (i > from && s[i - 1] == '\r') ? i - 1 : i;
     size_t ml;
-    for (at = find_in(s + from, end - from, 0, g_ran, m, &ml); at < end - from;
-         at = find_in(s + from, end - from, at + (ml ? ml : 1), g_ran, m, &ml)) {
+    for (at = find_in(&M, s + from, end - from, 0, &ml); at < end - from;
+         at = find_in(&M, s + from, end - from, at + (ml ? ml : 1), &ml)) {
       char *rep = R;
       size_t repl = rl;
       if (line1 && (line != line1 || at != col1)) continue;
@@ -634,7 +967,10 @@ static void replace_all (void) {
   char msg[512];
   size_t i, n = 0, files = 0, done = 0;
   if (g_pending) run();
-  while (WK.busy) walk_step(1000000);	/* every match first */
+  while (WK.busy) {	/* every match first: the workers are given their time */
+    wk_poll();
+    if (WK.busy) th_nap(2);
+  }
   rows();
   for (i = 0; i < g_nfile; i++)
     if (g_file[i].n) {
@@ -782,7 +1118,7 @@ void search_draw (int x, int y, int w, int h, int focus) {
     else if (WK.busy) {	/* the walk goes on: VS Code's progress, in words */
       static const char *const spin[] = {"|", "/", "-", "\\"};
       snprintf(sum, sizeof(sum), "%s Searching %lu files: %lu result%s in %lu file%s", spin[(os_now_us() / 150000) % 4],
-               (unsigned long)WK.files, (unsigned long)g_nhit, g_nhit == 1 ? "" : "s", (unsigned long)g_nfile,
+               (unsigned long)g_seen, (unsigned long)g_nhit, g_nhit == 1 ? "" : "s", (unsigned long)g_nfile,
                g_nfile == 1 ? "" : "s");
     }
     else if (g_nhit == 0) snprintf(sum, sizeof(sum), "No results found. Review your settings for configured exclusions.");

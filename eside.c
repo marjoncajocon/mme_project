@@ -257,6 +257,33 @@ static int exclude_match (const char *rel) {
 }
 
 
+/*
+** files.exclude as one comma separated list of globs, for Search's
+** workers: they may not read the settings while the editor runs
+*/
+char *files_exclude_list (void) {
+  static const char *const def[] = {"**/.git", "**/.svn", "**/.hg", "**/CVS", "**/.DS_Store", "**/Thumbs.db"};
+  const Json *j = settings_value("files.exclude");
+  Buf b;
+  size_t i;
+  buf_init(&b);
+  if (j && j->type == J_OBJ) {
+    for (i = 0; i < j->n; i++)
+      if (j->kid[i]->type == J_BOOL && j->kid[i]->b && j->kid[i]->key && strchr(j->kid[i]->key, ',') == NULL) {
+        if (b.len) buf_putc(&b, ',');
+        buf_puts(&b, j->kid[i]->key);
+      }
+  }
+  else
+    for (i = 0; i < sizeof(def) / sizeof(def[0]); i++) {
+      if (b.len) buf_putc(&b, ',');
+      buf_puts(&b, def[i]);
+    }
+  buf_putc(&b, '\0');
+  return buf_take(&b);
+}
+
+
 /* is rel (from the folder) hidden by files.exclude, it or a folder it is in? For the tree, Go to File, Search */
 int files_excluded (const char *rel) {
   char buf[1024];

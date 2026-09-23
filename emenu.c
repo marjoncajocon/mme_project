@@ -125,7 +125,10 @@ static const char *const names[CMD_N] = {
   "mme: Restart Language Server", "mme: Show Language Status", "Notifications: Focus Notification Toast",
   "Notifications: Accept Notification Primary Action", "Notifications: Clear All Notifications",
   "Manage", "View: Move Panel Right", "View: Move Panel Left", "View: Move Panel To Bottom",
-  "View: Set Panel Alignment to Center", "View: Set Panel Alignment to Justify", "View: Toggle Command Center"
+  "View: Set Panel Alignment to Center", "View: Set Panel Alignment to Justify", "View: Toggle Command Center",
+  "View: Reopen Editor With Hex Editor", "Image Preview: Zoom In", "Image Preview: Zoom Out",
+  "Image Preview: Reset Zoom",
+  "Git: Open Merge Editor", "Merge Editor: Complete Merge", "Code Lens: Run..."
 };
 
 static const char *const keys[CMD_N] = {
@@ -178,7 +181,9 @@ static const char *const keys[CMD_N] = {
   "", "", "", "", "",
   "Ctrl+=", "Ctrl+-", "Ctrl+NumPad0",
   "", "", "", "Ctrl+Shift+A", "",
-  "", "", "", "", "", "", ""
+  "", "", "", "", "", "", "",
+  "", "", "", "",
+  "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -318,7 +323,10 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "notification.acceptPrimaryAction", "notifications.clearAll",
   "mme.manage", "workbench.action.positionPanelRight", "workbench.action.positionPanelLeft",
   "workbench.action.positionPanelBottom", "workbench.action.alignPanelCenter", "workbench.action.alignPanelJustify",
-  "workbench.action.toggleCommandCenter"
+  "workbench.action.toggleCommandCenter",
+  "workbench.action.reopenWithHexEditor", "imagePreview.zoomIn", "imagePreview.zoomOut",
+  "imagePreview.resetZoom",
+  "git.openMergeEditor", "mergeEditor.acceptMerge", "codelens.showLensesInCurrentLine"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

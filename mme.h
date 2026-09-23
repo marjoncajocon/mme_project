@@ -146,6 +146,9 @@ typedef struct Opt {
   char win_title[256];	/* window.title: empty for VS Code's default */
   int panel_loc;	/* workbench.panel.defaultLocation: PANEL_* */
   int panel_justify;	/* workbench.panel.alignment: "justify" */
+  int md_scroll_preview;	/* markdown.preview.scrollPreviewWithEditor */
+  int md_scroll_editor;	/* markdown.preview.scrollEditorWithPreview */
+  int merge_editor;	/* git.mergeEditor: a conflicted file opens in the merge editor */
 } Opt;
 
 enum { PANEL_BOTTOM, PANEL_RIGHT, PANEL_LEFT };
@@ -177,6 +180,7 @@ typedef struct EdOpt {	/* the editing settings: edit_settings reads them */
   int beyond_last;	/* editor.scrollBeyondLastLine */
   int line_nums;	/* editor.lineNumbers: 0 off, 1 on, 2 relative, 3 interval */
   int wheel_lines;	/* editor.mouseWheelScrollSensitivity: lines a notch scrolls */
+  int sticky_max;	/* editor.stickyScroll.maxLineCount */
   unsigned char sep[128];	/* editor.wordSeparators: 1 for each of them */
 } EdOpt;
 
@@ -346,6 +350,8 @@ int term_key (int ms);	/* K_NONE when nothing came in ms (-1: wait) */
 void term_paste (Buf *b);	/* after K_PASTE: the pasted text, LF ends */
 void term_write (const char *s, size_t n);
 void term_font (int delta);	/* +1 bigger, -1 smaller, 0 the configured size */
+void term_ask_pixels (void);	/* XTSMGRAPHICS: how many pixels a cell is (the answer comes with the keys) */
+int term_cell_px (int *w, int *h);	/* 0: the terminal has not said */
 
 /* a typed character that goes into text: not a control key, no Ctrl or Alt */
 #define IS_TEXT(k)	((k) >= 32 && (k) < K_UP && (k) != 127)
@@ -384,6 +390,7 @@ enum {
 #define RGB_ITALIC	2
 #define RGB_UNDER	4
 #define RGB_CURLY	8	/* a squiggle, see scr_squiggle */
+#define RGB_STRIKE	16	/* a line through it, for ~~this~~ */
 
 /* the colors of code (VS Code's Dark+ tokens) on the backgrounds of the editor */
 enum {
@@ -449,6 +456,15 @@ void scr_cursor (int x, int y);
 void scr_cursor_shape (int decscusr);	/* 1 .. 6: block, underline, bar; blinking or not */
 enum { PTR_DEFAULT, PTR_TEXT, PTR_POINTER };	/* the mouse pointer: an arrow, an I beam, a hand */
 void scr_pointer (int shape);	/* over what can be clicked: PTR_POINTER */
+
+/*
+** A picture for a terminal that draws them (sixel): the bytes go as they
+** are, at the cell x, y, after the rows are sent, and only when a row of
+** the w by h cells it covers changed (a picture is big; it is not sent
+** again for nothing). Its cells must be drawn blank first.
+*/
+void scr_image (int x, int y, int w, int h, const char *data, size_t n);
+
 void scr_flush (void);
 void scr_redraw (void);	/* send everything on the next flush */
 
@@ -558,6 +574,8 @@ enum {
   CMD_LSP_RESTART, CMD_LSP_STATUS, CMD_NOTIF_FOCUS, CMD_NOTIF_ACCEPT, CMD_NOTIF_CLEAR,
   CMD_MANAGE, CMD_PANEL_RIGHT, CMD_PANEL_LEFT, CMD_PANEL_BOTTOM, CMD_PANEL_CENTER, CMD_PANEL_JUSTIFY,
   CMD_TOGGLE_CC,
+  CMD_HEX_OPEN, CMD_IMG_ZOOM_IN, CMD_IMG_ZOOM_OUT, CMD_IMG_ZOOM_RESET,
+  CMD_MERGE_EDITOR, CMD_MERGE_COMPLETE, CMD_LENS_RUN,
   CMD_N
 };
 
@@ -610,6 +628,19 @@ void snip_reload (void);	/* the files are read again when next asked */
 char *snip_dir (void);	/* ~/.mme/snippets */
 char *snip_expand (const char *body, const SnipCtx *ctx, SnipStop **stop, size_t *nstop, size_t *len);
 
+/* ethread.c - the workers Search and Go to File walk the folder on */
+typedef struct Mutex Mutex;
+typedef struct Thread Thread;
+
+Mutex *mx_new (void);
+void mx_free (Mutex *m);
+void mx_lock (Mutex *m);
+void mx_unlock (Mutex *m);
+Thread *th_start (void (*fn) (void *), void *ud);	/* NULL: none could start */
+void th_join (Thread *t);	/* waits for it, then frees it */
+int th_cpus (void);	/* how many workers are worth starting (2 .. 8) */
+void th_nap (int ms);	/* a worker with nothing to do */
+
 /* eregex.c - regular expressions (Find, Replace, Search with ".*") */
 typedef struct Regex Regex;
 Regex *re_compile (const char *pat, int icase, const char **err);	/* NULL: *err says why */
@@ -621,6 +652,35 @@ char *re_expand (const char *repl, const char *s, const size_t *cap, size_t *len
 
 /* emd.c - the Markdown preview */
 void md_draw (const Doc *d, int x, int y, int w, int h, size_t *top);	/* top: kept inside */
+int md_width (void);	/* the width the preview was last drawn at */
+size_t md_rows (const Doc *d, int w);	/* how many rows the whole preview has */
+size_t md_row_of_line (const Doc *d, int w, size_t line);	/* the preview row a source line is on */
+size_t md_line_of_row (const Doc *d, int w, size_t row);	/* and back, for scrolling together */
+int md_anchor_row (const Doc *d, int w, const char *name, size_t *row);	/* [jump](#heading) */
+int md_link_at (int x, int y, char **link);	/* the link under the mouse; *link to free */
+
+/* ehex.c - the hex viewer for binaries (read-only, like VS Code's Hex Editor) */
+void *hex_open (const char *path);	/* NULL: too big, or unreadable */
+void hex_close (void *page);
+void hex_reload (void *page);
+size_t hex_size (void *page);
+const char *hex_status (void *page);	/* "0x0000001C of 0x4A20   0x4D (77)" */
+void hex_draw (void *page, int x, int y, int w, int h, int focus);
+int hex_key (void *page, int k);	/* 1: it was the viewer's */
+void hex_wheel (void *page, int d);
+int hex_click (void *page, int mx, int my);
+
+/* eimage.c - the picture preview (PNG, BMP, GIF, ICO drawn; the rest told about) */
+int img_is_image (const char *path);	/* by its ending */
+int img_info (const char *path, char *out, size_t n);	/* "120x80 png, 12 KB" */
+void *img_open (const char *path);	/* NULL: not a picture */
+void img_close (void *page);
+void img_reload (void *page);
+const char *img_status (void *page);	/* "1920x1080 - PNG - 240 KB" */
+void img_draw (void *page, int x, int y, int w, int h, int focus);
+int img_key (void *page, int k);
+void img_zoom (void *page, int delta);	/* 0: fit again */
+int img_click (void *page, int mx, int my);
 
 /* ehistory.c - Local History: a copy of a file at each save */
 typedef struct HistEntry {
@@ -725,7 +785,7 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
 ** esettings.c, ewelcome.c - the pages that show in an editor tab: the
 ** Settings editor and the Welcome page. They tell mme.c what to do.
 */
-enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME };
+enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE };
 
 typedef struct PageAct {
   int what;	/* PA_* */
@@ -744,6 +804,25 @@ void sui_search (void);	/* Ctrl+F: to the search box */
 void welcome_draw (int x, int y, int w, int h, int focus, const Vec *recent);
 void welcome_key (int k, const Vec *recent, PageAct *a);
 void welcome_mouse (const Mouse *m, const Vec *recent, PageAct *a);
+
+/*
+** emerge.c - the merge editor: Incoming and Current over the Result. One
+** file at a time, in a page tab of its own.
+*/
+int merge_open (const char *path);	/* 0 it opened, -1: see the toast */
+int merge_candidate (const char *path);	/* it is unmerged, or has conflict markers */
+int merge_active (void);
+const char *merge_file (void);	/* the file it is merging; NULL: not open */
+const char *merge_tab_name (void);	/* "a.txt (Merging)" */
+int merge_left (void);	/* the conflicts still unresolved */
+void merge_next (int back);	/* Go to Next/Previous Conflict */
+int merge_complete (void);	/* Complete Merge: 1 written, the tab can close */
+int merge_may_close (void);	/* 1: the tab may go (it asks when conflicts are left) */
+void merge_close (void);
+void merge_draw (int x, int y, int w, int h, int focus);
+void merge_key (int k, PageAct *a);
+void merge_command (int cmd, PageAct *a);	/* the CMD_MERGE_* it takes over */
+void merge_mouse (const Mouse *m, PageAct *a);
 
 /* }================================================================== */
 
@@ -829,6 +908,7 @@ void side_follow (const char *real);	/* side_reveal when explorer.autoReveal */
 void files_gap (int rows);	/* rows under "EXPLORER" left for OPEN EDITORS */
 void files_mods (int mods);	/* the mouse's KM_* for the next files_click (Ctrl / Shift: select more) */
 int files_excluded (const char *rel);	/* files.exclude hides it (a path from the folder) */
+char *files_exclude_list (void);	/* files.exclude as globs, for a worker; free it */
 int files_drag_start (int row);	/* the mouse pressed on the tree's row: 1 something to drag */
 void files_drag_over (int row);	/* -1: not over the tree */
 void files_drop (int row, int copy, SideAct *act);	/* dropped on the tree's row */
@@ -874,8 +954,13 @@ void search_click (int row, int col, SideAct *act);
 void search_wheel (int d);
 int search_idle (void);
 void files_index_stale (void);	/* mme.c: a file was made, renamed or deleted: Go to File walks again */
+void files_index_stop (void);	/* its workers end (another folder, quitting) */
+void files_index_idle (void);	/* what they found, while the editor waits for a key */
 int search_busy (void);	/* a search is walking the folder: the main loop comes back soon */
+void search_stop (void);	/* the workers end (another folder, quitting) */
 int search_ignored (const char *rel);	/* for Go to File: .gitignore'd, or a folder search skips */
+char *search_ignore_list (void);	/* the folder's .gitignore as globs, for a worker; free it */
+int search_globs (const char *list, const char *rel);	/* rel matches one of the globs (no state: threads) */
 void search_set (const char *text);	/* Find in Files with the selection */
 void search_replace_mode (const char *text);	/* Replace in Files: the replace box open */
 
@@ -946,6 +1031,10 @@ void diff_close (void);
 const char *diff_title (void);
 const char *diff_path (void);
 size_t diff_line (void);	/* the line of the file at the cursor, from 1 */
+int diff_editable (void);	/* the modified side is the working tree's file: it is typed in */
+size_t diff_caret (size_t *col);	/* the caret's line (from 1) and byte, 0: nowhere */
+void diff_set_caret (size_t line, size_t col);
+void diff_new_text (const char *s, size_t n);	/* the modified side's text again: the lines are made from it */
 void diff_draw (int x, int y, int w, int h);
 int diff_key (int k);	/* DIFF_* */
 void diff_wheel (int d);
@@ -1280,6 +1369,7 @@ void on_selection_ranges (Doc *d, Pos at, const Pos *v, size_t n);	/* v: n pairs
 void on_folding (Doc *d, unsigned long edits, FoldRange *v, size_t n);	/* takes v */
 void on_edit_confirm (const TextEdit *v, size_t n);	/* a rename's edits: several files are asked about first */
 char *open_doc_text (const char *path, size_t *len);	/* mme.c: the editor's text of path, NULL: not open */
+void open_docs_list (Vec *out);	/* mme.c: the paths the editor has open (Search reads these itself) */
 int open_doc_edit (const char *path, const TextEdit *v, size_t n);	/* mme.c: edited there; 0: not open */
 
 /* }================================================================== */
