@@ -185,6 +185,8 @@ typedef struct VOpt {	/* the minimap's and the diff editor's settings: view_sett
   int diff_trim;	/* diffEditor.ignoreTrimWhitespace */
   int diff_hide;	/* diffEditor.hideUnchangedRegions.enabled */
   int diff_side;	/* diffEditor.renderSideBySide */
+  int tab_colors;	/* workbench.editor.decorations.colors: git colors the tab's name */
+  int tab_badges;	/* workbench.editor.decorations.badges: its letter (M, U, A) */
 } VOpt;
 
 extern VOpt vopt;

@@ -164,7 +164,10 @@ static const char default_edit[] =	/* the editing settings */
   "  \"editor.cursorSurroundingLines\": 0,\n"
   "  \"editor.scrollBeyondLastLine\": true,\n"
   ;
-static const char default_view[] =	/* the minimap's and the diff editor's */
+static const char default_view[] =	/* the minimap's, the diff editor's and the tabs' */
+  "  // git colors the name of a changed file's tab, and its letter (M, U, A, D)\n"
+  "  \"workbench.editor.decorations.colors\": true,\n"
+  "  \"workbench.editor.decorations.badges\": true,\n"
   "  // \"right\" or \"left\"; \"mouseover\" or \"always\": the box of what the editor shows\n"
   "  \"editor.minimap.side\": \"right\",\n"
   "  \"editor.minimap.showSlider\": \"mouseover\",\n"
@@ -798,7 +801,7 @@ void edit_settings (const Json *j) {
     if ((unsigned char)*sep < 128) eopt.sep[(unsigned char)*sep] = 1;
 }
 
-VOpt vopt = {0, 0, 1, 120, 1, 1, 0, 1};
+VOpt vopt = {0, 0, 1, 120, 1, 1, 0, 1, 1, 1};
 
 
 void view_settings (const Json *j) {
@@ -810,6 +813,8 @@ void view_settings (const Json *j) {
   vopt.diff_trim = json_bool(json_get(j, "diffEditor\\.ignoreTrimWhitespace"), 1);
   vopt.diff_hide = json_bool(json_get(j, "diffEditor\\.hideUnchangedRegions\\.enabled"), 0);
   vopt.diff_side = json_bool(json_get(j, "diffEditor\\.renderSideBySide"), 1);
+  vopt.tab_colors = json_bool(json_get(j, "workbench\\.editor\\.decorations\\.colors"), 1);
+  vopt.tab_badges = json_bool(json_get(j, "workbench\\.editor\\.decorations\\.badges"), 1);
 }
 
 /* }================================================================== */

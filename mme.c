@@ -2242,8 +2242,21 @@ static const char *tab_label (const Tab *t, char *buf, size_t n) {
 }
 
 
-static int draw_tab (int x, int y, const char *name, int on, int dirty, int preview, int pinned, int *close_x, int page) {
-  int ist, w = tab_width(name), x1;
+/* the color of a file changed against git's HEAD, as the Explorer shows it */
+static uint32_t git_fg (int mark) {
+  switch (mark) {
+    case 'M': return ui_color(C_GIT_M);
+    case 'A': return ui_color(C_GIT_A);
+    case 'D': return ui_color(C_GIT_D);
+    case 'U': return ui_color(C_GIT_U);
+  }
+  return 0;
+}
+
+
+static int draw_tab (int x, int y, const char *name, int on, int dirty, int preview, int pinned, int *close_x,
+                     int page, int gmark) {
+  int ist, w = tab_width(name), x1, n;
   uint32_t icon = page == PAGE_SETTINGS ? 0xEAF8 : page == PAGE_WELCOME ? 0xF121 : file_icon(name, &ist);	/* a page: gear, </> */
   int st = on ? S_TAB_ON : S_TAB;
   if (x + w > L.ed_x + L.ed_w) w = L.ed_x + L.ed_w - x;
@@ -2252,11 +2265,19 @@ static int draw_tab (int x, int y, const char *name, int on, int dirty, int prev
   scr_fill(x, y, w, st);
   (void)ist;
   scr_put(x + 1, y, icon, st);
-  scr_putsw(x + 3, y, w - 6, name, preview && !on ? S_TAB_PREVIEW : st);
+  n = scr_putsw(x + 3, y, w - 6, name, preview && !on ? S_TAB_PREVIEW : st);
+  if (gmark && vopt.tab_colors) {	/* the name in git's color, like the Explorer's */
+    int i;
+    for (i = 0; i < n; i++) scr_set_fg(x + 3 + i, y, git_fg(gmark));
+  }
   *close_x = x1 - 2;
   if (dirty) scr_put(x1 - 2, y, 0x25CF, st);	/* the dot */
   else if (pinned) scr_put(x1 - 2, y, 0xEBA0, st);	/* codicon pinned */
   else if (on) scr_put(x1 - 2, y, 0xEA76, st);	/* codicon close */
+  else if (gmark && vopt.tab_badges) {	/* VS Code's badge: M, U, A, D */
+    scr_put(x1 - 2, y, (uint32_t)gmark, st);
+    scr_set_fg(x1 - 2, y, git_fg(gmark));
+  }
   scr_put(x1 - 1, y, ' ', st);
   return x1;
 }
@@ -2296,9 +2317,10 @@ static void draw_tabs (void) {
     if (i < G->ntab) {
       const Tab *t = G->tab[i];
       char lb[300];
-      x = draw_tab(x, y, tab_label(t, lb, sizeof(lb)), i == on, doc_dirty(t->doc) && !t->md, t->preview, t->pinned, &cx, t->page);
+      x = draw_tab(x, y, tab_label(t, lb, sizeof(lb)), i == on, doc_dirty(t->doc) && !t->md, t->preview, t->pinned, &cx,
+                   t->page, t->page || t->md || t->real == NULL ? 0 : git_mark(t->real, 0));
     }
-    else x = draw_tab(x, y, diff_title(), i == on, 0, 0, 0, &cx, 0);
+    else x = draw_tab(x, y, diff_title(), i == on, 0, 0, 0, &cx, 0, 0);
     g_tabs.x1[i] = x;
     g_tabs.close[i] = cx;
   }
