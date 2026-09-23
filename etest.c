@@ -1553,6 +1553,15 @@ void test_wheel (int d) {
 ** ===================================================================
 */
 
+/* how many failed, for the activity bar's badge */
+int test_failed (void) {
+  int a, b, n = 0;
+  for (a = 0; a < g_nf; a++)
+    for (b = 0; b < g_f[a].n; b++) n += g_f[a].t[b].state == TM_FAIL;
+  return n;
+}
+
+
 /* the gutter's icon at a test's line: ▷ not run, ✓, ✗ (0: none); the file is read the first time */
 int test_mark (const char *path, size_t line) {
   TFile *f;

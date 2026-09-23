@@ -27,7 +27,9 @@
 Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, {0}, 0, 1, 1, 1, 1, 1, 1, 1, 1,
            0, 1000, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1,
            1, 1, 1, 0, 1, 1, 0, 0, 1000, 1, 0, "", 0, 1,	/* term_cwd, preview_tabs, textmate */
-           1, 1, 1, 1, 1, 0, 1, 0, 1};
+           300, 1,	/* hover_delay, hover_sticky */
+           1, 1, 1, 1, 1, 0, 1, 0, 1,	/* explorer.* */
+           1, "", 0, 0};	/* command_center, win_title, panel_loc, panel_justify */
 
 static Json *g_json;	/* the file as read, for what is looked up later */
 
@@ -183,6 +185,12 @@ static const char default_view[] =	/* the minimap's, the diff editor's and the t
   "  // false: the old lines above the new ones (inline)\n"
   "  \"diffEditor.renderSideBySide\": true,\n"
   ;
+static const char default_hover[] =	/* a part of its own (4095 bytes a literal at most) */
+  "  // ms the mouse rests on a name before its hover shows\n"
+  "  \"editor.hover.delay\": 300,\n"
+  "  // the mouse can go into the hover (to scroll it, click its links)\n"
+  "  \"editor.hover.sticky\": true,\n"
+  ;
 static const char default_term[] =	/* the terminal's; a part of its own (4095 bytes a literal at most) */
   "  // the shell marks its prompts and commands: circles by them, Run Recent Command (Ctrl+Alt+R)\n"
   "  \"terminal.integrated.shellIntegration.enabled\": true,\n"
@@ -226,6 +234,16 @@ static const char default_explorer[] =	/* the Explorer's */
   "  \"explorer.autoReveal\": true,\n"
   "  // what the Explorer, Go to File and Search leave out\n"
   "  \"files.exclude\": {\"**/.git\": true, \"**/.svn\": true, \"**/.hg\": true, \"**/CVS\": true, \"**/.DS_Store\": true, \"**/Thumbs.db\": true},\n"
+  ;
+static const char default_window[] =	/* the window's */
+  "  // the search box in the title bar (Go to File); back and forward beside it\n"
+  "  \"window.commandCenter\": true,\n"
+  "  // empty: \"${dirty}${activeEditorShort}${separator}${rootName}${separator}${appName}\"\n"
+  "  \"window.title\": \"\",\n"
+  "  // \"bottom\", \"right\" or \"left\": where the panel (terminal, problems ...) is\n"
+  "  \"workbench.panel.defaultLocation\": \"bottom\",\n"
+  "  // \"center\": under the editors; \"justify\": the whole width\n"
+  "  \"workbench.panel.alignment\": \"center\",\n"
   ;
 static const char default_file2[] =	/* the rest: one literal may not be longer than 4095 */
   "  // the language servers (IntelliSense): a command per language\n"
@@ -320,6 +338,8 @@ void settings_create (void) {
       os_write(fd, default_edit, sizeof(default_edit) - 1);
       os_write(fd, default_view, sizeof(default_view) - 1);
       os_write(fd, default_term, sizeof(default_term) - 1);
+      os_write(fd, default_hover, sizeof(default_hover) - 1);
+      os_write(fd, default_window, sizeof(default_window) - 1);
       os_write(fd, default_explorer, sizeof(default_explorer) - 1);
       os_write(fd, default_file2, sizeof(default_file2) - 1);
       os_close(fd);
@@ -520,6 +540,15 @@ int settings_load (void) {
   opt.codelens = json_bool(json_get(j, "editor\\.codeLens"), 1);
   opt.semantic = json_bool(json_get(j, "editor\\.semanticHighlighting\\.enabled"), 1);
   opt.textmate = json_bool(json_get(j, "editor\\.textmateGrammars"), 1);
+  opt.hover_delay = clamp((int)json_num(json_get(j, "editor\\.hover\\.delay"), 300), 0, 10000);
+  opt.hover_sticky = json_bool(json_get(j, "editor\\.hover\\.sticky"), 1);
+  opt.command_center = json_bool(json_get(j, "window\\.commandCenter"), 1);
+  snprintf(opt.win_title, sizeof(opt.win_title), "%s", json_str(json_get(j, "window\\.title"), ""));
+  {
+    const char *pl = json_str(json_get(j, "workbench\\.panel\\.defaultLocation"), "bottom");
+    opt.panel_loc = strcmp(pl, "right") == 0 ? PANEL_RIGHT : strcmp(pl, "left") == 0 ? PANEL_LEFT : PANEL_BOTTOM;
+    opt.panel_justify = strcmp(json_str(json_get(j, "workbench\\.panel\\.alignment"), "center"), "justify") == 0;
+  }
   opt.exp_confirm_dnd = json_bool(json_get(j, "explorer\\.confirmDragAndDrop"), 1);
   opt.exp_confirm_del = json_bool(json_get(j, "explorer\\.confirmDelete"), 1);
   opt.exp_dec_colors = json_bool(json_get(j, "explorer\\.decorations\\.colors"), 1);

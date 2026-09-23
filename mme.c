@@ -88,7 +88,8 @@ typedef struct Ed {
   char *clip;	/* what Ctrl+C took */
   size_t cliplen;
   int panel, panel_h;	/* the terminal's panel: shown, how high */
-  int resizing_panel;	/* dragging its top */
+  int panel_w;	/* how wide at the right or the left (0: 2/5 of the editors) */
+  int resizing_panel;	/* dragging its top (1), or its side's edge (2) */
   int minimap;	/* VS Code's minimap on the right of the text */
   int drag_mm;	/* dragging in it */
   int drag_sb;	/* dragging the scrollbar's thumb: 1 + where in it it was taken */
@@ -161,6 +162,10 @@ typedef struct Layout {
   int hsb;	/* the horizontal scrollbar under the text: 1, or 0 */
   int text_h0;	/* the text's rows before it */
   int panel_y, panel_h;	/* the panel, its title row included; 0: none */
+  int panel_x, panel_w;	/* its columns: under the editors, the whole width (justify), or at a side */
+  int area_y, area_h;	/* the editor area's rows (the panel under it takes some) */
+  int side_h;	/* the sidebar's rows (a justified panel goes under it too) */
+  int panel_side;	/* the panel is at the right or the left */
   int area_x, area_w;	/* the editor area: the groups side by side */
   int act_x;	/* the activity bar: on the left, or the right (workbench.sideBar.location) */
   int edge_x;	/* the sidebar's edge that drags */
@@ -169,6 +174,21 @@ typedef struct Layout {
 } Layout;
 
 static Layout L;
+
+#define PANEL_COLS	((L.panel_w > 0 ? L.panel_w : L.area_w) - 2)	/* a new terminal's columns */
+
+
+/* is x, y in the panel? */
+static int in_panel (int x, int y) {
+  return L.panel_h > 0 && x >= L.panel_x && x < L.panel_x + L.panel_w && y >= L.panel_y && y < L.panel_y + L.panel_h;
+}
+
+
+/* the column of a side panel's edge (it drags), -1: at the bottom */
+static int panel_edge (void) {
+  if (L.panel_h == 0 || !L.panel_side) return -1;
+  return opt.panel_loc == PANEL_RIGHT ? L.panel_x - 1 : L.panel_x + L.panel_w;
+}
 
 /* the Outline, at the bottom of the Explorer */
 static struct {
@@ -255,6 +275,8 @@ static void draw_signature (int gw);
 static void draw_hover (int gw);
 static void draw_problems (int x, int y, int w, int h, int focus);
 static void problems_title (int y, int x1);
+static void manage_menu (void);
+static void panel_more_menu (int x, int y);
 static int problems_title_click (int x);
 static void clip_text (const char *s);
 static int draw_sticky (int gw, Pos sa, Pos sb);
@@ -1321,15 +1343,45 @@ static void layout (void) {
     L.area_w = E.cols - L.area_x > 1 ? E.cols - L.area_x : 1;
     L.edge_x = L.area_x - 1;
   }
-  L.panel_h = 0;
-  if (E.panel && !E.zen && L.body_h >= 10) {	/* the panel: at least 4 rows, and room for the text */
+  L.panel_h = L.panel_w = L.panel_side = 0;
+  L.panel_y = L.body_y + L.body_h;
+  L.panel_x = L.area_x;
+  L.area_y = L.body_y;
+  L.area_h = L.body_h;
+  L.side_h = L.body_h;
+  if (E.panel && !E.zen && opt.panel_loc != PANEL_BOTTOM && L.area_w >= 45) {	/* at a side: as high as the editors */
+    int w = E.panel_w > 0 ? E.panel_w : L.area_w * 2 / 5;
+    if (w > L.area_w - 21) w = L.area_w - 21;
+    if (w < 20) w = 20;
+    if (E.panel_max) w = L.area_w - 1;	/* the editors beside it are not seen */
+    L.panel_w = w;
+    L.panel_side = 1;
+    L.panel_y = L.body_y;
+    L.panel_h = L.body_h;
+    if (opt.panel_loc == PANEL_RIGHT) L.panel_x = L.area_x + L.area_w - w;
+    else {
+      L.panel_x = L.area_x;
+      L.area_x += w + 1;	/* its edge between */
+    }
+    L.area_w -= w + 1;
+    if (L.area_w < 1) L.area_w = 1;
+  }
+  else if (E.panel && !E.zen && L.body_h >= 10) {	/* at the bottom: at least 4 rows, and room for the text */
     L.panel_h = E.panel_h;
     if (L.panel_h > L.body_h - 6) L.panel_h = L.body_h - 6;
     if (L.panel_h < 4) L.panel_h = 4;
     if (E.panel_max) L.panel_h = L.body_h;	/* the editor under it is not seen */
+    L.panel_x = L.area_x;
+    L.panel_w = L.area_w;
+    if (opt.panel_justify && !E.panel_max && L.side_w > 0) {	/* the whole width: under the sidebar too */
+      L.panel_x = opt.side_right ? 0 : L.side_x;
+      L.panel_w = opt.side_right ? L.act_x : E.cols - L.side_x;
+      L.side_h = L.body_h - L.panel_h;
+    }
+    L.area_h = L.body_h - L.panel_h;
+    L.panel_y = L.body_y + L.body_h - L.panel_h;
   }
-  L.panel_y = L.body_y + L.body_h - L.panel_h;
-  layout_groups(L.area_x, L.body_y, L.area_w, L.body_h - L.panel_h);
+  layout_groups(L.area_x, L.area_y, L.area_w, L.area_h);
   use_group(g_gcur);
   group_layout();
 }
@@ -2622,117 +2674,372 @@ static void draw_find (void) {
 }
 
 
-/* where the status bar's items are, for clicks */
+/*
+** {==================================================================
+** The status bar: VS Code's items
+** ===================================================================
+*/
+
+/*
+** Each picture the status bar is made again from its items: an id, a
+** name (for the right-click menu that hides them), a side, a priority
+** (when it is narrow the least important go first), the text (codicons
+** as UTF-8), a tooltip and the command a click runs. status_add is for
+** every part that has something to show there.
+*/
+#define SB_MAX	40
+
+typedef struct SbItem {
+  char id[48], name[64];
+  int right, prio, cmd;
+  char text[200], tip[200];
+  int x0, x1;	/* where it went; x1 0: not drawn */
+} SbItem;
+
+static SbItem g_sbi[SB_MAX];
+static int g_nsbi;
+static Vec g_sb_hidden;	/* the ids the user hid (mme-data/state/statusbar-hidden) */
+static int g_sb_read;
 static struct {
-  int branch_x0, branch_x1, pos_x0, pos_x1, prob_x0, prob_x1, sync_x0, sync_x1;
-  int ind_x0, ind_x1, eol_x0, eol_x1, lang_x0, lang_x1, bell_x, enc_x0, enc_x1;
-} g_sb;
+  int item;	/* the one the mouse rests on, -1 none */
+  long long since;
+} SBH = {-1, 0};
 
 
-static void draw_status (void) {
-  char right[256], pos[64], tmp[64];
+void status_add (const char *id, const char *name, int right, int prio, const char *text, const char *tip, int cmd) {
+  SbItem *it;
+  if (g_nsbi == SB_MAX) return;
+  it = &g_sbi[g_nsbi++];
+  snprintf(it->id, sizeof(it->id), "%s", id);
+  snprintf(it->name, sizeof(it->name), "%s", name);
+  it->right = right;
+  it->prio = prio;
+  it->cmd = cmd;
+  snprintf(it->text, sizeof(it->text), "%s", text);
+  snprintf(it->tip, sizeof(it->tip), "%s", tip ? tip : "");
+  it->x0 = it->x1 = 0;
+}
+
+
+static void sb_hidden_load (void) {
+  char *f, *t, *line;
+  if (g_sb_read) return;
+  g_sb_read = 1;
+  vec_init(&g_sb_hidden);
+  f = data_path("state" MMC_SEPS "statusbar-hidden");
+  t = read_file(f, NULL);
+  free(f);
+  if (t == NULL) return;
+  for (line = strtok(t, "\r\n"); line; line = strtok(NULL, "\r\n"))
+    if (*line) vec_push(&g_sb_hidden, xstrdup(line));
+  free(t);
+}
+
+
+static int sb_hidden (const char *id) {
+  size_t i;
+  sb_hidden_load();
+  for (i = 0; i < g_sb_hidden.n; i++)
+    if (strcmp(g_sb_hidden.v[i], id) == 0) return 1;
+  return 0;
+}
+
+
+/* an item shown or hidden, remembered in mme-data */
+static void sb_toggle (const char *id) {
+  size_t i;
+  Buf b;
+  char *dir = data_path("state"), *f;
+  int fd;
+  sb_hidden_load();
+  for (i = 0; i < g_sb_hidden.n && strcmp(g_sb_hidden.v[i], id) != 0; i++) ;
+  if (i < g_sb_hidden.n) {
+    free(g_sb_hidden.v[i]);
+    memmove(g_sb_hidden.v + i, g_sb_hidden.v + i + 1, (g_sb_hidden.n - i - 1) * sizeof(char *));
+    g_sb_hidden.n--;
+  }
+  else vec_push(&g_sb_hidden, xstrdup(id));
+  mkdir_p(dir);
+  f = path_join(dir, "statusbar-hidden");
+  buf_init(&b);
+  for (i = 0; i < g_sb_hidden.n; i++) buf_printf(&b, "%s\n", g_sb_hidden.v[i]);
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, b.s ? b.s : "", b.len);
+    os_close(fd);
+  }
+  buf_free(&b);
+  free(f);
+  free(dir);
+}
+
+
+/* a codicon and a text, as an item's text */
+static void sb_text (char *out, size_t n, uint32_t icon, const char *text) {
+  char u[8];
+  int k = icon ? utf8_encode(icon, u) : 0;
+  u[k] = '\0';
+  snprintf(out, n, "%s%s%s", u, icon && text[0] ? " " : "", text);
+}
+
+
+/* mme's own items, as VS Code has them */
+static void status_items (void) {
+  char t[200], tip[200];
   const char *br = git_branch();
-  int y = E.rows - 1, x = 0, n;
-  scr_fill(0, y, E.cols, S_STATUS);
-  g_sb.branch_x0 = g_sb.branch_x1 = g_sb.pos_x0 = g_sb.pos_x1 = -1;
-  g_sb.ind_x0 = g_sb.ind_x1 = g_sb.eol_x0 = g_sb.eol_x1 = g_sb.lang_x0 = g_sb.lang_x1 = -1;
-  g_sb.bell_x = E.cols - 2;	/* the notifications: codicon bell, bell-dot when there are new ones */
-  scr_put(g_sb.bell_x, y, toast_unread() ? 0xEB9A : 0xEAA2, S_STATUS);
   if (br[0]) {	/* the branch, on the left */
-    g_sb.branch_x0 = x;
-    x += 1;
-    x += scr_put(x, y, 0xEA68, S_STATUS) + 1;
-    x += scr_puts(x, y, br, S_STATUS);
-    if (git_count() > 0) x += scr_put(x, y, '*', S_STATUS);
-    x += 1;
-    g_sb.branch_x1 = x;
+    char b[160];
+    snprintf(b, sizeof(b), "%s%s", br, git_count() > 0 ? "*" : "");
+    sb_text(t, sizeof(t), 0xEA68, b);
+    snprintf(tip, sizeof(tip), "%s (Git) - Checkout Branch/Tag...", br);
+    status_add("status.scm.branch", "Source Control Checkout", 0, 90, t, tip, CMD_GIT_CHECKOUT);
   }
-  g_sb.sync_x0 = g_sb.sync_x1 = -1;
   if (br[0] && git_has_upstream()) {	/* VS Code's sync item: behind and ahead */
-    g_sb.sync_x0 = x;
-    x += scr_put(x, y, 0xEA77, S_STATUS);	/* codicon sync */
-    if (git_sync_text()[0]) x += 1 + scr_puts(x + 1, y, git_sync_text(), S_STATUS);
-    x += 1;
-    g_sb.sync_x1 = x;
+    sb_text(t, sizeof(t), 0xEA77, git_sync_text());
+    status_add("status.scm.sync", "Source Control Sync", 0, 80, t, "Synchronize Changes", CMD_GIT_SYNC);
   }
-  g_sb.prob_x0 = g_sb.prob_x1 = -1;
   {	/* the problems: VS Code's error and warning counts */
     int ne, nw;
-    char num[32];
     lsp_counts(&ne, &nw);
     if (ne || nw || (HAS_DOC && lsp_active(T->doc))) {
-      g_sb.prob_x0 = x;
-      x += 1;
-      x += scr_put(x, y, 0xEA87, S_STATUS) + 1;	/* codicon error */
-      snprintf(num, sizeof(num), "%d", ne);
-      x += scr_puts(x, y, num, S_STATUS) + 1;
-      x += scr_put(x, y, 0xEA6C, S_STATUS) + 1;	/* warning */
-      snprintf(num, sizeof(num), "%d", nw);
-      x += scr_puts(x, y, num, S_STATUS) + 1;
-      g_sb.prob_x1 = x;
+      char a[16], w[16];
+      int k;
+      k = utf8_encode(0xEA87, a);	/* codicon error */
+      a[k] = '\0';
+      k = utf8_encode(0xEA6C, w);	/* warning */
+      w[k] = '\0';
+      snprintf(t, sizeof(t), "%s %d %s %d", a, ne, w, nw);
+      if (ne || nw) snprintf(tip, sizeof(tip), "Errors: %d, Warnings: %d", ne, nw);
+      else snprintf(tip, sizeof(tip), "No Problems");
+      status_add("status.problems", "Problems", 0, 85, t, tip, CMD_PROBLEMS);
     }
   }
   if (!HAS_DOC || G->diff || T->page) return;
   if (opt.blame_status && T->real && !doc_dirty(T->doc)) {	/* git.blame.statusBarItem */
     const char *bl = git_blame(T->real, T->cur.y, 1);
-    if (bl && x + 20 < E.cols / 2) {
-      x += 1;
-      x += scr_put(x, y, 0xEAFC, S_STATUS) + 1;	/* codicon git-commit */
-      x += scr_putsw(x, y, E.cols / 2 - x, bl, S_STATUS) + 1;
+    if (bl) {
+      char c[120];
+      snprintf(c, sizeof(c), "%.*s", E.cols / 3 > 10 ? E.cols / 3 : 10, bl);
+      sb_text(t, sizeof(t), 0xEAFC, c);	/* codicon git-commit */
+      status_add("status.git.blame", "Git Blame Information", 0, 10, t, "Git Blame Information", CMD_GIT_FILE_HISTORY);
     }
   }
-  snprintf(pos, sizeof(pos), "Ln %lu, Col %lu", (unsigned long)(T->cur.y + 1),
-           (unsigned long)(col_of(row_at(T->cur.y), T->cur.x) + 1));
-  if (T->nmc > 0) {
-    snprintf(tmp, sizeof(tmp), " (%d selections)", T->nmc + 1);
-    strncat(pos, tmp, sizeof(pos) - strlen(pos) - 1);
-  }
-  else if (T->sel) {
-    Pos a, b;
-    size_t len;
-    char *t;
-    sel_range(&a, &b);
-    t = doc_text(T->doc, a, b, &len);
-    snprintf(tmp, sizeof(tmp), " (%lu selected)", (unsigned long)utf8_count(t, len));
-    strncat(pos, tmp, sizeof(pos) - strlen(pos) - 1);
-    free(t);
-  }
-  if (T->doc->tabs) snprintf(tmp, sizeof(tmp), "Tab Size: %d", TABW);
-  else snprintf(tmp, sizeof(tmp), "Spaces: %d", T->doc->indent);
-  g_sb.enc_x0 = g_sb.enc_x1 = -1;
-  n = snprintf(right, sizeof(right), "%s   %s   %s   %s   %s%s  ", pos, tmp, enc_name(T->doc->enc),
-               T->doc->crlf ? "CRLF" : "LF", T->sx ? syntax_name(T->sx) : ext_lang_label(T->doc->path),
-               E.tab_focus ? "   Tab Moves Focus" : "");
-  n = (int)str_cols(right) + 2;
-  if (x + n + 2 > E.cols) {	/* narrow: the position only */
-    snprintf(right, sizeof(right), "%s  ", pos);
-    n = (int)str_cols(right) + 2;
-  }
-  if (x + n <= E.cols) {
-    int rx = E.cols - n;
-    g_sb.pos_x0 = rx;
-    g_sb.pos_x1 = rx + (int)strlen(pos);
-    if (strlen(right) > strlen(pos) + 4) {	/* "Spaces: 4", "LF", the language */
-      g_sb.ind_x0 = g_sb.pos_x1 + 3;
-      g_sb.ind_x1 = g_sb.ind_x0 + (int)strlen(tmp);
-      g_sb.enc_x0 = g_sb.ind_x1 + 3;
-      g_sb.enc_x1 = g_sb.enc_x0 + (int)strlen(enc_name(T->doc->enc));
-      g_sb.eol_x0 = g_sb.enc_x1 + 3;
-      g_sb.eol_x1 = g_sb.eol_x0 + (T->doc->crlf ? 4 : 2);
-      g_sb.lang_x0 = g_sb.eol_x1 + 3;
-      g_sb.lang_x1 = g_sb.lang_x0 + (int)str_cols(syntax_name(T->sx));
+  {	/* "Ln 12, Col 5 (3 selected)" */
+    char tmp[64];
+    snprintf(t, sizeof(t), "Ln %lu, Col %lu", (unsigned long)(T->cur.y + 1),
+             (unsigned long)(col_of(row_at(T->cur.y), T->cur.x) + 1));
+    if (T->nmc > 0) {
+      snprintf(tmp, sizeof(tmp), " (%d selections)", T->nmc + 1);
+      strncat(t, tmp, sizeof(t) - strlen(t) - 1);
     }
-    scr_puts(rx, y, right, S_STATUS);
+    else if (T->sel) {
+      Pos a, b;
+      size_t len;
+      char *x;
+      sel_range(&a, &b);
+      x = doc_text(T->doc, a, b, &len);
+      snprintf(tmp, sizeof(tmp), " (%lu selected)", (unsigned long)utf8_count(x, len));
+      strncat(t, tmp, sizeof(t) - strlen(t) - 1);
+      free(x);
+    }
+    status_add("status.editor.selection", "Editor Selection", 1, 95, t, "Go to Line/Column", CMD_GOTO);
+  }
+  if (T->doc->tabs) snprintf(t, sizeof(t), "Tab Size: %d", TABW);
+  else snprintf(t, sizeof(t), "Spaces: %d", T->doc->indent);
+  status_add("status.editor.indentation", "Editor Indentation", 1, 60, t, "Select Indentation", CMD_INDENTATION);
+  status_add("status.editor.encoding", "Editor Encoding", 1, 50, enc_name(T->doc->enc), "Select Encoding", CMD_ENCODING);
+  status_add("status.editor.eol", "Editor End of Line", 1, 55, T->doc->crlf ? "CRLF" : "LF", "Select End of Line Sequence", CMD_EOL);
+  status_add("status.editor.mode", "Editor Language", 1, 70, T->sx ? syntax_name(T->sx) : ext_lang_label(T->doc->path),
+             "Select Language Mode", CMD_LANGUAGE);
+  {	/* the language server: "{}" (a spinner while it starts or works), its state in the tooltip */
+    char name[64];
+    const char *lang = T->sx ? syntax_id(syntax_name(T->sx)) : NULL;
+    int state = lang ? lsp_state(lang, name, sizeof(name)) : LS_NONE;
+    if (state != LS_NONE) {
+      snprintf(tip, sizeof(tip), "%s: %s", name,
+               state == LS_STARTING ? "starting" : state == LS_BUSY ? "working" :
+               state == LS_DEAD ? "stopped" : state == LS_MISSING ? "not found" : "running");
+      status_add("status.lsp.language", "Language Status", 1, 75,
+                 state == LS_STARTING || state == LS_BUSY ? ui_spinner() : "{}", tip, CMD_LSP_STATUS);
+    }
+  }
+  if (E.tab_focus) status_add("status.editor.tabFocusMode", "Accessibility Mode", 1, 40, "Tab Moves Focus",
+                              "Tab Moves Focus", CMD_TAB_FOCUS);
+  if (lsp_progress_count() > 0) {	/* $/progress: "gopls: Loading packages... (42%)" */
+    char p[200];
+    lsp_progress_text(0, p, sizeof(p));
+    snprintf(t, sizeof(t), "%s %s", ui_spinner(), p);
+    status_add("status.lsp.progress", "Language Server Progress", 0, 20, t, p, CMD_LSP_STATUS);
   }
 }
 
 
+static int sb_width (const SbItem *it) {
+  return (int)str_cols(it->text) + 2;	/* a space on each side, like VS Code's padding */
+}
+
+
+/* the item under column x on the status bar, -1: none */
+static int sb_at (int x) {
+  int i;
+  for (i = 0; i < g_nsbi; i++)
+    if (g_sbi[i].x1 > g_sbi[i].x0 && x >= g_sbi[i].x0 && x < g_sbi[i].x1) return i;
+  return -1;
+}
+
+
+static void draw_status (void) {
+  int y = E.rows - 1, i, lx = 0, rx = E.cols - 1, total = 0;
+  char shown[SB_MAX];
+  scr_fill(0, y, E.cols, S_STATUS);
+  g_nsbi = 0;
+  status_items();
+  status_add("status.notifications", "Notifications", 1, 100, toast_unread() ? "\xEE\xAE\x9A" : "\xEE\xAA\xA2",	/* bell-dot, bell: last, at the right end */
+             toast_unread() ? "Notifications" : "No Notifications", CMD_NOTIFICATIONS);
+  for (i = 0; i < g_nsbi; i++) {
+    shown[i] = !sb_hidden(g_sbi[i].id);
+    if (shown[i]) total += sb_width(&g_sbi[i]);
+  }
+  while (total > E.cols - 1) {	/* narrow: the least important go */
+    int k = -1;
+    for (i = 0; i < g_nsbi; i++)
+      if (shown[i] && (k < 0 || g_sbi[i].prio < g_sbi[k].prio)) k = i;
+    if (k < 0) break;
+    shown[k] = 0;
+    total -= sb_width(&g_sbi[k]);
+  }
+  for (i = 0; i < g_nsbi; i++) {	/* the left side, in their order */
+    SbItem *it = &g_sbi[i];
+    if (!shown[i] || it->right) continue;
+    it->x0 = lx;
+    it->x1 = lx + sb_width(it);
+    scr_puts(lx + 1, y, it->text, S_STATUS);
+    lx = it->x1;
+  }
+  for (i = g_nsbi - 1; i >= 0; i--) {	/* the right side, from the right: the last added at the end */
+    SbItem *it = &g_sbi[i];
+    if (!shown[i] || !it->right) continue;
+    it->x1 = rx;
+    it->x0 = rx - sb_width(it);
+    scr_puts(it->x0 + 1, y, it->text, S_STATUS);
+    rx = it->x0;
+  }
+  if (SBH.item >= 0 && SBH.item < g_nsbi && g_sbi[SBH.item].x1 > g_sbi[SBH.item].x0) {
+    SbItem *it = &g_sbi[SBH.item];	/* the one under the mouse: lighter, and its tooltip after a while */
+    for (i = it->x0; i < it->x1; i++) scr_set_bg(i, y, 0x333333);
+    if (it->tip[0] && os_now_us() - SBH.since > 700000 && y >= 3) {
+      int w = (int)str_cols(it->tip) + 4, x = it->x0;
+      if (w > E.cols) w = E.cols;
+      if (x + w > E.cols) x = E.cols - w;
+      if (x < 0) x = 0;
+      scr_box(x, y - 3, w, 3, S_BOX);
+      scr_putsw(x + 2, y - 2, w - 4, it->tip, S_BOX);
+    }
+  }
+}
+
+
+/* the mouse moved on the status bar (or left it: y is not its row) */
+static void sb_hover (int x, int y) {
+  int it = y == E.rows - 1 && SHOW_STATUS ? sb_at(x) : -1;
+  if (it != SBH.item) {
+    SBH.item = it;
+    SBH.since = os_now_us();
+  }
+}
+
+
+/* the status bar's right-click menu: hide the item there, or show / hide each one */
+static void sb_menu (int x) {
+  const char *label[SB_MAX + 2];
+  char hide[100];
+  int flags[SB_MAX + 2], idx[SB_MAX + 2], n = 0, i, at = sb_at(x), r;
+  if (at >= 0) {
+    snprintf(hide, sizeof(hide), "Hide '%s'", g_sbi[at].name);
+    label[n] = hide;
+    flags[n] = 0;
+    idx[n++] = at;
+    label[n] = "";
+    flags[n] = MF_LINE;
+    idx[n++] = -1;
+  }
+  for (i = 0; i < g_nsbi && n < SB_MAX + 2; i++) {
+    label[n] = g_sbi[i].name;
+    flags[n] = sb_hidden(g_sbi[i].id) ? 0 : MF_CHECK;
+    idx[n++] = i;
+  }
+  r = popup_list(x, E.rows - 3 - n, label, flags, n);
+  if (r >= 0 && idx[r] >= 0) sb_toggle(g_sbi[idx[r]].id);
+  SBH.item = -1;
+}
+
+/* }================================================================== */
+
+
+/* a window.title variable ("activeEditorShort" ...), put in b */
+static char *rel_dir (const char *path);
+
+static void title_var (const char *v, size_t n, Buf *b) {
+  const char *root = side_root(), *path = HAS_DOC && !G->diff && !T->page ? (T->real ? T->real : T->doc->path) : NULL;
+  char *d = NULL, *r = NULL;
+#define IS(s)	(n == sizeof(s) - 1 && memcmp(v, s, n) == 0)
+  if (IS("activeEditorShort")) buf_puts(b, HAS_DOC ? (G->diff ? diff_title() : T->page ? tab_name(T) : doc_name()) : "");
+  else if (IS("activeEditorMedium") || IS("activeEditorLong")) {
+    if (path && IS("activeEditorLong")) buf_puts(b, path);
+    else if (path && (r = rel_dir(path)) != NULL) buf_printf(b, "%s/%s", r, path_basename(path));
+    else buf_puts(b, HAS_DOC ? (G->diff ? diff_title() : T->page ? tab_name(T) : doc_name()) : "");
+  }
+  else if (IS("activeFolderShort") && path) {
+    d = path_dirname(path);
+    buf_puts(b, path_basename(d));
+  }
+  else if (IS("activeFolderMedium") && path) buf_puts(b, (r = rel_dir(path)) != NULL ? r : path_basename(root));
+  else if (IS("activeFolderLong") && path) buf_puts(b, (d = path_dirname(path)));
+  else if (IS("folderName")) buf_puts(b, path_basename(root));
+  else if (IS("folderPath") || IS("rootPath")) buf_puts(b, root);
+  else if (IS("rootName")) buf_puts(b, ws_active() ? ws_title() : path_basename(root));	/* "x (Workspace)" */
+  else if (IS("appName")) buf_puts(b, MME_NAME);
+  else if (IS("dirty")) buf_puts(b, HAS_DOC && !G->diff && doc_dirty(T->doc) ? "\xE2\x97\x8F " : "");
+  else if (IS("activeRepositoryBranchName")) buf_puts(b, git_branch());
+#undef IS
+  free(d);
+  free(r);
+}
+
+
+/*
+** The title (window.title, VS Code's variables): the parts between
+** ${separator} that come out empty go, with their separator.
+*/
 static void update_title (void) {
-  const char *root = ws_active() ? ws_title() : path_basename(side_root());	/* "x (Workspace)" */
-  if (HAS_DOC)
-    snprintf(ui_title, sizeof(ui_title), "%s%s - %s - " MME_NAME,
-             doc_dirty(T->doc) ? "\xE2\x97\x8F " : "", G->diff ? diff_title() : doc_name(), root);
-  else snprintf(ui_title, sizeof(ui_title), "%s - " MME_NAME, root);
+  const char *t = opt.win_title[0] ? opt.win_title : "${dirty}${activeEditorShort}${separator}${rootName}${separator}${appName}";
+  Buf out, part;
+  buf_init(&out);
+  buf_init(&part);
+  for (;;) {
+    const char *sep = strstr(t, "${separator}"), *e = sep ? sep : t + strlen(t), *c = t;
+    part.len = 0;
+    while (c < e) {	/* one part: its text and its variables */
+      const char *v = strstr(c, "${"), *z;
+      if (v == NULL || v >= e || (z = strchr(v, '}')) == NULL || z > e) {
+        buf_putn(&part, c, (size_t)(e - c));
+        break;
+      }
+      buf_putn(&part, c, (size_t)(v - c));
+      title_var(v + 2, (size_t)(z - v - 2), &part);
+      c = z + 1;
+    }
+    if (part.len) {
+      if (out.len) buf_puts(&out, " - ");
+      buf_putn(&out, part.s, part.len);
+    }
+    if (sep == NULL) break;
+    t = sep + 12;
+  }
+  buf_putc(&out, '\0');
+  snprintf(ui_title, sizeof(ui_title), "%s", out.s);
+  snprintf(ui_cc, sizeof(ui_cc), "%s", ws_active() ? ws_title() : path_basename(side_root()));
+  buf_free(&out);
+  buf_free(&part);
 }
 
 
@@ -3074,7 +3381,7 @@ static void scrollbar_mouse (Mouse *m) {
 /* the panel's title row and the terminal under it */
 static struct {
   int prob_x0, prob_x1, out_x0, out_x1, dbg_x0, dbg_x1, term_x0, term_x1;	/* the panel's own tabs */
-  int kill_x, close_x, add_x, prof_x, split_x, max_x, clear_x, chan_x0, chan_x1;
+  int kill_x, close_x, add_x, prof_x, split_x, max_x, clear_x, chan_x0, chan_x1, more_x;
   int tab_x0[16], tab_x1[16], ntab;	/* the terminals' tabs */
 } g_pn;
 
@@ -3084,54 +3391,56 @@ static struct {
 ** is 1, 3, 2 and 0.
 */
 static void draw_panel (void) {
-  int y = L.panel_y, x1 = L.area_x + L.area_w, i, focus = E.focus == F_PANEL;
+  int y = L.panel_y, x1 = L.panel_x + L.panel_w, ix = x1 - 2, i, focus = E.focus == F_PANEL, narrow = L.panel_w < 60;
   char t[160];
-  for (i = 0; i < L.area_w; i++) scr_put(L.area_x + i, y, 0x2500, S_BORDER);
+  for (i = 0; i < L.panel_w; i++) scr_put(L.panel_x + i, y, 0x2500, S_BORDER);
   {	/* the tabs, the one shown underlined */
     int ne, nw;
     lsp_counts(&ne, &nw);
-    snprintf(t, sizeof(t), " PROBLEMS %d ", ne + nw);
-    g_pn.prob_x0 = L.area_x + 2;
+    snprintf(t, sizeof(t), narrow ? " PROB " : " PROBLEMS %d ", ne + nw);	/* narrow (at a side): shorter */
+    g_pn.prob_x0 = L.panel_x + (narrow ? 1 : 2);
     g_pn.prob_x1 = g_pn.prob_x0 + scr_puts(g_pn.prob_x0, y, t, E.panel_view == 1 ? S_PANEL_TAB_ON : S_PANEL_TAB);
     g_pn.out_x0 = g_pn.prob_x1 + 1;
-    g_pn.out_x1 = g_pn.out_x0 + scr_puts(g_pn.out_x0, y, " OUTPUT ", E.panel_view == 3 ? S_PANEL_TAB_ON : S_PANEL_TAB);
+    g_pn.out_x1 = g_pn.out_x0 + scr_puts(g_pn.out_x0, y, narrow ? " OUT " : " OUTPUT ", E.panel_view == 3 ? S_PANEL_TAB_ON : S_PANEL_TAB);
     g_pn.dbg_x0 = g_pn.out_x1 + 1;
-    g_pn.dbg_x1 = g_pn.dbg_x0 + scr_puts(g_pn.dbg_x0, y, " DEBUG CONSOLE ", E.panel_view == 2 ? S_PANEL_TAB_ON : S_PANEL_TAB);
+    g_pn.dbg_x1 = g_pn.dbg_x0 + scr_puts(g_pn.dbg_x0, y, narrow ? " DEBUG " : " DEBUG CONSOLE ", E.panel_view == 2 ? S_PANEL_TAB_ON : S_PANEL_TAB);
     g_pn.term_x0 = g_pn.dbg_x1 + 1;
-    g_pn.term_x1 = g_pn.term_x0 + scr_puts(g_pn.term_x0, y, " TERMINAL ", E.panel_view == 0 ? S_PANEL_TAB_ON : S_PANEL_TAB);
+    g_pn.term_x1 = g_pn.term_x0 + scr_puts(g_pn.term_x0, y, narrow ? " TERM " : " TERMINAL ", E.panel_view == 0 ? S_PANEL_TAB_ON : S_PANEL_TAB);
   }
   g_pn.close_x = x1 - 3;
   g_pn.max_x = x1 - 5;
+  g_pn.more_x = x1 - 7;
+  scr_put(g_pn.more_x, y, 0xEA7C, S_PANEL_TAB);	/* ellipsis: Views and More Actions... */
   g_pn.kill_x = g_pn.add_x = g_pn.prof_x = g_pn.split_x = g_pn.clear_x = g_pn.chan_x0 = g_pn.chan_x1 = -1;
   g_pn.ntab = 0;
   scr_put(g_pn.close_x, y, 0xEA76, S_PANEL_TAB);	/* close */
   scr_put(g_pn.max_x, y, E.panel_max ? 0xEAB4 : 0xEAB7, S_PANEL_TAB);	/* chevron: maximize, restore */
   if (E.panel_view == 1) {
-    draw_problems(L.area_x, y + 1, L.area_w, L.panel_h - 1, focus);
-    problems_title(y, x1);	/* after: the counts are known */
+    draw_problems(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
+    problems_title(y, ix);	/* after: the counts are known */
     return;
   }
   if (E.panel_view == 2) {
-    console_draw(L.area_x, y + 1, L.area_w, L.panel_h - 1, focus);
+    console_draw(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
     return;
   }
   if (E.panel_view == 3) {	/* the channel's list, and Clear Output */
     int w;
-    g_pn.clear_x = x1 - 7;
+    g_pn.clear_x = ix - 7;
     scr_put(g_pn.clear_x, y, 0xEABF, S_PANEL_TAB);	/* codicon clear-all */
     snprintf(t, sizeof(t), " %s \xE2\x8C\x84 ", out_count() ? out_name(out_current()) : "Output");	/* ⌄ */
     w = (int)str_cols(t);
-    g_pn.chan_x1 = x1 - 9;
+    g_pn.chan_x1 = ix - 9;
     g_pn.chan_x0 = g_pn.chan_x1 - w;
     if (g_pn.chan_x0 > g_pn.term_x1 + 1) scr_puts(g_pn.chan_x0, y, t, S_INPUT);
-    out_draw(L.area_x, y + 1, L.area_w, L.panel_h - 1, focus);
+    out_draw(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
     return;
   }
-  g_pn.kill_x = x1 - 7;
-  g_pn.split_x = x1 - 9;
-  g_pn.prof_x = x1 - 11;
-  g_pn.add_x = x1 - 13;
-  if (panel_count() == 1 || L.area_w < 40) {	/* a tab for each terminal: "1: mmc", the one in front underlined */
+  g_pn.kill_x = ix - 7;
+  g_pn.split_x = ix - 9;
+  g_pn.prof_x = ix - 11;
+  g_pn.add_x = ix - 13;
+  if (panel_count() == 1 || L.panel_w < 40) {	/* a tab for each terminal: "1: mmc", the one in front underlined */
     int tx = g_pn.term_x1 + 2, n = panel_count(), k;
     for (k = 0; k < n && k < 16; k++) {
       int w;
@@ -3157,7 +3466,7 @@ static void draw_panel (void) {
   scr_put(g_pn.prof_x, y, 0xEAB4, S_PANEL_TAB);	/* chevron-down: the profiles */
   scr_put(g_pn.split_x, y, 0xEB56, S_PANEL_TAB);	/* split-horizontal */
   scr_put(g_pn.kill_x, y, 0xEA81, S_PANEL_TAB);	/* codicon trash */
-  panel_draw(L.area_x, y + 1, L.area_w, L.panel_h - 1, focus);
+  panel_draw(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
 }
 
 
@@ -3371,7 +3680,7 @@ static void clamp_view (void) {
 /* the lines to the right of group g and under it, where other groups are */
 static void draw_group_edges (int g) {
   int i, x = L.gx[g] + L.gw[g], y = L.gy[g] + L.gh[g];
-  int ex = L.area_x + L.area_w, ey = L.body_y + L.body_h - L.panel_h;
+  int ex = L.area_x + L.area_w, ey = L.area_y + L.area_h;
   int on = E.grp_resize == 1000 + g, onb = E.grp_resize == 2000 + g;
   if (g_ngrp < 2) return;	/* one group (maybe centered): no line */
   if (x < ex)
@@ -3424,11 +3733,11 @@ static void compose (void) {
   if (L.act_w > 0) act_draw(L.act_x, L.body_y, L.body_h, E.view, E.side);
   if (L.side_w > 0) {
     int ey;
-    int tree_h = L.body_h, oe_h = 0, ol_h = 0, tl_h = 0, py, sf = E.focus == F_SIDE;
-    if (E.view == VIEW_FILES && L.body_h > 10) {	/* the panes: OPEN EDITORS over the folder, the others under it */
+    int tree_h = L.side_h, oe_h = 0, ol_h = 0, tl_h = 0, py, sf = E.focus == F_SIDE;
+    if (E.view == VIEW_FILES && L.side_h > 10) {	/* the panes: OPEN EDITORS over the folder, the others under it */
       oe_h = oe_height();
       tl_h = tl_height();
-      tree_h = L.body_h - oe_h - tl_h;
+      tree_h = L.side_h - oe_h - tl_h;
       if (HAS_DOC && T->sx && (tree_h > 12 || !OL.open)) {
         ol_h = OL.open ? tree_h * 2 / 5 : 2;	/* collapsed: its title only */
         tree_h -= ol_h;
@@ -3455,7 +3764,7 @@ static void compose (void) {
     if (E.outline_focus && ((E.outline_focus == PANE_OUTLINE && !OL.h) || (E.outline_focus == PANE_EDITORS && !OE.h) ||
                             (E.outline_focus == PANE_TIMELINE && !TL.h)))
       E.outline_focus = PANE_TREE;	/* its pane went */
-    for (ey = 0; ey < L.body_h; ey++)	/* the edge that drags */
+    for (ey = 0; ey < L.side_h; ey++)	/* the edge that drags */
       scr_put(L.edge_x, L.body_y + ey, 0x2502, E.resizing ? S_TOGGLE_ON : S_BORDER);
   }
   if (!(E.panel_max && L.panel_h >= L.body_h)) {	/* every editor group (a maximized panel hides them) */
@@ -3475,7 +3784,12 @@ static void compose (void) {
     T = G->ntab ? G->tab[G->active] : &g_none;
     layout();
   }
-  if (L.panel_h > 0) draw_panel();
+  if (L.panel_h > 0) {
+    int ex = panel_edge(), i;
+    if (ex >= 0)	/* a panel at a side: its edge, which drags */
+      for (i = 0; i < L.panel_h; i++) scr_put(ex, L.panel_y + i, 0x2502, E.resizing_panel == 2 ? S_TOGGLE_ON : S_BORDER);
+    draw_panel();
+  }
   if (SHOW_STATUS) draw_status();
   if (dbg_active()) {	/* statusBar.debuggingBackground; the debug toolbar over the editor */
     int x;
@@ -5162,20 +5476,34 @@ static struct {
   int waiting;	/* it moved: after a while it is asked about */
   char *diag;	/* the problems there, waiting for the server's hover to join them */
   int qf_y, qf_x0, qf_x1;	/* where "Quick Fix..." is drawn, for a click; qf_y -1: none */
+  int top;	/* the first line shown: the hover scrolled */
+  int focus;	/* shown by the keys (Ctrl+K Ctrl+I): Up/Down/PgUp/PgDn scroll it */
+  int bx, by, bw, bh;	/* where it is drawn (bw 0: not), for the mouse */
+  int nlines, shown;	/* its lines, and how many show */
+  int nlink;	/* its links, drawn: where, and where they go */
+  int ly[16], lx0[16], lx1[16];
+  char *lurl[16];
 } HV;
 
 static struct {
-  char *label;	/* the signature, or NULL */
-  size_t a0, a1;	/* the parameter the cursor is in */
+  char *label;	/* the signature shown, or NULL (the one of v, not its own) */
+  SigInfo *v;	/* every overload */
+  int n, cur;	/* how many, the one shown */
+  int picked;	/* Up/Down chose cur: the server's next answer keeps it */
   size_t y;	/* the line it is for */
+  int row, up_x, down_x;	/* where its arrows are drawn, for a click; row -1: none */
 } SG;
 
 
 static void hover_close (void) {
+  int i;
   free(HV.text);
   HV.text = NULL;
   free(HV.diag);
   HV.diag = NULL;
+  HV.top = HV.focus = HV.bw = 0;
+  for (i = 0; i < HV.nlink; i++) free(HV.lurl[i]);
+  HV.nlink = 0;
 }
 
 
@@ -6134,8 +6462,10 @@ static void next_problem (int back) {
 
 void on_hover (const char *md) {
   char *dg = HV.diag;	/* the problems there come first, as in VS Code */
+  int focus = HV.focus;	/* asked by the keys: they scroll it */
   HV.diag = NULL;
   hover_close();
+  HV.focus = focus;
   if (dg && md && *md) {
     Buf b;
     buf_init(&b);
@@ -6150,19 +6480,55 @@ void on_hover (const char *md) {
 }
 
 
+static void sig_free (SigInfo *v, int n) {
+  int i;
+  for (i = 0; i < n; i++) {
+    free(v[i].label);
+    free(v[i].pdoc);
+    free(v[i].doc);
+  }
+  free(v);
+}
+
+
 static void sig_close (void) {
-  free(SG.label);
+  sig_free(SG.v, SG.n);
+  SG.v = NULL;
+  SG.n = SG.cur = SG.picked = 0;
   SG.label = NULL;
 }
 
 
-void on_signature (const char *label, size_t a0, size_t a1) {
-  sig_close();
-  if (label == NULL || !HAS_DOC) return;
-  SG.label = xstrdup(label);
-  SG.a0 = a0;
-  SG.a1 = a1;
+/* the server's signature help: its overloads; the one Up/Down chose stays while typing */
+void on_signatures (SigInfo *v, int n, int active) {
+  int keep = SG.picked && SG.v && SG.n == n && HAS_DOC && SG.y == T->cur.y ? SG.cur : -1;
+  sig_free(SG.v, SG.n);
+  SG.v = NULL;
+  SG.n = 0;
+  SG.label = NULL;
+  if (n <= 0 || v == NULL || !HAS_DOC) {
+    sig_free(v, n);
+    SG.picked = 0;
+    return;
+  }
+  SG.v = v;
+  SG.n = n;
+  SG.cur = keep >= 0 && keep < n ? keep : (active >= 0 && active < n ? active : 0);
+  SG.picked = keep >= 0;
+  SG.label = v[SG.cur].label;
   SG.y = T->cur.y;
+}
+
+
+/* Up / Down while the parameter hints show several overloads: the previous / next one; 1: it was theirs */
+static int sig_key (int k) {
+  int code = KEY_CODE(k);
+  if (SG.label == NULL || SG.n < 2 || SG.y != T->cur.y || (k & (KM_CTRL | KM_ALT | KM_SHIFT))) return 0;
+  if (code != K_UP && code != K_DOWN) return 0;
+  SG.cur = (SG.cur + (code == K_DOWN ? 1 : SG.n - 1)) % SG.n;
+  SG.label = SG.v[SG.cur].label;
+  SG.picked = 1;
+  return 1;
 }
 
 
@@ -6190,9 +6556,9 @@ static char *hover_expr (Pos p);
 static void hover_idle (void) {
   Pos p;
   char *dg;
-  if (!HV.waiting || os_now_us() - HV.mt < 500000) return;
+  if (!HV.waiting || os_now_us() - HV.mt < (long long)opt.hover_delay * 1000) return;	/* editor.hover.delay */
   HV.waiting = 0;
-  if (E.focus == F_PANEL && L.panel_h > 0 && HV.my >= L.panel_y) return;
+  if (E.focus == F_PANEL && in_panel(HV.mx, HV.my)) return;
   if (!pos_at_screen(HV.mx, HV.my, &p)) {	/* not a name: a squiggle's problem still shows */
     Pos q;
     int gw = gutter_width();
@@ -6233,10 +6599,30 @@ static void hover_idle (void) {
 }
 
 
-/* markdown, simply: no ``, **, \ escapes */
+/* the links of the hover being drawn: [text](url) becomes \x02text\x03, its url kept here */
+static char *g_hurl[64];
+static int g_nhurl;
+
+
+/* markdown, simply: no ``, **, \ escapes; links marked */
 static void plain_md (const char *s, size_t n, Buf *o) {
   size_t i;
   for (i = 0; i < n; i++) {
+    if (s[i] == '[') {	/* [text](url) */
+      const char *e = memchr(s + i, ']', n - i), *u, *ue;
+      if (e && (size_t)(e - s) + 1 < n && e[1] == '(' && (ue = memchr(e, ')', n - (size_t)(e - s))) != NULL) {
+        u = e + 2;
+        if (g_nhurl < 64) {
+          g_hurl[g_nhurl++] = xstrndup(u, (size_t)(ue - u));
+          buf_putc(o, '\x02');
+          plain_md(s + i + 1, (size_t)(e - s) - i - 1, o);
+          buf_putc(o, '\x03');
+        }
+        else plain_md(s + i + 1, (size_t)(e - s) - i - 1, o);
+        i = (size_t)(ue - s);
+        continue;
+      }
+    }
     if (s[i] == '\\' && i + 1 < n && strchr("\\`*_{}[]()#+-.!<>", s[i + 1])) {
       buf_putc(o, s[++i]);
       continue;
@@ -6251,33 +6637,96 @@ static void plain_md (const char *s, size_t n, Buf *o) {
 }
 
 
-/* the hover box: text, and its code in the file's colors */
+/* a line of the hover's text: \x02..\x03 are links (the n-th url of g_hurl from *li), drawn and kept for a click */
+static void hover_text_line (int x, int y, int w, const char *t, int *li) {
+  int cx = x;
+  while (*t && cx < x + w) {
+    const char *e = t;
+    if (*t == '\x02') {	/* a link: underlined, in the link color */
+      char *seg;
+      int n;
+      t++;
+      for (e = t; *e && *e != '\x03'; e++) ;
+      seg = xstrndup(t, (size_t)(e - t));
+      n = scr_putsw(cx, y, x + w - cx, seg, S_BOX_HIT);
+      scr_underline(cx, y, n, ui_color(C_HIT));
+      if (*li < g_nhurl && HV.nlink < 16) {
+        HV.ly[HV.nlink] = y;
+        HV.lx0[HV.nlink] = cx;
+        HV.lx1[HV.nlink] = cx + n;
+        HV.lurl[HV.nlink++] = xstrdup(g_hurl[*li]);
+      }
+      (*li)++;
+      cx += n;
+      free(seg);
+      t = *e ? e + 1 : e;
+      continue;
+    }
+    while (*e && *e != '\x02') e++;
+    {
+      char *seg = xstrndup(t, (size_t)(e - t));
+      cx += scr_putsw(cx, y, x + w - cx, seg, S_BOX);
+      free(seg);
+    }
+    t = e;
+  }
+}
+
+
+/* the hover box: text, its links, its code in its language's colors; it scrolls */
 static void draw_hover (int gw) {
   const char *p;
-  int w = 20, h = 0, x, y, ay, i, maxw, in_code = 0, state = 0;
-  char *lines[64];
-  int code[64], n = 0;
+  int w = 20, h = 0, x, y, ay, i, maxw, in_code = 0, state = 0, li = 0, n = 0;
+  char *lines[256];
+  int code[256], lk[256];	/* lk: the number of links before the line */
+  const Syntax *sx[256], *fence = NULL;
   (void)gw;	/* screen_at knows the gutter */
   HV.qf_y = -1;
+  HV.bw = 0;
+  for (i = 0; i < HV.nlink; i++) free(HV.lurl[i]);
+  HV.nlink = 0;
+  for (i = 0; i < g_nhurl; i++) free(g_hurl[i]);
+  g_nhurl = 0;
   if (HV.text == NULL || HV.at.y < T->top || HV.at.y >= T->top + (size_t)L.text_h) return;
   maxw = L.ed_w - 4 < 80 ? L.ed_w - 4 : 80;
-  for (p = HV.text; *p && n < 64;) {	/* the lines to show */
+  for (p = HV.text; *p && n < 256;) {	/* the lines to show */
     const char *e = strchr(p, '\n');
     size_t len = e ? (size_t)(e - p) : strlen(p);
     Buf b;
-    if (len >= 3 && strncmp(p, "```", 3) == 0) in_code = !in_code;
+    if (len >= 3 && strncmp(p, "```", 3) == 0) {	/* a fence: its language colors the code */
+      in_code = !in_code;
+      if (in_code) {
+        char lang[32];
+        size_t ln = len - 3 < sizeof(lang) - 1 ? len - 3 : sizeof(lang) - 1;
+        memcpy(lang, p + 3, ln);
+        lang[ln] = '\0';
+        while (ln > 0 && (lang[ln - 1] == ' ' || lang[ln - 1] == '\r')) lang[--ln] = '\0';
+        fence = lang[0] ? syntax_by_id(lang) : NULL;
+        if (fence == NULL) fence = T->sx;
+        state = 0;
+      }
+    }
     else if (len == 3 && strncmp(p, "---", 3) == 0) {
       lines[n] = NULL;	/* a line between parts */
+      lk[n] = g_nhurl;
       code[n++] = 0;
     }
     else if (len > 0 || (n > 0 && lines[n - 1] && lines[n - 1][0])) {
+      lk[n] = g_nhurl;
       buf_init(&b);
       if (in_code) buf_putn(&b, p, len);
       else plain_md(p, len, &b);
       buf_putc(&b, '\0');
       lines[n] = buf_take(&b);
       code[n] = in_code;
-      if ((int)str_cols(lines[n]) + 2 > w) w = (int)str_cols(lines[n]) + 2;
+      sx[n] = in_code ? fence : NULL;
+      {
+        int cw = 0;	/* columns without the link marks */
+        const char *c;
+        for (c = lines[n]; *c; c++)
+          if (*c != '\x02' && *c != '\x03' && ((unsigned char)*c & 0xC0) != 0x80) cw++;
+        if (cw + 3 > w) w = cw + 3;
+      }
       n++;
     }
     p += len + (e ? 1 : 0);
@@ -6285,7 +6734,11 @@ static void draw_hover (int gw) {
   while (n > 0 && lines[n - 1] && lines[n - 1][0] == '\0') free(lines[--n]);
   if (w > maxw) w = maxw;
   h = n < 14 ? n : 14;
+  HV.nlines = n;
+  HV.shown = h;
   if (h == 0) return;
+  if (HV.top > n - h) HV.top = n - h;
+  if (HV.top < 0) HV.top = 0;
   if (!screen_at(HV.at, &x, &ay)) {
     for (i = 0; i < n; i++) free(lines[i]);
     return;
@@ -6293,51 +6746,212 @@ static void draw_hover (int gw) {
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
   y = (ay - h >= L.text_y) ? ay - h : ay + 1;	/* above the name, else under it */
-  for (i = 0; i < h; i++) {
-    scr_fill(x, y + i, w, S_BOX);
-    if (lines[i] == NULL) {
-      int k;
-      for (k = 1; k < w - 1; k++) scr_put(x + k, y + i, 0x2500, S_MENU_LINE);
-    }
-    else if (code[i]) {	/* code: the file's colors on the box */
+  HV.bx = x;
+  HV.by = y;
+  HV.bw = w;
+  HV.bh = h;
+  for (i = 0; i < HV.top && i < n; i++)	/* the code state of the lines scrolled away */
+    if (code[i] && lines[i]) {
       size_t len = strlen(lines[i]);
       unsigned char *tok = (unsigned char *)xmalloc(len + 1);
-      state = syntax_scan(T->sx, lines[i], len, state, tok);
-      scr_code(x + 1, y + i, w - 2, lines[i], len, 0, tok, B_EDITOR, 0, 0, B_EDITOR);
+      state = syntax_scan(sx[i], lines[i], len, i > 0 && code[i - 1] ? state : 0, tok);
+      free(tok);
+    }
+  for (i = 0; i < h; i++) {
+    int k = HV.top + i;
+    scr_fill(x, y + i, w, S_BOX);
+    if (lines[k] == NULL) {
+      int c;
+      for (c = 1; c < w - 1; c++) scr_put(x + c, y + i, 0x2500, S_MENU_LINE);
+    }
+    else if (code[k]) {	/* code: its language's colors on the box */
+      size_t len = strlen(lines[k]);
+      unsigned char *tok = (unsigned char *)xmalloc(len + 1);
+      state = syntax_scan(sx[k], lines[k], len, k > 0 && code[k - 1] ? state : 0, tok);
+      scr_code(x + 1, y + i, w - 3, lines[k], len, 0, tok, B_EDITOR, 0, 0, B_EDITOR);
       scr_restyle(x, y + i, 1, S_BOX);
       free(tok);
     }
-    else if (lines[i][0] == '\x01') {	/* Quick Fix...: a link, clicked in on_mouse */
+    else if (lines[k][0] == '\x01') {	/* Quick Fix...: a link, clicked in on_mouse */
       HV.qf_y = y + i;
       HV.qf_x0 = x + 1;
-      HV.qf_x1 = x + 1 + scr_putsw(x + 1, y + i, w - 2, lines[i] + 1, S_BOX_HIT);
+      HV.qf_x1 = x + 1 + scr_putsw(x + 1, y + i, w - 3, lines[k] + 1, S_BOX_HIT);
     }
-    else scr_putsw(x + 1, y + i, w - 2, lines[i], S_BOX);
+    else {
+      li = lk[k];
+      hover_text_line(x + 1, y + i, w - 3, lines[k], &li);
+    }
+  }
+  if (n > h) {	/* it scrolls: its scrollbar on the right */
+    int th = h * h / n, ty;
+    if (th < 1) th = 1;
+    ty = (n - h) ? HV.top * (h - th) / (n - h) : 0;
+    for (i = 0; i < h; i++) scr_put(x + w - 1, y + i, i >= ty && i < ty + th ? 0x2590 : ' ', S_BOX_DIM);
   }
   for (i = 0; i < n; i++) free(lines[i]);
 }
 
 
-/* the signature over the line, the parameter the cursor is in in blue */
+/* is the cell in the hover box? */
+static int hover_in (int x, int y) {
+  return HV.text && HV.bw > 0 && x >= HV.bx && x < HV.bx + HV.bw && y >= HV.by && y < HV.by + HV.bh;
+}
+
+
+/* the hover scrolled by d lines */
+static void hover_scroll (int d) {
+  HV.top += d;
+  if (HV.top > HV.nlines - HV.shown) HV.top = HV.nlines - HV.shown;
+  if (HV.top < 0) HV.top = 0;
+}
+
+
+/* a key while the hover shown by Ctrl+K Ctrl+I has them: it scrolls; 0: not its (it closes) */
+static int hover_key (int k) {
+  int code = KEY_CODE(k), more = HV.nlines > HV.shown;
+  if (!HV.text || !HV.focus || (k & (KM_CTRL | KM_ALT | KM_SHIFT))) return 0;
+  if (code == K_ESC) {
+    hover_close();
+    return 1;
+  }
+  if (!more) return 0;	/* nothing to scroll: the keys move the cursor again */
+  if (code == K_UP) hover_scroll(-1);
+  else if (code == K_DOWN) hover_scroll(1);
+  else if (code == K_PGUP) hover_scroll(-HV.shown);
+  else if (code == K_PGDN) hover_scroll(HV.shown);
+  else if (code == K_HOME) HV.top = 0;
+  else if (code == K_END) hover_scroll(HV.nlines);
+  else return 0;
+  return 1;
+}
+
+
+static void open_url (const char *url);
+
+/* a click in the hover: a link opens (a file: link in the editor); 1: it was in it */
+static int hover_click (Mouse *m) {
+  int i;
+  if (!hover_in(m->x, m->y)) return 0;
+  for (i = 0; i < HV.nlink; i++)
+    if (m->y == HV.ly[i] && m->x >= HV.lx0[i] && m->x < HV.lx1[i]) {
+      char *u = xstrdup(HV.lurl[i]);
+      hover_close();
+      if (strncmp(u, "file://", 7) == 0) {	/* file:///x.go#L12 */
+        char *hash = strchr(u, '#'), *path;
+        long line = 0;
+        if (hash) {
+          *hash = '\0';
+          if (hash[1] == 'L') line = strtol(hash + 2, NULL, 10);
+        }
+        path = lsp_path(u);
+        on_show_document(path, NULL, line > 0 ? line - 1 : -1, 0);
+        free(path);
+      }
+      else open_url(u);
+      free(u);
+      return 1;
+    }
+  return 1;
+}
+
+
+/*
+** The parameter hints over the line: "1/3" with arrows when there are
+** overloads (Up/Down), the signature with its active parameter bold and
+** underlined, and under it that parameter's documentation.
+*/
 static void draw_signature (int gw) {
-  int w, x, y, cy;
+  int w, x, y, cy, lw, h = 1, i, np = 0, nd = 0, pre = 0;
+  const SigInfo *si;
+  char cnt[32], *pd[3], *dd[2];
   (void)gw;	/* screen_at knows the gutter */
+  SG.row = -1;
   if (SG.label == NULL || SG.y != T->cur.y || T->cur.y < T->top || T->cur.y >= T->top + (size_t)L.text_h) return;
-  w = (int)str_cols(SG.label) + 2;
-  if (w > L.ed_w - 2) w = L.ed_w - 2;
   if (!screen_at(T->cur, &x, &cy)) return;
-  y = cy - 1 >= L.text_y ? cy - 1 : cy + 1;
+  si = &SG.v[SG.cur];
+  cnt[0] = '\0';
+  if (SG.n > 1) {	/* "↑ 1/3 ↓ " */
+    snprintf(cnt, sizeof(cnt), "%d/%d", SG.cur + 1, SG.n);
+    pre = (int)strlen(cnt) + 5;
+  }
+  lw = (int)str_cols(si->label) + 2 + pre;
+  w = lw;
+  {	/* the docs: the parameter's first lines, the signature's first line, as plain text */
+    const char *src[2];
+    int k;
+    src[0] = si->pdoc;
+    src[1] = si->doc;
+    for (k = 0; k < 2; k++) {
+      const char *q = src[k];
+      int max = k == 0 ? 3 : 2;
+      while (q && *q && (k == 0 ? np : nd) < max) {
+        const char *e = strchr(q, '\n');
+        size_t len = e ? (size_t)(e - q) : strlen(q);
+        if (len > 0) {
+          Buf b;
+          int c;
+          buf_init(&b);
+          plain_md(q, len, &b);
+          buf_putc(&b, '\0');
+          for (c = 0; b.s[c]; c++)
+            if (b.s[c] == '\x02' || b.s[c] == '\x03') b.s[c] = ' ';
+          if (k == 0) pd[np++] = buf_take(&b);
+          else dd[nd++] = buf_take(&b);
+        }
+        q += len + (e ? 1 : 0);
+      }
+    }
+    for (i = 0; i < g_nhurl; i++) free(g_hurl[i]);
+    g_nhurl = 0;
+  }
+  for (i = 0; i < np; i++)
+    if ((int)str_cols(pd[i]) + 2 > w) w = (int)str_cols(pd[i]) + 2;
+  for (i = 0; i < nd; i++)
+    if ((int)str_cols(dd[i]) + 2 > w) w = (int)str_cols(dd[i]) + 2;
+  h = 1 + np + (np && nd ? 1 : 0) + nd;
+  if (w > L.ed_w - 2) w = L.ed_w - 2;
+  y = cy - h >= L.text_y ? cy - h : cy + 1;
   x -= 2;
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
-  scr_fill(x, y, w, S_BOX);
-  scr_putsw(x + 1, y, w - 2, SG.label, S_BOX);
-  if (SG.a1 > SG.a0 && SG.a1 <= strlen(SG.label)) {
-    char *before = xstrndup(SG.label, SG.a0), *par = xstrndup(SG.label + SG.a0, SG.a1 - SG.a0);
-    int bx = x + 1 + (int)str_cols(before);
-    if (bx < x + w - 1) scr_putsw(bx, y, x + w - 1 - bx, par, S_BOX_HIT);
-    free(before);
-    free(par);
+  for (i = 0; i < h; i++) scr_fill(x, y + i, w, S_BOX);
+  {
+    int lx = x + 1;
+    if (pre) {	/* the overloads: arrows to click, "1/3" */
+      SG.row = y;
+      SG.up_x = lx;
+      scr_put(lx, y, 0xEAA1, S_BOX);	/* codicon arrow-up */
+      scr_puts(lx + 2, y, cnt, S_BOX_DIM);
+      SG.down_x = lx + 3 + (int)strlen(cnt);
+      scr_put(SG.down_x, y, 0xEA9A, S_BOX);	/* arrow-down */
+      lx += pre;
+    }
+    scr_putsw(lx, y, x + w - 1 - lx, si->label, S_BOX);
+    if (si->a1 > si->a0 && si->a1 <= strlen(si->label)) {	/* the parameter now: bold, underlined, in color */
+      char *before = xstrndup(si->label, si->a0), *par = xstrndup(si->label + si->a0, si->a1 - si->a0);
+      int bx = lx + (int)str_cols(before);
+      if (bx < x + w - 1) {
+        int nw = scr_putsw(bx, y, x + w - 1 - bx, par, S_BOX_HIT), c;
+        for (c = 0; c < nw; c++) {
+          uint32_t ch = scr_ch(bx + c, y);
+          scr_put_rgb(bx + c, y, ch, ui_color(C_HIT), ui_color(C_MENU_BG), RGB_BOLD | RGB_UNDER);
+        }
+      }
+      free(before);
+      free(par);
+    }
+  }
+  for (i = 0; i < np; i++) {
+    scr_putsw(x + 1, y + 1 + i, w - 2, pd[i], S_BOX);
+    free(pd[i]);
+  }
+  if (np && nd) {
+    int c;
+    for (c = 1; c < w - 1; c++) scr_put(x + c, y + 1 + np, 0x2500, S_MENU_LINE);
+  }
+  for (i = 0; i < nd; i++) {
+    scr_putsw(x + 1, y + 1 + np + (np ? 1 : 0) + i, w - 2, dd[i], S_BOX_DIM);
+    free(dd[i]);
   }
 }
 
@@ -6894,6 +7508,106 @@ static void problem_go (size_t k) {
     E.focus = F_EDITOR;
   }
   free(path);
+}
+
+
+/* window/showDocument, and the hover's file: links: the file at the line (from 0; -1 none), or a URL */
+void on_show_document (const char *path, const char *url, long line, long col) {
+  if (url) {
+    open_url(url);
+    return;
+  }
+  if (path == NULL || open_file(path, 0) != 0) return;
+  if (line >= 0) {
+    Pos p;
+    p.y = (size_t)line;
+    p.x = col > 0 ? (size_t)col : 0;
+    move_h(doc_clamp(T->doc, p), 0);
+    center_cursor();
+  }
+  E.focus = F_EDITOR;
+}
+
+
+/* the OUTPUT view on channel chan ("gopls") */
+void on_show_output (const char *chan) {
+  int i;
+  for (i = 0; chan && i < out_count(); i++)
+    if (strcmp(out_name(i), chan) == 0) out_select(i);
+  E.panel = 1;
+  E.panel_view = 3;
+  E.focus = F_PANEL;
+}
+
+
+/* the language of the file in front, as the protocol names it ("go"); NULL none */
+static const char *front_lang (void) {
+  return HAS_DOC && !T->page && T->sx ? syntax_id(syntax_name(T->sx)) : NULL;
+}
+
+
+/* mme: Restart Language Server: the server of the file in front starts again with the open files */
+static void restart_server (void) {
+  const char *lang = front_lang();
+  char name[64];
+  int g, i;
+  if (lang == NULL || lsp_state(lang, name, sizeof(name)) == LS_NONE) {
+    toast(0, "There is no language server for %s.", HAS_DOC && T->sx ? syntax_name(T->sx) : "this file");
+    return;
+  }
+  lsp_restart(lang);
+  for (g = 0; g < g_ngrp; g++)	/* the files of that language go to the new one */
+    for (i = 0; i < g_grp[g].ntab; i++) {
+      Tab *t = g_grp[g].tab[i];
+      if (t->sx && !t->page && t->doc->path) lsp_open(t->doc, syntax_name(t->sx));
+    }
+  toast_src(0, name, "Restarting the %s language server", name);
+}
+
+
+/*
+** The language status ("{}" in the status bar): the server of the file in
+** front, how it is, and what can be done: restart it, see its output,
+** change which program it is.
+*/
+static void lang_status (void) {
+  static const char *const what[] = {"No language server", "Not started", "Not found", "Starting...",
+                                     "Running", "Working...", "Stopped"};
+  const char *lang = front_lang();
+  char name[64], label[200], detail[200];
+  const char *chan;
+  int st, r, has_out;
+  Pick p;
+  if (lang == NULL) {
+    toast(0, "There is no language server for this file.");
+    return;
+  }
+  st = lsp_state(lang, name, sizeof(name));
+  chan = lsp_channel(lang);
+  has_out = chan != NULL;
+  pick_init(&p, NULL);
+  p.keep_order = 1;
+  snprintf(label, sizeof(label), "%s Language Status", syntax_name(T->sx));
+  p.title = label;
+  if (st == LS_NONE) {
+    snprintf(detail, sizeof(detail), "No language server is set for \"%s\" in mme.languageServers", lang);
+    pick_add(&p, detail, NULL, 0xEA74);	/* info */
+  }
+  else {
+    char t[240];
+    if (lsp_progress_count() > 0 && st == LS_BUSY) lsp_progress_text(0, detail, sizeof(detail));
+    else snprintf(detail, sizeof(detail), "%s", st == LS_MISSING ? "the program was not found in the PATH" : "");
+    snprintf(t, sizeof(t), "%s: %s", name, what[st]);
+    pick_add(&p, t, detail[0] ? detail : NULL, st == LS_READY ? 0xEAB2 : st == LS_DEAD || st == LS_MISSING ? 0xEA87 : 0xEA74);	/* check, error, info */
+  }
+  pick_add(&p, "Restart Language Server", NULL, 0xEB37);	/* codicon refresh */
+  pick_add(&p, "Show Output", has_out ? chan : NULL, 0xEB9D);	/* output */
+  pick_add(&p, "Configure Language Servers (settings.json)", "mme.languageServers", 0xEAF8);	/* gear */
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r == 1) restart_server();
+  else if (r == 2) on_show_output(has_out ? chan : name);
+  else if (r == 3) run_command(CMD_SETTINGS_JSON);
 }
 
 
@@ -9840,6 +10554,62 @@ static void open_keys_json (void) {
 ** (Default: mme's, User: keybindings.json) like VS Code's editor; Enter
 ** on one: change its keys or when, remove it, reset it.
 */
+/* the Manage gear at the foot of the activity bar: VS Code's menu, from it upwards */
+static void manage_menu (void) {
+  static const char *const label[] = {"Command Palette...", "Profiles", "", "Settings", "Extensions",
+                                      "Keyboard Shortcuts", "Snippets", "Tasks", "Themes", "",
+                                      "Check for Updates...", "About"};
+  static const int flags[] = {0, MF_OFF, MF_LINE, 0, 0, 0, 0, 0, MF_SUB, MF_LINE, 0, 0};
+  static const int cmd[] = {CMD_PALETTE, 0, 0, CMD_SETTINGS, CMD_EXTENSIONS, CMD_KEYS, CMD_SNIPPETS,
+                            CMD_TASK_CONFIGURE, 0, 0, 0, CMD_ABOUT};
+  int n = (int)(sizeof(label) / sizeof(label[0])), x = L.act_w > 0 ? (opt.side_right ? L.act_x - popup_width(label, flags, n) : L.act_x + L.act_w) : 0;
+  int gy = act_manage_row(L.body_y, L.body_h), y = (gy >= 0 ? gy : E.rows - 2) - n - 1, r;
+  r = popup_list(x, y, label, flags, n);
+  if (r == 8) {	/* Themes: its submenu beside it */
+    static const char *const th[] = {"Color Theme", "File Icon Theme", "Product Icon Theme"};
+    static const int thf[] = {0, MF_OFF, MF_OFF};
+    if (popup_list(x + popup_width(label, flags, n) - 1, (y < 0 ? 0 : y) + 1 + 8, th, thf, 3) == 0) run_command(CMD_THEME);
+  }
+  else if (r == 10) toast(0, "There are currently no updates available: " MME_NAME " " MME_VERSION " is the latest.");
+  else if (r >= 0 && cmd[r]) run_command(cmd[r]);
+}
+
+
+/* the panel's "..." (Views and More Actions): where it goes, its alignment */
+static void panel_more_menu (int x, int y) {
+  static const char *const label[] = {"Move Panel Left", "Move Panel Right", "Move Panel To Bottom", "",
+                                      "Align Panel Center", "Align Panel Justify", "", "Maximize Panel Size",
+                                      "Hide Panel"};
+  int flags[9] = {0, 0, 0, MF_LINE, 0, 0, MF_LINE, 0, 0}, r;
+  flags[opt.panel_loc == PANEL_LEFT ? 0 : opt.panel_loc == PANEL_RIGHT ? 1 : 2] |= MF_CHECK;
+  flags[opt.panel_justify ? 5 : 4] |= MF_CHECK;
+  if (E.panel_max) flags[7] |= MF_CHECK;
+  r = popup_list(x - popup_width(label, flags, 9) + 2, y, label, flags, 9);
+  switch (r) {
+    case 0: run_command(CMD_PANEL_LEFT); break;
+    case 1: run_command(CMD_PANEL_RIGHT); break;
+    case 2: run_command(CMD_PANEL_BOTTOM); break;
+    case 4: run_command(CMD_PANEL_CENTER); break;
+    case 5: run_command(CMD_PANEL_JUSTIFY); break;
+    case 7: run_command(CMD_PANEL_MAX); break;
+    case 8:
+      E.panel = E.panel_max = 0;
+      E.focus = F_EDITOR;
+      break;
+  }
+}
+
+
+/* the activity bar's badges: the changes, the tests that failed; a dot while debugging */
+int act_badge (int view, int *dot) {
+  *dot = 0;
+  if (view == VIEW_GIT) return git_count();
+  if (view == VIEW_TEST) return test_failed();
+  if (view == VIEW_DEBUG) *dot = dbg_active();
+  return 0;
+}
+
+
 static void keyboard_shortcuts (void) {
   int start = 0;
   for (;;) {
@@ -12107,7 +12877,7 @@ static int group_at (int x, int y) {
     if (g_ngrp > 1 && x == L.gx[g] + L.gw[g] && y >= L.gy[g] && y < L.gy[g] + L.gh[g] && x < L.area_x + L.area_w)
       return 1000 + g;
     if (g_ngrp > 1 && y == L.gy[g] + L.gh[g] && x >= L.gx[g] && x < L.gx[g] + L.gw[g] &&
-        y < L.body_y + L.body_h - L.panel_h)
+        y < L.area_y + L.area_h)
       return 2000 + g;
   }
   return -1;
@@ -12379,6 +13149,21 @@ static void run_command (int cmd) {
     case CMD_ZOOM_RESET: term_font(0); break;
     case CMD_DIFF_WS: diff_toggle_trim(); break;
     case CMD_DIFF_HIDE: diff_toggle_hide(); break;
+    case CMD_MANAGE: manage_menu(); break;
+    case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
+      opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
+      settings_put("workbench.panel.defaultLocation", opt.panel_loc == PANEL_RIGHT ? "right" : opt.panel_loc == PANEL_LEFT ? "left" : "bottom");
+      E.panel_max = 0;
+      if (!E.panel) run_command(CMD_TERMINAL);
+      break;
+    case CMD_PANEL_CENTER: case CMD_PANEL_JUSTIFY:
+      opt.panel_justify = cmd == CMD_PANEL_JUSTIFY;
+      settings_put("workbench.panel.alignment", opt.panel_justify ? "justify" : "center");
+      break;
+    case CMD_TOGGLE_CC:
+      opt.command_center = !opt.command_center;
+      settings_put("window.commandCenter", opt.command_center ? "true" : "false");
+      break;
     case CMD_INSPECT_TOKENS: {	/* Developer: Inspect Editor Tokens and Scopes */
       char sc[1024];
       if (!HAS_DOC || G->diff || T->page) break;
@@ -12645,7 +13430,7 @@ static void run_command (int cmd) {
       E.panel_view = 0;
       E.focus = F_PANEL;
       layout();
-      if (!panel_alive() && panel_start(L.area_w - 2, L.panel_h - 1) != 0) {
+      if (!panel_alive() && panel_start(PANEL_COLS, L.panel_h - 1) != 0) {
         E.panel = 0;
         E.focus = F_EDITOR;
       }
@@ -12675,7 +13460,7 @@ static void run_command (int cmd) {
       E.panel = 1;
       E.panel_view = 0;
       layout();
-      if (!panel_alive() && panel_start(L.area_w - 2, L.panel_h - 1) != 0) {
+      if (!panel_alive() && panel_start(PANEL_COLS, L.panel_h - 1) != 0) {
         E.panel = 0;
         free(s);
         break;
@@ -12715,8 +13500,8 @@ static void run_command (int cmd) {
       E.focus = F_PANEL;
       layout();
       if ((cmd == CMD_TERMINAL_SPLIT ? panel_split()
-           : cmd == CMD_TERMINAL_NEW_PROFILE ? panel_new_profile(L.area_w - 2, L.panel_h - 1, prof)
-           : panel_new(L.area_w - 2, L.panel_h - 1)) != 0 && !panel_alive()) {
+           : cmd == CMD_TERMINAL_NEW_PROFILE ? panel_new_profile(PANEL_COLS, L.panel_h - 1, prof)
+           : panel_new(PANEL_COLS, L.panel_h - 1)) != 0 && !panel_alive()) {
         E.panel = 0;
         E.focus = F_EDITOR;
       }
@@ -12820,6 +13605,7 @@ static void run_command (int cmd) {
         hover_close();
         HV.at = T->cur;
         HV.from_mouse = 0;
+        HV.focus = 1;	/* Up/Down/PgUp/PgDn scroll it, Esc closes it */
         if (lsp_active(T->doc)) {
           HV.diag = dg;
           lsp_hover(T->doc, T->cur);
@@ -12902,6 +13688,11 @@ static void run_command (int cmd) {
     case CMD_SETTINGS: page_open(PAGE_SETTINGS); break;	/* the Settings editor */
     case CMD_WELCOME: page_open(PAGE_WELCOME); break;
     case CMD_NOTIFICATIONS: note_center(); break;
+    case CMD_NOTIF_FOCUS: if (!toast_focus()) note_center(); break;
+    case CMD_NOTIF_ACCEPT: toast_accept(); break;
+    case CMD_NOTIF_CLEAR: toast_clear_all(); break;
+    case CMD_LSP_STATUS: lang_status(); break;
+    case CMD_LSP_RESTART: restart_server(); break;
     case CMD_EXP_NEW_FILE: explorer_cmd(FC_NEW_FILE); break;
     case CMD_EXP_OPEN_SIDE: explorer_cmd(FC_OPEN_SIDE); break;
     case CMD_EXP_FIND_FOLDER: explorer_cmd(FC_FIND_FOLDER); break;
@@ -13130,6 +13921,7 @@ static int global_key (int k) {
       case 'u': run_command(CMD_OUTPUT); return 1;
       case '5': case '%': run_command(CMD_TERMINAL_SPLIT); return 1;
       case 'o': run_command(CMD_GOTO_SYMBOL); return 1;
+      case 'a': if (toast_accept()) return 1; break;	/* a notification's primary button */
       case 't': run_command(CMD_REOPEN); return 1;
       case '\\': case '|': run_command(CMD_GOTO_BRACKET); return 1;
       case 'd': run_command(CMD_DEBUG_VIEW); return 1;
@@ -13299,7 +14091,7 @@ int on_task_terminal (const char *name, const char *cmd, const char *cwd, int id
   E.panel = 1;
   E.panel_view = 0;
   layout();
-  if (panel_run(L.area_w - 2, L.panel_h - 1, name, cmd, cwd, id) != 0) {
+  if (panel_run(PANEL_COLS, L.panel_h - 1, name, cmd, cwd, id) != 0) {
     if (!panel_alive()) E.panel = 0;
     return -1;
   }
@@ -15176,7 +15968,9 @@ static void editor_key (int k) {
   }
   if (PK.open && peek_key(k)) return;
   if (DP.open && dirty_key(k)) return;
+  if (HV.text && HV.focus && hover_key(k)) return;	/* the hover shown by the keys scrolls */
   hover_close();
+  if (!CP.open && sig_key(k)) return;	/* Up/Down: the parameter hints' overloads */
   if (SG.label && KEY_CODE(k) == K_ESC && !CP.open) {
     sig_close();
     return;
@@ -15443,6 +16237,7 @@ static void on_key (int k) {
   E.follow = 1;
   E.nav_quiet = IS_TEXT(k) || code == K_UP || code == K_DOWN || code == K_PGUP || code == K_PGDN ||
                 code == K_ENTER || code == K_BS || code == K_DEL || code == K_PASTE || code == K_TAB;
+  if (toast_focused() && toast_key(k)) goto done;	/* a notification's buttons have the keys */
   if (user_key(k)) goto done;
   /* Ctrl+` (NUL, or the kitty key) and Ctrl+J: VS Code's terminal and panel */
   if (k == ('`' | KM_CTRL | KM_SHIFT) || k == ('~' | KM_CTRL | KM_SHIFT)) {
@@ -15682,8 +16477,8 @@ static void find_click (Mouse *m) {
 */
 static int pointer_at (const Mouse *m) {
   int in_editor = m->x >= L.area_x && m->y >= L.text_y && m->y < L.text_y + L.text_h &&
-                  !(L.panel_h > 0 && m->y >= L.panel_y);
-  if (L.panel_h > 0 && m->y > L.panel_y && E.panel_view == 0) return PTR_TEXT;	/* the terminal's text */
+                  !in_panel(m->x, m->y);
+  if (in_panel(m->x, m->y) && m->y > L.panel_y && E.panel_view == 0) return PTR_TEXT;	/* the terminal's text */
   if (in_editor && HAS_DOC && !T->page && !G->diff) {
     int gw = gutter_width();
     if (m->x >= L.ed_x + gw && m->x < L.ed_x + gw + text_cols()) return E.link_y ? PTR_POINTER : PTR_TEXT;
@@ -15697,6 +16492,7 @@ static void on_mouse (void) {
   Mouse *m = &term_mouse;
   int press = m->button == 0 && m->press && !m->drag;
   E.follow = 0;
+  if (press && toast_click(m->x, m->y)) return;	/* a notification's buttons, its x */
   scr_pointer(pointer_at(m));
   g_mm_hover = HAS_DOC && mm_width() > 0 && m->x >= L.mm_x && m->x < L.mm_x + mm_width() &&
                m->y >= L.text_y && m->y < L.text_y + L.text_h;	/* editor.minimap.showSlider "mouseover" */
@@ -15707,6 +16503,7 @@ static void on_mouse (void) {
     return;
   }
   if (m->button == 3 && m->drag && !m->wheel) {	/* it moved, no button down: hover later */
+    sb_hover(m->x, m->y);	/* the status bar's tooltips */
     E.link_y = 0;
     if ((m->mods & (eopt.mc_ctrl ? KM_ALT : KM_CTRL)) && HAS_DOC && !G->diff && !T->page && lsp_active(T->doc) &&
         m->y >= L.text_y && m->y < L.text_y + L.text_h && m->x >= L.ed_x + gutter_width() &&
@@ -15719,11 +16516,20 @@ static void on_mouse (void) {
         E.link_x1 = b.x;
       }
     }
+    if (opt.hover_sticky && hover_in(m->x, m->y)) return;	/* editor.hover.sticky: the mouse is in it */
     if (HV.text && HV.from_mouse && (m->y != HV.my || abs(m->x - HV.mx) > 3)) hover_close();
     HV.mx = m->x;
     HV.my = m->y;
     HV.mt = os_now_us();
     HV.waiting = 1;
+    return;
+  }
+  if (m->wheel && hover_in(m->x, m->y) && HV.nlines > HV.shown) {	/* the wheel in the hover scrolls it */
+    hover_scroll(m->wheel < 0 ? -3 : 3);
+    return;
+  }
+  if (press && SG.row >= 0 && m->y == SG.row && SG.label && (m->x == SG.up_x || m->x == SG.down_x)) {
+    sig_key(m->x == SG.up_x ? K_UP : K_DOWN);	/* the hints' arrows */
     return;
   }
   if (press && HAS_DOC && !G->diff && LN.d == T->doc) {	/* a code lens: its command */
@@ -15747,9 +16553,10 @@ static void on_mouse (void) {
     quickfix();
     return;
   }
+  if (press && hover_click(m)) return;	/* a link in the hover; the rest of it is its */
   hover_close();
   if (((m->press && !m->drag) || m->wheel) && !E.tdrag && !E.grp_resize && m->x >= L.area_x &&
-      m->x < L.area_x + L.area_w && m->y >= L.body_y && m->y < L.body_y + L.body_h - L.panel_h) {
+      m->x < L.area_x + L.area_w && m->y >= L.area_y && m->y < L.area_y + L.area_h) {
     int g = group_at(m->x, m->y);	/* the group under the mouse comes to the front; a border drags */
     if (g >= 1000) {
       if (press) E.grp_resize = g;
@@ -15815,8 +16622,8 @@ static void on_mouse (void) {
         files_drop(m->y - L.body_y, (m->mods & KM_CTRL) != 0, &act);	/* Ctrl: copied */
         apply_act(&act);
       }
-      else if (E.fdrag == 2 && m->x >= L.area_x && m->x < L.area_x + L.area_w && m->y >= L.body_y &&
-               m->y < L.body_y + L.body_h - L.panel_h) {
+      else if (E.fdrag == 2 && m->x >= L.area_x && m->x < L.area_x + L.area_w && m->y >= L.area_y &&
+               m->y < L.area_y + L.area_h) {
         size_t i;
         int g = group_at(m->x, m->y);
         if (g >= 0 && g < 1000) focus_group(g);
@@ -15885,8 +16692,12 @@ static void on_mouse (void) {
     else if (!m->press) E.drag_text = 0;
     return;
   }
-  if (E.resizing_panel) {	/* the panel's top follows the mouse */
-    if (m->drag) E.panel_h = L.body_y + L.body_h - m->y;
+  if (E.resizing_panel) {	/* the panel's top (or its side's edge) follows the mouse */
+    if (m->drag && E.resizing_panel == 2) {
+      int w = opt.panel_loc == PANEL_RIGHT ? L.panel_x + L.panel_w - m->x - 1 : m->x - L.panel_x;
+      E.panel_w = w < 20 ? 20 : w;
+    }
+    else if (m->drag) E.panel_h = L.body_y + L.body_h - m->y;
     else if (!m->press) E.resizing_panel = 0;
     return;
   }
@@ -15911,8 +16722,11 @@ static void on_mouse (void) {
     scrollbar_mouse(m);
     return;
   }
-  if (L.panel_h > 0 && m->x >= L.area_x && m->x < L.area_x + L.area_w && m->y >= L.panel_y &&
-      m->y < L.body_y + L.body_h) {
+  if (press && panel_edge() >= 0 && m->x == panel_edge() && m->y >= L.panel_y && m->y < L.panel_y + L.panel_h) {
+    E.resizing_panel = 2;	/* a side panel's edge: drag it */
+    return;
+  }
+  if (in_panel(m->x, m->y)) {
     if (m->wheel && E.panel_view == 1) {
       size_t st = (size_t)wheel_step(m->mods);
       if (m->wheel < 0) PB.sel = PB.sel > st ? PB.sel - st : 0;
@@ -15939,6 +16753,7 @@ static void on_mouse (void) {
         E.focus = F_EDITOR;
       }
       else if (m->x == g_pn.max_x) run_command(CMD_PANEL_MAX);
+      else if (m->x == g_pn.more_x) panel_more_menu(m->x, m->y + 1);
       else if (E.panel_view == 1 && problems_title_click(m->x)) ;	/* the filter box, the funnel, Collapse All */
       else if (m->x >= g_pn.prob_x0 && m->x < g_pn.prob_x1) {
         E.panel_view = 1;
@@ -15967,7 +16782,7 @@ static void on_mouse (void) {
           panel_select(k);
           E.focus = F_PANEL;
         }
-        else E.resizing_panel = 1;
+        else if (!L.panel_side) E.resizing_panel = 1;
       }
     }
     else if (press) E.focus = F_PANEL;
@@ -15987,26 +16802,31 @@ static void on_mouse (void) {
     return;
   }
   if (m->y == 0 && SHOW_MENU) {	/* the menu bar */
-    if (press) {
+    if (press && menubar_cc_hit(m->x)) {	/* the command center: back, forward, Go to File */
+      int c = menubar_cc_hit(m->x);
+      run_command(c == 1 ? CMD_NAV_BACK : c == 2 ? CMD_NAV_FORWARD : CMD_QUICK_OPEN);
+    }
+    else if (press) {
       int menu = menubar_hit(m->x);
       if (menu >= 0) run_command(menu_run(menu));
     }
     return;
   }
-  if (m->y == E.rows - 1 && SHOW_STATUS) {	/* the status bar */
-    if (press && m->x >= g_sb.branch_x0 && m->x < g_sb.branch_x1) run_command(CMD_GIT_CHECKOUT);
-    else if (press && m->x >= g_sb.sync_x0 && m->x < g_sb.sync_x1) run_command(CMD_GIT_SYNC);
-    else if (press && m->x >= g_sb.pos_x0 && m->x < g_sb.pos_x1) run_command(CMD_GOTO);
-    else if (press && m->x >= g_sb.prob_x0 && m->x < g_sb.prob_x1) run_command(CMD_PROBLEMS);
-    else if (press && m->x >= g_sb.ind_x0 && m->x < g_sb.ind_x1) run_command(CMD_INDENTATION);
-    else if (press && m->x >= g_sb.eol_x0 && m->x < g_sb.eol_x1) run_command(CMD_EOL);
-    else if (press && m->x >= g_sb.enc_x0 && m->x < g_sb.enc_x1) run_command(CMD_ENCODING);
-    else if (press && m->x >= g_sb.lang_x0 && m->x < g_sb.lang_x1) run_command(CMD_LANGUAGE);
-    else if (press && m->x >= g_sb.bell_x - 1) run_command(CMD_NOTIFICATIONS);
+  if (m->y == E.rows - 1 && SHOW_STATUS) {	/* the status bar: an item's command, or its menu */
+    int it = sb_at(m->x);
+    if (m->button == 2 && m->press && !m->drag) sb_menu(m->x);
+    else if (press && it >= 0 && g_sbi[it].cmd != CMD_NONE) {
+      SBH.item = -1;
+      run_command(g_sbi[it].cmd);
+    }
     return;
   }
   if (L.act_w > 0 && m->x >= L.act_x && m->x < L.act_x + L.act_w && m->y >= L.body_y) {	/* the activity bar: a view, or hide the one shown */
     int v = act_hit(m->y - L.body_y);
+    if (m->y == act_manage_row(L.body_y, L.body_h)) {	/* the Manage gear */
+      if (press) run_command(CMD_MANAGE);
+      return;
+    }
     if (!press || v < 0) return;
     if (E.side && E.view == v) {
       E.side = 0;

@@ -41,7 +41,27 @@ void act_draw (int x, int y, int h, int view, int shown) {
     if (row >= y + h) break;
     if (on) scr_put(opt.side_right ? x + ACT_W - 1 : x, row, 0x258E, S_ACT_BAR);	/* the bar on the side of the editor */
     scr_put(x + 1, row, act_icon[v], on ? S_ACT_ON : S_ACT);
+    if (row + 1 < y + h) {	/* VS Code's badge: a number at the icon's foot, white on blue */
+      int dot = 0, n = act_badge(v, &dot);
+      if (n > 0) {
+        char b[8];
+        int k;
+        snprintf(b, sizeof(b), n > 99 ? "99" : "%d", n);
+        for (k = 0; b[k]; k++) scr_put_rgb(x + 2 + k, row + 1, (unsigned char)b[k], 0xFFFFFF, 0x0078D4, RGB_BOLD);
+      }
+      else if (dot) {
+        scr_put(x + 2, row + 1, 0x25CF, S_ACT);	/* ● */
+        scr_set_fg(x + 2, row + 1, 0x0078D4);
+      }
+    }
   }
+  if ((v = act_manage_row(y, h)) >= 0) scr_put(x + 1, v, 0xEAF8, S_ACT);	/* Manage: codicon settings-gear */
+}
+
+
+/* the Manage gear at the foot of the activity bar (the Accounts slot above it stays empty) */
+int act_manage_row (int y, int h) {
+  return h >= VIEW_N * 2 + 5 ? y + h - 2 : -1;
 }
 
 

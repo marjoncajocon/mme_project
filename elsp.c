@@ -27,9 +27,20 @@ typedef struct Req {
   Pos at;	/* RQ_HIGHLIGHT: where it was asked */
 } Req;
 
+typedef struct Prog {	/* a $/progress that runs: "Loading packages..." */
+  char token[64];
+  char title[96];
+  char msg[128];
+  int pct;	/* -1: not said */
+} Prog;
+
 typedef struct Srv {
   char lang[16];
   OsProc proc;
+  long pid;
+  int gone;	/* restarted: another one does its work (it is kept, a question may still point at it) */
+  Prog prog[8];
+  int nprog;
   int to, from;	/* its stdin, its stdout */
   int err;	/* its stderr: to the OUTPUT view; -1 closed */
   char chan[64];	/* its output channel: "gopls" */
@@ -68,7 +79,7 @@ typedef struct DFile {
   size_t nt;	/* the last nt are a task's (its problem matcher) */
 } DFile;
 
-#define MAX_SRV	16
+#define MAX_SRV	64	/* restarts take new ones */
 
 static Srv *g_srv[MAX_SRV];
 static int g_nsrv;
@@ -78,6 +89,7 @@ static DFile *g_diag;
 static size_t g_ndiag, g_capdiag;
 static char g_failed[1024];	/* " lang lang ": servers that could not start, told once */
 static int g_log = -2;	/* $MME_LSPLOG: a file with every message, to see what goes wrong */
+static int g_down;	/* quitting: a server that ends is not restarted */
 
 
 /* a server's number in range, else def: casting -1 or 1e300 to size_t or int is undefined in C */
@@ -415,6 +427,7 @@ static Srv *start (const char *lang) {
   s->to = to[1];
   s->from = from[0];
   s->err = err[0];
+  s->pid = pid;
   out_log(s->chan, "[info] Starting %s for %s in %s", cmd, lang, root);
   buf_init(&s->in);
   g_srv[g_nsrv++] = s;
@@ -426,6 +439,8 @@ static Srv *start (const char *lang) {
     json_put_str(&b, path_basename(root), strlen(path_basename(root)));
     buf_puts(&b, "}],\"clientInfo\":{\"name\":\"mme\"},\"capabilities\":{"
                  "\"general\":{\"positionEncodings\":[\"utf-8\",\"utf-16\"]},"
+                 "\"window\":{\"workDoneProgress\":true,\"showDocument\":{\"support\":true},"
+                 "\"showMessage\":{\"messageActionItem\":{\"additionalPropertiesSupport\":false}}},"
                  "\"textDocument\":{\"synchronization\":{\"didSave\":false},"
                  "\"completion\":{\"completionItem\":{\"snippetSupport\":true,"
                  "\"documentationFormat\":[\"markdown\",\"plaintext\"],"
@@ -466,15 +481,229 @@ static Srv *start (const char *lang) {
 static Srv *server (const char *lang) {
   int i;
   for (i = 0; i < g_nsrv; i++)
-    if (strcmp(g_srv[i]->lang, lang) == 0) return g_srv[i]->dead ? NULL : g_srv[i];
+    if (!g_srv[i]->gone && strcmp(g_srv[i]->lang, lang) == 0) return g_srv[i]->dead ? NULL : g_srv[i];
   return start(lang);
+}
+
+
+/* the server for lang now (not one restarted since), running or not; NULL: none started */
+static Srv *srv_of (const char *lang) {
+  int i;
+  for (i = g_nsrv - 1; i >= 0; i--)
+    if (!g_srv[i]->gone && strcmp(g_srv[i]->lang, lang) == 0) return g_srv[i];
+  return NULL;
+}
+
+
+/* a server stopped for good: its pipes closed, its process ended; the struct stays */
+static void srv_stop (Srv *s) {
+  int status;
+  if (!s->dead) {
+    request(s, "shutdown", "null", RQ_OTHER, NULL);
+    notify(s, "exit", "null");
+  }
+  s->dead = s->told = s->gone = 1;
+  s->nprog = 0;
+  os_close(s->to);
+  os_close(s->from);
+  if (s->err >= 0) os_close(s->err);
+  s->err = -1;
+  if (s->pid > 0 && os_poll_proc(s->proc, &status) == 0) os_kill(s->pid, 9);
+}
+
+
+static void diag_drop (const char *uri);
+
+/*
+** mme: Restart Language Server: the server of lang stops, a new one starts
+** and gets the files the old one had; one that was not found is looked for
+** again.
+*/
+void lsp_restart (const char *lang) {
+  Srv *old = srv_of(lang), *ns;
+  char key[32], *at;
+  size_t k;
+  snprintf(key, sizeof(key), " %s ", lang);
+  if ((at = strstr(g_failed, key)) != NULL) memmove(at, at + strlen(key) - 1, strlen(at + strlen(key) - 1) + 1);
+  if (old) {
+    out_log(old->chan, "[info] Restarting the %s language server", lang);
+    srv_stop(old);
+  }
+  ns = start(lang);
+  for (k = 0; k < g_ndoc; k++) {
+    LDoc *l = &g_doc[k];
+    if (old == NULL || l->s != old) continue;
+    diag_drop(l->uri);	/* the new one says them again */
+    if (ns) {
+      l->s = ns;
+      l->opened = 0;
+      l->version = 0;
+    }
+    else {	/* nothing to talk to: the file is opened again later */
+      free(l->uri);
+      *l = g_doc[--g_ndoc];
+      k--;
+    }
+  }
+}
+
+
+/* the servers that crashed lately, VS Code's rule: 5 in 3 minutes and it is not restarted */
+static struct {
+  char lang[16];
+  long long t[5];
+  int n;
+  int given_up;
+} g_crash[16];
+
+
+static void show_output_done (void *ud, int choice) {
+  if (choice == 0) on_show_output((const char *)ud);
+}
+
+
+/* a server ended by itself: started again, unless it keeps doing that */
+static void crashed (Srv *s) {
+  static char chan[16][64];
+  long long now = os_now_us();
+  int i, c = -1, recent = 0;
+  for (i = 0; i < 16 && g_crash[i].lang[0]; i++)
+    if (strcmp(g_crash[i].lang, s->lang) == 0) c = i;
+  if (c < 0 && i < 16) {
+    c = i;
+    snprintf(g_crash[c].lang, sizeof(g_crash[c].lang), "%s", s->lang);
+  }
+  if (c < 0 || g_crash[c].given_up) return;
+  if (g_crash[c].n == 5) {
+    memmove(g_crash[c].t, g_crash[c].t + 1, 4 * sizeof(long long));
+    g_crash[c].n--;
+  }
+  g_crash[c].t[g_crash[c].n++] = now;
+  for (i = 0; i < g_crash[c].n; i++)
+    if (now - g_crash[c].t[i] < 180000000LL) recent++;
+  if (recent >= 5) {
+    static const char *const act[] = {"Show Output"};
+    char msg[200];
+    g_crash[c].given_up = 1;
+    snprintf(chan[c], sizeof(chan[c]), "%s", s->chan);
+    snprintf(msg, sizeof(msg), "The %s server crashed 5 times in the last 3 minutes. The server will not be restarted.", s->chan);
+    out_log(s->chan, "[error] %s", msg);
+    toast_ask(2, s->chan, msg, act, 1, show_output_done, chan[c]);
+    return;
+  }
+  out_log(s->chan, "[info] The %s server crashed; restarting it (%d of 5)", s->chan, recent);
+  lsp_restart(s->lang);
+}
+
+
+/* how the server of lang is: LS_*; name gets its program's name ("gopls") */
+int lsp_state (const char *lang, char *name, size_t n) {
+  const char *cmd = lang ? settings_server(lang) : NULL;
+  char key[32];
+  Srv *s;
+  if (name && n) name[0] = '\0';
+  if (cmd == NULL || !*cmd) return LS_NONE;
+  if (name && n) {	/* the program: its first word, no folder, no .exe */
+    const char *e = strchr(cmd, ' '), *b;
+    size_t len = e ? (size_t)(e - cmd) : strlen(cmd);
+    char *prog = xstrndup(cmd, len), *dot;
+    b = path_basename(prog);
+    snprintf(name, n, "%s", b);
+    if ((dot = strrchr(name, '.')) != NULL && dot != name && m_strnicmp(dot, ".exe", 4) == 0) *dot = '\0';
+    free(prog);
+  }
+  snprintf(key, sizeof(key), " %s ", lang);
+  if ((s = srv_of(lang)) != NULL) {
+    if (s->dead) return LS_DEAD;
+    if (!s->ready) return LS_STARTING;
+    return s->nprog ? LS_BUSY : LS_READY;
+  }
+  return strstr(g_failed, key) ? LS_MISSING : LS_OFF;
+}
+
+
+/* the OUTPUT channel of lang's server ("gopls"); NULL: none */
+const char *lsp_channel (const char *lang) {
+  Srv *s = lang ? srv_of(lang) : NULL;
+  return s ? s->chan : NULL;
+}
+
+
+/* the progress that runs now, of every server: how many */
+int lsp_progress_count (void) {
+  int i, n = 0;
+  for (i = 0; i < g_nsrv; i++)
+    if (!g_srv[i]->gone && !g_srv[i]->dead) n += g_srv[i]->nprog;
+  return n;
+}
+
+
+/* the i-th: "gopls: Loading packages... (42%)" in buf; its percentage, -1 not said */
+int lsp_progress_text (int i, char *buf, size_t n) {
+  int k;
+  for (k = 0; k < g_nsrv; k++) {
+    Srv *s = g_srv[k];
+    if (s->gone || s->dead) continue;
+    if (i < s->nprog) {
+      const Prog *p = &s->prog[s->nprog - 1 - i];	/* the newest first */
+      char pc[16] = "";
+      if (p->pct >= 0) snprintf(pc, sizeof(pc), " (%d%%)", p->pct);
+      snprintf(buf, n, "%s: %s%s%s%s", s->chan, p->title, p->title[0] && p->msg[0] ? " " : "", p->msg, pc);
+      return p->pct;
+    }
+    i -= s->nprog;
+  }
+  if (n) buf[0] = '\0';
+  return -1;
+}
+
+
+/* $/progress: begin, report, end of a work done progress */
+static void progress (Srv *s, const Json *params) {
+  const Json *tk = json_get(params, "token"), *v = json_get(params, "value");
+  const char *kind = json_str(json_get(v, "kind"), "");
+  char token[64];
+  int i, at = -1;
+  if (tk == NULL || v == NULL) return;
+  if (tk->type == J_STR) snprintf(token, sizeof(token), "%s", tk->str);
+  else snprintf(token, sizeof(token), "%.0f", tk->num);
+  for (i = 0; i < s->nprog; i++)
+    if (strcmp(s->prog[i].token, token) == 0) at = i;
+  if (strcmp(kind, "begin") == 0) {
+    Prog *p;
+    if (at < 0) {
+      if (s->nprog == 8) {	/* the oldest is forgotten */
+        memmove(s->prog, s->prog + 1, 7 * sizeof(Prog));
+        s->nprog--;
+      }
+      at = s->nprog++;
+    }
+    p = &s->prog[at];
+    snprintf(p->token, sizeof(p->token), "%s", token);
+    snprintf(p->title, sizeof(p->title), "%s", json_str(json_get(v, "title"), ""));
+    snprintf(p->msg, sizeof(p->msg), "%s", json_str(json_get(v, "message"), ""));
+    p->pct = json_get(v, "percentage") ? inum(json_get(v, "percentage"), -1) : -1;
+    out_log(s->chan, "[info] %s %s", p->title, p->msg);
+  }
+  else if (strcmp(kind, "report") == 0 && at >= 0) {
+    Prog *p = &s->prog[at];
+    if (json_get(v, "message")) snprintf(p->msg, sizeof(p->msg), "%s", json_str(json_get(v, "message"), ""));
+    if (json_get(v, "percentage")) p->pct = inum(json_get(v, "percentage"), -1);
+  }
+  else if (strcmp(kind, "end") == 0 && at >= 0) {
+    memmove(s->prog + at, s->prog + at + 1, (size_t)(s->nprog - at - 1) * sizeof(Prog));
+    s->nprog--;
+  }
+  if (s->prog[0].pct > 100) s->prog[0].pct = 100;
 }
 
 
 void lsp_shutdown (void) {
   int i;
+  g_down = 1;
   for (i = 0; i < g_nsrv; i++) {
     Srv *s = g_srv[i];
+    if (s->gone) continue;	/* stopped already */
     if (!s->dead) {
       request(s, "shutdown", "null", RQ_OTHER, NULL);
       notify(s, "exit", "null");
@@ -1017,6 +1246,18 @@ static DFile *dfile (const char *uri, int make) {
 }
 
 
+/* the server's problems of uri go (a restarted server says them again); a task's stay */
+static void diag_drop (const char *uri) {
+  DFile *f = dfile(uri, 0);
+  size_t i, ns;
+  if (f == NULL) return;
+  ns = f->n - f->nt;
+  for (i = 0; i < ns; i++) free(f->v[i].msg);
+  memmove(f->v, f->v + ns, f->nt * sizeof(Diag));
+  f->n = f->nt;
+}
+
+
 static void diagnostics (Srv *s, const Json *params) {
   const char *uri = json_str(json_get(params, "uri"), NULL);
   const Json *list = json_get(params, "diagnostics");
@@ -1453,45 +1694,63 @@ static void hover (const Json *res) {
 }
 
 
+/* MarkupContent or a string: its text (malloc'd), "" when none */
+static char *markup (const Json *j) {
+  if (j == NULL) return xstrdup("");
+  if (j->type == J_STR) return xstrdup(j->str);
+  return xstrdup(json_str(json_get(j, "value"), ""));
+}
+
+
+/* SignatureHelp: every overload, its active parameter as a range of its label and that parameter's doc */
 static void signature (const Json *res) {
-  const Json *sigs = json_get(res, "signatures"), *sg, *params;
-  int as = inum(json_get(res, "activeSignature"), 0), ap;
-  const char *label;
-  size_t a0 = 0, a1 = 0;
+  const Json *sigs = json_get(res, "signatures");
+  int as = inum(json_get(res, "activeSignature"), 0), k, n;
+  SigInfo *v;
   if (sigs == NULL || sigs->type != J_ARR || sigs->n == 0) {
-    on_signature(NULL, 0, 0);
+    on_signatures(NULL, 0, 0);
     return;
   }
   if (as < 0 || (size_t)as >= sigs->n) as = 0;
-  sg = sigs->kid[as];
-  label = json_str(json_get(sg, "label"), "");
-  ap = inum(json_get(sg, "activeParameter"), json_num(json_get(res, "activeParameter"), 0));
-  params = json_get(sg, "parameters");
-  if (params && params->type == J_ARR && ap >= 0 && (size_t)ap < params->n) {
-    const Json *pl = json_get(params->kid[ap], "label");
-    if (pl && pl->type == J_STR) {	/* the parameter's text: where it is in the label */
-      const char *f = strstr(label, pl->str);
-      if (f) {
-        a0 = (size_t)(f - label);
-        a1 = a0 + pl->len;
+  n = sigs->n > 32 ? 32 : (int)sigs->n;
+  v = (SigInfo *)xmalloc((size_t)n * sizeof(SigInfo));
+  for (k = 0; k < n; k++) {
+    const Json *sg = sigs->kid[k], *params = json_get(sg, "parameters");
+    const char *label = json_str(json_get(sg, "label"), "");
+    int ap = inum(json_get(sg, "activeParameter"), json_num(json_get(res, "activeParameter"), 0));
+    SigInfo *si = &v[k];
+    si->label = xstrdup(label);
+    si->a0 = si->a1 = 0;
+    si->doc = markup(json_get(sg, "documentation"));
+    si->pdoc = xstrdup("");
+    if (params && params->type == J_ARR && ap >= 0 && (size_t)ap < params->n) {
+      const Json *pl = json_get(params->kid[ap], "label");
+      free(si->pdoc);
+      si->pdoc = markup(json_get(params->kid[ap], "documentation"));
+      if (pl && pl->type == J_STR) {	/* the parameter's text: where it is in the label */
+        const char *f = strstr(label, pl->str);
+        if (f) {
+          si->a0 = (size_t)(f - label);
+          si->a1 = si->a0 + pl->len;
+        }
       }
-    }
-    else if (pl && pl->type == J_ARR && pl->n == 2) {	/* [start, end]: UTF-16 units */
-      size_t u0 = unum(pl->kid[0], 0), u1 = unum(pl->kid[1], 0), i = 0, u = 0, len;
-      size_t n = strlen(label);
-      while (i < n && u < u0) {
-        u += utf8_decode(label + i, n - i, &len) >= 0x10000 ? 2 : 1;
-        i += len;
+      else if (pl && pl->type == J_ARR && pl->n == 2) {	/* [start, end]: UTF-16 units */
+        size_t u0 = unum(pl->kid[0], 0), u1 = unum(pl->kid[1], 0), i = 0, u = 0, len;
+        size_t ln = strlen(label);
+        while (i < ln && u < u0) {
+          u += utf8_decode(label + i, ln - i, &len) >= 0x10000 ? 2 : 1;
+          i += len;
+        }
+        si->a0 = i;
+        while (i < ln && u < u1) {
+          u += utf8_decode(label + i, ln - i, &len) >= 0x10000 ? 2 : 1;
+          i += len;
+        }
+        si->a1 = i;
       }
-      a0 = i;
-      while (i < n && u < u1) {
-        u += utf8_decode(label + i, n - i, &len) >= 0x10000 ? 2 : 1;
-        i += len;
-      }
-      a1 = i;
     }
   }
-  on_signature(label, a0, a1);
+  on_signatures(v, n, as < n ? as : 0);
 }
 
 
@@ -1561,16 +1820,100 @@ void lsp_action_run (size_t i) {
 }
 
 
+/* a showMessageRequest waiting for its button: the answer goes back with its id */
+typedef struct Question {
+  Srv *s;
+  char id[80];	/* as JSON: "7" or "\"abc\"" */
+  char act[4][48];
+  int n;
+} Question;
+
+
+static void question_done (void *ud, int choice) {
+  Question *q = (Question *)ud;
+  Buf b;
+  buf_init(&b);
+  buf_printf(&b, "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":", q->id);
+  if (choice >= 0 && choice < q->n) {
+    buf_puts(&b, "{\"title\":");
+    json_put_str(&b, q->act[choice], strlen(q->act[choice]));
+    buf_puts(&b, "}}");
+  }
+  else buf_puts(&b, "null}");
+  if (!q->s->dead) send_msg(q->s, &b);	/* a server gone takes no answer */
+  buf_free(&b);
+  free(q);
+}
+
+
+/* window/showDocument: a file (at its selection) or a URL in the browser */
+static int show_document (Srv *s, const Json *params) {
+  const char *uri = json_str(json_get(params, "uri"), NULL);
+  const Json *sel = json_get(params, "selection.start");
+  long line = -1, col = -1;
+  char *path;
+  (void)s;
+  if (uri == NULL) return 0;
+  if (json_bool(json_get(params, "external"), 0) || strncmp(uri, "file://", 7) != 0) {
+    on_show_document(NULL, uri, -1, -1);
+    return 1;
+  }
+  if (sel) {
+    line = (long)unum(json_get(sel, "line"), 0);
+    col = (long)unum(json_get(sel, "character"), 0);
+  }
+  path = lsp_path(uri);
+  on_show_document(path, NULL, line, col);
+  free(path);
+  return 1;
+}
+
+
 /* a request of the server: answered with nothing, which every server takes */
 static void answer (Srv *s, const Json *msg) {
   const Json *id = json_get(msg, "id");
   const char *method = json_str(json_get(msg, "method"), "");
   Buf b;
+  if (strcmp(method, "window/showMessageRequest") == 0 && json_get(msg, "params.actions") &&
+      json_get(msg, "params.actions")->type == J_ARR && json_get(msg, "params.actions")->n > 0) {
+    const Json *acts = json_get(msg, "params.actions");	/* a question: answered when a button is picked */
+    int type = inum(json_get(msg, "params.type"), 3);
+    const char *titles[4];
+    Question *q = (Question *)xmalloc(sizeof(Question));
+    size_t i;
+    memset(q, 0, sizeof(*q));
+    q->s = s;
+    if (id->type == J_STR) {
+      Buf t;
+      buf_init(&t);
+      json_put_str(&t, id->str, id->len);
+      buf_putc(&t, '\0');
+      snprintf(q->id, sizeof(q->id), "%s", t.s);
+      buf_free(&t);
+    }
+    else snprintf(q->id, sizeof(q->id), "%.0f", id->num);
+    for (i = 0; i < acts->n && q->n < 4; i++) {
+      snprintf(q->act[q->n], sizeof(q->act[0]), "%s", json_str(json_get(acts->kid[i], "title"), "?"));
+      titles[q->n] = q->act[q->n];
+      q->n++;
+    }
+    out_log(s->chan, "[info] %s", json_str(json_get(msg, "params.message"), ""));
+    toast_ask(type == 1 ? 2 : type == 2 ? 1 : 0, s->chan, json_str(json_get(msg, "params.message"), ""), titles, q->n,
+              question_done, q);
+    return;
+  }
   buf_init(&b);
   buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
   if (id->type == J_STR) json_put_str(&b, id->str, id->len);
   else buf_printf(&b, "%.0f", id->num);	/* as it came (a cast of a huge one is undefined) */
-  if (strcmp(method, "workspace/applyEdit") == 0) {	/* a command's edit: it is done here */
+  if (strcmp(method, "window/showMessageRequest") == 0) {	/* no buttons: a notification, answered at once */
+    int type = inum(json_get(msg, "params.type"), 3);
+    toast_src(type == 1 ? 2 : type == 2 ? 1 : 0, s->chan, "%s", json_str(json_get(msg, "params.message"), ""));
+    buf_puts(&b, ",\"result\":null}");
+  }
+  else if (strcmp(method, "window/showDocument") == 0)
+    buf_printf(&b, ",\"result\":{\"success\":%s}}", show_document(s, json_get(msg, "params")) ? "true" : "false");
+  else if (strcmp(method, "workspace/applyEdit") == 0) {	/* a command's edit: it is done here */
     workspace_edit(s, json_get(msg, "params.edit"));
     buf_puts(&b, ",\"result\":{\"applied\":true}}");
   }
@@ -1601,12 +1944,14 @@ static void handle (Srv *s, const Json *msg) {
   if (method) {
     if (strcmp(method->str, "textDocument/publishDiagnostics") == 0)
       diagnostics(s, json_get(msg, "params"));
+    else if (strcmp(method->str, "$/progress") == 0) progress(s, json_get(msg, "params"));
     else if (strcmp(method->str, "window/showMessage") == 0 || strcmp(method->str, "window/logMessage") == 0) {
       static const char *const level[] = {"info", "error", "warning", "info", "info"};
       int type = inum(json_get(msg, "params.type"), 4);
       const char *text = json_str(json_get(msg, "params.message"), "");
       out_log(s->chan, "[%s] %s", level[type >= 1 && type <= 4 ? type : 0], text);
-      if (method->str[7] == 's' && type <= 2) toast(1, "%s", text);	/* errors and warnings only */
+      if (method->str[7] == 's' && type >= 1 && type <= 3)	/* a notification, as VS Code shows it */
+        toast_src(type == 1 ? 2 : type == 2 ? 1 : 0, s->chan, "%s", text);
     }
     return;
   }
@@ -1930,6 +2275,8 @@ int lsp_poll (void) {
     if (s->dead && !s->told) {
       out_log(s->chan, "[error] The %s language server stopped", s->lang);
       s->told = 1;
+      s->nprog = 0;
+      if (!s->gone && !g_down) crashed(s);	/* started again, VS Code's way */
     }
     got |= messages(s);
   }

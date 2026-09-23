@@ -17,6 +17,7 @@
 
 void (*ui_background) (void);
 char ui_title[512];
+char ui_cc[256];
 
 
 /*
@@ -120,7 +121,11 @@ static const char *const names[CMD_N] = {
   "Explorer: Open to the Side", "Find in Folder...",
   "Help: Keyboard Shortcuts Reference", "Help: Tips and Tricks", "Help: Show All Commands",
   "Diff: Toggle Ignore Trim Whitespace", "Diff: Toggle Collapse Unchanged Regions",
-  "View: Zoom In", "View: Zoom Out", "View: Reset Zoom"
+  "View: Zoom In", "View: Zoom Out", "View: Reset Zoom",
+  "mme: Restart Language Server", "mme: Show Language Status", "Notifications: Focus Notification Toast",
+  "Notifications: Accept Notification Primary Action", "Notifications: Clear All Notifications",
+  "Manage", "View: Move Panel Right", "View: Move Panel Left", "View: Move Panel To Bottom",
+  "View: Set Panel Alignment to Center", "View: Set Panel Alignment to Justify", "View: Toggle Command Center"
 };
 
 static const char *const keys[CMD_N] = {
@@ -171,7 +176,9 @@ static const char *const keys[CMD_N] = {
   "", "", "", "Ctrl+Up", "Ctrl+Down", "", "Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+Alt+R", "Ctrl+G", "", "", "",
   "Ctrl+Enter", "Shift+Alt+F",
   "", "", "", "", "",
-  "Ctrl+=", "Ctrl+-", "Ctrl+NumPad0"
+  "Ctrl+=", "Ctrl+-", "Ctrl+NumPad0",
+  "", "", "", "Ctrl+Shift+A", "",
+  "", "", "", "", "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -306,7 +313,12 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "explorer.openToSide", "filesExplorer.findInFolder",
   "workbench.action.keybindingsReference", "workbench.action.openTipsAndTricks", "workbench.action.showCommands.all",
   "toggle.diff.ignoreTrimWhitespace", "diffEditor.toggleCollapseUnchangedRegions",
-  "workbench.action.zoomIn", "workbench.action.zoomOut", "workbench.action.zoomReset"
+  "workbench.action.zoomIn", "workbench.action.zoomOut", "workbench.action.zoomReset",
+  "mme.restartLanguageServer", "mme.showLanguageStatus", "notifications.focusToasts",
+  "notification.acceptPrimaryAction", "notifications.clearAll",
+  "mme.manage", "workbench.action.positionPanelRight", "workbench.action.positionPanelLeft",
+  "workbench.action.positionPanelBottom", "workbench.action.alignPanelCenter", "workbench.action.alignPanelJustify",
+  "workbench.action.toggleCommandCenter"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -410,6 +422,52 @@ int menubar_hit (int x) {
 }
 
 
+/* the command center: where its arrows and its box were drawn */
+static struct {
+  int back, fwd, x0, x1;
+} g_cc = {-1, -1, -1, -1};
+
+
+int menubar_cc_hit (int x) {
+  if (g_cc.x1 <= g_cc.x0) return 0;
+  if (x == g_cc.back) return 1;
+  if (x == g_cc.fwd) return 2;
+  return x >= g_cc.x0 && x < g_cc.x1 ? 3 : 0;
+}
+
+
+/*
+** VS Code's command center (window.commandCenter): in the middle of the
+** title bar, "<- ->" and a box with the search icon and the folder's name
+** that opens Go to File. 0: no room for it (the title shows instead).
+*/
+static int cc_draw (int end, int cols) {
+  int bw = cols * 2 / 5, bx, tw;
+  g_cc.back = g_cc.fwd = g_cc.x0 = g_cc.x1 = -1;
+  if (!opt.command_center || ui_cc[0] == '\0') return 0;
+  if (bw > 60) bw = 60;
+  tw = (int)str_cols(ui_cc) + 4;
+  if (bw < tw) bw = tw;
+  if (bw > cols - end - 9) bw = cols - end - 9;	/* the room right of the menus */
+  if (bw < 16) return 0;
+  bx = (cols - bw) / 2;	/* in the middle, else just right of the menus */
+  if (bx - 6 <= end) bx = end + 6;
+  if (bx + bw >= cols - 1) return 0;
+  g_cc.back = bx - 5;
+  g_cc.fwd = bx - 3;
+  g_cc.x0 = bx;
+  g_cc.x1 = bx + bw;
+  scr_put(g_cc.back, 0, 0xEA9B, S_MENUBAR);	/* codicon arrow-left: Go Back */
+  scr_put(g_cc.fwd, 0, 0xEA9C, S_MENUBAR);	/* arrow-right: Go Forward */
+  scr_fill(bx, 0, bw, S_INPUT);
+  tw = (int)str_cols(ui_cc) + 2;	/* the icon, a space, the name: in the middle of the box */
+  if (tw > bw - 2) tw = bw - 2;
+  scr_put(bx + (bw - tw) / 2, 0, 0xEA6D, S_INPUT);	/* codicon search */
+  scr_putsw(bx + (bw - tw) / 2 + 2, 0, tw - 2, ui_cc, S_INPUT);
+  return 1;
+}
+
+
 void menubar_draw (int open) {
   int i, end = title_x(NMENU), cols = scr_cols(), w;
   scr_fill(0, 0, cols, S_MENUBAR);
@@ -419,6 +477,7 @@ void menubar_draw (int open) {
     scr_fill(x, 0, (int)strlen(menus[i].name) + 2, st);
     scr_puts(x + 1, 0, menus[i].name, st);
   }
+  if (cc_draw(end, cols)) return;	/* the command center takes the title's place */
   w = (int)str_cols(ui_title);	/* the title, in the middle when there is room */
   if (w > 0 && w < cols - 2 * end) scr_puts((cols - w) / 2, 0, ui_title, S_MENUBAR);
   else if (w > 0 && end + 2 + w < cols) scr_puts(cols - w - 1, 0, ui_title, S_MENUBAR);
@@ -483,6 +542,77 @@ static int step (const int *cmd, int sel, int d) {
 ** end; label[i] (when not NULL) is what item i says instead of its
 ** command's name. The command picked, CMD_NONE for Esc or a click outside.
 */
+/* the next item of a popup_list that can be picked, from sel in direction d; -1: none */
+static int pl_step (const int *flags, int n, int sel, int d) {
+  int i, k = sel;
+  for (i = 0; i < n; i++) {
+    k = k < 0 ? (d > 0 ? 0 : n - 1) : (k + d + n) % n;
+    if (!(flags[k] & (MF_OFF | MF_LINE))) return k;
+  }
+  return -1;
+}
+
+
+int popup_width (const char *const *label, const int *flags, int n) {
+  int i, w = 20;
+  for (i = 0; i < n; i++)
+    if (!(flags[i] & MF_LINE) && (int)str_cols(label[i]) + 8 > w) w = (int)str_cols(label[i]) + 8;
+  return w;
+}
+
+
+/*
+** A little menu of labels, like VS Code's context menus: a check before an
+** item (MF_CHECK), dim ones (MF_OFF) cannot be picked, MF_LINE is a line,
+** MF_SUB has the submenu's arrow (Right picks it too). The index picked, -1.
+*/
+int popup_list (int x, int y, const char *const *label, const int *flags, int n) {
+  int w = popup_width(label, flags, n), h = n + 2, sel = pl_step(flags, n, -1, 1), i;
+  if (x + w > scr_cols()) x = scr_cols() - w;
+  if (y + h > scr_rows()) y = scr_rows() - h;
+  if (x < 0) x = 0;
+  if (y < 0) y = 0;
+  for (;;) {
+    int k, code;
+    ui_background();
+    scr_box(x, y, w, h, S_MENU);
+    for (i = 0; i < n; i++) {
+      int ry = y + 1 + i, on = (i == sel), cx, st = flags[i] & MF_OFF ? S_MENU_KEY : on ? S_MENU_SEL : S_MENU;
+      if (flags[i] & MF_LINE) {
+        for (cx = x + 1; cx < x + w - 1; cx++) scr_put(cx, ry, 0x2500, S_MENU_LINE);
+        continue;
+      }
+      scr_fill(x + 1, ry, w - 2, on ? S_MENU_SEL : S_MENU);
+      if (flags[i] & MF_CHECK) scr_put(x + 1, ry, 0xEAB2, st);	/* codicon check */
+      scr_putsw(x + 3, ry, w - 6, label[i], st);
+      if (flags[i] & MF_SUB) scr_put(x + w - 3, ry, 0xEAB6, st);	/* chevron-right */
+    }
+    scr_cursor(0, -1);
+    scr_flush();
+    k = term_key(200);
+    if (k == K_NONE) continue;
+    code = KEY_CODE(k);
+    if (code == K_ESC || code == K_LEFT) return -1;
+    if (code == K_UP && sel >= 0) sel = pl_step(flags, n, sel, -1);
+    else if (code == K_DOWN && sel >= 0) sel = pl_step(flags, n, sel, 1);
+    else if ((code == K_ENTER || code == ' ') && sel >= 0) return sel;
+    else if (code == K_RIGHT && sel >= 0 && (flags[sel] & MF_SUB)) return sel;
+    else if (code == K_MOUSE) {
+      Mouse *mo = &term_mouse;
+      int inside = mo->x >= x && mo->x < x + w && mo->y > y && mo->y < y + h - 1;
+      if (mo->wheel) continue;
+      if (inside) {
+        int it = mo->y - y - 1;
+        if (flags[it] & (MF_OFF | MF_LINE)) continue;
+        sel = it;
+        if (mo->button == 0 && !mo->press && !mo->drag) return it;	/* the button came up here */
+      }
+      else if (mo->press && !mo->drag) return -1;	/* a click outside closes */
+    }
+  }
+}
+
+
 int menu_popup (int x, int y, const int *cmd, const char *const *label) {
   int n = count(cmd), i, w = 20, h = n + 2, sel = step(cmd, -1, 1);
   for (i = 0; i < n; i++) {
@@ -1250,11 +1380,16 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
 ** ===================================================================
 */
 
-#define TOAST_TIME	4000000	/* us */
+#define TOAST_TIME	4000000	/* us: an information goes */
+#define TOAST_ERR_TIME	10000000	/* an error stays longer */
 
-static char g_toast[256];
-static int g_toast_warn;
-static long long g_toast_time;
+/* the toast shown now (without actions) */
+static struct {
+  char msg[256];
+  char src[32];	/* "gopls": the source line under it */
+  int sev;	/* 0 information, 1 warning, 2 error */
+  long long time;
+} g_t;
 
 
 /* the notifications that came, for the notification center: the last one last */
@@ -1262,33 +1397,133 @@ static long long g_toast_time;
 
 static struct {
   char msg[NOTE_MAX][256];
-  int warn[NOTE_MAX];
+  char src[NOTE_MAX][32];
+  int sev[NOTE_MAX];
   int n, unread;
 } g_note;
 
 
-static void note_add (const char *msg, int warn) {
+/* notifications with buttons (a language server's question): the first shows until it is answered */
+#define ASK_MAX	8
+
+typedef struct Ask {
+  char msg[256];
+  char src[32];
+  int sev;
+  char act[4][48];
+  int nact;
+  void (*done) (void *ud, int choice);	/* choice -1: closed without one */
+  void *ud;
+} Ask;
+
+static Ask g_ask[ASK_MAX];
+static int g_nask;
+static int g_ask_focus, g_ask_sel;	/* the keys go to the first one's buttons */
+
+/* where the toasts are drawn, for the mouse */
+static struct {
+  int x, y, w, h, close_x, gear_x, btn_y, bx0[4], bx1[4], nbtn;	/* the question */
+  int tx, ty, tw, th, tclose_x;	/* the plain toast */
+} TG;
+
+
+static uint32_t sev_icon (int sev) {
+  return sev >= 2 ? 0xEA87 : sev == 1 ? 0xEA6C : 0xEA74;	/* codicons error, warning, info */
+}
+
+
+static uint32_t sev_color (int sev) {
+  return ui_color(sev >= 2 ? C_ERROR : sev == 1 ? C_WARNING : C_INFO);
+}
+
+
+static void note_add (const char *msg, int sev, const char *src) {
   if (msg[0] == '\0' || strstr(msg, "chord") || strstr(msg, "Chord")) return;	/* the Ctrl+K notice is not one */
   if (g_note.n > 0 && strcmp(g_note.msg[g_note.n - 1], msg) == 0) return;	/* the same again */
   if (g_note.n == NOTE_MAX) {
     memmove(g_note.msg, g_note.msg + 1, (NOTE_MAX - 1) * sizeof(g_note.msg[0]));
-    memmove(g_note.warn, g_note.warn + 1, (NOTE_MAX - 1) * sizeof(g_note.warn[0]));
+    memmove(g_note.src, g_note.src + 1, (NOTE_MAX - 1) * sizeof(g_note.src[0]));
+    memmove(g_note.sev, g_note.sev + 1, (NOTE_MAX - 1) * sizeof(g_note.sev[0]));
     g_note.n--;
   }
   snprintf(g_note.msg[g_note.n], sizeof(g_note.msg[0]), "%s", msg);
-  g_note.warn[g_note.n++] = warn;
+  snprintf(g_note.src[g_note.n], sizeof(g_note.src[0]), "%s", src ? src : "");
+  g_note.sev[g_note.n++] = sev;
   g_note.unread++;
+}
+
+
+static void note_del (int at) {
+  int n = g_note.n;
+  memmove(g_note.msg + at, g_note.msg + at + 1, (size_t)(n - at - 1) * sizeof(g_note.msg[0]));
+  memmove(g_note.src + at, g_note.src + at + 1, (size_t)(n - at - 1) * sizeof(g_note.src[0]));
+  memmove(g_note.sev + at, g_note.sev + at + 1, (size_t)(n - at - 1) * sizeof(g_note.sev[0]));
+  g_note.n--;
+}
+
+
+static void toast_v (int sev, const char *src, const char *fmt, va_list ap) {
+  vsnprintf(g_t.msg, sizeof(g_t.msg), fmt, ap);
+  snprintf(g_t.src, sizeof(g_t.src), "%s", src ? src : "");
+  g_t.sev = sev;
+  g_t.time = os_now_us();
+  note_add(g_t.msg, sev, src);
 }
 
 
 void toast (int warn, const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  vsnprintf(g_toast, sizeof(g_toast), fmt, ap);
+  toast_v(warn ? 1 : 0, NULL, fmt, ap);
   va_end(ap);
-  g_toast_warn = warn;
-  g_toast_time = os_now_us();
-  note_add(g_toast, warn);
+}
+
+
+/* a notification with its severity (0 info, 1 warning, 2 error) and its source ("gopls") */
+void toast_src (int sev, const char *src, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  toast_v(sev, src, fmt, ap);
+  va_end(ap);
+}
+
+
+/*
+** A notification with buttons, like a language server's showMessageRequest:
+** it shows until a button is clicked (or it is closed); done gets the
+** button's index, -1 for none.
+*/
+void toast_ask (int sev, const char *src, const char *msg, const char *const *act, int n,
+                void (*done) (void *ud, int choice), void *ud) {
+  Ask *a;
+  int i;
+  if (g_nask == ASK_MAX) {	/* too many waiting: this one gets no answer */
+    if (done) done(ud, -1);
+    return;
+  }
+  a = &g_ask[g_nask++];
+  memset(a, 0, sizeof(*a));
+  snprintf(a->msg, sizeof(a->msg), "%s", msg);
+  snprintf(a->src, sizeof(a->src), "%s", src ? src : "");
+  a->sev = sev;
+  for (i = 0; i < n && i < 4; i++) snprintf(a->act[i], sizeof(a->act[0]), "%s", act[i]);
+  a->nact = i;
+  a->done = done;
+  a->ud = ud;
+  note_add(msg, sev, src);
+}
+
+
+/* question i answered with choice (-1: closed) */
+static void ask_answer (int i, int choice) {
+  Ask a;
+  if (i < 0 || i >= g_nask) return;
+  a = g_ask[i];
+  memmove(g_ask + i, g_ask + i + 1, (size_t)(g_nask - i - 1) * sizeof(Ask));
+  g_nask--;
+  g_ask_sel = 0;
+  if (g_nask == 0) g_ask_focus = 0;
+  if (a.done) a.done(a.ud, choice >= a.nact ? -1 : choice);
 }
 
 
@@ -1297,68 +1532,276 @@ int toast_unread (void) {
 }
 
 
+/* Notifications: Focus Notification Toast; 0: there is none with buttons */
+int toast_focus (void) {
+  if (g_nask == 0) return 0;
+  g_ask_focus = 1;
+  g_ask_sel = 0;
+  return 1;
+}
+
+
+int toast_focused (void) {
+  return g_ask_focus && g_nask > 0;
+}
+
+
+/* Notifications: Accept Notification Primary Action (Ctrl+Shift+A) */
+int toast_accept (void) {
+  if (g_nask == 0) return 0;
+  ask_answer(0, 0);
+  return 1;
+}
+
+
+/* Notifications: Clear All Notifications: the toasts and the questions go, the list too */
+void toast_clear_all (void) {
+  while (g_nask > 0) ask_answer(0, -1);
+  g_t.msg[0] = '\0';
+  g_note.n = g_note.unread = 0;
+}
+
+
+/* a key while the question has the keys: Left/Right/Tab pick a button, Enter it, Esc closes; 0: not its */
+int toast_key (int k) {
+  int code = KEY_CODE(k), n;
+  if (!toast_focused()) return 0;
+  n = g_ask[0].nact;
+  if (code == K_ESC) ask_answer(0, -1);
+  else if (code == K_ENTER) ask_answer(0, n ? g_ask_sel : -1);
+  else if (code == K_RIGHT || (code == K_TAB && !(k & KM_SHIFT))) g_ask_sel = n ? (g_ask_sel + 1) % n : 0;
+  else if (code == K_LEFT || code == K_TAB) g_ask_sel = n ? (g_ask_sel + n - 1) % n : 0;
+  else {
+    g_ask_focus = 0;	/* anything else: back to where the keys were */
+    return 0;
+  }
+  return 1;
+}
+
+
+/* the message cut into lines of w columns at spaces: their starts and lengths; how many (max) */
+static int wrap (const char *s, int w, const char **start, size_t *len, int max) {
+  int n = 0;
+  while (*s && n < max) {
+    const char *p = s, *cut = NULL;
+    int col = 0;
+    while (*p && *p != '\n') {
+      size_t l;
+      uint32_t cp = utf8_decode(p, strlen(p), &l);
+      int cw = uc_width(cp);
+      if (col + cw > w) break;
+      if (*p == ' ') cut = p;
+      col += cw;
+      p += l;
+    }
+    if (*p && *p != '\n' && cut && cut > s) p = cut;	/* at the last space */
+    start[n] = s;
+    len[n++] = (size_t)(p - s);
+    s = p;
+    while (*s == ' ' || *s == '\n') s++;
+  }
+  if (*s && n > 0) {	/* more than fits: the last line ends in ... */
+    size_t l = len[n - 1];
+    while (l > 0 && str_cols(start[n - 1]) > 0 && (int)l > w - 3) l--;
+    len[n - 1] = l;
+  }
+  return n;
+}
+
+
+/* a message box of the corner (the toast's look): its height; y is its bottom row */
+static int note_box (int bottom, int w, int sev, const char *src, const char *msg, const Ask *a, int focus, int sel,
+                     int *top, int *close_x, int *gear_x) {
+  const char *ls[4];
+  size_t ll[4];
+  int cols = scr_cols(), nl, h, x, y, i, tw = w - 10;
+  char buf[260];
+  nl = wrap(msg, tw > 10 ? tw : 10, ls, ll, a ? 4 : 3);
+  if (nl == 0) nl = 1, ls[0] = msg, ll[0] = 0;
+  h = 2 + nl + ((src && *src) || (a && a->nact) ? 1 : 0);
+  x = cols - w - 1;
+  y = bottom - h + 1;
+  if (y < 1) return 0;
+  scr_box(x, y, w, h, S_TOAST);
+  if (focus) {	/* the keys are here: VS Code's focus border */
+    for (i = 0; i < w; i++) {
+      scr_put(x + i, y, 0x2500, S_TOAST);
+      scr_set_fg(x + i, y, ui_color(C_ACCENT));
+    }
+  }
+  scr_put(x + 2, y + 1, sev_icon(sev), S_TOAST);
+  scr_set_fg(x + 2, y + 1, sev_color(sev));
+  for (i = 0; i < nl; i++) {
+    size_t n = ll[i] < sizeof(buf) - 4 ? ll[i] : sizeof(buf) - 4;
+    memcpy(buf, ls[i], n);
+    buf[n] = '\0';
+    if (i == nl - 1 && ls[i] + ll[i] < msg + strlen(msg) && ls[i][ll[i]] != '\0' &&
+        strlen(ls[i] + ll[i]) > 0 && i + 1 == (a ? 4 : 3))
+      strcat(buf, "...");
+    scr_putsw(x + 5, y + 1 + i, tw, buf, S_TOAST);
+  }
+  *close_x = x + w - 3;
+  scr_put(*close_x, y + 1, 0xEA76, S_TOAST);	/* codicon close */
+  *gear_x = -1;
+  if (src && *src) {
+    *gear_x = x + w - 5;
+    scr_put(*gear_x, y + 1, 0xEAF8, S_TOAST);	/* gear: the notification center */
+    snprintf(buf, sizeof(buf), "Source: %s", src);
+    scr_putsw(x + 5, y + 1 + nl, w - 7, buf, S_BOX_DIM);
+  }
+  if (a) {	/* the buttons, on the right of the last row: the first is the primary one */
+    int bx = x + w - 2;
+    TG.nbtn = a->nact;
+    TG.btn_y = y + 1 + nl;
+    for (i = a->nact - 1; i >= 0; i--) {
+      int bw = (int)str_cols(a->act[i]) + 2, st = i == 0 ? S_STATUS : S_INPUT;
+      if (focus && i == sel) st = S_MENU_SEL;
+      bx -= bw;
+      if (bx < x + 2) {
+        TG.bx0[i] = TG.bx1[i] = -1;
+        continue;
+      }
+      scr_fill(bx, TG.btn_y, bw, st);
+      scr_puts(bx + 1, TG.btn_y, a->act[i], st);
+      TG.bx0[i] = bx;
+      TG.bx1[i] = bx + bw;
+      bx -= 1;
+    }
+  }
+  *top = y;
+  return h;
+}
+
+
+/* the spinner of a running progress: a Braille frame by the time */
+static const char *spin (void) {
+  static const char *const f[] = {"\xE2\xA0\x8B", "\xE2\xA0\x99", "\xE2\xA0\xB9", "\xE2\xA0\xB8", "\xE2\xA0\xBC",
+                                  "\xE2\xA0\xB4", "\xE2\xA0\xA6", "\xE2\xA0\xA7", "\xE2\xA0\x87", "\xE2\xA0\x8F"};
+  return f[(os_now_us() / 100000) % 10];
+}
+
+
+const char *ui_spinner (void) {
+  return spin();
+}
+
+
 /*
-** The notification center (the bell in the status bar): every notification
-** so far, the newest on top, above the status bar at the right; the x of
-** one clears it, "Clear All" every one. Esc or a click outside closes it.
+** The notification center (the bell in the status bar): what is running
+** (a language server's progress), the questions with their buttons, then
+** every notification so far, the newest on top; the x of one clears it,
+** "Clear All" every one. Esc or a click outside closes it.
 */
 void note_center (void) {
   int sel = 0;
   g_note.unread = 0;
-  g_toast[0] = '\0';	/* the toast goes: it is in the list */
+  g_t.msg[0] = '\0';	/* the toast goes: it is in the list */
   for (;;) {
-    int cols = scr_cols(), rows = scr_rows(), w = cols < 62 ? cols - 2 : 60, x = cols - w - 1;
-    int n = g_note.n, shown, h, y, i, k, code, clear_x, close_x;
-    shown = n ? n : 1;
+    int cols = scr_cols(), rows = scr_rows(), w = cols < 72 ? cols - 2 : 70, x = cols - w - 1;
+    int np = lsp_progress_count(), nq = g_nask, n = g_note.n, total, shown, h, y, i, k, code, clear_x, close_x;
+    total = np + nq + n;
+    shown = total ? total : 1;
     if (shown > rows - 8) shown = rows - 8;
     if (shown < 1) shown = 1;
     h = shown + 1;
     y = rows - 2 - h;
-    if (y < 1 || w < 20) return;
-    if (sel >= n) sel = n ? n - 1 : 0;
+    if (y < 1 || w < 24) return;
+    if (sel >= nq + n) sel = nq + n ? nq + n - 1 : 0;
     ui_background();
     scr_box(x, y, w, h, S_TOAST);
     scr_fill(x, y, w, S_BOX_TITLE);
-    scr_puts(x + 2, y, n ? "NOTIFICATIONS" : "NO NEW NOTIFICATIONS", S_BOX_TITLE);
+    scr_puts(x + 2, y, total ? "NOTIFICATIONS" : "NO NEW NOTIFICATIONS", S_BOX_TITLE);
     clear_x = x + w - 5;
     close_x = x + w - 3;
     scr_put(clear_x, y, 0xEABF, S_BOX_TITLE);	/* codicon clear-all */
     scr_put(close_x, y, 0xEAB4, S_BOX_TITLE);	/* chevron-down: hide */
-    for (i = 0; i < shown && i < n; i++) {	/* the newest first */
-      int k2 = n - 1 - i, st = i == sel ? S_BOX_SEL : S_TOAST, ry = y + 1 + i;
-      scr_fill(x, ry, w, st);
-      scr_put(x + 2, ry, g_note.warn[k2] ? 0xEA6C : 0xEA74, g_note.warn[k2] ? S_TOAST_WARN : st);
-      scr_putsw(x + 5, ry, w - 9, g_note.msg[k2], st);
-      if (i == sel) scr_put(x + w - 3, ry, 0xEA76, st);	/* its x */
+    for (i = 0; i < shown && i < total; i++) {
+      int ry = y + 1 + i;
+      char t[300];
+      if (i < np) {	/* running: the spinner, and what it does */
+        int pct = lsp_progress_text(i, t, sizeof(t));
+        scr_fill(x, ry, w, S_TOAST);
+        scr_puts(x + 2, ry, spin(), S_TOAST);
+        scr_set_fg(x + 2, ry, ui_color(C_INFO));
+        scr_putsw(x + 5, ry, w - 13, t, S_TOAST);
+        if (pct >= 0) {	/* a bar of its percentage */
+          int bw = 6, fill = pct * bw / 100, b;
+          for (b = 0; b < bw; b++) scr_put(x + w - 8 + b, ry, b < fill ? 0x2588 : 0x2591, S_BOX_DIM);
+        }
+        continue;
+      }
+      k = i - np;	/* the row: questions, then notes */
+      if (k < nq) {
+        const Ask *a = &g_ask[k];
+        int st = k == sel ? S_BOX_SEL : S_TOAST, bx = x + w - 5, b;
+        scr_fill(x, ry, w, st);
+        scr_put(x + 2, ry, sev_icon(a->sev), st);
+        scr_set_fg(x + 2, ry, sev_color(a->sev));
+        for (b = a->nact - 1; b >= 0; b--) bx -= (int)str_cols(a->act[b]) + 3;
+        scr_putsw(x + 5, ry, bx - x - 6, a->msg, st);
+        for (b = 0; b < a->nact; b++) {	/* its buttons, the first the primary one */
+          int bw = (int)str_cols(a->act[b]) + 2;
+          if (bx + bw >= x + w - 3) break;
+          scr_fill(bx, ry, bw, b == 0 ? S_STATUS : S_INPUT);
+          scr_puts(bx + 1, ry, a->act[b], b == 0 ? S_STATUS : S_INPUT);
+          bx += bw + 1;
+        }
+        if (k == sel) scr_put(x + w - 3, ry, 0xEA76, st);
+        continue;
+      }
+      k -= nq;
+      {
+        int k2 = n - 1 - k, st = k + nq == sel ? S_BOX_SEL : S_TOAST;
+        scr_fill(x, ry, w, st);
+        scr_put(x + 2, ry, sev_icon(g_note.sev[k2]), st);
+        scr_set_fg(x + 2, ry, sev_color(g_note.sev[k2]));
+        if (g_note.src[k2][0]) snprintf(t, sizeof(t), "%s  (%s)", g_note.msg[k2], g_note.src[k2]);
+        else snprintf(t, sizeof(t), "%s", g_note.msg[k2]);
+        scr_putsw(x + 5, ry, w - 9, t, st);
+        if (k + nq == sel) scr_put(x + w - 3, ry, 0xEA76, st);	/* its x */
+      }
     }
     scr_cursor(0, -1);
-    scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
+    scr_pointer(PTR_POINTER);	/* every row is clickable */
     scr_flush();
     k = term_key(200);
     if (k == K_NONE) continue;
     code = KEY_CODE(k);
-    if (code == K_ESC || code == K_ENTER) return;
-    if (code == K_UP && sel > 0) sel--;
-    else if (code == K_DOWN && sel + 1 < n) sel++;
-    else if ((code == K_DEL || code == K_BS) && n > 0) {	/* that one goes */
-      int at = n - 1 - sel;
-      memmove(g_note.msg + at, g_note.msg + at + 1, (size_t)(n - at - 1) * sizeof(g_note.msg[0]));
-      memmove(g_note.warn + at, g_note.warn + at + 1, (size_t)(n - at - 1) * sizeof(g_note.warn[0]));
-      g_note.n--;
+    if (code == K_ESC) return;
+    if (code == K_ENTER) {
+      if (sel < g_nask) ask_answer(sel, 0);	/* a question: its primary button */
+      else return;
+    }
+    else if (code == K_UP && sel > 0) sel--;
+    else if (code == K_DOWN && sel + 1 < nq + n) sel++;
+    else if ((code == K_DEL || code == K_BS) && nq + n > 0) {	/* that one goes */
+      if (sel < nq) ask_answer(sel, -1);
+      else note_del(n - 1 - (sel - nq));
     }
     else if (code == K_MOUSE && term_mouse.press && !term_mouse.drag && !term_mouse.wheel) {
       Mouse *m = &term_mouse;
       if (m->x < x || m->x >= x + w || m->y < y || m->y >= y + h) return;	/* outside */
-      if (m->y == y && m->x == clear_x) g_note.n = 0;
+      if (m->y == y && m->x == clear_x) toast_clear_all();
       else if (m->y == y && m->x == close_x) return;
-      else if (m->y > y && m->y - y - 1 < n) {
-        sel = m->y - y - 1;
-        if (m->x == x + w - 3) {	/* its x */
-          int at = n - 1 - sel;
-          memmove(g_note.msg + at, g_note.msg + at + 1, (size_t)(n - at - 1) * sizeof(g_note.msg[0]));
-          memmove(g_note.warn + at, g_note.warn + at + 1, (size_t)(n - at - 1) * sizeof(g_note.warn[0]));
-          g_note.n--;
+      else if (m->y > y && m->y - y - 1 >= np && m->y - y - 1 - np < nq + n) {
+        int r = m->y - y - 1 - np;
+        sel = r;
+        if (r < nq) {	/* a question: which button */
+          const Ask *a = &g_ask[r];
+          int bx = x + w - 5, b;
+          for (b = a->nact - 1; b >= 0; b--) bx -= (int)str_cols(a->act[b]) + 3;
+          if (m->x == x + w - 3) ask_answer(r, -1);
+          else
+            for (b = 0; b < a->nact; b++) {
+              int bw = (int)str_cols(a->act[b]) + 2;
+              if (m->x >= bx && m->x < bx + bw) {
+                ask_answer(r, b);
+                break;
+              }
+              bx += bw + 1;
+            }
         }
+        else if (m->x == x + w - 3) note_del(n - 1 - (r - nq));	/* its x */
       }
     }
   }
@@ -1366,16 +1809,62 @@ void note_center (void) {
 
 
 void toast_draw (void) {
-  int cols = scr_cols(), rows = scr_rows(), w, x, y;
-  if (g_toast[0] == '\0' || os_now_us() - g_toast_time > TOAST_TIME) return;
-  w = (int)str_cols(g_toast) + 7;
-  if (w > cols - 2) w = cols - 2;
-  x = cols - w - 1;
-  y = rows - 4;
-  if (y < 1) return;
-  scr_box(x, y, w, 3, S_TOAST);
-  scr_put(x + 2, y + 1, g_toast_warn ? 0xEA6C : 0xEA74, g_toast_warn ? S_TOAST_WARN : S_TOAST);
-  scr_putsw(x + 5, y + 1, w - 6, g_toast, S_TOAST);
+  int cols = scr_cols(), rows = scr_rows(), bottom = rows - 2, w;
+  long long left = g_t.sev >= 2 ? TOAST_ERR_TIME : TOAST_TIME;
+  TG.w = TG.tw = 0;
+  if (g_nask > 0) {	/* the first question: until it is answered */
+    const Ask *a = &g_ask[0];
+    int top, h;
+    w = cols - 2 < 64 ? cols - 2 : 64;
+    h = note_box(bottom, w, a->sev, a->src, a->msg, a, toast_focused(), g_ask_sel, &top, &TG.close_x, &TG.gear_x);
+    if (h > 0) {
+      TG.x = cols - w - 1;
+      TG.y = top;
+      TG.w = w;
+      TG.h = h;
+      bottom = top - 1;
+    }
+  }
+  if (g_t.msg[0] && os_now_us() - g_t.time <= left) {
+    int top, h, gear;
+    w = (int)str_cols(g_t.msg) + 11;
+    if (g_t.src[0] && (int)strlen(g_t.src) + 20 > w) w = (int)strlen(g_t.src) + 20;
+    if (w < 30) w = 30;
+    if (w > 64) w = 64;
+    if (w > cols - 2) w = cols - 2;
+    h = note_box(bottom, w, g_t.sev, g_t.src, g_t.msg, NULL, 0, 0, &top, &TG.tclose_x, &gear);
+    if (h > 0) {
+      TG.tx = cols - w - 1;
+      TG.ty = top;
+      TG.tw = w;
+      TG.th = h;
+    }
+  }
+}
+
+
+/* a click on a toast: its buttons, its x, its gear; 1: it was on one */
+int toast_click (int x, int y) {
+  if (TG.w > 0 && g_nask > 0 && x >= TG.x && x < TG.x + TG.w && y >= TG.y && y < TG.y + TG.h) {
+    int i;
+    if (y == TG.y + 1 && x == TG.close_x) ask_answer(0, -1);
+    else if (y == TG.y + 1 && x == TG.gear_x) note_center();
+    else if (y == TG.btn_y) {
+      for (i = 0; i < TG.nbtn; i++)
+        if (x >= TG.bx0[i] && x < TG.bx1[i]) {
+          ask_answer(0, i);
+          return 1;
+        }
+    }
+    else toast_focus();	/* on its text: the keys go to it */
+    return 1;
+  }
+  if (TG.tw > 0 && g_t.msg[0] && x >= TG.tx && x < TG.tx + TG.tw && y >= TG.ty && y < TG.ty + TG.th) {
+    if (y == TG.ty + 1 && x == TG.tclose_x) g_t.msg[0] = '\0';
+    else if (y == TG.ty + 1 && x == TG.tclose_x - 2 && g_t.src[0]) note_center();
+    return 1;
+  }
+  return 0;
 }
 
 /* }================================================================== */

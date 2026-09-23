@@ -131,6 +131,8 @@ typedef struct Opt {
   char term_cwd[512];	/* terminal.integrated.cwd */
   int preview_tabs;	/* workbench.editor.enablePreview: a click replaces the tab */
   int textmate;	/* editor.textmateGrammars: VS Code's grammars color the code */
+  int hover_delay;	/* editor.hover.delay, ms */
+  int hover_sticky;	/* editor.hover.sticky: the mouse can go into the hover */
   int exp_confirm_dnd;	/* explorer.confirmDragAndDrop */
   int exp_confirm_del;	/* explorer.confirmDelete */
   int exp_dec_colors;	/* explorer.decorations.colors */
@@ -140,7 +142,13 @@ typedef struct Opt {
   int exp_nest_expand;	/* explorer.fileNesting.expand */
   int exp_sort;	/* explorer.sortOrder: EXS_* */
   int exp_reveal;	/* explorer.autoReveal */
+  int command_center;	/* window.commandCenter */
+  char win_title[256];	/* window.title: empty for VS Code's default */
+  int panel_loc;	/* workbench.panel.defaultLocation: PANEL_* */
+  int panel_justify;	/* workbench.panel.alignment: "justify" */
 } Opt;
+
+enum { PANEL_BOTTOM, PANEL_RIGHT, PANEL_LEFT };
 
 enum { EXS_DEFAULT, EXS_MIXED, EXS_FILES_FIRST, EXS_TYPE, EXS_MODIFIED };	/* explorer.sortOrder */
 
@@ -547,6 +555,9 @@ enum {
   CMD_HELP_KEYS, CMD_HELP_TIPS, CMD_HELP_COMMANDS,
   CMD_DIFF_WS, CMD_DIFF_HIDE,
   CMD_ZOOM_IN, CMD_ZOOM_OUT, CMD_ZOOM_RESET,
+  CMD_LSP_RESTART, CMD_LSP_STATUS, CMD_NOTIF_FOCUS, CMD_NOTIF_ACCEPT, CMD_NOTIF_CLEAR,
+  CMD_MANAGE, CMD_PANEL_RIGHT, CMD_PANEL_LEFT, CMD_PANEL_BOTTOM, CMD_PANEL_CENTER, CMD_PANEL_JUSTIFY,
+  CMD_TOGGLE_CC,
   CMD_N
 };
 
@@ -556,6 +567,13 @@ extern char ui_title[512];	/* in the middle of the title bar */
 
 void menubar_draw (int open);	/* open: the menu shown, -1 none */
 int menubar_hit (int x);	/* the menu under column x on row 0, -1 none */
+extern char ui_cc[256];	/* the command center's text: the folder's name */
+int menubar_cc_hit (int x);	/* the command center: 1 back, 2 forward, 3 its box, 0 none */
+
+/* a little menu at x, y (flags: MF_*); the item picked, -1: none */
+enum { MF_CHECK = 1, MF_OFF = 2, MF_LINE = 4, MF_SUB = 8 };
+int popup_list (int x, int y, const char *const *label, const int *flags, int n);
+int popup_width (const char *const *label, const int *flags, int n);
 int menu_run (int which);	/* the menu opened by key or click: the CMD_ picked */
 int menu_popup (int x, int y, const int *cmd, const char *const *label);	/* a right-click menu */
 const char *cmd_name (int cmd);
@@ -686,6 +704,16 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
 
 /* the notification in the corner */
 void toast (int warn, const char *fmt, ...);
+void toast_src (int sev, const char *src, const char *fmt, ...);	/* sev 0 info, 1 warning, 2 error; src "gopls" */
+void toast_ask (int sev, const char *src, const char *msg, const char *const *act, int n,
+                void (*done) (void *ud, int choice), void *ud);	/* buttons; choice -1: closed */
+int toast_click (int x, int y);	/* 1: it was on a toast */
+int toast_key (int k);	/* the focused question's keys; 0: not its */
+int toast_focus (void);	/* 0: no question */
+int toast_focused (void);
+int toast_accept (void);	/* the question's primary button */
+void toast_clear_all (void);
+const char *ui_spinner (void);	/* a Braille frame, by the time */
 void toast_draw (void);
 int toast_unread (void);	/* notifications not seen in the center yet */
 void note_center (void);	/* the notification center (the bell) */
@@ -753,6 +781,16 @@ int files_bar_rows (void);	/* its rows, 0 when everything fits */
 void files_bar_to (int row, int rows);	/* dragged there */
 int side_width (void);	/* mme.c: the sidebar's width now */
 void act_draw (int x, int y, int h, int view, int shown);
+int act_manage_row (int y, int h);	/* the Manage gear's row, -1: no room */
+int act_badge (int view, int *dot);	/* mme.c: a view's number (changes, failed tests), or a dot */
+
+/*
+** mme.c: one item of the status bar, given while it is drawn: its id
+** ("status.x"), its name for the right-click menu, the side (1 right), a
+** priority (the lowest go first when it is narrow), the text (codicons as
+** UTF-8), the tooltip, the command a click runs.
+*/
+void status_add (const char *id, const char *name, int right, int prio, const char *text, const char *tip, int cmd);
 int act_hit (int y);	/* the view whose icon is on row y of the body, -1 none */
 
 void side_open (const char *native);	/* the folder the Explorer shows */
@@ -1203,6 +1241,12 @@ size_t lsp_diag_files (void);
 const Diag *lsp_diag_file (size_t i, char **path, size_t *n);	/* *path malloc'd */
 char *lsp_path (const char *uri);
 void lsp_shutdown (void);
+enum { LS_NONE, LS_OFF, LS_MISSING, LS_STARTING, LS_READY, LS_BUSY, LS_DEAD };	/* lsp_state */
+int lsp_state (const char *lang, char *name, size_t n);	/* LS_*; name: the program ("gopls") */
+void lsp_restart (const char *lang);
+const char *lsp_channel (const char *lang);	/* its OUTPUT channel, NULL none */
+int lsp_progress_count (void);	/* $/progress running now */
+int lsp_progress_text (int i, char *buf, size_t n);	/* its text; its percentage, -1 none */
 void lsp_task_diags (const char *path, const Diag *v, size_t n);	/* a task's problems in a file */
 void lsp_task_clear (void);
 
@@ -1210,7 +1254,16 @@ void lsp_task_clear (void);
 void on_completion (Doc *d, CompItem *v, size_t n);	/* takes v */
 void on_definition (const char *path, Pos p, int utf16);
 void on_hover (const char *markdown);	/* NULL: nothing to say */
-void on_signature (const char *label, size_t a0, size_t a1);	/* a0..a1: the parameter now */
+typedef struct SigInfo {	/* a signature help's overload */
+  char *label;
+  size_t a0, a1;	/* the active parameter in label */
+  char *pdoc;	/* that parameter's documentation, "" none */
+  char *doc;	/* the signature's */
+} SigInfo;
+
+void on_signatures (SigInfo *v, int n, int active);	/* takes v; n 0: none */
+void on_show_document (const char *path, const char *url, long line, long col);	/* window/showDocument */
+void on_show_output (const char *chan);	/* the OUTPUT view, on this channel */
 void on_edit (const TextEdit *v, size_t n);
 void on_actions (const char *const *titles, size_t n);
 void on_bulb (Doc *d, size_t y, size_t n, int fix);	/* line y has n code actions */
@@ -1302,6 +1355,7 @@ void test_gutter (const char *path, size_t line);	/* its icon clicked: it runs *
 void test_saved (const char *path);	/* a file was saved: its tests read again */
 void test_command (int cmd);	/* CMD_TEST_* */
 void test_shutdown (void);
+int test_failed (void);	/* the tests that failed: the badge */
 
 /* }================================================================== */
 

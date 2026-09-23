@@ -108,8 +108,27 @@ With no file open the editor shows the keys to start with.
   does not send a big file again and again; anything asked for (a suggestion,
   a hover) sends it at once first.
 - **Hover** — the mouse resting on a name (or Ctrl+K Ctrl+I) shows what the
-  server knows of it, its code in the file's colors. Resting on a squiggle
-  shows its problem first, with a "Quick Fix... (Ctrl+.)" link.
+  server knows of it, its code in its language's colors. Resting on a squiggle
+  shows its problem first, with a "Quick Fix... (Ctrl+.)" link. Links in it
+  (`[text](url)`) are underlined: a click opens the file or the browser. It
+  scrolls with the wheel, and with Up / Down / PgUp / PgDn after Ctrl+K
+  Ctrl+I; the mouse may go into it (editor.hover.sticky), and it comes after
+  editor.hover.delay ms.
+- **Parameter hints** — the signature over the line with the parameter the
+  cursor is in bold and underlined, its documentation under it. With
+  overloads it shows "1/3" and Up / Down (or its arrows) go through them.
+- **What the server does** — its progress ($/progress) is a spinner in the
+  status bar and a bar in the notification center ("gopls: Setting up
+  workspace (42%)"); its questions (showMessageRequest) are notifications
+  with buttons: click one, or Ctrl+Shift+A for the first, or
+  "Notifications: Focus Notification Toast" and then Left / Right and Enter.
+  A notification says what it came from ("Source: gopls").
+- **Language status** — "{ }" by the language in the status bar (a spinner
+  while the server starts or works, red when it stopped, yellow when the
+  program was not found). A click, or "mme: Show Language Status", shows the
+  server and offers Restart Language Server, Show Output and the setting to
+  change. A server that crashes is started again, and after five times in
+  three minutes mme says so and stops, as VS Code does.
 - **Inlay hints** — the server's hints in the text, dim and in italics:
   parameter names (`add(a: 1, b: 2)`), the types of `:=` variables ...
   (editor.inlayHints.enabled; gopls gets them turned on). Not with word wrap.
@@ -650,6 +669,24 @@ With no file open the editor shows the keys to start with.
   side (diffEditor.renderSideBySide), and open the file. A → by a change of
   the working tree reverts that block.
 
+- **Title bar** — the command center in the middle (window.commandCenter): the
+  folder's name in a box that opens Go to File, with Go Back and Go Forward
+  beside it. `window.title` takes VS Code's variables (`${activeEditorShort}`,
+  `${rootName}`, `${dirty}`, `${separator}` ...); a part that comes out empty
+  goes, with its separator.
+- **Manage** — the gear at the foot of the activity bar (VS Code's): the
+  Command Palette, Settings, Extensions, Keyboard Shortcuts, Snippets, Tasks,
+  Themes and About. The activity bar's icons carry VS Code's badges: how many
+  files changed, how many tests failed, a dot while debugging.
+- **Status bar** — its items are VS Code's (the branch, the problems, the
+  position, the indentation, the encoding, the line ends, the language, the
+  notifications). Resting the mouse on one shows what it does, a click runs it,
+  and a right-click hides items; what is hidden is kept in mme-data.
+- **Panel position** — workbench.panel.defaultLocation "bottom", "right" or
+  "left" (View: Move Panel Right ..., or the panel's "..."); at a side it is as
+  high as the editors and its edge drags. workbench.panel.alignment "justify"
+  puts a bottom panel across the whole width, under the sidebar too.
+
 ## Keys
 
 | Keys | |
@@ -732,8 +769,7 @@ Alt+1 and Ctrl+PgDn there.
 VS Code's own quick open ranking (matched letters lit, and the file list kept
 between searches for folders with tens of thousands of files), the language
 server's progress in the status bar, notifications with buttons, the minimap's
-slider dragged with the mouse, editing in the diff editor, the command center
-in the title bar, and the Manage gear.
+slider dragged with the mouse, and editing in the diff editor.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and

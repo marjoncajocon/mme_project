@@ -1277,6 +1277,15 @@ static Blame *blame_of (const char *path) {
 
 
 /* git blame --porcelain: every line's commit, and the commits' authors */
+/* "41a4118... 1 1 89": a blame record starts with a commit's 40 hex digits */
+static int is_hash40 (const char *p) {
+  int i;
+  for (i = 0; i < 40; i++)
+    if (!((p[i] >= '0' && p[i] <= '9') || (p[i] >= 'a' && p[i] <= 'f'))) return 0;
+  return 1;
+}
+
+
 static void blame_load (const char *path) {
   const char *top = git_root(), *p;
   size_t tl;
@@ -1302,7 +1311,7 @@ static void blame_load (const char *path) {
   for (p = b.s ? b.s : ""; *p;) {	/* "<hash> <orig> <final> [<n>]", its keys, "\t<line>" */
     const char *e = strchr(p, '\n');
     size_t len = e ? (size_t)(e - p) : strlen(p);
-    if (len > 41 && p[40] == ' ') {
+    if (len > 41 && p[40] == ' ' && is_hash40(p)) {	/* a line of the file can look like one: check it */
       size_t k, fin = (size_t)strtoul(strchr(p + 41, ' ') ? strchr(p + 41, ' ') + 1 : p + 41, NULL, 10);
       for (k = 0; k < BLp->nc; k++)
         if (memcmp(BLp->c[k].hash, p, 40) == 0) break;
@@ -1328,6 +1337,10 @@ static void blame_load (const char *path) {
         else if (l2 > 12 && strncmp(p, "author-time ", 12) == 0) c->time = strtoll(p + 12, NULL, 10);
         else if (l2 > 8 && strncmp(p, "summary ", 8) == 0 && c->summary == NULL) c->summary = xstrndup(p + 8, l2 - 8);
         p += l2 + (e2 ? 1 : 0);
+      }
+      if (*p == '\t') {	/* the line of the file itself: not a record */
+        const char *e2 = strchr(p, '\n');
+        p += e2 ? (size_t)(e2 - p) + 1 : strlen(p);
       }
       continue;
     }
