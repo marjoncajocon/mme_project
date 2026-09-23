@@ -337,6 +337,7 @@ void term_size (int *cols, int *rows);
 int term_key (int ms);	/* K_NONE when nothing came in ms (-1: wait) */
 void term_paste (Buf *b);	/* after K_PASTE: the pasted text, LF ends */
 void term_write (const char *s, size_t n);
+void term_font (int delta);	/* +1 bigger, -1 smaller, 0 the configured size */
 
 /* a typed character that goes into text: not a control key, no Ctrl or Alt */
 #define IS_TEXT(k)	((k) >= 32 && (k) < K_UP && (k) != 127)
@@ -545,6 +546,7 @@ enum {
   CMD_EXP_OPEN_SIDE, CMD_EXP_FIND_FOLDER,
   CMD_HELP_KEYS, CMD_HELP_TIPS, CMD_HELP_COMMANDS,
   CMD_DIFF_WS, CMD_DIFF_HIDE,
+  CMD_ZOOM_IN, CMD_ZOOM_OUT, CMD_ZOOM_RESET,
   CMD_N
 };
 
@@ -875,6 +877,7 @@ void git_error (const Buf *b, const char *fallback);	/* git's message in a toast
 void git_ago (long long t, char *out, size_t n);	/* "3 days ago" */
 const char *git_blame (const char *path, size_t y, int short_form);	/* NULL: none */
 void blame_clear (void);
+int git_blame_idle (void);	/* the blame git was asked for, read when nothing else is to do */
 void on_disk_changed (void);	/* mme.c: git changed files; the open ones are read again */
 
 /* eext.c - the Extensions view, and what extensions contribute */
@@ -940,6 +943,7 @@ enum { QM_ADD = 1, QM_MOD = 2, QM_DEL = 4, QM_DEL_TOP = 8 };	/* DEL: lines went 
 
 void quick_clear (void);	/* git refreshed: the index's copies are read again */
 void quick_forget (Doc *d);
+int quick_idle (void);	/* git's copy of a file, read when nothing else is to do */
 const QHunk *quick_hunks (Doc *d, const char *path, size_t *n);	/* NULL: no quick diff */
 int quick_mark (Doc *d, const char *path, size_t y);	/* QM_* */
 const char *quick_old (Doc *d, const char *path, size_t i, size_t *len);	/* the index's line i */

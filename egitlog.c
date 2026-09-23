@@ -1226,25 +1226,53 @@ typedef struct BCommit {
   long long time;
 } BCommit;
 
-static struct {
-  char *path;	/* the file it is for; NULL: none */
+typedef struct Blame {
+  char *path;	/* the file it is for; NULL: the slot is free */
   BCommit *c;
   size_t nc;
   size_t *line;	/* each line's commit */
   size_t nline;
-} BL;
+} Blame;
+
+/*
+** git blame takes a tenth of a second and more, so it must not run while a
+** tab is being drawn: git_blame says what it knows and remembers what it
+** was asked for, and git_blame_idle runs git once the editor is quiet.
+** The files looked at lately are kept, so going back to a tab is free.
+*/
+#define NBLAME	8
+
+static Blame g_bl[NBLAME];
+static int g_bl_next;
+static char *g_bl_want;	/* asked for and not read yet */
+
+
+static void blame_free (Blame *b) {
+  size_t i;
+  for (i = 0; i < b->nc; i++) {
+    free(b->c[i].author);
+    free(b->c[i].summary);
+  }
+  free(b->c);
+  free(b->line);
+  free(b->path);
+  memset(b, 0, sizeof(*b));
+}
 
 
 void blame_clear (void) {
-  size_t i;
-  for (i = 0; i < BL.nc; i++) {
-    free(BL.c[i].author);
-    free(BL.c[i].summary);
-  }
-  free(BL.c);
-  free(BL.line);
-  free(BL.path);
-  memset(&BL, 0, sizeof(BL));
+  int i;
+  for (i = 0; i < NBLAME; i++) blame_free(&g_bl[i]);
+  free(g_bl_want);
+  g_bl_want = NULL;
+}
+
+
+static Blame *blame_of (const char *path) {
+  int i;
+  for (i = 0; i < NBLAME; i++)
+    if (g_bl[i].path && m_fncmp(g_bl[i].path, path) == 0) return &g_bl[i];
+  return NULL;
 }
 
 
@@ -1255,8 +1283,10 @@ static void blame_load (const char *path) {
   char *rel;
   Buf b;
   OsStat st;
-  blame_clear();
-  BL.path = xstrdup(path);
+  Blame *BLp = &g_bl[g_bl_next];
+  g_bl_next = (g_bl_next + 1) % NBLAME;
+  blame_free(BLp);
+  BLp->path = xstrdup(path);
   if (top == NULL) return;
   if (os_stat(path, &st) == 0 && st.size > (1 << 20)) return;	/* a big file: git blame would take seconds, each save */
   tl = strlen(top);
@@ -1274,26 +1304,26 @@ static void blame_load (const char *path) {
     size_t len = e ? (size_t)(e - p) : strlen(p);
     if (len > 41 && p[40] == ' ') {
       size_t k, fin = (size_t)strtoul(strchr(p + 41, ' ') ? strchr(p + 41, ' ') + 1 : p + 41, NULL, 10);
-      for (k = 0; k < BL.nc; k++)
-        if (memcmp(BL.c[k].hash, p, 40) == 0) break;
-      if (k == BL.nc) {
-        BL.c = (BCommit *)xrealloc(BL.c, (BL.nc + 1) * sizeof(BCommit));
-        memset(&BL.c[BL.nc], 0, sizeof(BCommit));
-        memcpy(BL.c[BL.nc].hash, p, 40);
-        BL.nc++;
+      for (k = 0; k < BLp->nc; k++)
+        if (memcmp(BLp->c[k].hash, p, 40) == 0) break;
+      if (k == BLp->nc) {
+        BLp->c = (BCommit *)xrealloc(BLp->c, (BLp->nc + 1) * sizeof(BCommit));
+        memset(&BLp->c[BLp->nc], 0, sizeof(BCommit));
+        memcpy(BLp->c[BLp->nc].hash, p, 40);
+        BLp->nc++;
       }
       if (fin > 0) {
-        if (fin > BL.nline) {
-          BL.line = (size_t *)xrealloc(BL.line, fin * sizeof(size_t) * 2);
-          while (BL.nline < fin * 2) BL.line[BL.nline++] = (size_t)-1;
+        if (fin > BLp->nline) {
+          BLp->line = (size_t *)xrealloc(BLp->line, fin * sizeof(size_t) * 2);
+          while (BLp->nline < fin * 2) BLp->line[BLp->nline++] = (size_t)-1;
         }
-        BL.line[fin - 1] = k;
+        BLp->line[fin - 1] = k;
       }
       p += len + (e ? 1 : 0);
       while (*p && *p != '\t') {	/* its keys, until the line itself */
         const char *e2 = strchr(p, '\n');
         size_t l2 = e2 ? (size_t)(e2 - p) : strlen(p);
-        BCommit *c = &BL.c[k];
+        BCommit *c = &BLp->c[k];
         if (l2 > 7 && strncmp(p, "author ", 7) == 0 && c->author == NULL) c->author = xstrndup(p + 7, l2 - 7);
         else if (l2 > 12 && strncmp(p, "author-time ", 12) == 0) c->time = strtoll(p + 12, NULL, 10);
         else if (l2 > 8 && strncmp(p, "summary ", 8) == 0 && c->summary == NULL) c->summary = xstrndup(p + 8, l2 - 8);
@@ -1314,11 +1344,18 @@ static void blame_load (const char *path) {
 const char *git_blame (const char *path, size_t y, int short_form) {
   static char out[400];
   const BCommit *c;
+  const Blame *b;
   char ago[48];
   if (path == NULL || git_root() == NULL) return NULL;
-  if (BL.path == NULL || m_fncmp(BL.path, path) != 0) blame_load(path);
-  if (y >= BL.nline || BL.line[y] == (size_t)-1) return NULL;
-  c = &BL.c[BL.line[y]];
+  if ((b = blame_of(path)) == NULL) {	/* git_blame_idle reads it: the frame is not kept waiting */
+    if (g_bl_want == NULL || m_fncmp(g_bl_want, path) != 0) {
+      free(g_bl_want);
+      g_bl_want = xstrdup(path);
+    }
+    return NULL;
+  }
+  if (y >= b->nline || b->line[y] == (size_t)-1) return NULL;
+  c = &b->c[b->line[y]];
   if (strncmp(c->hash, "0000000000", 10) == 0) {
     snprintf(out, sizeof(out), short_form ? "You, Uncommitted" : "You \xE2\x80\xA2 Uncommitted changes");
     return out;
@@ -1328,6 +1365,17 @@ const char *git_blame (const char *path, size_t y, int short_form) {
   else snprintf(out, sizeof(out), "%s, %s \xE2\x80\xA2 %s", c->author ? c->author : "?", ago,
                 c->summary ? c->summary : "");
   return out;
+}
+
+
+/* the editor is quiet: git blame of the file asked for; 1 when it ran */
+int git_blame_idle (void) {
+  char *path = g_bl_want;
+  if (path == NULL) return 0;
+  g_bl_want = NULL;
+  if (blame_of(path) == NULL) blame_load(path);
+  free(path);
+  return 1;
 }
 
 /* }================================================================== */

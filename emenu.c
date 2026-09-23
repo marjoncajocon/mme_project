@@ -119,7 +119,8 @@ static const char *const names[CMD_N] = {
   "Terminal: Change Icon...", "Developer: Inspect Editor Tokens and Scopes",
   "Explorer: Open to the Side", "Find in Folder...",
   "Help: Keyboard Shortcuts Reference", "Help: Tips and Tricks", "Help: Show All Commands",
-  "Diff: Toggle Ignore Trim Whitespace", "Diff: Toggle Collapse Unchanged Regions"
+  "Diff: Toggle Ignore Trim Whitespace", "Diff: Toggle Collapse Unchanged Regions",
+  "View: Zoom In", "View: Zoom Out", "View: Reset Zoom"
 };
 
 static const char *const keys[CMD_N] = {
@@ -169,7 +170,8 @@ static const char *const keys[CMD_N] = {
   "Ctrl+M", "Ctrl+K Ctrl+C", "Ctrl+K Ctrl+U", "Alt+PageUp", "Alt+PageDown",
   "", "", "", "Ctrl+Up", "Ctrl+Down", "", "Ctrl+Shift+C", "Ctrl+Shift+V", "Ctrl+Alt+R", "Ctrl+G", "", "", "",
   "Ctrl+Enter", "Shift+Alt+F",
-  "", "", "", "", ""
+  "", "", "", "", "",
+  "Ctrl+=", "Ctrl+-", "Ctrl+NumPad0"
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -303,7 +305,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "editor.action.inspectTMScopes",
   "explorer.openToSide", "filesExplorer.findInFolder",
   "workbench.action.keybindingsReference", "workbench.action.openTipsAndTricks", "workbench.action.showCommands.all",
-  "toggle.diff.ignoreTrimWhitespace", "diffEditor.toggleCollapseUnchangedRegions"
+  "toggle.diff.ignoreTrimWhitespace", "diffEditor.toggleCollapseUnchangedRegions",
+  "workbench.action.zoomIn", "workbench.action.zoomOut", "workbench.action.zoomReset"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -364,7 +367,7 @@ static const int m_sel[] = {CMD_SELECT_ALL, CMD_SELECT_LINE, CMD_SELECT_BRACKET,
                             CMD_CURSOR_UP, CMD_CURSOR_DOWN, CMD_NEXT_MATCH, CMD_ALL_MATCHES, 0, CMD_COLUMN_SELECT, -1};
 static const int m_view[] = {CMD_PALETTE, 0, CMD_EXPLORER, CMD_SEARCH, CMD_GIT, CMD_EXTENSIONS, CMD_TEST_VIEW,
                              0, CMD_PROBLEMS, CMD_OUTPUT, CMD_DEBUG_CONSOLE, CMD_TERMINAL, CMD_PANEL_MAX, 0, CMD_SPLIT, CMD_SPLIT_DOWN, CMD_LAYOUT_MENU,
-                             0, CMD_SIDEBAR, CMD_SIDEBAR_POS, CMD_MINIMAP, CMD_STICKY, CMD_RENDER_WS, CMD_WORDWRAP, CMD_ZEN,
+                             0, CMD_ZOOM_IN, CMD_ZOOM_OUT, CMD_ZOOM_RESET, 0, CMD_SIDEBAR, CMD_SIDEBAR_POS, CMD_MINIMAP, CMD_STICKY, CMD_RENDER_WS, CMD_WORDWRAP, CMD_ZEN,
                              CMD_APPEARANCE_MENU, 0, CMD_THEME, -1};
 static const int m_go[] = {CMD_NAV_BACK, CMD_NAV_FORWARD, 0, CMD_QUICK_OPEN, CMD_GOTO_SYMBOL, CMD_WORKSPACE_SYMBOL, CMD_GOTO, CMD_GOTO_BRACKET, 0, CMD_DEFINITION, CMD_TYPE_DEF, CMD_IMPLEMENTATION, CMD_REFERENCES, CMD_CALL_HIERARCHY, CMD_PEEK_DEF, CMD_HOVER, 0, CMD_NEXT_PROBLEM,
                            CMD_PREV_PROBLEM, 0, CMD_NEXT_CHANGE, CMD_PREV_CHANGE, -1};

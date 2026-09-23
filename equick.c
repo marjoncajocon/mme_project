@@ -38,6 +38,7 @@ typedef struct QDoc {
   size_t nh;
   unsigned char *mark;	/* QM_* of each line of d */
   size_t nmark;
+  int want;	/* its copy is to be read (quick_idle does it) */
 } QDoc;
 
 #define NQ	16
@@ -80,6 +81,7 @@ static void read_orig (QDoc *q) {
   q->oline = NULL;
   q->noline = q->olen = 0;
   q->gen = g_gen;
+  q->want = 0;
   q->edits = ~0UL;
   if (os_stat(q->path, &st) == 0 && st.size > (8 << 20)) return;	/* a big file: no bars (reading git's copy takes seconds) */
   rel = git_rel_of(q->path);
@@ -101,8 +103,12 @@ static void read_orig (QDoc *q) {
 }
 
 
-/* the entry of d (made, or its index's copy read again, as needed) */
-static QDoc *entry (Doc *d, const char *path) {
+/*
+** The entry of d. git cat-file takes tens of milliseconds, so drawing asks
+** for the copy (sync 0) and quick_idle reads it once the editor is quiet;
+** a command that stages or reverts (sync 1) cannot wait and reads it now.
+*/
+static QDoc *entry (Doc *d, const char *path, int sync) {
   int i;
   QDoc *q = NULL;
   if (path == NULL || git_root() == NULL) return NULL;
@@ -120,8 +126,27 @@ static QDoc *entry (Doc *d, const char *path) {
     q->path = xstrdup(path);
     q->gen = 0;
   }
-  if (q->gen != g_gen) read_orig(q);
+  if (q->gen != g_gen) {
+    if (!sync) {
+      q->want = 1;
+      return q;
+    }
+    read_orig(q);
+  }
   return q;
+}
+
+
+/* the editor is quiet: the copy asked for is read; 1 when one was */
+int quick_idle (void) {
+  int i;
+  for (i = 0; i < NQ; i++)
+    if (g_q[i].want && g_q[i].path) {
+      g_q[i].want = 0;
+      if (g_q[i].gen != g_gen) read_orig(&g_q[i]);
+      return 1;
+    }
+  return 0;
 }
 
 
@@ -143,7 +168,7 @@ static void make_marks (QDoc *q) {
 
 
 static QDoc *fresh (Doc *d, const char *path) {
-  QDoc *q = entry(d, path);
+  QDoc *q = entry(d, path, 0);
   Buf b;
   size_t y;
   if (q == NULL || q->orig == NULL) return NULL;
@@ -180,7 +205,7 @@ int quick_mark (Doc *d, const char *path, size_t y) {
 
 /* line i of the index's copy (no newline, no \r); NULL: none */
 const char *quick_old (Doc *d, const char *path, size_t i, size_t *len) {
-  QDoc *q = entry(d, path);
+  QDoc *q = entry(d, path, 0);
   size_t e;
   if (q == NULL || q->orig == NULL || i >= q->noline) return NULL;
   e = i + 1 < q->noline ? q->oline[i + 1] - 1 : q->olen;
@@ -196,7 +221,7 @@ const char *quick_old (Doc *d, const char *path, size_t i, size_t *len) {
 ** these changes (h[0..nh), in order) made as d has them; 0 done.
 */
 int quick_stage (Doc *d, const char *path, const QHunk *h, size_t nh) {
-  QDoc *q = entry(d, path);
+  QDoc *q = entry(d, path, 1);	/* a command: its copy now */
   Buf b;
   size_t i = 0, k, y, len;
   const char *eol;

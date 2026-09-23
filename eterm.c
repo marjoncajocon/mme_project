@@ -9,6 +9,7 @@
 #include "mme.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -22,6 +23,19 @@ Mouse term_mouse;
 static int g_open = 0;
 
 #define ESC_WAIT	30	/* ms: an ESC with nothing after it is the Esc key */
+
+
+/*
+** Zoom In / Out / Reset: the font is the terminal's, so mme can only ask
+** for another size, with xterm's OSC 50 ("#+1" one step up, "#-1" down,
+** "#0" the configured one). A terminal that does not know it keeps its
+** font (mmc-term zooms with its own Ctrl+= / Ctrl+- / Ctrl+0 instead).
+*/
+void term_font (int delta) {
+  char s[32];
+  int n = snprintf(s, sizeof(s), "\033]50;#%s\033\\", delta > 0 ? "+1" : delta < 0 ? "-1" : "0");
+  term_write(s, (size_t)n);
+}
 
 
 void term_write (const char *s, size_t n) {

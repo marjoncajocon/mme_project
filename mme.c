@@ -208,6 +208,8 @@ static struct {
   int open;
   char *path;	/* what the items are for */
   int stale;	/* read them again */
+  int loading;	/* git log has not run for path yet (tl_idle runs it) */
+  size_t cap;	/* room in v */
   TItem *v;
   size_t n, sel, top;
   int y0, h;
@@ -7753,7 +7755,19 @@ static void tl_load (void) {
     t->file = xstrdup(h[i].file);
   }
   history_free(h, nh);
-  if (git_root()) {	/* git log --follow of the file */
+  TL.cap = cap;
+  TL.loading = git_root() != NULL;	/* tl_idle asks git: it takes a quarter of a second */
+  qsort(TL.v, TL.n, sizeof(TItem), cmp_titem);
+}
+
+
+/* the editor is quiet: the file's commits; 1 when git ran */
+static int tl_idle (void) {
+  const char *path = TL.path;
+  size_t cap = TL.cap;
+  if (!TL.loading || path == NULL) return 0;
+  TL.loading = 0;
+  {	/* git log --follow of the file */
     const char *a[] = {"log", "--follow", "-n", "50", "--format=%h%x09%an%x09%at%x09%s", "--", path, NULL};
     Buf b;
     char *line;
@@ -7782,6 +7796,7 @@ static void tl_load (void) {
     buf_free(&b);
   }
   qsort(TL.v, TL.n, sizeof(TItem), cmp_titem);
+  return 1;
 }
 
 
@@ -11023,6 +11038,9 @@ static void work_idle (void) {
   watch_idle();
   autosave_idle();
   backup_idle();
+  if (tl_idle()) return;	/* git takes a tenth of a second: one thing at a time */
+  if (git_blame_idle()) return;
+  quick_idle();
 }
 
 
@@ -12356,6 +12374,9 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_OUTLINE_COLLAPSE: outline_collapse_all(); break;
+    case CMD_ZOOM_IN: term_font(1); break;	/* the terminal's font, if it knows OSC 50 */
+    case CMD_ZOOM_OUT: term_font(-1); break;
+    case CMD_ZOOM_RESET: term_font(0); break;
     case CMD_DIFF_WS: diff_toggle_trim(); break;
     case CMD_DIFF_HIDE: diff_toggle_hide(); break;
     case CMD_INSPECT_TOKENS: {	/* Developer: Inspect Editor Tokens and Scopes */
