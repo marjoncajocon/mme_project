@@ -1405,7 +1405,11 @@ static void scan_line (Doc *d, const Syntax *sx, size_t y, size_t n, unsigned ch
 
 
 void syntax_line_quick (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
-  if (sx == NULL || y >= d->n) return;
+  if (y >= d->n) return;
+  if (sx == NULL) {	/* no grammar (Plain Text): every byte is T_TEXT, and the caller reads them all */
+    memset(tok, T_TEXT, d->row[y].len);
+    return;
+  }
   scan_line(d, sx, y, d->row[y].len, tok);
 }
 
@@ -1416,7 +1420,12 @@ void syntax_line_quick (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) 
 ** many bytes, no more, and the caller stops there too.
 */
 void syntax_line_head (Doc *d, const Syntax *sx, size_t y, unsigned char *tok, size_t max) {
-  if (sx == NULL || y >= d->n) return;
+  if (y >= d->n) return;
+  if (sx == NULL) {	/* no grammar (Plain Text): every byte is T_TEXT, and the caller reads them all */
+    if (max > d->row[y].len) max = d->row[y].len;
+    memset(tok, T_TEXT, max);
+    return;
+  }
   scan_line(d, sx, y, max, tok);
 }
 

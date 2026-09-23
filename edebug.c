@@ -41,6 +41,8 @@ typedef int Sock;
 ** ===================================================================
 */
 
+#define MAX_MESSAGE	((size_t)64 << 20)	/* a Content-Length no real adapter sends */
+
 enum { RQ_INIT, RQ_LAUNCH, RQ_SETBP, RQ_CONFDONE, RQ_THREADS, RQ_STACK, RQ_SCOPES,
        RQ_VARS, RQ_WATCH, RQ_REPL, RQ_HOVER, RQ_STEP, RQ_DISCONNECT, RQ_SETVAR, RQ_GOTOT, RQ_GOTO,
        RQ_EXCINFO, RQ_OTHER };
@@ -144,6 +146,28 @@ static int g_log = -2;	/* $MME_DAPLOG: every message */
 /* the launch configurations of .vscode/launch.json */
 static Json *g_launch;
 static int g_cfg;	/* the one chosen */
+
+
+/* an adapter's number in range, else def: casting -1 or 1e300 to size_t, int or long is undefined in C */
+static size_t unum (const Json *j, double def) {
+  double v = json_num(j, def);
+  if (v >= 0 && v < 1e15) return (size_t)v;
+  return def >= 0 && def < 1e15 ? (size_t)def : 0;
+}
+
+
+static int inum (const Json *j, double def) {
+  double v = json_num(j, def);
+  if (v > -2e9 && v < 2e9) return (int)v;
+  return def > -2e9 && def < 2e9 ? (int)def : 0;
+}
+
+
+static long lnum (const Json *j, double def) {
+  double v = json_num(j, def);
+  if (v > -2e9 && v < 2e9) return (long)v;
+  return def > -2e9 && def < 2e9 ? (long)def : 0;
+}
 
 
 static void trace (const char *dir, const char *s, size_t n) {
@@ -302,7 +326,7 @@ static void bp_load (void) {
       b = &g_bp[g_nbp++];
       memset(b, 0, sizeof(*b));
       b->path = xstrdup(p);
-      b->line = (size_t)json_num(json_get(o, "line"), 1) - 1;
+      b->line = unum(json_get(o, "line"), 1) - 1;
       b->enabled = json_bool(json_get(o, "enabled"), 1);
       b->id = -1;
       b->cond = opt_str(o, "condition");
@@ -523,7 +547,7 @@ static void refuse (const Json *msg) {
   buf_init(&b);
   buf_printf(&b, "{\"seq\":%d,\"type\":\"response\",\"request_seq\":%d,\"success\":false,\"command\":\"%s\","
                  "\"message\":\"not supported by mme\"}",
-             ++D.seq, (int)json_num(json_get(msg, "seq"), 0), json_str(json_get(msg, "command"), ""));
+             ++D.seq, inum(json_get(msg, "seq"), 0), json_str(json_get(msg, "command"), ""));
   send_msg(&b);
   buf_free(&b);
 }
@@ -1465,7 +1489,7 @@ static void got_vars (VarList *l, long ref, const Json *list, int scopes) {
     Var *y = &v[n++];
     y->name = xstrdup(name);
     y->value = scopes ? NULL : xstrdup(json_str(json_get(x, "value"), ""));
-    y->ref = (long)json_num(json_get(x, "variablesReference"), 0);
+    y->ref = lnum(json_get(x, "variablesReference"), 0);
     y->depth = depth;
     y->open = 0;
     y->path = xstrcat3(parent, "/", name);
@@ -1497,10 +1521,10 @@ static void got_stack (const Json *body) {
     const Json *f = list->kid[i];
     const char *p = json_str(json_get(f, "source.path"), NULL);
     Frame *y = &D.fr[D.nfr++];
-    y->id = (long)json_num(json_get(f, "id"), 0);
+    y->id = lnum(json_get(f, "id"), 0);
     y->name = xstrdup(json_str(json_get(f, "name"), "?"));
     y->path = p ? native_path(p) : NULL;
-    y->line = (size_t)json_num(json_get(f, "line"), 0);
+    y->line = unum(json_get(f, "line"), 0);
   }
   D.cur = 0;	/* the first frame with a file of its own (the program's, not the runtime's) */
   for (i = 0; i < D.nfr; i++)
@@ -1524,7 +1548,7 @@ static void got_event (const Json *msg) {
     request("configurationDone", "{}", RQ_CONFDONE, 0, NULL);
   }
   else if (strcmp(ev, "stopped") == 0) {
-    D.thread = (long)json_num(json_get(body, "threadId"), D.thread);
+    D.thread = lnum(json_get(body, "threadId"), (double)D.thread);
     snprintf(D.reason, sizeof(D.reason), "%s", json_str(json_get(body, "reason"), "pause"));
     drop_temp(1);
     request("threads", NULL, RQ_THREADS, 0, NULL);
@@ -1554,13 +1578,13 @@ static void got_event (const Json *msg) {
   }
   else if (strcmp(ev, "breakpoint") == 0) {
     const Json *b = json_get(body, "breakpoint");
-    int id = (int)json_num(json_get(b, "id"), -2), i;
+    int id = inum(json_get(b, "id"), -2), i;
     for (i = 0; i < g_nbp; i++)
       if (g_bp[i].id == id) g_bp[i].verified = json_bool(json_get(b, "verified"), 0);
   }
   else if (strcmp(ev, "exited") == 0) {
     char code[32];
-    snprintf(code, sizeof(code), "%d", (int)json_num(json_get(body, "exitCode"), 0));
+    snprintf(code, sizeof(code), "%d", inum(json_get(body, "exitCode"), 0));
     con_print(CC_INFO, "Process exited with code %s.", code);
   }
   else if (strcmp(ev, "terminated") == 0) {
@@ -1573,7 +1597,7 @@ static void got_event (const Json *msg) {
 
 
 static void got_response (const Json *msg) {
-  int seq = (int)json_num(json_get(msg, "request_seq"), -1), i, ok = json_bool(json_get(msg, "success"), 0);
+  int seq = inum(json_get(msg, "request_seq"), -1), i, ok = json_bool(json_get(msg, "success"), 0);
   const Json *body = json_get(msg, "body");
   Req r;
   for (i = 0; i < D.nreq; i++)
@@ -1607,8 +1631,8 @@ static void got_response (const Json *msg) {
         if (g_bp[j].enabled && r.path && same_path(g_bp[j].path, r.path) && k < (int)list->n) {
           const Json *b = list->kid[k++];
           g_bp[j].verified = json_bool(json_get(b, "verified"), 0);
-          g_bp[j].id = (int)json_num(json_get(b, "id"), -1);
-          if (g_bp[j].verified && json_get(b, "line")) g_bp[j].line = (size_t)json_num(json_get(b, "line"), 1) - 1;
+          g_bp[j].id = inum(json_get(b, "id"), -1);
+          if (g_bp[j].verified && json_get(b, "line")) g_bp[j].line = unum(json_get(b, "line"), 1) - 1;
         }
       break;
     }
@@ -1619,7 +1643,7 @@ static void got_response (const Json *msg) {
       if (list == NULL || list->type != J_ARR) break;
       D.th = (Thread *)xmalloc((list->n + 1) * sizeof(Thread));
       for (j = 0; j < (int)list->n; j++) {
-        D.th[D.nth].id = (long)json_num(json_get(list->kid[j], "id"), 0);
+        D.th[D.nth].id = lnum(json_get(list->kid[j], "id"), 0);
         D.th[D.nth].name = xstrdup(json_str(json_get(list->kid[j], "name"), "thread"));
         D.nth++;
       }
@@ -1640,7 +1664,7 @@ static void got_response (const Json *msg) {
       free(g_wvars.v[w].value);
       g_wvars.v[w].value = xstrdup(ok ? json_str(json_get(body, "result"), "")
                                       : json_str(json_get(msg, "message"), "not available"));
-      g_wvars.v[w].ref = ok ? (long)json_num(json_get(body, "variablesReference"), 0) : 0;
+      g_wvars.v[w].ref = ok ? lnum(json_get(body, "variablesReference"), 0) : 0;
       if (g_wvars.v[w].ref > 0 && was_open(g_wvars.v[w].path)) var_expand(&g_wvars, w);
       break;
     }
@@ -1656,7 +1680,7 @@ static void got_response (const Json *msg) {
         break;
       }
       snprintf(a, sizeof(a), "{\"threadId\":%ld,\"targetId\":%ld}", D.thread ? D.thread : 1,
-               (long)json_num(json_get(t->kid[0], "id"), 0));
+               lnum(json_get(t->kid[0], "id"), 0));
       request("goto", a, RQ_GOTO, 0, NULL);
       break;
     }
@@ -1712,6 +1736,19 @@ static void got_message (const Json *msg) {
 }
 
 
+/* the Content-Length a header says, (size_t)-1 when it is not one we can use */
+static size_t hdr_len (const char *s) {
+  size_t v = 0;
+  while (*s == ' ' || *s == '	') s++;
+  if (*s < '0' || *s > '9') return (size_t)-1;	/* a sign, or nothing: strtoul would make it huge */
+  for (; *s >= '0' && *s <= '9'; s++) {
+    if (v > (64u << 20)) return (size_t)-1;	/* no message of ours is that big */
+    v = v * 10 + (size_t)(*s - '0');
+  }
+  return v > (64u << 20) ? (size_t)-1 : v;
+}
+
+
 /* the whole messages that came in D.in */
 static int messages (void) {
   int got = 0;
@@ -1730,7 +1767,12 @@ static int messages (void) {
       D.in.len -= hlen;
       continue;
     }
-    body = (size_t)strtoul(cl + 15, NULL, 10);
+    body = hdr_len(cl + 15);
+    if (body == (size_t)-1) {	/* not a length we will ever see: drop the header, or the reader wedges */
+      memmove(D.in.s, D.in.s + hlen, D.in.len - hlen);
+      D.in.len -= hlen;
+      continue;
+    }
     if (D.in.len < hlen + body) break;
     trace("<< ", D.in.s + hlen, body);
     j = json_parse(D.in.s + hlen, body);
@@ -1825,7 +1867,7 @@ int dbg_poll (void) {
     end_session();
     return 1;
   }
-  if (os_poll_proc(D.proc, &status) == 1 && D.in.len == 0) {	/* it ended by itself */
+  if (D.in.len == 0 && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
     if (D.out >= 0) {	/* its last words */
       while (os_wait_readable(D.out, 0) == 1 && (n = os_read(D.out, chunk, sizeof(chunk))) > 0)
         adapter_output(chunk, (size_t)n);
@@ -1849,6 +1891,7 @@ int dbg_stopped (void) {
 
 void dbg_shutdown (void) {
   if (D.on && D.ready) request("disconnect", "{\"terminateDebuggee\":true}", RQ_OTHER, 0, NULL);
+  D.restart = 0;	/* quitting during a Restart must not start the adapter again */
   end_session();
   if (g_bp_dirty) bp_save();
 }

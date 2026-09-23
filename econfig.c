@@ -254,7 +254,8 @@ static const char default_window[] =	/* the window's */
   "  \"workbench.panel.alignment\": \"center\",\n"
   ;
 static const char default_file2[] =	/* the rest: one literal may not be longer than 4095 */
-  "  // the language servers (IntelliSense): a command per language\n"
+  "  // the language servers (IntelliSense): a command per language.\n"
+  "  // \"*\" is what a language not named here gets: \"*\": \"\" turns them all off\n"
   "  \"mme.languageServers\": {\n"
   "    \"c\": \"clangd\",\n"
   "    \"cpp\": \"clangd\",\n"
@@ -617,15 +618,36 @@ const Json *settings_value (const char *key) {
 }
 
 
-/* where "key" is in s: the start of its line; *line_end after its newline */
-static char *find_key (char *s, const char *key, char **line_end) {
+/*
+** Where "key" is in s as a setting's own name: settings.json is JSONC, so
+** the same text in a line that is commented out (or inside another
+** setting's value) is not it; NULL when it is not there.
+*/
+static char *key_at (char *s, const char *key) {
   Buf q;
-  char *at, *ls, *e;
+  char *at = s, *found = NULL;
   buf_init(&q);
   buf_printf(&q, "\"%s\"", key);
   buf_putc(&q, '\0');
-  at = strstr(s, q.s);
+  while (found == NULL && (at = strstr(at, q.s)) != NULL) {
+    const char *v = at + q.len - 1, *p;
+    char *ls;
+    int comment = 0;
+    for (ls = at; ls > s && ls[-1] != '\n'; ls--) ;
+    for (p = ls; p + 1 < at; p++)
+      if (p[0] == '/' && p[1] == '/') comment = 1;
+    while (*v == ' ' || *v == '\t') v++;
+    if (!comment && *v == ':') found = at;	/* a ':' after it: a name, not a value */
+    else at += q.len - 1;
+  }
   buf_free(&q);
+  return found;
+}
+
+
+/* where "key" is in s: the start of its line; *line_end after its newline */
+static char *find_key (char *s, const char *key, char **line_end) {
+  char *at = key_at(s, key), *ls, *e;
   if (at == NULL) return NULL;
   for (ls = at; ls > s && ls[-1] != '\n'; ls--) ;
   for (e = at; *e && *e != '\n'; e++) ;
@@ -682,7 +704,7 @@ void settings_put_raw (const char *key, const char *value) {
   buf_printf(&q, "\"%s\"", key);
   buf_putc(&q, '\0');
   buf_init(&b);
-  at = strstr(s, q.s);
+  at = key_at(s, key);
   if (at) {	/* the value after the key's ':' goes */
     char *v = strchr(at + q.len - 1, ':'), *e;
     if (v) {
@@ -758,6 +780,8 @@ const char *settings_server (const char *lang) {
   size_t i;
   if (servers) {
     const Json *s = json_get(servers, lang);
+    if (s) return json_str(s, NULL);
+    s = json_get(servers, "*");	/* what every other language gets: "" turns them all off */
     if (s) return json_str(s, NULL);
   }
   for (i = 0; i < sizeof(def) / sizeof(def[0]); i++)

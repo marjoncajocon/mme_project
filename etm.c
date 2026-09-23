@@ -659,8 +659,12 @@ struct Scope {
   unsigned gen;	/* the theme its style is for */
   uint32_t fg;
   int has_fg, fs;
+  int depth;	/* how many parents: scope_style walks them by calling itself */
   unsigned char cls;	/* T_*: what it is for mme (comments, strings ...) */
 };
+
+/* a grammar says the names, so the chain has an end: no real scope is this deep */
+#define MAX_SCOPE	256
 
 static char **g_atom;
 static int g_natom, g_capatom;
@@ -717,11 +721,13 @@ static int atom (const char *s, size_t n) {
 static Scope *scope_push1 (Scope *parent, int a) {
   unsigned h = (unsigned)(((size_t)parent >> 4) * 31u + (unsigned)a) & 8191;
   Scope *s;
+  if (parent && parent->depth >= MAX_SCOPE) return parent;
   for (s = g_shash[h]; s; s = s->hnext)
     if (s->parent == parent && s->atom == a) return s;
   s = (Scope *)calloc(1, sizeof(Scope));
   s->parent = parent;
   s->atom = a;
+  s->depth = parent ? parent->depth + 1 : 1;
   s->hnext = g_shash[h];
   g_shash[h] = s;
   return s;
@@ -1131,14 +1137,20 @@ static const char *name_of (const char *tmpl, const char *s, const size_t *caps,
     int k = -1, mode = 0;
     const char *q = p;
     if (p[0] == '$' && p[1] >= '0' && p[1] <= '9') {
-      k = 0;
+      k = 0;	/* $99999999999: the index is clamped, not run over */
       q = p + 1;
-      while (*q >= '0' && *q <= '9') k = k * 10 + (*q++ - '0');
+      while (*q >= '0' && *q <= '9') {
+        if (k < 100000) k = k * 10 + (*q - '0');
+        q++;
+      }
     }
     else if (p[0] == '$' && p[1] == '{' && p[2] >= '0' && p[2] <= '9') {
       k = 0;
       q = p + 2;
-      while (*q >= '0' && *q <= '9') k = k * 10 + (*q++ - '0');
+      while (*q >= '0' && *q <= '9') {
+        if (k < 100000) k = k * 10 + (*q - '0');
+        q++;
+      }
       if (strncmp(q, ":/downcase}", 11) == 0) mode = 1, q += 11;
       else if (strncmp(q, ":/upcase}", 9) == 0) mode = 2, q += 9;
       else if (*q == '}') q++;

@@ -28,7 +28,7 @@ static void skip (JParse *p) {
     else if (p->s + 1 < p->e && p->s[0] == '/' && p->s[1] == '*') {
       p->s += 2;
       while (p->s + 1 < p->e && !(p->s[0] == '*' && p->s[1] == '/')) p->s++;
-      p->s = p->s + 2 <= p->e ? p->s + 2 : p->e;
+      p->s = (size_t)(p->e - p->s) >= 2 ? p->s + 2 : p->e;	/* p->s + 2 past the end is not a pointer */
     }
     else return;
   }

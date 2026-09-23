@@ -412,7 +412,7 @@ static Class *parse_class (P *p, int flags);
 /* the class body after '[' (and '^'), to its ']' */
 static void class_items (P *p, Class *c, int flags) {
   int first = 1;
-  while (p->i < p->n) {
+  while (p->i < p->n && !p->err) {
     uint32_t a, b;
     int ch = (unsigned char)p->s[p->i];
     if (ch == ']' && !first) {
@@ -437,7 +437,13 @@ static void class_items (P *p, Class *c, int flags) {
     }
     if (ch == '[') {	/* a class in the class: added */
       p->i++;
+      if (++p->depth > 200) {	/* [[[[...: this calls itself once for each one */
+        p->err = "too deep";
+        p->depth--;
+        return;
+      }
       add_sub(p->re, c, parse_class(p, flags));
+      p->depth--;
       continue;
     }
     if (ch == '&' && p->i + 1 < p->n && p->s[p->i + 1] == '&') {	/* the rest must match too */
@@ -553,7 +559,13 @@ static int ref_group (P *p) {
   while (p->i < p->n && p->s[p->i] != close) p->i++;
   if (p->i >= p->n) return -1;
   p->i++;
-  if (p->s[a] >= '0' && p->s[a] <= '9') return atoi(p->s + a);
+  if (p->s[a] >= '0' && p->s[a] <= '9') {	/* by hand: atoi of a number too big for an int is undefined */
+    int g2 = 0;
+    size_t k;
+    for (k = a; k + 1 < p->i && p->s[k] >= '0' && p->s[k] <= '9'; k++)
+      if (g2 < 100000) g2 = g2 * 10 + (p->s[k] - '0');
+    return g2;
+  }
   if (p->s[a] == '-' || p->s[a] == '+') return -1;	/* relative: not done */
   g = group_by_name(p, p->s + a, p->i - 1 - a);
   return g;
@@ -788,15 +800,21 @@ static int parse_quant (P *p, int *min, int *max) {
     size_t i = p->i + 1;
     int a = -1, b = -1, comma = 0;
     if (i < p->n && p->s[i] >= '0' && p->s[i] <= '9') {
-      a = 0;
-      while (i < p->n && p->s[i] >= '0' && p->s[i] <= '9') a = a * 10 + (p->s[i++] - '0');
+      a = 0;	/* a{99999999999}: the count is clamped, not run over */
+      while (i < p->n && p->s[i] >= '0' && p->s[i] <= '9') {
+        if (a < 100000) a = a * 10 + (p->s[i] - '0');
+        i++;
+      }
     }
     if (i < p->n && p->s[i] == ',') {
       comma = 1;
       i++;
       if (i < p->n && p->s[i] >= '0' && p->s[i] <= '9') {
         b = 0;
-        while (i < p->n && p->s[i] >= '0' && p->s[i] <= '9') b = b * 10 + (p->s[i++] - '0');
+        while (i < p->n && p->s[i] >= '0' && p->s[i] <= '9') {
+          if (b < 100000) b = b * 10 + (p->s[i] - '0');
+          i++;
+        }
       }
     }
     if (i >= p->n || p->s[i] != '}' || (a < 0 && b < 0)) return 0;
@@ -815,7 +833,7 @@ static Node *parse_seq (P *p, int *flags) {
   Node *head = NULL, *tail = NULL;
   for (;;) {
     Node *a = NULL;
-    int c, min, max;
+    int c, min, max, nquant = 0;
     skip_ext(p, *flags);
     if (p->i >= p->n) break;
     c = (unsigned char)p->s[p->i];
@@ -839,8 +857,10 @@ static Node *parse_seq (P *p, int *flags) {
     if (p->err) return NULL;
     if (a == NULL) continue;
     skip_ext(p, *flags);
-    while (parse_quant(p, &min, &max)) {	/* a* a+? a{2}+ ... */
+    /* "a" and a thousand '*': the nodes nest, and mark_nodes walks them by calling itself */
+    while (nquant < 200 && parse_quant(p, &min, &max)) {	/* a* a+? a{2}+ ... */
       Node *r = node(p->re, N_REP);
+      nquant++;
       r->kid = a;
       r->min = min;
       r->max = max;
@@ -1304,7 +1324,8 @@ static int run (M *m, const Node *nd, size_t i, const Cont *k) {
       }
       case N_BACKREF: {
         size_t a, b, len, q;
-        if (nd->cap <= 0 || 2 * nd->cap + 1 >= m->ncap || (a = m->cap[2 * nd->cap]) == NONE ||
+        /* nd->cap comes from the pattern: 2 * it would overflow before the check */
+        if (nd->cap <= 0 || nd->cap >= m->ncap / 2 || (a = m->cap[2 * nd->cap]) == NONE ||
             (b = m->cap[2 * nd->cap + 1]) == NONE)
           goto done;
         len = b - a;

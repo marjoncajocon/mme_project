@@ -242,7 +242,9 @@ static int read_csi (void) {
     else if (c == '?') qm = 1;
     else if (c >= '0' && c <= '9') {
       if (np == 0) np = 1;
-      if (np <= 8) p[np - 1] = p[np - 1] * 10 + (c - '0');
+      /* CSI 99999999999H: a parameter of any length must not run the int
+      ** over, and a terminal's are far smaller than this */
+      if (np <= 8 && p[np - 1] < 100000) p[np - 1] = p[np - 1] * 10 + (c - '0');
     }
     else if (c == ';') {
       if (np == 0) np = 1;

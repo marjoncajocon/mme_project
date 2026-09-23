@@ -268,9 +268,10 @@ int git_index_put (const char *rel, const char *s, size_t n) {
   sha[40] = '\0';
   buf_free(&b);
   {
-    char info[512];
+    char info[2048];
     const char *u[] = {"update-index", "--add", "--cacheinfo", info, NULL};
-    snprintf(info, sizeof(info), "%s,%s,%s", mode, sha, rel);
+    if (snprintf(info, sizeof(info), "%s,%s,%s", mode, sha, rel) >= (int)sizeof(info))
+      return -1;	/* cut short it would stage the blob under another name */
     buf_init(&b);
     r = git_exec(&b, 1, u);
     if (r != 0) git_error(&b, "Could not stage the change");
@@ -1233,11 +1234,13 @@ static const Change *change_of (const char *path) {
 /* the lines of a unified diff with the whole file as context */
 static void parse_unified (const char *p) {
   size_t o = 0, n = 0;
+  int hunk = 0;	/* a "@@" came: "---" and "+++" are the file's own lines from here on */
   while (*p) {	/* after its header */
     const char *e = strchr(p, '\n');
     size_t len = e ? (size_t)(e - p) : strlen(p);
     if (p[0] == '@' && p[1] == '@') {
       unsigned long a = 0, c2 = 0;
+      hunk = 1;
       const char *q = strchr(p, '-'), *r = strchr(p, '+');
       if (q) a = strtoul(q + 1, NULL, 10);
       if (r) c2 = strtoul(r + 1, NULL, 10);
@@ -1246,9 +1249,9 @@ static void parse_unified (const char *p) {
     }
     else if (D.nline > 0 || o > 0 || n > 0 || p[0] == ' ' || p[0] == '-' || p[0] == '+') {
       if (p[0] == ' ') dline_add(' ', ++o, ++n, p + 1, len ? len - 1 : 0);
-      else if (p[0] == '-' && !(p[1] == '-' && p[2] == '-' && D.nline == 0 && o == 0))
+      else if (p[0] == '-' && !(p[1] == '-' && p[2] == '-' && !hunk))	/* a deleted "-- comment" is not the "---" header */
         dline_add('-', ++o, 0, p + 1, len - 1);
-      else if (p[0] == '+' && !(p[1] == '+' && p[2] == '+' && D.nline == 0 && n == 0))
+      else if (p[0] == '+' && !(p[1] == '+' && p[2] == '+' && !hunk))
         dline_add('+', 0, ++n, p + 1, len - 1);
     }
     p += len + (e ? 1 : 0);

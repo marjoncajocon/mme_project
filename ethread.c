@@ -97,21 +97,34 @@ static void *run_thread (void *ud) {
 #endif
 
 
+/* a worker's stack, asked for by name: the default is 512 KB on macOS,
+** and a regular expression that backtracks needs much more than that */
+#define TH_STACK	(8u * 1024 * 1024)
+
+
 /* fn(ud) on a thread of its own; NULL when the system said no */
 Thread *th_start (void (*fn) (void *), void *ud) {
   Thread *t = (Thread *)xmalloc(sizeof(Thread));
   t->fn = fn;
   t->ud = ud;
 #ifdef _WIN32
-  t->h = CreateThread(NULL, 0, run_thread, t, 0, NULL);
+  t->h = CreateThread(NULL, TH_STACK, run_thread, t, 0, NULL);
   if (t->h == NULL) {
     free(t);
     return NULL;
   }
 #else
-  if (pthread_create(&t->t, NULL, run_thread, t) != 0) {
-    free(t);
-    return NULL;
+  {
+    pthread_attr_t a;
+    int rc;
+    pthread_attr_init(&a);
+    pthread_attr_setstacksize(&a, TH_STACK);
+    rc = pthread_create(&t->t, &a, run_thread, t);
+    pthread_attr_destroy(&a);
+    if (rc != 0) {
+      free(t);
+      return NULL;
+    }
   }
 #endif
   return t;

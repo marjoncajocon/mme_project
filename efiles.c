@@ -170,17 +170,18 @@ void fs_reveal (const char *path) {
   char *dir = path_dirname(path);
   io[0] = io[1] = io[2] = null;
   if (strstr(os_type(), "darwin")) {
-    argv[0] = "open";
-    argv[1] = "-R";
+    argv[0] = find_program("open");	/* os_spawn does not look in PATH: the whole path is needed */
+    argv[1] = (char *)"-R";
     argv[2] = (char *)path;
   }
   else {
-    argv[0] = "xdg-open";
+    argv[0] = find_program("xdg-open");
     argv[1] = is_dir(path) ? (char *)path : dir;
     argv[2] = NULL;
   }
   argv[3] = NULL;
-  if (os_spawn(argv[0], argv, NULL, io, 3, &proc, &pid) == 0) os_detach(proc);
+  if (argv[0] && os_spawn(argv[0], argv, NULL, io, 3, &proc, &pid) == 0) os_detach(proc);
+  free(argv[0]);
   if (null >= 0) os_close(null);
   free(dir);
 }
@@ -230,16 +231,24 @@ int fs_copy (const char *from, const char *to) {
     vec_free(&v);
     return r;
   }
-  else {
-    size_t len;
-    char *s = read_file(from, &len);
-    int fd, r = -1;
-    if (s == NULL) return -1;
-    if ((fd = os_open(to, OS_EXCL)) >= 0) {
-      r = os_write(fd, s, len) == (long)len ? 0 : -1;
-      os_close(fd);
+  else {	/* piece by piece: read_file stops at 64 MB, which would cut a big file short */
+    char chunk[65536];
+    int in = os_open(from, OS_READ), out, r = 0;
+    long n;
+    if (in < 0) return -1;
+    if ((out = os_open(to, OS_EXCL)) < 0) {
+      os_close(in);
+      return -1;
     }
-    free(s);
+    while ((n = os_read(in, chunk, sizeof(chunk))) > 0)
+      if (os_write(out, chunk, (size_t)n) != n) {
+        r = -1;
+        break;
+      }
+    if (n < 0) r = -1;
+    os_close(in);
+    os_close(out);
+    if (r != 0) os_unlink(to);	/* half a file is worse than none */
     return r;
   }
 }

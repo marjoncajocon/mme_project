@@ -185,6 +185,8 @@ static void flow (const Cell *c, size_t n, const Cells *pre1, const Cells *pre2,
     }
     fit = j;
     if (j < n && c[j].cp != '\n' && lastsp > i) fit = lastsp;	/* break at the last space */
+    /* a prefix as wide as the page fits nothing: take one cell anyway, so the loop ends */
+    if (fit == i && c[i].cp != ' ' && c[i].cp != '\n') fit = i + 1;
     for (k = i; k < fit; k++) cells_push(&row, &c[k]);
     row_out(row.v, row.n, fill);
     i = fit;
@@ -363,7 +365,7 @@ static void inline_cells (Cells *out, const char *s, size_t n, uint32_t fg, uint
         }
       }
     }
-    if (c == '<' && i + 1 < n && (strncmp(s + i + 1, "http", 4) == 0)) {	/* <https://...> */
+    if (c == '<' && i + 5 <= n && strncmp(s + i + 1, "http", 4) == 0) {	/* <https://...> */
       size_t e = i + 1;
       while (e < n && s[e] != '>') e++;
       if (e < n) {
@@ -735,6 +737,13 @@ static size_t entity (const char *s, size_t n, Buf *out) {
 }
 
 
+/* does the row say tag at i? a Row's bytes are not NUL ended: only they are read */
+static int tag_at (const Row *r, size_t i, const char *tag) {
+  size_t n = strlen(tag);
+  return r->len - i >= n && m_strnicmp(r->s + i, tag, n) == 0;
+}
+
+
 /*
 ** The HTML from *y on, drawn as what it says: the tags are dropped,
 ** <br> breaks the line, a comment is not shown at all, and <img src=x>
@@ -773,10 +782,10 @@ static void html_block (const Doc *d, size_t *y) {
           i = e < r->len ? e + 1 : r->len;
           continue;
         }
-        if (m_strnicmp(r->s + i, "<br", 3) == 0) buf_putc(&text, '\n');
-        else if (m_strnicmp(r->s + i, "<script", 7) == 0 || m_strnicmp(r->s + i, "<style", 6) == 0)
+        if (tag_at(r, i, "<br")) buf_putc(&text, '\n');
+        else if (tag_at(r, i, "<script") || tag_at(r, i, "<style"))
           hidden = 1;
-        else if (m_strnicmp(r->s + i, "<img", 4) == 0) {	/* the picture's place */
+        else if (tag_at(r, i, "<img")) {	/* the picture's place */
           const char *src = NULL;
           size_t k, sn = 0;
           for (k = i; k + 5 < (e < r->len ? e : r->len); k++)
@@ -792,9 +801,9 @@ static void html_block (const Doc *d, size_t *y) {
           if (src) buf_putn(&text, src, sn);
           else buf_puts(&text, "image");
         }
-        else if (m_strnicmp(r->s + i, "<li", 3) == 0) buf_puts(&text, "\n\xE2\x80\xA2 ");
-        else if (m_strnicmp(r->s + i, "<p", 2) == 0 || m_strnicmp(r->s + i, "<tr", 3) == 0 ||
-                 m_strnicmp(r->s + i, "<div", 4) == 0) buf_putc(&text, '\n');
+        else if (tag_at(r, i, "<li")) buf_puts(&text, "\n\xE2\x80\xA2 ");
+        else if (tag_at(r, i, "<p") || tag_at(r, i, "<tr") ||
+                 tag_at(r, i, "<div")) buf_putc(&text, '\n');
         if (e >= r->len) {	/* the tag goes on into the next line */
           in_tag = 1;
           break;

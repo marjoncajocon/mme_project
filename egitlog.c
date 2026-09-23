@@ -49,7 +49,7 @@ void git_error (const Buf *b, const char *fallback) {
     n = e ? (size_t)(e - p) : strlen(p);
     while (n > 0 && (p[n - 1] == '\r' || p[n - 1] == ' ')) n--;
     if (n > 0 && strncmp(p, "hint:", 5) != 0) break;
-    p = e ? e + 1 : p + n;
+    p = e ? e + 1 : p + strlen(p);	/* the last line: past it, not past its trimmed length (that would not move) */
   }
   if (*p == '\0') {
     toast(1, "%s", fallback);
@@ -1241,6 +1241,8 @@ typedef struct Blame {
 ** The files looked at lately are kept, so going back to a tab is free.
 */
 #define NBLAME	8
+/* blame is only asked for files under a megabyte: no line of one is past this */
+#define MAX_BLAME_LINES	((size_t)1 << 20)
 
 static Blame g_bl[NBLAME];
 static int g_bl_next;
@@ -1312,7 +1314,10 @@ static void blame_load (const char *path) {
     const char *e = strchr(p, '\n');
     size_t len = e ? (size_t)(e - p) : strlen(p);
     if (len > 41 && p[40] == ' ' && is_hash40(p)) {	/* a line of the file can look like one: check it */
-      size_t k, fin = (size_t)strtoul(strchr(p + 41, ' ') ? strchr(p + 41, ' ') + 1 : p + 41, NULL, 10);
+      /* the final line number is the third field of this line, not of a later one */
+      const char *sp = (const char *)memchr(p + 41, ' ', len - 41);
+      size_t k, fin = (size_t)strtoul(sp ? sp + 1 : p + 41, NULL, 10);
+      if (fin > MAX_BLAME_LINES) fin = 0;	/* git said something no file that size could say */
       for (k = 0; k < BLp->nc; k++)
         if (memcmp(BLp->c[k].hash, p, 40) == 0) break;
       if (k == BLp->nc) {

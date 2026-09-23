@@ -539,8 +539,12 @@ static int canvas_room (Canvas *c, int w, int h) {
 }
 
 
-static uint32_t hls_rgb (int h, int l, int s) {	/* sixel HLS: 0 degrees is blue */
-  double hh = fmod((double)h + 240.0, 360.0) / 60.0, ll = l / 100.0, ss = s / 100.0;
+/* sixel HLS: 0 degrees is blue; l and s come from the picture, so they are held
+** in 0..100 - outside it the result does not fit a uint32_t, which is undefined */
+static uint32_t hls_rgb (int h, int l, int s) {
+  double hh = fmod((double)h + 240.0, 360.0) / 60.0;
+  double ll = (l < 0 ? 0 : l > 100 ? 100 : l) / 100.0;
+  double ss = (s < 0 ? 0 : s > 100 ? 100 : s) / 100.0;
   double c = (1.0 - fabs(2.0 * ll - 1.0)) * ss, x = c * (1.0 - fabs(fmod(hh, 2.0) - 1.0));
   double m = ll - c / 2.0, r = 0, g = 0, b = 0;
   if (hh < 1) { r = c; g = x; }
@@ -596,6 +600,7 @@ static void sixel (Vt *vt, const char *d, size_t n) {
             }
       }
       x += rep;
+      if (x > SIXEL_MAX) x = SIXEL_MAX;	/* "!999999" over and over would overflow the int */
       rep = 1;
       p++;
     }
@@ -630,6 +635,7 @@ static void sixel (Vt *vt, const char *d, size_t n) {
     else if (c == '-') {
       x = 0;
       y += 6;
+      if (y > SIXEL_MAX) y = SIXEL_MAX;
       p++;
     }
     else p++;

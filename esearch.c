@@ -487,8 +487,9 @@ static void worker (void *ud) {
     else if (st.size <= MAX_FILE && !binary_name(name) && !is_open_file(path)) {
       took = 1;
       if (WK.inc[0] == '\0' || search_globs(WK.inc, rel)) {
-        size_t len;
-        pk = scan_text(&M, path, rel, read_file(path, &len), len);
+        size_t len = 0;	/* read first: the order of a call's arguments is not fixed */
+        char *text = read_file(path, &len);
+        pk = scan_text(&M, path, rel, text, len);
       }
     }
     free(path);
@@ -616,8 +617,8 @@ static void search_open_docs (void) {
   size_t i;
   ui_match(&M);
   for (i = 0; i < WK.skip.n; i++) {
-    char *rel = rel_in_root(WK.skip.v[i]);
-    size_t len;
+    char *rel = rel_in_root(WK.skip.v[i]), *text;
+    size_t len = 0;
     SPack *pk;
     if (rel == NULL) continue;
     if (search_globs(WK.exc, rel) || (WK.inc[0] && !search_globs(WK.inc, rel)) ||
@@ -626,7 +627,8 @@ static void search_open_docs (void) {
       continue;
     }
     WK.files++;
-    pk = scan_text(&M, WK.skip.v[i], rel, open_doc_text(WK.skip.v[i], &len), len);
+    text = open_doc_text(WK.skip.v[i], &len);	/* first: the order of a call's arguments is not fixed */
+    pk = scan_text(&M, WK.skip.v[i], rel, text, len);
     if (pk) {	/* straight into the editor's lists: this is its own thread */
       pk->next = NULL;
       WK.out = WK.tail = pk;
@@ -680,10 +682,17 @@ static void wk_start (void) {
     wk_push(xstrdup(ws_folder(i)), xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
   n = th_cpus();
   for (i = 0; i < n && i < MAX_WORK; i++) {
-    Thread *t = th_start(worker, NULL);
-    if (t == NULL) break;
-    WK.th[WK.nth++] = t;
+    Thread *t;
+    mx_lock(WK.mx);	/* the workers already running count down under the lock: this must too */
     WK.alive++;
+    mx_unlock(WK.mx);
+    if ((t = th_start(worker, NULL)) == NULL) {
+      mx_lock(WK.mx);
+      WK.alive--;
+      mx_unlock(WK.mx);
+      break;
+    }
+    WK.th[WK.nth++] = t;
   }
   WK.busy = 1;
   if (WK.nth == 0) {	/* no thread could start: walk here, as it used to */
@@ -1009,7 +1018,16 @@ static void dismiss_row (size_t k) {
   size_t r;
   if (k >= g_nrow) return;
   r = g_row[k];
-  if (r % 2 == 0) g_file[r / 2].n = 0;
+  if (r % 2 == 0) {	/* a file: its hits go too, or g_nhit no longer counts what g_hit holds */
+    SFile *f = &g_file[r / 2];
+    size_t j, first = f->first, n = f->n;
+    for (j = 0; j < n; j++) free(g_hit[first + j].text);
+    memmove(g_hit + first, g_hit + first + n, (g_nhit - first - n) * sizeof(SHit));
+    g_nhit -= n;
+    f->n = 0;
+    for (j = 0; j < g_nfile; j++)
+      if (g_file[j].first > first) g_file[j].first -= n;
+  }
   else {
     size_t j = r / 2;
     SFile *f = &g_file[g_hit[j].file];
@@ -1403,7 +1421,7 @@ void search_click (int row, int col, SideAct *act) {
 
 
 void search_wheel (int d) {
-  size_t h = (size_t)g_h, st = (size_t)wheel_step(0);
+  size_t h = g_h > 0 ? (size_t)g_h : 1, st = (size_t)wheel_step(0);	/* a side bar too short for a row */
   if (d < 0) g_top = g_top > st ? g_top - st : 0;
   else if (g_nrow > h) {
     g_top += st;

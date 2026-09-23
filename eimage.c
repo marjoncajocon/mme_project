@@ -318,9 +318,10 @@ static int size_of (const unsigned char *b, size_t n, const char *kind, int *w, 
     char tmp[4001];
     memcpy(tmp, s, look);
     tmp[look] = '\0';
-    if ((a = strstr(tmp, "width=")) != NULL) *w = atoi(a + 7);
-    if ((a = strstr(tmp, "height=")) != NULL) *h = atoi(a + 8);
-    if ((*w == 0 || *h == 0) && (a = strstr(tmp, "viewBox=")) != NULL) {
+    /* the quote after the '=' is skipped, but only when the text really goes that far */
+    if ((a = strstr(tmp, "width=")) != NULL && a[6] != '\0') *w = atoi(a + 7);
+    if ((a = strstr(tmp, "height=")) != NULL && a[7] != '\0') *h = atoi(a + 8);
+    if ((*w == 0 || *h == 0) && (a = strstr(tmp, "viewBox=")) != NULL && a[8] != '\0') {
       double v[4] = {0, 0, 0, 0};
       if (sscanf(a + 9, "%lf %lf %lf %lf", &v[0], &v[1], &v[2], &v[3]) == 4) {
         *w = (int)v[2];
@@ -477,10 +478,10 @@ done:
 static int bmp_decode (const unsigned char *b, size_t n, Pix *out) {
   uint32_t off, hdr;
   int w, h, bpp, flip = 1, x, y;
-  size_t row;
+  size_t row, npal;
   uint32_t *px;
   const unsigned char *pal;
-  if (n < 30) return 0;
+  if (n < 34) return 0;	/* the file header, the info header's size, and the compression at 30 */
   off = le32(b + 10);
   hdr = le32(b + 14);
   w = (int)le32(b + 18);
@@ -493,17 +494,19 @@ static int bmp_decode (const unsigned char *b, size_t n, Pix *out) {
   if (w <= 0 || h <= 0 || off >= n || (size_t)w * (size_t)h > (1u << 26)) return 0;
   if (bpp != 24 && bpp != 32 && bpp != 8) return 0;
   if (le32(b + 30) != 0 && bpp != 32) return 0;	/* compressed: not read here */
+  if ((size_t)hdr > n - 14) return 0;	/* the header's own size comes from the file */
   pal = b + 14 + hdr;
+  npal = (size_t)(n - 14 - hdr) / 4;	/* the color table entries the file really holds */
   row = ((size_t)w * (size_t)bpp / 8 + 3) & ~(size_t)3;
-  if (off + row * (size_t)h > n) return 0;
+  if ((size_t)off + row * (size_t)h > n) return 0;
   px = (uint32_t *)xmalloc((size_t)w * (size_t)h * sizeof(uint32_t));
   for (y = 0; y < h; y++) {
     const unsigned char *r = b + off + row * (size_t)(flip ? h - 1 - y : y);
     for (x = 0; x < w; x++) {
       uint32_t c;
       if (bpp == 8) {
-        int idx = r[x];
-        c = ((uint32_t)pal[idx * 4 + 2] << 16) | ((uint32_t)pal[idx * 4 + 1] << 8) | pal[idx * 4];
+        size_t idx = r[x];
+        c = idx < npal ? ((uint32_t)pal[idx * 4 + 2] << 16) | ((uint32_t)pal[idx * 4 + 1] << 8) | pal[idx * 4] : 0;
       }
       else {
         const unsigned char *p = r + (size_t)x * (size_t)(bpp / 8);
@@ -528,6 +531,7 @@ static int gif_decode (const unsigned char *b, size_t n, Pix *out) {
   int gsize = 0, w, h, x, y, tr = -1;
   uint32_t *px;
   if (n < 14) return 0;
+  memset(pal, 0, sizeof(pal));	/* a picture may use an index the color table does not have */
   if (b[10] & 0x80) {
     gsize = 2 << (b[10] & 7);
     if (13 + gsize * 3 > (int)n) return 0;
@@ -536,7 +540,7 @@ static int gif_decode (const unsigned char *b, size_t n, Pix *out) {
   }
   while (p < e) {	/* the blocks, up to the first picture */
     if (*p == 0x21) {	/* an extension */
-      if (p + 3 < e && p[1] == 0xF9 && p[2] >= 4) tr = (p[3] & 1) ? p[6] : -1;
+      if (p + 6 < e && p[1] == 0xF9 && p[2] >= 4) tr = (p[3] & 1) ? p[6] : -1;	/* p[6] is read: it must be there */
       p += 2;
       while (p < e && *p) p += 1 + *p;	/* its sub blocks */
       p++;
@@ -560,6 +564,8 @@ static int gif_decode (const unsigned char *b, size_t n, Pix *out) {
   }
   if (gsize == 0) return 0;
   p += 10;
+  /* the code size comes from the file; outside 2..8 the tables below would not hold the codes */
+  if (*p < 2 || *p > 8) return 0;
   {	/* LZW: the codes are the pixels' colors */
     int min = *p++, clear = 1 << min, end = clear + 1, size = min + 1, next = end + 1, prev = -1;
     unsigned char *data = NULL, *pixels;
@@ -594,24 +600,24 @@ static int gif_decode (const unsigned char *b, size_t n, Pix *out) {
         prev = -1;
         continue;
       }
-      if (code == end) break;
+      if (code == end || code > next) break;	/* above next the tables do not hold it: broken */
       if (code < next && code != next) {
         int c = code;
-        while (c >= clear && sp < 4096) {
+        while (c >= clear && sp < 4095) {	/* 4095: one is put after the loop */
           stack[sp++] = (unsigned char)suf[c];
           c = pre[c];
         }
-        stack[sp++] = (unsigned char)c;
+        if (sp < 4096) stack[sp++] = (unsigned char)c;
       }
       else if (prev >= 0) {	/* the code not there yet: the one before plus its first */
         int c = prev;
         unsigned char tmp[4096];
         int t = 0;
-        while (c >= clear && t < 4096) {
+        while (c >= clear && t < 4095) {	/* 4095: one is put after the loop */
           tmp[t++] = (unsigned char)suf[c];
           c = pre[c];
         }
-        tmp[t++] = (unsigned char)c;
+        if (t < 4096) tmp[t++] = (unsigned char)c;
         stack[sp++] = (unsigned char)c;
         while (t-- > 0 && sp < 4096) stack[sp++] = tmp[t];
         {	/* it comes out in order: turn it back */
@@ -671,8 +677,8 @@ static int ico_decode (const unsigned char *b, size_t n, Pix *out) {
   if (best < 0) return 0;
   {
     const unsigned char *e = b + 6 + 16 * best;
-    uint32_t len = le32(e + 8), off = le32(e + 12);
-    if (off + len > n) return 0;
+    size_t len = le32(e + 8), off = le32(e + 12);	/* size_t: the sum of two uint32_t must not wrap */
+    if (len == 0 || off > n || len > n - off) return 0;
     if (len > 8 && memcmp(b + off, "\x89PNG", 4) == 0) return png_decode(b + off, len, out);
     {	/* a BMP without its file header: one is made for it */
       unsigned char *tmp = (unsigned char *)xmalloc(len + 14);

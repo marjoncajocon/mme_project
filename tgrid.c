@@ -893,7 +893,9 @@ static void reflow (Grid *g, Line **scrp, int *cx, int *cy, int *wrap_next,
     LLine *ll = &lls[i];
     int x = 0, j;
     Line *l;
-    out = out_room(out, &capout, nout + ll->n / (cols - 1) + 2);
+    /* a row holds at least cols / 2 of the cells: a wide one whose other half
+    ** was taken away (unlink_wide, then an insert) still moves x on by two */
+    out = out_room(out, &capout, nout + ll->n / (cols / 2 > 0 ? cols / 2 : 1) + 2);
     line_init(NULL, &out[nout], cols);
     l = &out[nout++];
     for (j = 0; j <= ll->n; j++) {

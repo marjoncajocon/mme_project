@@ -377,24 +377,25 @@ int keys_load (void) {
   char *f = keys_path(), *s;
   size_t len, i;
   Json *j;
-  clear_all();
   if (f == NULL) {
+    clear_all();
     show_keys();
     return 0;
   }
   s = read_file(f, &len);
   free(f);
   if (s == NULL) {
+    clear_all();
     show_keys();
     return 0;
   }
   j = json_parse(s, len);
   free(s);
-  if (j == NULL || j->type != J_ARR) {
+  if (j == NULL || j->type != J_ARR) {	/* the file is broken: the bindings there are stay, or keys_save wipes it */
     json_free(j);
-    show_keys();
     return -1;
   }
+  clear_all();
   for (i = 0; i < j->n; i++) add_json(j->kid[i]);
   json_free(j);
   show_keys();

@@ -60,10 +60,13 @@ char *vs_subst (const char *s) {
     else if (file == NULL) continue;	/* no file in front: the file's variables are empty */
     else if (strcmp(name, "file") == 0) buf_puts(&b, file);
     else if (strcmp(name, "fileBasename") == 0) buf_puts(&b, path_basename(file));
-    else if (strcmp(name, "fileBasenameNoExtension") == 0 || strcmp(name, "fileExtname") == 0) {
+    else if (strcmp(name, "fileBasenameNoExtension") == 0) {
       const char *base = path_basename(file), *dot = strrchr(base, '.');
-      if (name[12] == 'N') buf_putn(&b, base, dot && dot != base ? (size_t)(dot - base) : strlen(base));
-      else if (dot && dot != base) buf_puts(&b, dot);
+      buf_putn(&b, base, dot && dot != base ? (size_t)(dot - base) : strlen(base));
+    }
+    else if (strcmp(name, "fileExtname") == 0) {
+      const char *base = path_basename(file), *dot = strrchr(base, '.');
+      if (dot && dot != base) buf_puts(&b, dot);
     }
     else if (strcmp(name, "fileDirname") == 0 || strcmp(name, "relativeFileDirname") == 0) {
       char *dir = path_dirname(file);
@@ -518,7 +521,7 @@ static void run_task_pick (int build) {
         run(&g_task[i]);
         return;
       }
-    for (i = 0; i < g_ntask; i++)
+    for (i = 0; i < g_ntask && n < 512; i++)
       if (g_task[i].build) idx[n++] = i;
     if (n == 1 && g_task[idx[0]].source[0] == '\0') {
       run(&g_task[idx[0]]);

@@ -863,6 +863,10 @@ static int cmp_fold (const void *a, const void *b) {
 
 void on_folding (Doc *d, unsigned long edits, FoldRange *v, size_t n) {
   (void)edits;
+  if (d != FRG.ask_d) {	/* another file's, late */
+    free(v);
+    return;
+  }
   free(FRG.v);
   FRG.d = d;
   FRG.v = v;
@@ -1852,6 +1856,11 @@ static int cmp_lens_line (const void *a, const void *b) {
 
 void on_lens (Doc *d, Lens *v, size_t n) {
   size_t i, k = 0;
+  if (d != LN.ask_d) {	/* another file's, late: its tab may be closed and its text gone */
+    for (i = 0; i < n; i++) free(v[i].title);
+    free(v);
+    return;
+  }
   for (i = 0; i < LN.n; i++) free(LN.v[i].title);
   free(LN.v);
   free(LN.ln);
@@ -4645,6 +4654,7 @@ static void toggle_block_comment (void) {
     size_t sp2 = (b.x >= cl + 1 && rb->s[b.x - cl - 1] == ' ') ? 1 : 0;
     p.x -= cl + sp2;
     q.x += ol + sp1;
+    if (pos_cmp(q, p) > 0) q = p;	/* an empty comment: the markers meet, nothing is between them */
     ed_delete(p, b);
     ed_delete(a, q);
     keep_del(p, b);
@@ -5246,6 +5256,12 @@ static int file_is_binary (const char *path) {
   if (fd < 0) return 0;
   n = os_read(fd, head, sizeof(head));
   os_close(fd);
+  /* UTF-16 puts a NUL beside every ASCII byte, so without this every such
+  ** file would look binary and open in the hex editor, although ebuf.c
+  ** reads and writes that encoding and the BOM says which one it is */
+  if (n >= 2 && ((head[0] == (char)0xFF && head[1] == (char)0xFE) ||
+                 (head[0] == (char)0xFE && head[1] == (char)0xFF)))
+    return 0;
   for (i = 0; i < (int)n; i++)
     if (head[i] == '\0') return 1;
   return 0;
@@ -5882,10 +5898,17 @@ static void fi_run (void) {
   FI.running = 1;
   n = th_cpus();
   for (i = 0; i < n && i < FI_WORK; i++) {
-    Thread *t = th_start(fi_worker, NULL);
-    if (t == NULL) break;
-    FI.th[FI.nth++] = t;
+    Thread *t;
+    mx_lock(FI.mx);	/* the workers already running count down under the lock: this must too */
     FI.alive++;
+    mx_unlock(FI.mx);
+    if ((t = th_start(fi_worker, NULL)) == NULL) {
+      mx_lock(FI.mx);
+      FI.alive--;
+      mx_unlock(FI.mx);
+      break;
+    }
+    FI.th[FI.nth++] = t;
   }
   if (FI.nth == 0) {	/* no thread could start: walk here, as it used to */
     FI.alive = 1;
@@ -17480,13 +17503,11 @@ static void drop_text (Pos p, int copy) {
   doc_group(T->doc);
   if (!copy) {
     if (pos_cmp(p, b) > 0) {	/* after it: the place moves back as it goes */
-      if (p.y == b.y) {
-        p.x -= b.x - a.x;
+      if (p.y == b.y) {	/* on the last line of it: what is left of that line joins line a */
+        p.x = a.x + (p.x - b.x);
         p.y = a.y;
-        if (b.y != a.y) p.x += a.x;
       }
       else p.y -= b.y - a.y;
-      if (p.y == a.y && b.y != a.y) p.x = a.x + (p.x - a.x);
     }
     ed_delete(a, b);
   }

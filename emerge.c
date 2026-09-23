@@ -539,8 +539,11 @@ static int same_lines (size_t a, size_t b, const Doc *d, size_t c, size_t e) {
   size_t i;
   if (b - a != e - c) return 0;
   for (i = 0; i + a < b; i++) {
-    const Row *x = &M.res.row[a + i], *y = &d->row[c + i];
-    if (c + i >= d->n || x->len != y->len || memcmp(x->s, y->s, x->len) != 0) return 0;
+    const Row *x, *y;
+    if (a + i >= M.res.n || c + i >= d->n) return 0;	/* before the rows are pointed at */
+    x = &M.res.row[a + i];
+    y = &d->row[c + i];
+    if (x->len != y->len || memcmp(x->s, y->s, x->len) != 0) return 0;
   }
   return 1;
 }
@@ -775,6 +778,15 @@ int merge_may_close (void) {
   char msg[200];
   if (!M.open) return 1;
   left = merge_left();
+  /* Nothing was accepted or typed in the Result, so there is nothing to
+  ** complete: close without touching the file. Without this a conflict
+  ** that merges by itself (one of its sides empty) makes left 0 the
+  ** moment the file opens, and merely closing the tab would write the
+  ** merged text over the file, markers and all, with nobody asked. */
+  if (!doc_dirty(&M.res)) {
+    merge_close();
+    return 1;
+  }
   if (left == 0) return merge_complete();
   snprintf(msg, sizeof(msg), "'%s' has %d unresolved conflict%s.", path_basename(M.path), left,
            left == 1 ? "" : "s");

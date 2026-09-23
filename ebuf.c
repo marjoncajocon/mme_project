@@ -136,8 +136,19 @@ static void raw_delete (Doc *d, Pos a, Pos b) {
 ** ===================================================================
 */
 
+/*
+** Caches elsewhere (the highlighter, the conflicts, the preview) remember
+** what they worked out for a Doc as (its address, its edits). A Doc that
+** is freed and made again can land on the same address, so a fresh one
+** never starts at the same count as the one before it: no cache of the
+** old text is ever taken for the new one.
+*/
+static unsigned long g_docgen;
+
+
 void doc_init (Doc *d) {
   memset(d, 0, sizeof(*d));
+  d->edits = ++g_docgen;
   row_new(d, 0);
   d->indent = opt.tab_size;
   d->tabs = !opt.insert_spaces;
@@ -158,6 +169,7 @@ static void undo_clear (UndoList *u) {
 void doc_free (Doc *d) {
   tm_doc_free(d);
   syntax_doc_free(d);
+  quick_forget(d);	/* its git copy too, or the entry keeps a Doc that is gone */
   rows_free(d);
   free(d->hl);
   free(d->depth);
@@ -171,7 +183,7 @@ void doc_free (Doc *d) {
 /* tabs or spaces, and how many: from the steps between the lines' indents */
 void doc_detect_indent (Doc *d) {
   size_t i, j, ntab = 0, nspace = 0;
-  size_t hist[9] = {0}, prev = 0;
+  size_t hist[17] = {0}, prev = 0;	/* steps 2..8, and read at editor.tabSize, which goes to 16 */
   static const int steps[] = {2, 4, 8, 3};
   int k;
   for (i = 0; i < d->n; i++) {
@@ -197,8 +209,14 @@ void doc_detect_indent (Doc *d) {
   }
   d->tabs = ntab > nspace;
   d->indent = opt.tab_size;
-  for (k = 0; k < 4; k++)
-    if (hist[steps[k]] > hist[d->indent]) d->indent = steps[k];
+  {	/* the most common step wins; hist only counts 2 .. 8, so a wider editor.tabSize counts as none */
+    size_t have = (d->indent >= 2 && d->indent <= 8) ? hist[d->indent] : 0;
+    for (k = 0; k < 4; k++)
+      if (hist[steps[k]] > have) {
+        have = hist[steps[k]];
+        d->indent = steps[k];
+      }
+  }
 }
 
 

@@ -78,6 +78,7 @@ static size_t read_entries (const char *dir, HistEntry **out) {
       cap = cap ? cap * 2 : 16;
       v = (HistEntry *)xrealloc(v, cap * sizeof(HistEntry));
     }
+    if (t1[0] == '\0' || strchr(t1, '/') || strchr(t1, '\\')) continue;	/* a name, never a path: the file may be hand-edited */
     v[n].time = strtoll(line, NULL, 10);
     v[n].file = path_join(dir, t1);
     v[n].source = xstrdup(t2 && *t2 ? t2 : "File Saved");
@@ -110,12 +111,13 @@ static void write_entries (const char *dir, const char *path, const HistEntry *v
 /* a copy of path as it is on disk now (it was just saved); source: "File Saved" ... */
 void history_add (const char *path, const char *source) {
   char *dir, *s, name[64], *copy;
-  const char *ext = strrchr(path_basename(path), '.');
+  const char *ext;
   size_t len, n, i, from = 0;
   HistEntry *v;
   int fd;
   long long now = (long long)time(NULL);
   if (path == NULL || (s = read_file(path, &len)) == NULL) return;
+  ext = strrchr(path_basename(path), '.');	/* after the guard: path_basename reads it */
   if (len > MAX_SIZE) {
     free(s);
     return;
@@ -135,7 +137,7 @@ void history_add (const char *path, const char *source) {
       return;
     }
   }
-  snprintf(name, sizeof(name), "%llx%lx%s", now, (unsigned long)n, ext ? ext : "");
+  snprintf(name, sizeof(name), "%llx%lx%s", (unsigned long long)now, (unsigned long)n, ext ? ext : "");
   copy = path_join(dir, name);
   if ((fd = os_open(copy, OS_WRITE)) >= 0) {
     os_write(fd, s, len);

@@ -396,7 +396,12 @@ typedef struct M {
   size_t n, end;
   size_t cap[20];
   long steps;	/* a limit: some patterns take too long */
+  const char *base;	/* where the stack was when this match began */
 } M;
+
+#define MAX_STEPS	2000000	/* one place to start */
+#define MAX_SCAN	20000000	/* a whole line */
+#define MAX_STACK	(4u * 1024 * 1024)	/* what the recursion may take of the stack */
 
 
 static int step (M *m, const Node *n, size_t i, const Cont *k);
@@ -435,8 +440,77 @@ static int in_class (const M *m, const Node *n, uint32_t cp) {
 }
 
 
+/* a repeat of one character (a+, .*, [a-z]{2,}): the common one, and the
+** only one a long line can run the stack out with, so it never recurses */
+static int rep_simple (const Node *r) {
+  const Node *k = r->kid;
+  return k != NULL && k->next == NULL &&
+         (k->t == N_CHAR || k->t == N_ANY || k->t == N_CLASS);
+}
+
+
+/* one turn of such a repeat, matched at i: where it ends in *out */
+static int rep_one (const M *m, const Node *k, size_t i, size_t *out) {
+  size_t len;
+  uint32_t cp;
+  if (i >= m->n) return 0;
+  if (k->t == N_CHAR) {
+    if (m->s[i] != k->c && !(m->re->icase && lowc(m->s[i]) == lowc(k->c))) return 0;
+    *out = i + 1;
+    return 1;
+  }
+  cp = utf8_decode((const char *)m->s + i, m->n - i, &len);
+  if (k->t == N_ANY ? (cp == '\n' || cp == '\r') : !in_class(m, k, cp)) return 0;
+  *out = i + len;
+  return 1;
+}
+
+
+/* as many turns as it takes, in a loop, giving them back one at a time */
+static int rep_loop (M *m, const Node *r, size_t i, int count, const Cont *up) {
+  size_t *pos = NULL, cap = 0, np = 1, e = i, j;
+  int hit = 0;
+  if (r->lazy) {	/* as few as possible: each try is the last thing done */
+    for (;;) {
+      if (count >= r->min && step(m, r->next, e, up)) return 1;
+      if (r->max >= 0 && count >= r->max) return 0;
+      if (++m->steps > MAX_STEPS || !rep_one(m, r->kid, e, &e)) return 0;
+      count++;
+    }
+  }
+  /* as many as possible. while every turn takes one byte (the usual) turn j
+  ** ended at i + j; a wide character is where a list of the ends begins */
+  for (;;) {
+    size_t nxt;
+    if (r->max >= 0 && count + (int)np - 1 >= r->max) break;
+    if (++m->steps > MAX_STEPS || !rep_one(m, r->kid, e, &nxt)) break;
+    if (pos == NULL && nxt != e + 1) {
+      cap = np + 64;
+      pos = (size_t *)xmalloc(cap * sizeof *pos);
+      for (j = 0; j < np; j++) pos[j] = i + j;
+    }
+    e = nxt;
+    if (pos != NULL) {
+      if (np + 1 > cap) {
+        cap *= 2;
+        pos = (size_t *)xrealloc(pos, cap * sizeof *pos);
+      }
+      pos[np] = e;
+    }
+    np++;
+  }
+  while (np > 0 && !hit && m->steps <= MAX_STEPS) {	/* the longest first, then one less, ... */
+    np--;
+    if (count + (int)np >= r->min && step(m, r->next, pos ? pos[np] : i + np, up)) hit = 1;
+  }
+  free(pos);
+  return hit;
+}
+
+
 static int try_rep (M *m, const Node *r, size_t i, int count, const Cont *up) {
   Cont c;
+  if (rep_simple(r)) return rep_loop(m, r, i, count, up);
   c.t = K_REP;
   c.n = r;
   c.count = count;
@@ -474,10 +548,18 @@ static int cont (M *m, size_t i, const Cont *k) {
 }
 
 
-/* the nodes from n on match at i, then k */
+/* The nodes from n on match at i, then k. A backtracking matcher recurses,
+** and a pattern like (a|a)+ recurses once per character of a line, so the
+** real limit is the stack, not a count of anything: every way into the
+** recursion comes through here, so here is where what is left of it is
+** measured, to give up as the step budget does rather than take the
+** program down. */
 static int step (M *m, const Node *n, size_t i, const Cont *k) {
+  char here;
+  uintptr_t a = (uintptr_t)m->base, b = (uintptr_t)&here;
+  if ((a > b ? a - b : b - a) > MAX_STACK) return 0;
   for (;;) {
-    if (++m->steps > 2000000) return 0;
+    if (++m->steps > MAX_STEPS) return 0;
     if (n == NULL) return cont(m, i, k);
     switch (n->t) {
       case N_CHAR:
@@ -540,17 +622,23 @@ static int step (M *m, const Node *n, size_t i, const Cont *k) {
 }
 
 
-/* does re match s at byte 'at'? its end in *end, the groups in cap[20] (-1: none) */
-int re_at (const Regex *re, const char *s, size_t n, size_t at, size_t *end, size_t *cap) {
+/* as re_at, adding the steps it took to *total */
+static int match_at (const Regex *re, const char *s, size_t n, size_t at,
+                     size_t *end, size_t *cap, long *total) {
   M m;
+  char base;
   size_t i;
+  int ok;
+  m.base = &base;
   m.re = re;
   m.s = (const unsigned char *)s;
   m.n = n;
   m.end = at;
   m.steps = 0;
   for (i = 0; i < 20; i++) m.cap[i] = (size_t)-1;
-  if (!step(&m, re->first, at, NULL)) return 0;
+  ok = step(&m, re->first, at, NULL);
+  *total += m.steps;
+  if (!ok) return 0;
   *end = m.end;
   if (cap) {
     memcpy(cap, m.cap, sizeof(m.cap));
@@ -561,12 +649,22 @@ int re_at (const Regex *re, const char *s, size_t n, size_t at, size_t *end, siz
 }
 
 
+/* does re match s at byte 'at'? its end in *end, the groups in cap[20] (-1: none) */
+int re_at (const Regex *re, const char *s, size_t n, size_t at, size_t *end, size_t *cap) {
+  long total = 0;
+  return match_at(re, s, n, at, end, cap, &total);
+}
+
+
 /* the first match from byte 'from' on that is not empty: 1, and where */
 int re_find (const Regex *re, const char *s, size_t n, size_t from, size_t *a, size_t *b) {
   size_t i, e;
-  for (i = from; i < n; i++) {
+  long total = 0;	/* the whole scan shares a budget: every byte of a long
+			** line is a place to start, and a pattern that backtracks
+			** would take minutes to say no at each of them */
+  for (i = from; i < n && total <= MAX_SCAN; i++) {
     if (i > 0 && ((unsigned char)s[i] & 0xC0) == 0x80) continue;	/* inside a character */
-    if (re_at(re, s, n, i, &e, NULL) && e > i) {
+    if (match_at(re, s, n, i, &e, NULL, &total) && e > i) {
       *a = i;
       *b = e;
       return 1;

@@ -1029,8 +1029,8 @@ static void finish_rust (const Run *r, int code) {
       }
       want_msg = 0;
     }
-    if (strncmp(l, "test ", 5) == 0 && strstr(l, " ... ")) {
-      char *full = xstrndup(l + 5, (size_t)(strstr(l, " ... ") - l - 5)), *nm = strrchr(full, ':');
+    if (strncmp(l, "test ", 5) == 0 && strstr(l + 5, " ... ")) {	/* from l + 5: "test ... x" would give a length of -1 */
+      char *full = xstrndup(l + 5, (size_t)(strstr(l + 5, " ... ") - l - 5)), *nm = strrchr(full, ':');
       const char *res = strstr(l, " ... ") + 5;
       nm = nm ? nm + 1 : full;
       for (k = 0; k < r->keys.n; k++) {

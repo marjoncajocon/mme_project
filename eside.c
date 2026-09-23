@@ -1363,9 +1363,17 @@ static void delete_selected (SideAct *act) {
   else snprintf(msg, sizeof(msg), any_dir ? "Are you sure you want to delete the following %d files/directories and their contents?"
                                           : "Are you sure you want to delete the following %d files?", (int)v.n);
   detail[0] = '\0';
-  for (i = 0; i < v.n && i < 8 && v.n > 1; i++)	/* their names, like VS Code's list */
-    len += (size_t)snprintf(detail + len, sizeof(detail) - len, "%s%s", i ? ", " : "", path_basename(v.v[i]));
-  if (v.n > 8) snprintf(detail + len, sizeof(detail) - len, " ... and %d more", (int)(v.n - 8));
+  for (i = 0; i < v.n && i < 8 && v.n > 1; i++) {	/* their names, like VS Code's list */
+    /* snprintf answers what the whole name needed, not what it wrote: long names would run len past the end */
+    int k = snprintf(detail + len, sizeof(detail) - len, "%s%s", i ? ", " : "", path_basename(v.v[i]));
+    if (k < 0 || (size_t)k >= sizeof(detail) - len) {
+      len = sizeof(detail) - 1;
+      break;
+    }
+    len += (size_t)k;
+  }
+  if (v.n > 8 && len + 1 < sizeof(detail))
+    snprintf(detail + len, sizeof(detail) - len, " ... and %d more", (int)(v.n - 8));
   snprintf(b0, sizeof(b0), "Move to %s", bin);
   bt[0] = b0;
   bt[1] = "Cancel";
@@ -1436,8 +1444,12 @@ static void paste_files (SideAct *act) {
     vec_init(&g_fclip);
   }
   msel_clear();
-  side_refresh();
-  reload(dir, last);
+  {	/* side_refresh reads the folders again: dir points into an array it freed */
+    char *at = xstrdup(dir->path);
+    side_refresh();
+    reload(node_of(&g_root, at), last);
+    free(at);
+  }
   free(last);
 }
 
@@ -1582,8 +1594,12 @@ void files_drop (int row, int copy, SideAct *act) {
   msel_clear();
   files_drag_end();
   if (dir != &g_root && !dir->open) dir->open = 1;
-  side_refresh();
-  reload(dir == &g_root ? NULL : dir, last);
+  {	/* side_refresh reads the folders again: dir points into an array it freed */
+    char *at = dir == &g_root ? NULL : xstrdup(dir->path);
+    side_refresh();
+    reload(at ? node_of(&g_root, at) : NULL, last);
+    free(at);
+  }
   free(last);
 }
 

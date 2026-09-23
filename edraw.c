@@ -263,7 +263,7 @@ void scr_squiggle (int x, int y, int w, uint32_t color) {
 
 
 uint32_t tok_color (int t) {
-  return ui_color(C_TOK + t);
+  return ui_color(C_TOK + (t >= 0 && t < T_N ? t : T_TEXT));	/* a token out of range must not leave g_color */
 }
 
 

@@ -80,6 +80,7 @@ typedef struct DFile {
 } DFile;
 
 #define MAX_SRV	64	/* restarts take new ones */
+#define MAX_MESSAGE	((size_t)64 << 20)	/* a Content-Length no real server sends */
 
 static Srv *g_srv[MAX_SRV];
 static int g_nsrv;
@@ -694,7 +695,7 @@ static void progress (Srv *s, const Json *params) {
     memmove(s->prog + at, s->prog + at + 1, (size_t)(s->nprog - at - 1) * sizeof(Prog));
     s->nprog--;
   }
-  if (s->prog[0].pct > 100) s->prog[0].pct = 100;
+  if (at >= 0 && at < s->nprog && s->prog[at].pct > 100) s->prog[at].pct = 100;
 }
 
 
@@ -711,7 +712,10 @@ void lsp_shutdown (void) {
     os_close(s->to);
     os_close(s->from);
     if (s->err >= 0) os_close(s->err);
-    os_kill(0, 0);
+    /* a server that ignores the exit must not outlive the editor; not when it is
+    ** dead already: os_poll_proc took its handle then, and the id can be another's */
+    if (s->pid > 0 && !s->dead) os_kill(s->pid, 9);
+    s->dead = 1;
   }
   g_nsrv = 0;
 }
@@ -758,6 +762,9 @@ void lsp_open (Doc *d, const char *syntax) {
 }
 
 
+static void lens_forget (const Doc *d);	/* a closed file's code lenses, below */
+
+
 void lsp_close (Doc *d) {
   LDoc *l = ldoc(d);
   int i, k;
@@ -767,6 +774,7 @@ void lsp_close (Doc *d) {
         g_srv[i]->req[k].kind = RQ_OTHER;
         g_srv[i]->req[k].d = NULL;
       }
+  lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
   if (l == NULL) return;
   if (l->opened) {
     Buf b;
@@ -940,6 +948,15 @@ static struct {
   char **json;
   size_t n;
 } g_lens;
+
+
+/* the code lenses of a file that is closing: its Doc must not be used again */
+static void lens_forget (const Doc *d) {
+  if (g_lens.d == d) {
+    g_lens.d = NULL;
+    g_lens.s = NULL;
+  }
+}
 
 
 void lsp_lens (Doc *d) {
@@ -1942,15 +1959,16 @@ static void handle (Srv *s, const Json *msg) {
     return;
   }
   if (method) {
-    if (strcmp(method->str, "textDocument/publishDiagnostics") == 0)
+    const char *mth = json_str(method, "");	/* not method->str: it is NULL when "method" is not a string */
+    if (strcmp(mth, "textDocument/publishDiagnostics") == 0)
       diagnostics(s, json_get(msg, "params"));
-    else if (strcmp(method->str, "$/progress") == 0) progress(s, json_get(msg, "params"));
-    else if (strcmp(method->str, "window/showMessage") == 0 || strcmp(method->str, "window/logMessage") == 0) {
+    else if (strcmp(mth, "$/progress") == 0) progress(s, json_get(msg, "params"));
+    else if (strcmp(mth, "window/showMessage") == 0 || strcmp(mth, "window/logMessage") == 0) {
       static const char *const level[] = {"info", "error", "warning", "info", "info"};
       int type = inum(json_get(msg, "params.type"), 4);
       const char *text = json_str(json_get(msg, "params.message"), "");
       out_log(s->chan, "[%s] %s", level[type >= 1 && type <= 4 ? type : 0], text);
-      if (method->str[7] == 's' && type >= 1 && type <= 3)	/* a notification, as VS Code shows it */
+      if (mth[7] == 's' && type >= 1 && type <= 3)	/* a notification, as VS Code shows it */
         toast_src(type == 1 ? 2 : type == 2 ? 1 : 0, s->chan, "%s", text);
     }
     return;
@@ -2209,6 +2227,19 @@ static void handle (Srv *s, const Json *msg) {
 }
 
 
+/* the Content-Length a header says, (size_t)-1 when it is not one we can use */
+static size_t hdr_len (const char *s) {
+  size_t v = 0;
+  while (*s == ' ' || *s == '	') s++;
+  if (*s < '0' || *s > '9') return (size_t)-1;	/* a sign, or nothing: strtoul would make it huge */
+  for (; *s >= '0' && *s <= '9'; s++) {
+    if (v > (64u << 20)) return (size_t)-1;	/* no message of ours is that big */
+    v = v * 10 + (size_t)(*s - '0');
+  }
+  return v > (64u << 20) ? (size_t)-1 : v;
+}
+
+
 /* the whole messages that came in s->in */
 static int messages (Srv *s) {
   int got = 0;
@@ -2227,7 +2258,12 @@ static int messages (Srv *s) {
       s->in.len -= hlen;
       continue;
     }
-    body = (size_t)strtoul(cl + 15, NULL, 10);
+    body = hdr_len(cl + 15);
+    if (body == (size_t)-1) {	/* not a length we will ever see: it is not talking LSP */
+      out_log(s->chan, "[error] Content-Length out of range: the server is not talking LSP");
+      s->dead = 1;
+      break;
+    }
     if (s->in.len < hlen + body) break;
     trace("<< ", s->in.s + hlen, body);
     j = json_parse(s->in.s + hlen, body);
