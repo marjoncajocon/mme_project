@@ -218,6 +218,8 @@ static const Setting set[] = {
    "Controls whether the editor shows CodeLens."},
   {"editor.textmateGrammars", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Color the code with the TextMate grammars of VS Code and its extensions, exactly as VS Code does; off: mme's own simpler highlighter."},
+  {"editor.maxTokenizationLineLength", C_EDITOR, ST_NUM, 0, "20000", NULL,
+   "Lines above this length will not be tokenized for performance reasons."},
   {"editor.semanticHighlighting.enabled", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Controls whether the semanticHighlighting is shown for the languages that support it."},
   {"editor.lightbulb.enabled", C_EDITOR, ST_ENUM, 0, "\"onCode\"", "onCode|off",

@@ -157,8 +157,10 @@ static void undo_clear (UndoList *u) {
 
 void doc_free (Doc *d) {
   tm_doc_free(d);
+  syntax_doc_free(d);
   rows_free(d);
   free(d->hl);
+  free(d->depth);
   undo_clear(&d->undo);
   undo_clear(&d->redo);
   free(d->path);

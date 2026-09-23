@@ -1278,14 +1278,104 @@ static size_t g_tmpcap;
 
 
 /*
+** A long line is scanned once and kept: the text, the bracket depths and
+** the minimap all ask for the same line in one frame, and a minified line
+** is hundreds of thousands of bytes. Short lines are scanned again, which
+** costs nothing and keeps an ordinary file as it was.
+*/
+#define SC_N	32	/* slots: the long lines of a screen */
+#define SC_MIN	4096	/* a shorter line is not worth keeping */
+#define SC_MAX	(4u << 20)	/* a longer one is not kept either */
+#define SC_BYTES	(8u << 20)	/* what the slots may hold together */
+
+static struct SCell {
+  const Doc *d;
+  const Syntax *sx;
+  size_t y, len;
+  unsigned long edits;
+  int state;
+  unsigned char *tok;
+  size_t cap;
+  unsigned long stamp;
+} g_sc[SC_N];
+static unsigned long g_scstamp;
+static size_t g_scbytes;
+
+
+/* the file is closed: its lines go, so that another Doc cannot take them */
+void syntax_doc_free (Doc *d) {
+  int i;
+  for (i = 0; i < SC_N; i++)
+    if (g_sc[i].d == d) g_sc[i].d = NULL;
+}
+
+
+/* the slots not asked for lately give their lines back, until the rest fits */
+static void sc_trim (const struct SCell *keep) {
+  while (g_scbytes > SC_BYTES) {
+    struct SCell *old = NULL;
+    int i;
+    for (i = 0; i < SC_N; i++) {
+      struct SCell *c = &g_sc[i];
+      if (c == keep || c->cap == 0) continue;
+      if (old == NULL || c->stamp < old->stamp) old = c;
+    }
+    if (old == NULL) break;
+    g_scbytes -= old->cap;
+    free(old->tok);
+    memset(old, 0, sizeof(*old));
+  }
+}
+
+
+/* the first n bytes of line y of d, scanned from 'state'; kept when that is worth it */
+static void scan_keep (const Syntax *sx, Doc *d, size_t y, size_t n, int state, unsigned char *tok) {
+  const Row *r = &d->row[y];
+  struct SCell *c;
+  int i, old = 0;
+  if (n < SC_MIN || n > SC_MAX) {
+    syntax_scan(sx, r->s, n, state, tok);
+    return;
+  }
+  for (i = 0; i < SC_N; i++) {
+    c = &g_sc[i];
+    if (c->d == d && c->sx == sx && c->tok && c->y == y && c->len == n && c->edits == d->edits &&
+        c->state == state) {
+      memcpy(tok, c->tok, n);
+      c->stamp = ++g_scstamp;
+      return;
+    }
+    if (g_sc[i].stamp < g_sc[old].stamp) old = i;
+  }
+  syntax_scan(sx, r->s, n, state, tok);
+  c = &g_sc[old];
+  if (n + 1 > c->cap) {
+    g_scbytes -= c->cap;
+    c->cap = n + 256;
+    c->tok = (unsigned char *)xrealloc(c->tok, c->cap);
+    g_scbytes += c->cap;
+  }
+  memcpy(c->tok, tok, n);
+  c->d = d;
+  c->sx = sx;
+  c->y = y;
+  c->len = n;
+  c->edits = d->edits;
+  c->state = state;
+  c->stamp = ++g_scstamp;
+  sc_trim(c);
+}
+
+
+/*
 ** The line's tokens from this file's own scanner, never the TextMate
 ** grammar: the minimap and the bracket depths ask for hundreds of lines at
 ** once, and a grammar costs too much for that (the eye cannot tell in a
 ** minimap dot anyway).
 */
-static void scan_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
+static void scan_line (Doc *d, const Syntax *sx, size_t y, size_t n, unsigned char *tok) {
   size_t k;
-  const Row *r = &d->row[y];
+  if (n > d->row[y].len) n = d->row[y].len;
   if (d->hl_sx != (const void *)sx) {	/* another language: all again */
     d->hl_sx = sx;
     d->hl_n = 0;
@@ -1310,19 +1400,30 @@ static void scan_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
     d->hl[k + 1] = (unsigned char)syntax_scan(sx, p->s, p->len, d->hl[k], g_tmp);
   }
   if (d->hl_n < y + 1) d->hl_n = y + 1;
-  syntax_scan(sx, r->s, r->len, d->hl[y], tok);
+  scan_keep(sx, d, y, n, d->hl[y], tok);
 }
 
 
 void syntax_line_quick (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
   if (sx == NULL || y >= d->n) return;
-  scan_line(d, sx, y, tok);
+  scan_line(d, sx, y, d->row[y].len, tok);
+}
+
+
+/*
+** The first max bytes of line y only: the minimap shows a hundred columns
+** of it, and a minified line is tens of thousands of bytes. tok holds that
+** many bytes, no more, and the caller stops there too.
+*/
+void syntax_line_head (Doc *d, const Syntax *sx, size_t y, unsigned char *tok, size_t max) {
+  if (sx == NULL || y >= d->n) return;
+  scan_line(d, sx, y, max, tok);
 }
 
 
 void syntax_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
   if (tm_line(d, sx, y, tok)) return;	/* VS Code's grammar colors it */
-  scan_line(d, sx, y, tok);
+  scan_line(d, sx, y, d->row[y].len, tok);
 }
 
 /* }================================================================== */

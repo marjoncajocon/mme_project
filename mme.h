@@ -131,6 +131,7 @@ typedef struct Opt {
   char term_cwd[512];	/* terminal.integrated.cwd */
   int preview_tabs;	/* workbench.editor.enablePreview: a click replaces the tab */
   int textmate;	/* editor.textmateGrammars: VS Code's grammars color the code */
+  int tm_max_line;	/* editor.maxTokenizationLineLength: a longer line the grammar leaves alone */
   int hover_delay;	/* editor.hover.delay, ms */
   int hover_sticky;	/* editor.hover.sticky: the mouse can go into the hover */
   int exp_confirm_dnd;	/* explorer.confirmDragAndDrop */
@@ -263,6 +264,8 @@ typedef struct Doc {
   size_t hl_from;	/* the first line changed since the highlighter looked */
   size_t br_from;	/* and since the bracket depths were counted */
   size_t tm_from;	/* and since the grammar tokenized it */
+  size_t *depth;	/* the bracket depth each line starts with */
+  size_t depth_cap, depth_n;	/* its size, and the lines counted: 0 .. depth_n - 1 */
   unsigned char *hl;	/* the highlighter's state at the start of each line */
   size_t hl_n, hl_cap;	/* known for lines 0 .. hl_n - 1 */
   const void *hl_sx;	/* the language they are for */
@@ -1113,6 +1116,8 @@ int syntax_scan (const Syntax *sx, const char *s, size_t n, int state, unsigned 
 /* the tokens of line y of d, with the states of the lines before kept up to date */
 void syntax_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok);
 void syntax_line_quick (Doc *d, const Syntax *sx, size_t y, unsigned char *tok);	/* without the grammar: for bulk work */
+void syntax_doc_free (Doc *d);	/* what was scanned for it is dropped */
+void syntax_line_head (Doc *d, const Syntax *sx, size_t y, unsigned char *tok, size_t max);	/* its first max bytes */
 /* a language mme only knows from a VS Code extension (its grammar colors it) */
 const Syntax *syntax_extra (const char *name, const char *id, const char *line, const char *open, const char *close);
 const char *syntax_lang (const Syntax *sx);	/* its VS Code language id */

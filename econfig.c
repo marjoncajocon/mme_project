@@ -26,7 +26,7 @@
 
 Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, {0}, 0, 1, 1, 1, 1, 1, 1, 1, 1,
            0, 1000, 1, 1, 0, 0, 1, 0, 1, 1, 1, 0, 0, 0, 0, 0, 1, 1, 1, 1,
-           1, 1, 1, 0, 1, 1, 0, 0, 1000, 1, 0, "", 0, 1,	/* term_cwd, preview_tabs, textmate */
+           1, 1, 1, 0, 1, 1, 0, 0, 1000, 1, 0, "", 0, 1, 20000,	/* term_cwd, preview_tabs, textmate, tm_max_line */
            300, 1,	/* hover_delay, hover_sticky */
            1, 1, 1, 1, 1, 0, 1, 0, 1,	/* explorer.* */
            1, "", 0, 0,	/* command_center, win_title, panel_loc, panel_justify */
@@ -141,6 +141,8 @@ static const char default_file1[] =
   "  \"mme.extensions.useVSCodeExtensions\": true,\n"
   "  // VS Code's TextMate grammars (from VS Code and its extensions) color the code\n"
   "  \"editor.textmateGrammars\": true,\n"
+  "  // a longer line is left to mme's own highlighter: a minified file stays quick\n"
+  "  \"editor.maxTokenizationLineLength\": 20000,\n"
   ;
 static const char default_edit[] =	/* the editing settings */
   "  // how far a mouse wheel notch scrolls: 1 is three lines, like VS Code\n"
@@ -553,6 +555,7 @@ int settings_load (void) {
   opt.codelens = json_bool(json_get(j, "editor\\.codeLens"), 1);
   opt.semantic = json_bool(json_get(j, "editor\\.semanticHighlighting\\.enabled"), 1);
   opt.textmate = json_bool(json_get(j, "editor\\.textmateGrammars"), 1);
+  opt.tm_max_line = clamp((int)json_num(json_get(j, "editor\\.maxTokenizationLineLength"), 20000), 0, 1000000);
   opt.hover_delay = clamp((int)json_num(json_get(j, "editor\\.hover\\.delay"), 300), 0, 10000);
   opt.hover_sticky = json_bool(json_get(j, "editor\\.hover\\.sticky"), 1);
   opt.command_center = json_bool(json_get(j, "window\\.commandCenter"), 1);

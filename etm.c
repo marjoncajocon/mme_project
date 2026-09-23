@@ -22,11 +22,24 @@
 
 
 #define NONE	((size_t)-1)
-#define MAX_LINE	20000	/* longer lines are not tokenized (VS Code's maxTokenizationLineLength) */
+#define TM_LINE_US	100000	/* one line's own budget: a minified line costs seconds otherwise */
 
 typedef struct Grammar Grammar;
 typedef struct Rule Rule;
 typedef struct Scope Scope;
+
+
+/*
+** editor.maxTokenizationLineLength: a longer line is left to esyntax.c,
+** as VS Code leaves it to no one. 0: every line, however long.
+*/
+static size_t tm_limit (void) {
+  return opt.tm_max_line > 0 ? (size_t)opt.tm_max_line : (size_t)-1;
+}
+
+
+/* when the line being tokenized must stop, whatever is left of it */
+static long long g_line_end;
 
 
 static int is_dir (const char *p) {
@@ -1354,7 +1367,8 @@ static Frame *tok_string (Grammar *base, const char *s, size_t n, int first, siz
   for (;;) {
     size_t ms, me;
     int adv;
-    if (++loops > 4000 || !scan_next(base, st, s, n, pos, anchor, first, &h)) {
+    if (++loops > 4000 || (loops % 64 == 0 && os_now_us() > g_line_end) ||
+        !scan_next(base, st, s, n, pos, anchor, first, &h)) {
       produce(o, st->content, n);
       break;
     }
@@ -1434,10 +1448,11 @@ static Frame *tok_line (Grammar *g, Frame *st, const char *s, size_t n, int firs
   static size_t cap;
   st->refs++;
   g_line++;
-  if (n > MAX_LINE) {
+  if (n > tm_limit()) {
     produce(o, st->content, n);
     return st;
   }
+  g_line_end = os_now_us() + TM_LINE_US;
   if (n + 2 > cap) {
     cap = n + 256;
     buf = (char *)xrealloc(buf, cap);
@@ -1472,14 +1487,14 @@ static Frame *root_frame (Grammar *g) {
 ** stand.
 */
 #define TC_N	128	/* slots: a screen and more */
-#define TC_MAX	8192	/* a longer line is not kept */
+#define TC_BYTES	(16u << 20)	/* what the slots may hold together */
 
 typedef struct TCell {
   size_t y, len;
-  unsigned long edits;
   int used;
   Out o;
   size_t cap;
+  unsigned long stamp;	/* when it was last asked for: the oldest goes first */
 } TCell;
 
 typedef struct TDoc {
@@ -1488,6 +1503,8 @@ typedef struct TDoc {
   Frame **st;	/* st[k]: the stack line k starts with */
   size_t n, cap;
   TCell c[TC_N];	/* the lines tokenized lately */
+  size_t bytes;	/* what their arrays take */
+  unsigned long stamp;
 } TDoc;
 
 static struct {	/* the last line tokenized for drawing */
@@ -1515,6 +1532,41 @@ static void tc_free (TDoc *td) {
     free(td->c[i].o.sc);
     memset(&td->c[i], 0, sizeof(td->c[i]));
   }
+  td->bytes = 0;
+  LAST.hit = NULL;
+  LAST.d = NULL;
+}
+
+
+/* the bytes one slot's arrays take */
+static size_t tc_bytes (const TCell *c) {
+  return c->cap * (2 * sizeof(unsigned char) + sizeof(uint32_t) + sizeof(Scope *));
+}
+
+
+/*
+** A minified line is tens of thousands of bytes and each one costs an
+** entry in four arrays, so the slots are given a size: the ones not asked
+** for lately give their arrays back until the rest fits again. 'keep' is
+** the slot just filled, which stays.
+*/
+static void tc_trim (TDoc *td, const TCell *keep) {
+  while (td->bytes > TC_BYTES) {
+    TCell *old = NULL;
+    int i;
+    for (i = 0; i < TC_N; i++) {
+      TCell *c = &td->c[i];
+      if (c == keep || c->cap == 0) continue;
+      if (old == NULL || c->stamp < old->stamp) old = c;
+    }
+    if (old == NULL) break;
+    td->bytes -= tc_bytes(old);
+    free(old->o.cls);
+    free(old->o.fg);
+    free(old->o.fs);
+    free(old->o.sc);
+    memset(old, 0, sizeof(*old));
+  }
 }
 
 
@@ -1526,10 +1578,15 @@ static void tc_drop (TDoc *td, size_t y) {
 }
 
 
-/* the slot of line y, when it holds that line as the text is now */
+/*
+** The slot of line y, when it holds that line as the text is now. An edit
+** drops its line and the ones after it (tc_drop), so the ones above it are
+** still good: a keystroke does not throw the whole screen away.
+*/
 static TCell *tc_get (TDoc *td, const Doc *d, size_t y) {
   TCell *c = &td->c[y % TC_N];
-  if (!c->used || c->y != y || c->edits != d->edits || c->len != d->row[y].len) return NULL;
+  if (!c->used || c->y != y || c->len != d->row[y].len) return NULL;
+  c->stamp = ++td->stamp;
   return c;
 }
 
@@ -1630,51 +1687,43 @@ int tm_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
     r = &d->row[k];
     td->st[k + 1] = tok_line(g, td->st[k], r->s, r->len, k == 0, NULL);
     td->n++;
-    if (++count % 32 == 0 && used + (os_now_us() - t0) > 50000) {
+    if ((++count % 32 == 0 || r->len > 4096) && used + (os_now_us() - t0) > 50000) {	/* a long line is looked at at once */
       used += os_now_us() - t0;
       return 0;
     }
   }
-  if (td->n == y + 1 && used + (os_now_us() - t0) > 50000) {	/* a new line when the time is spent: later */
+  if (used + (os_now_us() - t0) > 50000) {	/* the frame's time is spent: esyntax colors it, the grammar catches up */
     used += os_now_us() - t0;
     return 0;
   }
   r = &d->row[y];
+  if (r->len > tm_limit()) {	/* editor.maxTokenizationLineLength: esyntax.c colors it */
+    if (td->n == y + 1) td->st[td->n++] = tok_line(g, td->st[y], r->s, r->len, y == 0, NULL);
+    return 0;
+  }
   LAST.hit = NULL;
-  if (r->len <= TC_MAX) {	/* into its slot, for whoever asks next */
+  {	/* into its slot, for whoever asks next */
     TCell *c = &td->c[y % TC_N];
+    size_t was = tc_bytes(c);
     out_size(&c->o, r->len, &c->cap);
+    td->bytes += tc_bytes(c) - was;
+    c->stamp = ++td->stamp;
     after = tok_line(g, td->st[y], r->s, r->len, y == 0, &c->o);
     c->used = 1;
     c->y = y;
     c->len = r->len;
-    c->edits = d->edits;
     LAST.hit = c;
     memcpy(tok, c->o.cls, r->len);
-    if (td->n == y + 1) {	/* the frontier moved on: that counts */
-      td->st[td->n++] = after;
-      used += os_now_us() - t0;
-    }
+    if (td->n == y + 1) td->st[td->n++] = after;	/* the frontier moved on */
     else fr_unref(after);
+    used += os_now_us() - t0;
     LAST.d = d;
     LAST.y = y;
     LAST.n = r->len;
     LAST.edits = d->edits;
+    tc_trim(td, c);
     return 1;
   }
-  out_size(&LAST.o, r->len, &LAST.cap);
-  after = tok_line(g, td->st[y], r->s, r->len, y == 0, &LAST.o);
-  if (td->n == y + 1) {	/* the frontier moved on: that counts */
-    td->st[td->n++] = after;
-    used += os_now_us() - t0;
-  }
-  else fr_unref(after);
-  memcpy(tok, LAST.o.cls, r->len);
-  LAST.d = d;
-  LAST.y = y;
-  LAST.n = r->len;
-  LAST.edits = d->edits;
-  return 1;
 }
 
 

@@ -758,38 +758,33 @@ static int cursor_brackets (Pos *a, Pos *b) {
 }
 
 
-/* how deep the brackets are at the start of each line: again after an edit */
-static size_t *g_depth;
-static size_t g_ndepth;
-static const Doc *g_depth_doc;
-
 /*
-** The depths are kept between frames: an edit only counts the lines from it
-** on (the text above them cannot have changed), and the count stops at the
-** last line the editor shows, so a huge file costs no more than a screen.
+** How deep the brackets are at the start of each line. The count belongs
+** to the file, so going to another tab and back does not do it again; an
+** edit only counts the lines from it on (the text above them cannot have
+** changed), and the count stops at the last line the editor shows, so a
+** huge file costs no more than a screen.
 */
-static size_t g_depth_n;	/* counted for lines 0 .. g_depth_n - 1 */
-
 static size_t depth_at (size_t y) {
+  Doc *doc = T->doc;
   size_t k, d, want = y + 1, last = T->top + (size_t)L.text_h + 1;
-  if (g_depth_doc != T->doc || g_ndepth != T->doc->n + 1) {	/* another file, or lines came or went */
-    g_ndepth = T->doc->n + 1;
-    g_depth = (size_t *)xrealloc(g_depth, g_ndepth * sizeof(size_t));
-    g_depth_n = 0;
-    g_depth_doc = T->doc;
+  if (doc->depth_cap != doc->n + 1) {	/* lines came or went: the count starts over */
+    doc->depth_cap = doc->n + 1;
+    doc->depth = (size_t *)xrealloc(doc->depth, doc->depth_cap * sizeof(size_t));
+    doc->depth_n = 0;
   }
-  if (T->doc->br_from < g_depth_n) g_depth_n = T->doc->br_from;	/* an edit: from its line on again */
-  T->doc->br_from = (size_t)-1;
+  if (doc->br_from < doc->depth_n) doc->depth_n = doc->br_from;	/* an edit: from its line on again */
+  doc->br_from = (size_t)-1;
   if (want < last) want = last;	/* what the screen needs now, in one go */
-  if (want > T->doc->n) want = T->doc->n;
-  if (g_depth_n == 0) g_depth[0] = 0;
-  for (k = g_depth_n, d = g_depth[g_depth_n]; k < want; k++) {
+  if (want > doc->n) want = doc->n;
+  if (doc->depth_n == 0) doc->depth[0] = 0;
+  for (k = doc->depth_n, d = doc->depth[doc->depth_n]; k < want; k++) {
     const Row *r = row_at(k);
     const unsigned char *tok = r->len > 0 ? line_tokens_quick(k) : NULL;
     size_t x;
-    g_depth[k] = d;
+    doc->depth[k] = d;
     if (tok == NULL) {
-      g_depth[k + 1] = d;
+      doc->depth[k + 1] = d;
       continue;
     }
     for (x = 0; x < r->len; x++) {
@@ -798,10 +793,10 @@ static size_t depth_at (size_t y) {
       if (is_open(c)) d++;
       else if (is_close(c) && d > 0) d--;
     }
-    g_depth[k + 1] = d;
+    doc->depth[k + 1] = d;
   }
-  if (want > g_depth_n) g_depth_n = want;
-  return y < g_depth_n ? g_depth[y] : 0;
+  if (want > doc->depth_n) doc->depth_n = want;
+  return y < doc->depth_n ? doc->depth[y] : 0;
 }
 
 
@@ -3295,17 +3290,19 @@ static void mm_line (size_t y, uint32_t *dot) {
   static unsigned char *tok;
   static size_t cap;
   const Row *r;
-  size_t x = 0, c = 0, len, ch = mm_ch();
+  size_t x = 0, c = 0, len, ch = mm_ch(), head;
   int i;
   for (i = 0; i < 2 * MM_W; i++) dot[i] = MM_NONE;
   if (y >= T->doc->n) return;
   r = row_at(y);
-  if (r->len + 1 > cap) {
-    cap = r->len + 256;
+  head = 4 * ch * 2 * MM_W + 8;	/* the bytes its columns can take, UTF-8 and all */
+  if (head > r->len) head = r->len;
+  if (head + 1 > cap) {
+    cap = head + 256;
     tok = (unsigned char *)xrealloc(tok, cap);
   }
-  syntax_line_quick(T->doc, T->sx, y, tok);	/* the grammar is too slow for hundreds of lines a frame */
-  while (x < r->len && c / ch < 2 * MM_W) {
+  syntax_line_head(T->doc, T->sx, y, tok, head);	/* the grammar is too slow for hundreds of lines a frame */
+  while (x < head && c / ch < 2 * MM_W) {
     size_t w = char_width(r, x, c, &len);
     unsigned char b = (unsigned char)r->s[x];
     if (b != ' ' && b != '\t' && dot[c / ch] == MM_NONE) dot[c / ch] = tok_color(tok[x]);
