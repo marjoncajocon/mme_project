@@ -543,7 +543,13 @@ static Srv *start (const char *lang) {
                  "\"resolveSupport\":{\"properties\":[\"edit\"]}}},"
                  "\"workspace\":{\"workspaceFolders\":true,\"configuration\":true,\"symbol\":{},"
                  "\"applyEdit\":true,\"workspaceEdit\":{\"documentChanges\":true}}}");
-    if (strcmp(s->lang, "go") == 0) buf_printf(&b, ",\"initializationOptions\":%s", GOPLS_OPTIONS);
+    /* editorInfo: Copilot's server asks who it is talking to, and a server
+    ** that does not know these options ignores them. gopls wants its own at
+    ** the top level too, so they join these instead of nesting under them. */
+    buf_printf(&b, ",\"initializationOptions\":{\"editorInfo\":{\"name\":\"mme\",\"version\":\"%s\"},"
+               "\"editorPluginInfo\":{\"name\":\"mme\",\"version\":\"%s\"}", MME_VERSION, MME_VERSION);
+    if (strcmp(s->lang, "go") == 0) buf_printf(&b, ",%s", &GOPLS_OPTIONS[1]);	/* past its own brace */
+    else buf_putc(&b, '}');
     buf_putc(&b, '}');
     request(s, "initialize", b.s, RQ_INIT, NULL);
     buf_free(&b);
