@@ -3201,6 +3201,7 @@ typedef struct SbItem {
   char id[48], name[64];
   int right, prio, cmd;
   char text[200], tip[200];
+  int dim;	/* drawn dim: it is there, but it is doing nothing (a signed-out Copilot) */
   int x0, x1;	/* where it went; x1 0: not drawn */
 } SbItem;
 
@@ -3225,7 +3226,14 @@ void status_add (const char *id, const char *name, int right, int prio, const ch
   it->cmd = cmd;
   snprintf(it->text, sizeof(it->text), "%s", text);
   snprintf(it->tip, sizeof(it->tip), "%s", tip ? tip : "");
+  it->dim = 0;
   it->x0 = it->x1 = 0;
+}
+
+
+/* the item just added is drawn dim, the way VS Code greys an inactive one */
+static void status_dim (void) {
+  if (g_nsbi > 0) g_sbi[g_nsbi - 1].dim = 1;
 }
 
 
@@ -3386,6 +3394,36 @@ static void status_items (void) {
 }
 
 
+/*
+** GitHub Copilot's status item, the way VS Code shows it: one icon,
+** dim while the server is signed out or inactive, the server's own
+** didChangeStatus message as the tooltip, and a click that opens the
+** menu - which offers the sign-in when there is nobody signed in.
+** While a suggestion is being fetched the icon is the working one: a
+** still glyph, not a spinner, so nothing has to be redrawn on a timer.
+*/
+static void status_copilot (void) {
+  InlineStatus is;
+  char t[200], tip[200];
+  uint32_t icon;
+  if (!lsp_inline_configured()) return;
+  lsp_inline_status(&is);
+  if (is.busy || is.signing) icon = 0xEA77;	/* codicon sync: it is working */
+  else if (is.kind == CS_ERROR) icon = 0xEA87;	/* codicon error */
+  else if (is.kind == CS_WARNING) icon = 0xEA6C;	/* codicon warning */
+  else icon = 0xEA61;	/* codicon lightbulb: a suggestion is what it is for */
+  sb_text(t, sizeof(t), icon, "");
+  if (is.signing) snprintf(tip, sizeof(tip), "GitHub Copilot: signing in - paste %s at %s", is.code, is.uri);
+  else if (is.msg[0]) snprintf(tip, sizeof(tip), "GitHub Copilot: %s", is.msg);
+  else if (is.user[0]) snprintf(tip, sizeof(tip), "GitHub Copilot: signed in as %s", is.user);
+  else if (!is.ready) snprintf(tip, sizeof(tip), "GitHub Copilot: starting");
+  else snprintf(tip, sizeof(tip), "GitHub Copilot: ready");
+  status_add("status.inlineCompletion", "GitHub Copilot", 1, 73, t, tip, CMD_COPILOT_STATUS);
+  if (!is.busy && !is.signing &&	/* working is never idle, whoever is signed in */
+      (!is.ready || is.kind == CS_INACTIVE || (is.known && is.user[0] == '\0'))) status_dim();
+}
+
+
 static int sb_width (const SbItem *it) {
   return (int)str_cols(it->text) + 2;	/* a space on each side, like VS Code's padding */
 }
@@ -3406,6 +3444,7 @@ static void draw_status (void) {
   scr_fill(0, y, E.cols, S_STATUS);
   g_nsbi = 0;
   status_items();
+  status_copilot();	/* after the editor's own, left of the bell: where VS Code puts it */
   status_add("status.notifications", "Notifications", 1, 100, toast_unread() ? "\xEE\xAE\x9A" : "\xEE\xAA\xA2",	/* bell-dot, bell: last, at the right end */
              toast_unread() ? "Notifications" : "No Notifications", CMD_NOTIFICATIONS);
   for (i = 0; i < g_nsbi; i++) {
@@ -3425,7 +3464,7 @@ static void draw_status (void) {
     if (!shown[i] || it->right) continue;
     it->x0 = lx;
     it->x1 = lx + sb_width(it);
-    scr_puts(lx + 1, y, it->text, S_STATUS);
+    scr_puts(lx + 1, y, it->text, it->dim ? S_STATUS_DIM : S_STATUS);
     lx = it->x1;
   }
   for (i = g_nsbi - 1; i >= 0; i--) {	/* the right side, from the right: the last added at the end */
@@ -3433,7 +3472,7 @@ static void draw_status (void) {
     if (!shown[i] || !it->right) continue;
     it->x1 = rx;
     it->x0 = rx - sb_width(it);
-    scr_puts(it->x0 + 1, y, it->text, S_STATUS);
+    scr_puts(it->x0 + 1, y, it->text, it->dim ? S_STATUS_DIM : S_STATUS);
     rx = it->x0;
   }
   if (SBH.item >= 0 && SBH.item < g_nsbi && g_sbi[SBH.item].x1 > g_sbi[SBH.item].x0) {
@@ -8822,6 +8861,71 @@ static void lang_status (void) {
   if (r == 1) restart_server();
   else if (r == 2) on_show_output(has_out ? chan : name);
   else if (r == 3) run_command(CMD_SETTINGS_JSON);
+}
+
+
+/*
+** The GitHub Copilot status menu, as VS Code's: who is signed in, what
+** the inline-completion server last said about itself, and what can be
+** done about it. This is what a click on the status item runs, so a
+** signed-out Copilot is one click away from signing in.
+*/
+static void copilot_status (void) {
+  InlineStatus is;
+  Pick p;
+  int act[6], n = 0, r;
+  char head[240];
+  const char *detail;
+  if (!lsp_inline_configured()) {
+    toast(0, "No inline-completion server is set in mme.inlineCompletionServer.");
+    return;
+  }
+  lsp_inline_status(&is);
+  pick_init(&p, "GitHub Copilot");
+  p.keep_order = 1;
+  if (is.signing) snprintf(head, sizeof(head), "Signing in: paste the code %s", is.code);
+  else if (is.user[0]) snprintf(head, sizeof(head), "Signed in as %s", is.user);
+  else if (!is.ready) snprintf(head, sizeof(head), "The server is starting");
+  else if (is.known) snprintf(head, sizeof(head), "Not signed in");
+  else snprintf(head, sizeof(head), "Running");
+  detail = is.signing ? is.uri : is.msg;
+  pick_add(&p, head, detail[0] ? detail : NULL,
+           is.kind == CS_ERROR ? 0xEA87 : is.kind == CS_WARNING ? 0xEA6C :
+           is.user[0] ? 0xEAB2 : 0xEA74);	/* codicons error, warning, check, info */
+  act[n++] = 0;
+  if (is.signing) {	/* the flow is out: the code and the page again, for a lost browser tab */
+    pick_add(&p, "Copy the Code Again", is.code, 0xEAF0);	/* codicon files */
+    act[n++] = 1;
+    pick_add(&p, "Open the Page Again", is.uri, 0xEAB6);	/* codicon chevron-right */
+    act[n++] = 2;
+  }
+  else if (is.user[0]) {
+    pick_add(&p, "Sign Out", NULL, 0xEA76);	/* codicon close */
+    act[n++] = 3;
+  }
+  else {
+    pick_add(&p, "Sign In", "github.copilot.signIn", 0xEB59);	/* codicon settings-sync */
+    act[n++] = 4;
+  }
+  pick_add(&p, "Check Status", NULL, 0xEB37);	/* codicon refresh */
+  act[n++] = 5;
+  pick_add(&p, "Show Output", is.chan[0] ? is.chan : NULL, 0xEB9D);	/* codicon output */
+  act[n++] = 6;
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r < 0 || r >= n) return;
+  switch (act[r]) {
+    case 1:
+      clip_set(is.code, strlen(is.code));
+      toast(0, "Copied %s to the clipboard", is.code);
+      break;
+    case 2: open_url(is.uri); break;
+    case 3: lsp_inline_signout(); break;
+    case 4: lsp_inline_signin(); break;
+    case 5: lsp_inline_check(); break;
+    case 6: if (is.chan[0]) on_show_output(is.chan); break;
+    default: break;
+  }
 }
 
 
@@ -14715,6 +14819,9 @@ static void run_command (int cmd) {
     case CMD_INLINE_HIDE: gh_dismiss(); break;
     case CMD_INLINE_NEXT: gh_cycle(1); break;
     case CMD_INLINE_PREV: gh_cycle(-1); break;
+    case CMD_COPILOT_SIGNIN: lsp_inline_signin(); break;
+    case CMD_COPILOT_SIGNOUT: lsp_inline_signout(); break;
+    case CMD_COPILOT_STATUS: copilot_status(); break;
     case CMD_MANAGE: manage_menu(); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;

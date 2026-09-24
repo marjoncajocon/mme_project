@@ -21,6 +21,7 @@ enum { RQ_INIT, RQ_COMPLETE, RQ_DEFINE, RQ_HOVER, RQ_SIGNATURE, RQ_RENAME, RQ_AC
        RQ_RESOLVE, RQ_SYMBOLS, RQ_FORMAT, RQ_LOC_REFS, RQ_LOC_IMPL, RQ_LOC_TYPE, RQ_LOC_PEEK,
        RQ_WSYM, RQ_HIGHLIGHT, RQ_BULB, RQ_INLAY, RQ_SEMANTIC, RQ_LENS, RQ_LENS_RESOLVE, RQ_COMP_RESOLVE,
        RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE,
+       RQ_SIGNIN, RQ_SIGNOUT, RQ_CHECK, RQ_DEVICE,
        RQ_OTHER };
 
 typedef struct Req {
@@ -446,6 +447,8 @@ static char **split_cmd (const char *cmd) {
 }
 
 
+static void auth_forget (void);	/* the inline server's account, below: a new one is nobody yet */
+
 static Srv *start (const char *lang) {
   const char *cmd = settings_server(lang);
   char **argv, key[32], *root;
@@ -506,6 +509,7 @@ static Srv *start (const char *lang) {
   s->err = err[0];
   s->pid = pid;
   out_log(s->chan, "[info] Starting %s for %s in %s", cmd, lang, root);
+  if (strcmp(lang, INLINE_LANG) == 0) auth_forget();	/* checkStatus asks this one again */
   buf_init(&s->in);
   g_srv[g_nsrv++] = s;
   {	/* initialize */
@@ -1540,6 +1544,239 @@ void lsp_inline_accept (size_t i) {
 
 /*
 ** {==================================================================
+** GitHub Copilot's account: signIn, signOut, checkStatus
+**
+** The inline-completion server keeps its own credentials, so the
+** editor never sees a token: it asks the server to sign in and the
+** server drives GitHub's device flow. signIn answers at once with a
+** code and a page to type it in, and names a command
+** (github.copilot.finishDeviceFlow) that answers only once the user
+** has authorised in the browser - a minute, or never. That command is
+** an ordinary async workspace/executeCommand like every other request
+** here, so the editor keeps drawing and typing while it is out.
+**
+** The server also sends didChangeStatus whenever it starts working,
+** stops, or cannot: the last one is kept and drawn in the status bar.
+** ===================================================================
+*/
+
+static struct {
+  int kind;	/* CS_*: what didChangeStatus last said */
+  int busy, signing, known;
+  char user[64], msg[200], code[32], uri[200];
+} g_auth;
+
+
+static void auth_forget (void) {
+  memset(&g_auth, 0, sizeof(g_auth));	/* CS_OFF, nobody signed in, nothing out */
+}
+
+
+/* the inline-completion server; start_it: bring it up if it is not running. NULL: none is set */
+static Srv *inline_srv (int start_it) {
+  const char *cmd = settings_server(INLINE_LANG);
+  if (cmd == NULL || cmd[0] == '\0') return NULL;
+  return start_it ? server(INLINE_LANG) : srv_of(INLINE_LANG);
+}
+
+
+int lsp_inline_configured (void) {
+  const char *cmd = settings_server(INLINE_LANG);
+  return cmd != NULL && cmd[0] != '\0';
+}
+
+
+void lsp_inline_status (InlineStatus *out) {
+  const Srv *s = inline_srv(0);
+  memset(out, 0, sizeof(*out));
+  out->kind = g_auth.kind;
+  out->busy = g_auth.busy;
+  out->signing = g_auth.signing;
+  out->known = g_auth.known;
+  out->ready = s != NULL && s->ready && !s->dead;
+  snprintf(out->user, sizeof(out->user), "%s", g_auth.user);
+  snprintf(out->msg, sizeof(out->msg), "%s", g_auth.msg);
+  snprintf(out->code, sizeof(out->code), "%s", g_auth.code);
+  snprintf(out->uri, sizeof(out->uri), "%s", g_auth.uri);
+  snprintf(out->chan, sizeof(out->chan), "%s", s != NULL ? s->chan : "");
+}
+
+
+/*
+** A {"status":...,"user":...} answer: checkStatus's, signOut's, and the
+** one the device-flow command ends with. Only these say who is signed
+** in; didChangeStatus says how the server is, which is not the same.
+*/
+static void auth_account (const Json *res) {
+  const char *st = json_str(json_get(res, "status"), NULL);
+  const char *user = json_str(json_get(res, "user"), "");
+  int in;
+  if (st == NULL) return;	/* a server that does not answer these: nothing is claimed */
+  g_auth.known = 1;
+  in = strcmp(st, "OK") == 0 || strcmp(st, "MaybeOk") == 0 || strcmp(st, "AlreadySignedIn") == 0;
+  snprintf(g_auth.user, sizeof(g_auth.user), "%s", in ? user : "");
+  if (!in) {
+    int no_sub = strcmp(st, "NotAuthorized") == 0;
+    g_auth.kind = CS_INACTIVE;
+    if (g_auth.msg[0] == '\0' || no_sub)	/* a didChangeStatus that says why keeps saying it */
+      snprintf(g_auth.msg, sizeof(g_auth.msg), "%s",
+               no_sub ? "This account has no GitHub Copilot subscription" : "Not signed in");
+  }
+  else if (g_auth.kind == CS_OFF || g_auth.kind == CS_INACTIVE) {	/* a didChangeStatus of its own wins */
+    g_auth.kind = CS_NORMAL;
+    g_auth.msg[0] = '\0';
+  }
+}
+
+
+/* the "kind" and "message" of a status, wherever it came from */
+static void auth_kind (Srv *s, const Json *p) {
+  const char *kind = json_str(json_get(p, "kind"), NULL);
+  const char *m = json_str(json_get(p, "message"), NULL);
+  if (kind != NULL) {
+    if (strcmp(kind, "Error") == 0) g_auth.kind = CS_ERROR;
+    else if (strcmp(kind, "Warning") == 0) g_auth.kind = CS_WARNING;
+    else if (strcmp(kind, "Inactive") == 0) g_auth.kind = CS_INACTIVE;
+    else g_auth.kind = CS_NORMAL;
+  }
+  if (m != NULL) snprintf(g_auth.msg, sizeof(g_auth.msg), "%s", m);
+  if (m != NULL && m[0] && g_auth.kind >= CS_WARNING)	/* the output keeps what the status bar only hints at */
+    out_log(s->chan, "[%s] %s", g_auth.kind == CS_ERROR ? "error" : "warning", m);
+}
+
+
+/* didChangeStatus: {"busy":bool,"kind":"Normal"|"Error"|"Warning"|"Inactive","message":"..."} */
+static void auth_change (Srv *s, const Json *p) {
+  g_auth.busy = json_bool(json_get(p, "busy"), 0);
+  auth_kind(s, p);
+}
+
+
+/*
+** didChangeStatus/v2, which Copilot's server 1.551 sends beside the one
+** above: the same news split by category, and the account it is signed
+** in to comes with it instead of waiting for a checkStatus.
+**
+**   {"statuses":[{"category":"auth","kind":"Normal","result":{"status":"OK","user":"..."}},
+**                {"category":"completion","busy":false},
+**                {"category":"cls","kind":"Normal","inactive":false}]}
+*/
+static void auth_change_v2 (Srv *s, const Json *p) {
+  const Json *v = json_get(p, "statuses");
+  size_t i;
+  if (v == NULL || v->type != J_ARR) return;
+  for (i = 0; i < v->n; i++) {
+    const Json *e = v->kid[i], *busy = json_get(e, "busy"), *res = json_get(e, "result");
+    if (busy != NULL) g_auth.busy = json_bool(busy, 0);
+    if (res != NULL) auth_account(res);
+    else if (strcmp(json_str(json_get(e, "category"), ""), "completion") != 0) auth_kind(s, e);
+    if (json_bool(json_get(e, "inactive"), 0)) g_auth.kind = CS_INACTIVE;
+  }
+}
+
+
+void lsp_inline_check (void) {
+  Srv *s = inline_srv(1);
+  if (s == NULL || s->dead || !s->ready) return;	/* not up yet: initialize's answer asks for it */
+  request(s, "checkStatus", "{\"options\":{}}", RQ_CHECK, NULL);
+}
+
+
+/*
+** The command signIn named. It answers when the user has authorised in
+** the browser, or not at all, so nothing waits for it.
+*/
+static void auth_device (Srv *s, const Json *cmd) {
+  const char *name = json_str(json_get(cmd, "command"), "");
+  const Json *args = json_get(cmd, "arguments");
+  Buf b;
+  buf_init(&b);
+  buf_puts(&b, "{\"command\":");
+  json_put_str(&b, name, strlen(name));
+  buf_puts(&b, ",\"arguments\":");
+  if (args != NULL) json_write(&b, args);
+  else buf_puts(&b, "[]");
+  buf_putc(&b, '}');
+  request(s, "workspace/executeCommand", b.s, RQ_DEVICE, NULL);
+  buf_free(&b);
+}
+
+
+/* signIn's answer: already in, or the device flow to walk the user through */
+static void auth_prompt (Srv *s, const Json *res) {
+  const char *st = json_str(json_get(res, "status"), "");
+  const char *code = json_str(json_get(res, "userCode"), NULL);
+  const char *uri = json_str(json_get(res, "verificationUri"), NULL);
+  const Json *cmd = json_get(res, "command");
+  if (strcmp(st, "PromptUserDeviceFlow") != 0 || code == NULL || uri == NULL) {
+    auth_account(res);
+    if (g_auth.user[0]) toast_src(0, s->chan, "Already signed in to GitHub Copilot as %s", g_auth.user);
+    else toast_src(1, s->chan, "The server offered no sign-in%s%s", st[0] ? ": " : "", st);
+    return;
+  }
+  g_auth.signing = 1;
+  snprintf(g_auth.code, sizeof(g_auth.code), "%s", code);
+  snprintf(g_auth.uri, sizeof(g_auth.uri), "%s", uri);
+  clip_set(code, strlen(code));	/* it is pasted into the page: VS Code copies it too */
+  on_show_document(NULL, uri, -1, -1);	/* the browser, by window/showDocument's own path */
+  out_log(s->chan, "[info] device flow: paste %s at %s", code, uri);
+  toast_src(0, s->chan, "GitHub Copilot: paste the code %s at %s (it is on the clipboard)", code, uri);
+  if (cmd != NULL && json_get(cmd, "command") != NULL) auth_device(s, cmd);
+  else g_auth.signing = 0;	/* nothing to wait for: the server wants to be asked again */
+}
+
+
+/* the device flow ended: the user authorised, or it timed out */
+static void auth_done (Srv *s, const Json *msg) {
+  const Json *err = json_get(msg, "error");
+  g_auth.signing = 0;
+  g_auth.code[0] = g_auth.uri[0] = '\0';
+  if (err != NULL) {
+    snprintf(g_auth.msg, sizeof(g_auth.msg), "%s", json_str(json_get(err, "message"), "the sign-in did not finish"));
+    g_auth.kind = CS_ERROR;
+    out_log(s->chan, "[error] sign-in: %s", g_auth.msg);
+    toast_src(2, s->chan, "GitHub Copilot sign-in failed: %s", g_auth.msg);
+    return;
+  }
+  auth_account(json_get(msg, "result"));
+  if (g_auth.user[0]) toast_src(0, s->chan, "Signed in to GitHub Copilot as %s", g_auth.user);
+  else toast_src(1, s->chan, "GitHub Copilot sign-in did not finish: %s",
+                 json_str(json_get(msg, "result.status"), "no status"));
+}
+
+
+void lsp_inline_signin (void) {
+  Srv *s = inline_srv(1);
+  if (s == NULL) {
+    toast(0, "No inline-completion server is set in mme.inlineCompletionServer.");
+    return;
+  }
+  if (g_auth.signing) {
+    toast(0, "A sign-in is already running: paste %s at %s", g_auth.code, g_auth.uri);
+    return;
+  }
+  if (s->dead || !s->ready) {
+    toast(0, "The inline-completion server is still starting.");
+    return;
+  }
+  request(s, "signIn", "{}", RQ_SIGNIN, NULL);
+}
+
+
+void lsp_inline_signout (void) {
+  Srv *s = inline_srv(0);
+  if (s == NULL || s->dead || !s->ready) {
+    toast(0, "The inline-completion server is not running.");
+    return;
+  }
+  request(s, "signOut", "{}", RQ_SIGNOUT, NULL);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
 ** Diagnostics
 ** ===================================================================
 */
@@ -2259,6 +2496,9 @@ static void handle (Srv *s, const Json *msg) {
     if (strcmp(mth, "textDocument/publishDiagnostics") == 0)
       diagnostics(s, json_get(msg, "params"));
     else if (strcmp(mth, "$/progress") == 0) progress(s, json_get(msg, "params"));
+    else if (strcmp(mth, "didChangeStatus") == 0 || strcmp(mth, "statusNotification") == 0)
+      auth_change(s, json_get(msg, "params"));	/* Copilot's own: how the inline server is */
+    else if (strcmp(mth, "didChangeStatus/v2") == 0) auth_change_v2(s, json_get(msg, "params"));
     else if (strcmp(mth, "window/showMessage") == 0 || strcmp(mth, "window/logMessage") == 0) {
       static const char *const level[] = {"info", "error", "warning", "info", "info"};
       int type = inum(json_get(msg, "params.type"), 4);
@@ -2326,6 +2566,17 @@ static void handle (Srv *s, const Json *msg) {
       notify(s, "initialized", "{}");
       for (k = 0; k < g_ndoc; k++)
         if (g_doc[k].s == s) did_open(&g_doc[k]);
+      if (strcmp(s->lang, INLINE_LANG) == 0) lsp_inline_check();	/* who is signed in, before anything is asked of it */
+    }
+    else if (r.kind == RQ_SIGNIN) auth_prompt(s, json_get(msg, "result"));
+    else if (r.kind == RQ_DEVICE) auth_done(s, msg);
+    else if (r.kind == RQ_CHECK) auth_account(json_get(msg, "result"));
+    else if (r.kind == RQ_SIGNOUT) {
+      g_auth.msg[0] = '\0';	/* whatever it last said about itself is past */
+      auth_account(json_get(msg, "result"));
+      g_auth.user[0] = '\0';	/* whatever it answered, the credentials are gone */
+      g_auth.known = 1;
+      toast_src(0, s->chan, "Signed out of GitHub Copilot");
     }
     else if (r.kind == RQ_COMPLETE) completion(s, r.d, json_get(msg, "result"));
     else if (r.kind == RQ_DEFINE) definition(s, json_get(msg, "result"));

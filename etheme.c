@@ -197,6 +197,7 @@ static const struct {
   [S_SEL] = {C_EDITOR_FG, C_SEL_BG, ""}, [S_MATCH] = {C_EDITOR_FG, C_MATCH_BG, ""},
   [S_CTRL] = {C_CTRL, C_EDITOR_BG, ""},
   [S_STATUS] = {C_STATUS_FG, C_STATUS_BG, ""}, [S_STATUS_ITEM] = {C_STATUS_FG, C_STATUS_ITEM, ""},
+  [S_STATUS_DIM] = {C_STATUS_FG, C_STATUS_BG, "2;"},	/* an item that is there but does nothing */
   [S_MENUBAR] = {C_TITLE_FG, C_TITLE_BG, ""}, [S_MENUBAR_ON] = {C_TITLE_FG, C_TITLE_ON, ""},
   [S_MENU] = {C_MENU_FG, C_MENU_BG, ""}, [S_MENU_SEL] = {C_MENU_SEL_FG, C_MENU_SEL_BG, ""},
   [S_MENU_KEY] = {C_MENU_DIM, C_MENU_BG, ""}, [S_MENU_KEY_SEL] = {C_MENU_SEL_FG, C_MENU_SEL_BG, ""},

@@ -373,7 +373,7 @@ int term_cell_px (int *w, int *h);	/* 0: the terminal has not said */
 
 enum {
   S_TEXT, S_LINE, S_GUTTER, S_GUTTER_CUR, S_SEL, S_MATCH, S_CTRL,
-  S_STATUS, S_STATUS_ITEM,
+  S_STATUS, S_STATUS_ITEM, S_STATUS_DIM,
   S_MENUBAR, S_MENUBAR_ON, S_MENU, S_MENU_SEL, S_MENU_KEY, S_MENU_KEY_SEL, S_MENU_LINE,
   S_ACT, S_ACT_ON, S_ACT_BAR,
   S_SIDE, S_SIDE_HEAD, S_SIDE_TITLE, S_SIDE_DIR, S_SIDE_SEL, S_SIDE_CUR,
@@ -586,7 +586,7 @@ enum {
   CMD_HEX_OPEN, CMD_IMG_ZOOM_IN, CMD_IMG_ZOOM_OUT, CMD_IMG_ZOOM_RESET,
   CMD_MERGE_EDITOR, CMD_MERGE_COMPLETE, CMD_LENS_RUN,
   CMD_INLINE_TRIGGER, CMD_INLINE_ACCEPT, CMD_INLINE_WORD, CMD_INLINE_HIDE, CMD_INLINE_NEXT,
-  CMD_INLINE_PREV,
+  CMD_INLINE_PREV, CMD_COPILOT_SIGNIN, CMD_COPILOT_SIGNOUT, CMD_COPILOT_STATUS,
   CMD_N
 };
 
@@ -1310,6 +1310,32 @@ void lsp_inline_cancel (void);	/* the answer is not wanted any more ($/cancelReq
 void lsp_inline_shown (size_t i);	/* item i is on the screen: textDocument/didShowCompletion */
 void lsp_inline_partial (size_t i, size_t len);	/* len bytes of item i taken: didPartiallyAcceptCompletion */
 void lsp_inline_accept (size_t i);	/* item i taken whole: its command, if it has one */
+
+/*
+** The inline-completion server's account and its status: Copilot's
+** signIn / signOut / checkStatus, and the didChangeStatus notification
+** it sends whenever it starts working, stops, or goes wrong.
+*/
+enum { CS_OFF, CS_INACTIVE, CS_NORMAL, CS_WARNING, CS_ERROR };	/* didChangeStatus "kind" */
+
+typedef struct InlineStatus {
+  int kind;	/* CS_*: the last didChangeStatus, CS_OFF until one comes */
+  int busy;	/* it is fetching a suggestion */
+  int signing;	/* a device flow is out: code and uri hold it */
+  int ready;	/* the server answered initialize and is alive */
+  int known;	/* it answered checkStatus: user is worth believing */
+  char user[64];	/* who is signed in; "" nobody */
+  char msg[200];	/* the last didChangeStatus message */
+  char code[32], uri[200];	/* the device code, and the page to type it in */
+  char chan[64];	/* its OUTPUT channel */
+} InlineStatus;
+
+int lsp_inline_configured (void);	/* mme.inlineCompletionServer names a program */
+void lsp_inline_status (InlineStatus *out);	/* what that server last said about itself */
+void lsp_inline_signin (void);	/* signIn, then its device flow; the answers come as toasts */
+void lsp_inline_signout (void);	/* signOut */
+void lsp_inline_check (void);	/* checkStatus (sent by itself when the server comes up) */
+
 void lsp_semantic (Doc *d);	/* to on_semantic */
 void lsp_lens (Doc *d);	/* to on_lens */
 void lsp_lens_run (size_t i);	/* the command of on_lens's lens i */	/* to on_actions; then lsp_action_run */

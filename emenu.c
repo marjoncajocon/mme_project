@@ -130,7 +130,8 @@ static const char *const names[CMD_N] = {
   "Image Preview: Reset Zoom",
   "Git: Open Merge Editor", "Merge Editor: Complete Merge", "Code Lens: Run...",
   "Trigger Inline Suggestion", "Accept Inline Suggestion", "Accept Next Word Of Inline Suggestion",
-  "Hide Inline Suggestion", "Show Next Inline Suggestion", "Show Previous Inline Suggestion"
+  "Hide Inline Suggestion", "Show Next Inline Suggestion", "Show Previous Inline Suggestion",
+  "GitHub Copilot: Sign In", "GitHub Copilot: Sign Out", "GitHub Copilot: Show Status"
 };
 
 static const char *const keys[CMD_N] = {
@@ -186,7 +187,8 @@ static const char *const keys[CMD_N] = {
   "", "", "", "", "", "", "",
   "", "", "", "",
   "", "", "",
-  "Alt+\\", "Tab", "Ctrl+Right", "Escape", "Alt+]", "Alt+["
+  "Alt+\\", "Tab", "Ctrl+Right", "Escape", "Alt+]", "Alt+[",
+  "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -332,7 +334,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "git.openMergeEditor", "mergeEditor.acceptMerge", "codelens.showLensesInCurrentLine",
   "editor.action.inlineSuggest.trigger", "editor.action.inlineSuggest.commit",
   "editor.action.inlineSuggest.acceptNextWord", "editor.action.inlineSuggest.hide",
-  "editor.action.inlineSuggest.showNext", "editor.action.inlineSuggest.showPrevious"
+  "editor.action.inlineSuggest.showNext", "editor.action.inlineSuggest.showPrevious",
+  "github.copilot.signIn", "github.copilot.signOut", "github.copilot.status"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
