@@ -214,6 +214,7 @@ char *settings_path (void);
 void settings_create (void);
 int settings_load (void);	/* -1: the file is not good JSON */
 const Json *settings_get (const char *key);	/* "mme\\.debugAdapters"; NULL */
+#define INLINE_LANG	"*inline"	/* the reserved key of the inline-completion server */
 const char *settings_server (const char *lang);	/* the language server's command */
 void settings_put (const char *key, const char *value);	/* "key": "value" in the file */
 const char *term_profile_setting (void);	/* "terminal.integrated.defaultProfile.windows" ... */

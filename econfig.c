@@ -262,6 +262,10 @@ static const char default_file2[] =	/* the rest: one literal may not be longer t
   "  // a color of the theme, changed: \"workbench.colorCustomizations\": {\n"
   "  //   \"diffEditor.removedTextBackground\": \"#B35A00\" }, and a block named\n"
   "  //   for one theme, \"[Dark+]\": { ... }, wins over a plain key\n"
+  "  // ghost text (inline suggestions) for every language, beside the\n"
+  "  // language servers below: a GitHub Copilot language server, say\n"
+  "  \"mme.inlineCompletionServer\": \"\",\n"
+  "\n"
   "  // the language servers (IntelliSense): a command per language.\n"
   "  // \"*\" is what a language not named here gets: \"*\": \"\" turns them all off\n"
   "  \"mme.languageServers\": {\n"
@@ -762,6 +766,8 @@ const Json *settings_get (const char *key) {
 
 
 const char *settings_server (const char *lang) {
+  if (strcmp(lang, INLINE_LANG) == 0)	/* not a language: its own setting */
+    return json_str(settings_get("mme\\.inlineCompletionServer"), "");
   static const struct {
     const char *lang, *cmd;
   } def[] = {

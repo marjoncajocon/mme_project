@@ -74,6 +74,7 @@ typedef struct LDoc {
   int opened;	/* didOpen went */
   char *last;	/* the text the server has, to find what changed in it */
   size_t nlast;
+  char *langid;	/* the file's language, not the server's: one server sees many */
 } LDoc;
 
 #define SYNC_WAIT	200000	/* us of quiet before the text goes: typing does not send a file a key */
@@ -339,7 +340,7 @@ static void did_open (LDoc *l) {
   if (txt == NULL) return;
   buf_init(&b);
   buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"%s\",\"version\":%d,\"text\":",
-             l->uri, l->s->lang, ++l->version);
+             l->uri, l->langid != NULL ? l->langid : l->s->lang, ++l->version);
   json_put_str(&b, txt, len);
   buf_puts(&b, "}}");
   notify(l->s, "textDocument/didOpen", b.s);
@@ -626,6 +627,7 @@ void lsp_restart (const char *lang) {
     }
     else {	/* nothing to talk to: the file is opened again later */
       free(l->uri);
+      free(l->langid);
       *l = g_doc[--g_ndoc];
       k--;
     }
@@ -819,20 +821,41 @@ const char *lsp_lang (const char *syntax) {
 }
 
 
+/* the server of a document's own language (never the inline one) */
 static LDoc *ldoc (const Doc *d) {
   size_t i;
   for (i = 0; i < g_ndoc; i++)
-    if (g_doc[i].d == d) return &g_doc[i];
+    if (g_doc[i].d == d && strcmp(g_doc[i].s->lang, INLINE_LANG) != 0) return &g_doc[i];
   return NULL;
 }
 
 
-void lsp_open (Doc *d, const char *syntax) {
-  const char *lang = lsp_lang(syntax);
-  Srv *s;
+/* the inline-completion server's binding of a document, when there is one */
+static LDoc *ldoc_inline_only (const Doc *d) {
+  size_t i;
+  for (i = 0; i < g_ndoc; i++)
+    if (g_doc[i].d == d && strcmp(g_doc[i].s->lang, INLINE_LANG) == 0) return &g_doc[i];
+  return NULL;
+}
+
+
+/*
+** Who answers inline suggestions for this document: the server named by
+** mme.inlineCompletionServer, or the language's own when that is what
+** advertised the capability (naming Copilot in mme.languageServers still
+** works, it just costs that language its real server).
+*/
+static LDoc *ldoc_inline (const Doc *d) {
+  LDoc *l = ldoc_inline_only(d);
+  if (l != NULL) return l;
+  l = ldoc(d);
+  return (l != NULL && l->s->can_inline) ? l : NULL;
+}
+
+
+/* one binding of a document to a server; the file's language goes with it */
+static void bind_doc (Doc *d, Srv *s, const char *langid) {
   LDoc *l;
-  if (lang == NULL || d->path == NULL || ldoc(d)) return;
-  if ((s = server(lang)) == NULL) return;
   if (g_ndoc == g_capdoc) {
     g_capdoc = g_capdoc ? g_capdoc * 2 : 16;
     g_doc = (LDoc *)xrealloc(g_doc, g_capdoc * sizeof(LDoc));
@@ -841,8 +864,22 @@ void lsp_open (Doc *d, const char *syntax) {
   memset(l, 0, sizeof(*l));
   l->d = d;
   l->s = s;
+  l->langid = xstrdup(langid);
   l->uri = to_uri(d->path);
   if (s->ready) did_open(l);
+}
+
+
+void lsp_open (Doc *d, const char *syntax) {
+  const char *lang = lsp_lang(syntax);
+  Srv *s;
+  if (d->path == NULL) return;
+  if (lang != NULL && ldoc(d) == NULL && (s = server(lang)) != NULL) bind_doc(d, s, lang);
+  if (ldoc_inline_only(d) == NULL) {	/* and the one that answers for every language */
+    const char *cmd = settings_server(INLINE_LANG);
+    if (cmd != NULL && cmd[0] != '\0' && (s = server(INLINE_LANG)) != NULL)
+      bind_doc(d, s, lang != NULL ? lang : "plaintext");
+  }
 }
 
 
@@ -852,7 +889,6 @@ static const Doc *inline_doc (void);
 
 
 void lsp_close (Doc *d) {
-  LDoc *l = ldoc(d);
   int i, k;
   for (i = 0; i < g_nsrv; i++)	/* its answers still to come are dropped: d is about to go */
     for (k = 0; k < g_srv[i]->nreq; k++)
@@ -862,17 +898,21 @@ void lsp_close (Doc *d) {
       }
   lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
   if (inline_doc() == d) inline_forget();	/* and its inline suggestions */
-  if (l == NULL) return;
-  if (l->opened) {
-    Buf b;
-    buf_init(&b);
-    buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-    notify(l->s, "textDocument/didClose", b.s);
-    buf_free(&b);
+  for (i = (int)g_ndoc - 1; i >= 0; i--) {	/* a document may be on two servers */
+    LDoc *l = &g_doc[i];
+    if (l->d != d) continue;
+    if (l->opened) {
+      Buf b;
+      buf_init(&b);
+      buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
+      notify(l->s, "textDocument/didClose", b.s);
+      buf_free(&b);
+    }
+    free(l->uri);
+    free(l->last);
+    free(l->langid);
+    *l = g_doc[--g_ndoc];
   }
-  free(l->uri);
-  free(l->last);
-  *l = g_doc[--g_ndoc];
 }
 
 
@@ -1395,15 +1435,17 @@ void lsp_inline_cancel (void) {
 
 
 int lsp_inline_able (const Doc *d) {
-  const LDoc *l = ldoc(d);
+  const LDoc *l = ldoc_inline(d);
   return l && l->s->ready && !l->s->dead && l->s->can_inline;
 }
 
 
 void lsp_inline (Doc *d, Pos at, int invoked) {
-  LDoc *l = synced(d);
+  LDoc *l = ldoc_inline(d);
   Buf q;
-  if (l == NULL) return;
+  if (l == NULL || !l->s->ready || l->s->dead) return;
+  if (!l->opened) did_open(l);	/* synced(), but for whichever server answers these */
+  else if (l->sent != d->edits) did_change(l);
   lsp_inline_cancel();	/* one at a time: the server drops the old one anyway */
   buf_init(&q);
   buf_printf(&q, "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},"	/* version: Copilot's, harmless elsewhere */
