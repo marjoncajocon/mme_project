@@ -307,6 +307,7 @@ int theme_set (const char *name) {
     a->load(a->arg, g_color);
   }
   theme_customize(g_color, theme_name(t));	/* workbench.colorCustomizations has the last word */
+  tm_theme_again();	/* and editor.tokenColorCustomizations, over the grammar's rules */
   snprintf(g_curname, sizeof(g_curname), "%s", theme_name(t));
   for (i = 0; i < S_N; i++)
     make_sgr(g_sgr[i], sizeof(g_sgr[i]), style[i].attr, g_color[style[i].fg], g_color[style[i].bg]);

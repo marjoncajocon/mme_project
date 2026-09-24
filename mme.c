@@ -7095,12 +7095,22 @@ static void comp_accept (void) {
   int snippet = c->snippet;
   if (snippet && !c->has_range) {	/* "#ifn" for "#ifndef": the '#' typed before the word goes too */
     const Row *r = row_at(a.y);
-    size_t typed = b.x - a.x, k, ll = strlen(c->label);
+    size_t typed = b.x - a.x, k, ll = strlen(c->label), took = 0;
     for (k = ll > typed ? ll - typed : 0; k > 0; k--)
       if (k <= a.x && memcmp(r->s + a.x - k, c->label, k) == 0 && m_strnicmp(c->label + k, r->s + a.x, typed) == 0) {
         a.x -= k;
+        took = k;
         break;
       }
+    if (took == 0) {	/* or the body repeats it: "int " before "main" for "int main (...)" */
+      size_t lim = 0;
+      while (lim < 64 && ins[lim] != '\0' && ins[lim] != '$' && ins[lim] != '\n') lim++;
+      for (k = lim > typed ? lim - typed : 0; k > 0; k--)
+        if (k <= a.x && memcmp(r->s + a.x - k, ins, k) == 0 && m_strnicmp(ins + k, r->s + a.x, typed) == 0) {
+          a.x -= k;
+          break;
+        }
+    }
   }
   comp_free();
   if (snippet) snippet_insert(a, b, ins);

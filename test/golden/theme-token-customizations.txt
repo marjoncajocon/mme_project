@@ -1,0 +1,5 @@
+{858585}       {c6c6c6}1  {ff8800}/* edit.c - a small C file the editing scenarios type into. */                                   {d27206}???????     {c6c6c6}?
+{858585}       3  {c586c0}#include {4444ff}<stdlib.h>                                                                              {4a82b1}?           {434343}
+{858585}       5                                                                                                   {82b6d1}?{afafaf}?          {434343}
+{858585}       7                                                                                                   {a3719f}?{82b6d1}?{4a82b1}?{82b6d1}?        {434343}
+exited=0

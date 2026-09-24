@@ -442,6 +442,7 @@ int theme_current (void);
 typedef int (*ThemeLoad) (void *arg, uint32_t *color);	/* an extension's colors over the base */
 void theme_add (const char *name, int light, ThemeLoad load, void *arg);
 void theme_customize (uint32_t *color, const char *theme);	/* workbench.colorCustomizations over it */
+void tm_theme_again (void);	/* the grammar's rules are built again: the settings changed */
 void theme_clear_added (void);
 
 void scr_resize (int cols, int rows);

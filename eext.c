@@ -696,6 +696,67 @@ static void colors_onto (const Json *cs, uint32_t *color) {
 }
 
 
+/* editor.tokenColorCustomizations' named groups, onto mme's token classes */
+static const struct {
+  const char *key;
+  int tok;
+} tokgroup[] = {
+  {"comments", T_COMMENT}, {"strings", T_STRING}, {"keywords", T_KEYWORD},
+  {"numbers", T_NUMBER}, {"types", T_TYPE}, {"functions", T_FUNC},
+  {"variables", T_VAR}
+};
+
+
+/*
+** One textMateRules entry onto the classes its scope names. The theme
+** loader scores its rules because a theme holds hundreds that overlap;
+** these are applied last and in order, so the later rule simply wins.
+*/
+static void tok_rule_onto (const Json *rule, uint32_t *color) {
+  const Json *sc = json_get(rule, "scope"), *st = json_get(rule, "settings");
+  uint32_t rgb;
+  int t, k;
+  if (sc == NULL || !parse_color(json_str(json_get(st, "foreground"), NULL),
+                                 color[C_EDITOR_BG], &rgb)) return;
+  for (t = 0; t < T_N; t++)
+    for (k = 0; k < 3 && tokscope[t][k]; k++) {
+      size_t i, nsel = sc->type == J_ARR ? sc->n : 1;
+      for (i = 0; i < nsel; i++) {
+        const char *s = sc->type == J_ARR ? json_str(sc->kid[i], "") : json_str(sc, "");
+        while (*s) {	/* "a, b.c" */
+          const char *e = strchr(s, ',');
+          size_t n;
+          while (*s == ' ') s++;
+          n = e ? (size_t)(e - s) : strlen(s);
+          while (n > 0 && s[n - 1] == ' ') n--;
+          if (selector_fits(s, n, tokscope[t][k]) >= 0) color[C_TOK + t] = rgb;
+          if (e == NULL) break;
+          s = e + 1;
+        }
+      }
+    }
+}
+
+
+/* the groups and the rules of one tokenColorCustomizations object */
+static void tokens_onto (const Json *tc, uint32_t *color) {
+  const Json *rules;
+  size_t i;
+  uint32_t rgb;
+  if (tc == NULL || tc->type != J_OBJ) return;
+  for (i = 0; i < sizeof(tokgroup) / sizeof(tokgroup[0]); i++) {
+    const Json *v = json_get(tc, tokgroup[i].key);
+    if (v == NULL) continue;	/* a group may be a color, or {"foreground": ...} */
+    if (parse_color(v->type == J_OBJ ? json_str(json_get(v, "foreground"), NULL)
+                                     : json_str(v, NULL), color[C_EDITOR_BG], &rgb))
+      color[C_TOK + tokgroup[i].tok] = rgb;
+  }
+  rules = json_get(tc, "textMateRules");
+  if (rules != NULL && rules->type == J_ARR)
+    for (i = 0; i < rules->n; i++) tok_rule_onto(rules->kid[i], color);
+}
+
+
 /* "[Dark+]" or "[Dark+][Monokai]": does the key name this theme? "*" is all */
 static int scoped_to (const char *key, const char *theme) {
   const char *p = key;
@@ -718,13 +779,23 @@ static int scoped_to (const char *key, const char *theme) {
 */
 void theme_customize (uint32_t *color, const char *theme) {
   const Json *cc = settings_get("workbench\\.colorCustomizations");
+  const Json *tc = settings_get("editor\\.tokenColorCustomizations");
   size_t i;
-  if (cc == NULL || cc->type != J_OBJ) return;
-  colors_onto(cc, color);
-  for (i = 0; i < cc->n; i++) {
-    const Json *k = cc->kid[i];
-    if (k->key != NULL && k->type == J_OBJ && k->key[0] == '[' && scoped_to(k->key, theme))
-      colors_onto(k, color);
+  if (cc != NULL && cc->type == J_OBJ) {
+    colors_onto(cc, color);
+    for (i = 0; i < cc->n; i++) {	/* then this theme's own, which win */
+      const Json *k = cc->kid[i];
+      if (k->key != NULL && k->type == J_OBJ && k->key[0] == '[' && scoped_to(k->key, theme))
+        colors_onto(k, color);
+    }
+  }
+  if (tc != NULL && tc->type == J_OBJ) {	/* the code's colors, the same way */
+    tokens_onto(tc, color);
+    for (i = 0; i < tc->n; i++) {
+      const Json *k = tc->kid[i];
+      if (k->key != NULL && k->type == J_OBJ && k->key[0] == '[' && scoped_to(k->key, theme))
+        tokens_onto(k, color);
+    }
   }
 }
 

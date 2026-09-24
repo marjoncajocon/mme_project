@@ -19,12 +19,12 @@
     "max_us": 178516,
     "over_20ms": 1
   },
-  "perf-find-long-line": {
-    "max_us": 0,
-    "over_20ms": 0
-  },
   "nes-tab-jumps-then-applies": {
     "max_us": 146021,
     "over_20ms": 1
+  },
+  "perf-find-long-line": {
+    "max_us": 0,
+    "over_20ms": 0
   }
 }

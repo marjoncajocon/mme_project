@@ -182,6 +182,14 @@ SCENARIOS = [
          ["w:1000", "k:" + PGDN * 3, "w:300", "d", "k:" + END, "w:200", "d",
           "k:" + CTRL_END, "w:400", "d", "k:" + CTRL_HOME, "w:300", "d"],
          "PgDn, End, Ctrl+End / Ctrl+Home and the scrolling that follows them"),
+    Scen("edit-snippet-absorbs", "lang/edit.c",
+         # the suite turns timed suggestions off, so ask for the list
+         ["w:1200", "k:`[1;5F", "k:|", "w:400", "k:int main", "w:600",
+          "k:`[32;5u", "w:1500", "k:	", "w:1200", "d"],
+         "a snippet whose body repeats what was already typed must not say it "
+         "twice. Typing \"int main\" and taking the main snippet gave \"int int "
+         "main (...)\": only the snippet's prefix was absorbed, never its body",
+         private=True),
     Scen("edit-multi-cursor", "lang/edit.c",
          ["w:900", "k:" + DOWN * 12, "k:" + HOME, "k:" + CTRL_D, "w:200",
           "k:" + CTRL_D, "w:200", "k:" + CTRL_D, "w:300", "d",
@@ -358,6 +366,19 @@ SCENARIOS = [
          "only the word that changed is brighter than the rest of its line: the\n"
          "         changed line is paired with the line it became and not with the\n"
          "         line inserted above it, which would paint both of them whole"),
+    Scen("theme-token-customizations", "lang/edit.c",
+         ["w:2000"] + crows(3, 5, 7, 9),
+         "editor.tokenColorCustomizations recolours the code over the theme, by "
+         "named group and by textMateRules, and a block named for the current theme "
+         "wins. It must reach the grammar's own colours and not only the fallback "
+         "highlighter, or it does nothing in the default setup",
+         settings={"workbench.colorTheme": "Dark+",
+                   "editor.tokenColorCustomizations": {
+                       "comments": "#111111",
+                       "[Dark+]": {"comments": "#FF8800", "numbers": "#00FFAA"},
+                       "[Not This One]": {"comments": "#00FF00"},
+                       "textMateRules": [{"scope": "string",
+                                          "settings": {"foreground": "#4444FF"}}]}}),
     Scen("theme-color-customizations", "wordrepo",
          ["w:2500", "k:" + CTRL_SHIFT_G, "w:1500"] + click(13, 6) + ["w:1800"] + brows(4, 5),
          "workbench.colorCustomizations puts a colour over the theme, and a block\n"

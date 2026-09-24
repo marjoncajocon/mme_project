@@ -263,6 +263,8 @@ static const char default_window[] =	/* the window's */
   ;
 static const char default_file2[] =	/* the rest: one literal may not be longer than 4095 */
   "  // a color of the theme, changed: \"workbench.colorCustomizations\": {\n"
+  "  // and the code's own colors: \"editor.tokenColorCustomizations\": {\n"
+  "  //   \"comments\": \"#6A9955\", or \"textMateRules\": [ ... ] }\n"
   "  //   \"diffEditor.removedTextBackground\": \"#B35A00\" }, and a block named\n"
   "  //   for one theme, \"[Dark+]\": { ... }, wins over a plain key\n"
   "  // ghost text (inline suggestions) for every language, beside the\n"

@@ -939,6 +939,78 @@ static char *builtin_theme (const char *name) {
 
 
 /* the theme now: its rules read when it changed */
+/* "[Dark+]" or "[Dark+][Monokai]": does the key name this theme? */
+static int named_for (const char *key, const char *theme) {
+  const char *p = key;
+  while (*p == '[') {
+    const char *e = strchr(p, ']');
+    size_t n;
+    if (e == NULL) return 0;
+    n = (size_t)(e - p) - 1;
+    if (n == 1 && p[1] == '*') return 1;
+    if (theme != NULL && n == strlen(theme) && m_strnicmp(p + 1, theme, n) == 0) return 1;
+    p = e + 1;
+  }
+  return 0;
+}
+
+
+/* what VS Code's named groups mean as scopes */
+static const struct {
+  const char *key, *scope;
+} groupscope[] = {
+  {"comments", "comment"}, {"strings", "string"}, {"keywords", "keyword"},
+  {"numbers", "constant.numeric"}, {"types", "entity.name.type, support.type"},
+  {"functions", "entity.name.function, support.function"}, {"variables", "variable"}
+};
+
+
+/* the rules of one tokenColorCustomizations object, after the theme's */
+static void customize_onto (const Json *tc) {
+  const Json *rules;
+  size_t i;
+  if (tc == NULL || tc->type != J_OBJ) return;
+  for (i = 0; i < sizeof(groupscope) / sizeof(groupscope[0]); i++) {
+    const Json *v = member(tc, groupscope[i].key);
+    const char *fg = v == NULL ? NULL : (v->type == J_OBJ ? mstr(v, "foreground") : json_str(v, NULL));
+    Buf b;
+    Json *j;
+    if (fg == NULL) continue;
+    buf_init(&b);	/* a rule of its own, so the grammar's scopes see it too */
+    buf_printf(&b, "{\"scope\":\"%s\",\"settings\":{\"foreground\":\"%s\"}}",
+               groupscope[i].scope, fg);
+    j = json_parse(b.s, b.len);
+    if (j != NULL) {
+      add_rule(j);
+      json_free(j);
+    }
+    buf_free(&b);
+  }
+  rules = member(tc, "textMateRules");
+  if (rules != NULL && rules->type == J_ARR)
+    for (i = 0; i < rules->n; i++) add_rule(rules->kid[i]);
+}
+
+
+/* editor.tokenColorCustomizations: the plain keys, then this theme's own */
+static void customize_rules (const char *theme) {
+  const Json *tc = settings_get("editor\\.tokenColorCustomizations");
+  size_t i;
+  if (tc == NULL || tc->type != J_OBJ) return;
+  customize_onto(tc);
+  for (i = 0; i < tc->n; i++) {
+    const Json *k = tc->kid[i];
+    if (k->key != NULL && k->type == J_OBJ && k->key[0] == '[' && named_for(k->key, theme))
+      customize_onto(k);
+  }
+}
+
+
+void tm_theme_again (void) {
+  g_theme = -1;	/* the settings may have changed what the rules are */
+}
+
+
 static void theme_now (void) {
   int t = theme_current();
   const char *name;
@@ -954,6 +1026,7 @@ static void theme_now (void) {
   if (f == NULL && ext_theme_path(name)) f = xstrdup(ext_theme_path(name));
   if (f) theme_file(f, 0);
   free(f);
+  customize_rules(name);	/* the settings have the last word, as in VS Code */
 }
 
 
