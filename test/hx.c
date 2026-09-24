@@ -3,6 +3,9 @@
 **
 ** usage: hx <exe> <file-or-folder> <steps...>
 **   k:<keys>   backtick is ESC, | is Enter, ^X is Ctrl-X
+**   x:<hex>    the same, as hex byte pairs: a command line cannot carry
+**              bytes over 127 (argv is the ANSI code page), so text that is
+**              not ASCII goes in this way
 **   w:<ms>     wait
 **   d          dump the screen as text
 **   c:<row>    the row with a {rrggbb} marker where the text colour changes
@@ -138,6 +141,20 @@ int main (int argc, char **argv) {
   for (i = 3; i < argc; i++) {
     if (argv[i][0] == 'k') {
       size_t n = unesc(argv[i] + 2, keys);
+      pty_write(p, keys, n);
+      pump(250);
+    }
+    else if (argv[i][0] == 'x') {	/* hex byte pairs: what k: cannot spell */
+      const char *h = argv[i] + 2;
+      size_t n = 0;
+      while (h[0] && h[1] && n < sizeof keys) {
+        char t[3];
+        t[0] = h[0];
+        t[1] = h[1];
+        t[2] = 0;
+        keys[n++] = (char)strtol(t, NULL, 16);
+        h += 2;
+      }
       pty_write(p, keys, n);
       pump(250);
     }

@@ -67,6 +67,13 @@ TICK_MS = 20
 
 # ------------------------------------------------------------------ scenarios
 
+def stub_cmd(*args):
+    """stublsp.py as a settings.json command, for a scenario that needs two of
+    them with different arguments (stub_lsp= gives every language the same one)"""
+    return " ".join(["python", os.path.join(HERE, "stublsp.py").replace("\\", "/")] +
+                    list(args))
+
+
 class Scen(object):
     """One scenario: what to open, what to press, and what it guards."""
 
@@ -473,6 +480,44 @@ SCENARIOS = [
          ["w:1500", "k:" + CTRL_SHIFT_P, "k:Next Edit", "w:900", "d"],
          "the palette carries the next edit commands, whether or not a server is set"),
 
+    Scen("lsp-latin1-source", "lang/latin1.c",
+         ["w:3000", "k:" + CTRL_SHIFT_M, "w:1200", "d"],
+         "a source file with Latin-1 bytes in it still reaches the language\n"
+         "         server. A JSON message is UTF-8: a raw 0xE9 inside one makes every\n"
+         "         strict reader (Python's json, llvm::json in clangd) throw the whole\n"
+         "         message away, and the file loses IntelliSense for good - PROBLEMS\n"
+         "         would be empty and the server would be restarting in a loop",
+         stub_lsp=("c",)),
+    Scen("lsp-language-mode-server", "lang/edit.c",
+         ["w:3000", "k:" + CTRL_SHIFT_P, "k:Change Language Mode", "w:700",
+          "k:|", "w:700", "k:Python", "w:700", "k:|", "w:3000",
+          "k:" + CTRL_SHIFT_M, "w:1200", "d"],
+         "Change Language Mode hands the file to the new language's server:\n"
+         "         PROBLEMS carries the Python server's diagnostics. The file used to\n"
+         "         stay on the server of the language it was opened as, for the whole\n"
+         "         session, and Copilot kept being told the old languageId",
+         settings={"mme.languageServers": {"*": "",
+                                           "c": stub_cmd("--name=c-server"),
+                                           "python": stub_cmd("--name=py-server")}}),
+    Scen("copilot-signin-expires", "lang/edit.c",
+         ["w:3000", "k:" + CTRL_SHIFT_P, "k:GitHub Copilot: Sign In", "w:900",
+          "k:|", "w:3000",	# past the second the code lasts, and past the toast
+          "k:" + CTRL_SHIFT_P, "k:GitHub Copilot: Sign In", "w:1000",
+          "k:|", "w:1400", "d"],
+         "a device flow the server never finishes is given up on once the code\n"
+         "         it named has expired, so Sign In works again and offers a new one.\n"
+         "         Nothing else ever cleared it: one closed browser tab used to leave\n"
+         "         'a sign-in is already running' for as long as the editor ran",
+         inline_lsp="stuck", fake_browser=True),
+    Scen("copilot-signin-twice", "lang/edit.c",
+         ["w:3000", "k:" + CTRL_SHIFT_P, "k:GitHub Copilot: Sign In", "w:400",
+          "k:|", "w:400",
+          "k:" + CTRL_SHIFT_P, "k:GitHub Copilot: Sign In", "w:400",
+          "k:|", "w:1200", "d"],
+         "two Sign Ins in a row send the server one signIn, not two: it says how\n"
+         "         many it was asked for, and two device flows would mean two codes of\n"
+         "         which only the second is on the screen and on the clipboard",
+         inline_lsp="slow", fake_browser=True),
     # --------------------------------------------------- files mme must not eat
     # --------------------------------------------------- files mme must not eat
     Scen("merge-close-keeps-file", "odd/selfmerge.c",
@@ -680,6 +725,9 @@ def build_masks():
     # the shell inside the terminal panel prints its own spelling of the
     # temp directory, /tmp/<name>, which no Windows form of it matches
     subs.append((path_rx("/tmp/" + os.path.basename(BUILD)), "<PATH>"))
+    # a path the view cut off before its end is still a path
+    subs.append((re.compile(r"[A-Za-z]:[\\/][A-Za-z0-9_.~+\\/-]*[\\/]mme-test[A-Za-z0-9_.~+\\/-]*"), "<PATH>"))
+    subs.append((re.compile(r"/tmp/[A-Za-z0-9_.~+/-]*"), "<PATH>"))
     for root in (BUILD, HERE, EDITOR):
         subs.append((path_rx(root), "<PATH>"))
         posix = "/" + root[0].lower() + root[2:].replace("\\", "/") if root[1:2] == ":" else root

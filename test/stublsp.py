@@ -30,6 +30,15 @@ state it pretends to be in is the one argument it takes:
     --auth=busy     signed in and fetching: Normal with busy true
     --auth=v2       signed in, said only in didChangeStatus/v2, the newer shape
                     Copilot's server 1.551 sends beside the old one
+    --auth=stuck    nobody signed in, and the device flow is never finished:
+                    the code expires in a second and the command signIn names
+                    is never answered, the way a flow ends when the browser
+                    tab is closed
+    --auth=slow     nobody signed in, and signIn itself takes three seconds to
+                    answer, saying out loud how many times it was asked
+
+It also takes --name=x, which puts "x: " in front of every diagnostic, so two
+of these can be told apart when a scenario has one per language.
 
 signIn always answers with the device flow, and the command it names
 (github.copilot.finishDeviceFlow) answers DEVICE_WAIT seconds later from a
@@ -47,9 +56,12 @@ OUT = sys.stdout.buffer
 LOCK = threading.Lock()          # the device-flow thread writes too
 
 AUTH = "out"
+NAME = ""                        # --name=x: every diagnostic says "x: ..."
 for _a in sys.argv[1:]:
     if _a.startswith("--auth="):
         AUTH = _a.split("=", 1)[1]
+    elif _a.startswith("--name="):
+        NAME = _a.split("=", 1)[1]
 
 USER = "stubuser"
 DEVICE_CODE = "ABCD-1234"
@@ -137,6 +149,21 @@ def finish_device_flow(mid):
     status("Normal", "Ready")
 
 
+SIGNIN_SEEN = [0]                # --auth=slow counts the signIn requests
+SLOW_WAIT = 3.0                  # seconds --auth=slow takes to answer signIn
+
+
+def slow_signin(mid):
+    """--auth=slow: signIn itself is what takes its time, so a second Sign In
+    goes out while the first has no answer yet"""
+    time.sleep(SLOW_WAIT)
+    send({"jsonrpc": "2.0", "id": mid, "result": {
+        "status": "PromptUserDeviceFlow", "userCode": DEVICE_CODE,
+        "verificationUri": DEVICE_URI, "expiresIn": 899, "interval": 5,
+        "command": {"command": "github.copilot.finishDeviceFlow",
+                    "arguments": []}}})
+
+
 ECHO = False                     # the edit on the screen asked to be echoed
 
 
@@ -171,7 +198,8 @@ def publish(uri):
     send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
           "params": {"uri": uri, "diagnostics": [
               {"range": rng(a, b, c, d), "severity": 1 if i == 0 else 2,
-               "source": src, "code": code, "message": msg}
+               "source": src, "code": code,
+               "message": (NAME + ": " + msg) if NAME else msg}
               for i, (a, b, c, d, msg, src, code) in enumerate(DIAGS)]}})
 
 
@@ -224,7 +252,14 @@ def main():
             send({"jsonrpc": "2.0", "id": mid,
                   "result": None if AUTH == "v2" else account()})
         elif method == "signIn":
-            if SIGNED_IN:
+            SIGNIN_SEEN[0] += 1
+            if AUTH == "slow":
+                # answered from a thread, three seconds late, and it says out
+                # loud how many times it was asked: a second Sign In while the
+                # first is still out must never reach here
+                say("signIn asked %d time(s)" % SIGNIN_SEEN[0])
+                threading.Thread(target=slow_signin, args=(mid,), daemon=True).start()
+            elif SIGNED_IN:
                 send({"jsonrpc": "2.0", "id": mid,
                       "result": {"status": "AlreadySignedIn", "user": USER}})
             else:
@@ -232,13 +267,21 @@ def main():
                     "status": "PromptUserDeviceFlow",
                     "userCode": DEVICE_CODE,
                     "verificationUri": DEVICE_URI,
-                    "expiresIn": 899, "interval": 5,
-                    "command": {"command": "github.copilot.finishDeviceFlow",
+                    # stuck: the code expires in a second and the command it
+                    # names is never answered, the way a device flow ends when
+                    # the user closes the browser tab
+                    "expiresIn": 1 if AUTH == "stuck" else 899, "interval": 5,
+                    "command": {"command": "github.copilot.neverFinishes"
+                                if AUTH == "stuck" else
+                                "github.copilot.finishDeviceFlow",
                                 "arguments": []}}})
         elif method == "signOut":
             globals()["SIGNED_IN"] = False
             send({"jsonrpc": "2.0", "id": mid, "result": {"status": "NotSignedIn"}})
             status("Inactive", "Sign in to use Copilot")
+        elif method == "workspace/executeCommand" and \
+                msg["params"].get("command") == "github.copilot.neverFinishes":
+            pass                 # --auth=stuck: no answer, ever
         elif method == "workspace/executeCommand" and \
                 msg["params"].get("command") == "github.copilot.finishDeviceFlow":
             # answered from a thread: the main loop goes on serving everything else

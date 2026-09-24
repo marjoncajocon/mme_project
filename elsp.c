@@ -147,8 +147,12 @@ static char *to_uri (const char *native) {
   if (p[0] != '/') buf_putc(&b, '/');
   for (; *p; p++) {
     unsigned char c = (unsigned char)*p;
-    if (c == '\\') buf_putc(&b, '/');
-    else if (c > 127 || strchr(" %#?[]", c)) {
+    /* a backslash is the separator only where it is one: on the systems where
+    ** it is an ordinary character of a name, turning it into / named another
+    ** file. A quote or a control character has to go too, or the uri would
+    ** break the JSON message it is put into. */
+    if (c == '\\' && path_is_sep('\\')) buf_putc(&b, '/');
+    else if (c < 32 || c > 127 || strchr(" \"\\%#?[]", c)) {
       buf_putc(&b, '%');
       buf_putc(&b, hex[c >> 4]);
       buf_putc(&b, hex[c & 15]);
@@ -875,10 +879,40 @@ static void bind_doc (Doc *d, Srv *s, const char *langid) {
 }
 
 
+/* one binding goes: its server is told the file is closed, and the last takes its place */
+static void unbind (LDoc *l) {
+  if (l->opened) {
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
+    notify(l->s, "textDocument/didClose", b.s);
+    buf_free(&b);
+  }
+  free(l->uri);
+  free(l->last);
+  free(l->langid);
+  *l = g_doc[--g_ndoc];
+}
+
+
+/* is this binding for a file of this language? (its languageId says so) */
+static int binds_lang (const LDoc *l, const char *lang) {
+  return strcmp(l->langid != NULL ? l->langid : "", lang) == 0;
+}
+
+
 void lsp_open (Doc *d, const char *syntax) {
   const char *lang = lsp_lang(syntax);
+  LDoc *l;
   Srv *s;
   if (d->path == NULL) return;
+  /* Change Language Mode: what it is bound to is the language it had, and so
+  ** is the languageId its servers were told. Those bindings go, and are made
+  ** again below for the language it has now - which is another server. */
+  if (lang != NULL) {
+    if ((l = ldoc(d)) != NULL && !binds_lang(l, lang)) unbind(l);
+    if ((l = ldoc_inline_only(d)) != NULL && !binds_lang(l, lang)) unbind(l);
+  }
   if (lang != NULL && ldoc(d) == NULL && (s = server(lang)) != NULL) bind_doc(d, s, lang);
   if (ldoc_inline_only(d) == NULL) {	/* and the one that answers for every language */
     const char *cmd = settings_server(INLINE_LANG);
@@ -906,21 +940,8 @@ void lsp_close (Doc *d) {
   lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
   if (inline_doc() == d) inline_forget();	/* and its inline suggestions */
   if (nedit_doc() == d) nedit_forget();	/* and the next edit it was offered */
-  for (i = (int)g_ndoc - 1; i >= 0; i--) {	/* a document may be on two servers */
-    LDoc *l = &g_doc[i];
-    if (l->d != d) continue;
-    if (l->opened) {
-      Buf b;
-      buf_init(&b);
-      buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-      notify(l->s, "textDocument/didClose", b.s);
-      buf_free(&b);
-    }
-    free(l->uri);
-    free(l->last);
-    free(l->langid);
-    *l = g_doc[--g_ndoc];
-  }
+  for (i = (int)g_ndoc - 1; i >= 0; i--)	/* a document may be on two servers */
+    if (g_doc[i].d == d) unbind(&g_doc[i]);	/* downwards: what fills the slot is already past */
 }
 
 
@@ -1837,12 +1858,21 @@ void lsp_nedit_done (int what) {
 static struct {
   int kind;	/* CS_*: what didChangeStatus last said */
   int busy, signing, known;
+  long long sign_by;	/* us by which the sign-in out now must have finished; 0: none is */
   char user[64], msg[200], code[32], uri[200];
 } g_auth;
 
 
 static void auth_forget (void) {
   memset(&g_auth, 0, sizeof(g_auth));	/* CS_OFF, nobody signed in, nothing out */
+}
+
+
+/* nothing is signing in any more: the next Sign In is let through */
+static void auth_stop_signing (void) {
+  g_auth.signing = 0;
+  g_auth.sign_by = 0;
+  g_auth.code[0] = g_auth.uri[0] = '\0';
 }
 
 
@@ -1982,13 +2012,20 @@ static void auth_prompt (Srv *s, const Json *res) {
   const char *code = json_str(json_get(res, "userCode"), NULL);
   const char *uri = json_str(json_get(res, "verificationUri"), NULL);
   const Json *cmd = json_get(res, "command");
+  double secs;
   if (strcmp(st, "PromptUserDeviceFlow") != 0 || code == NULL || uri == NULL) {
+    auth_stop_signing();	/* no flow came of it: Sign In works again at once */
     auth_account(res);
     if (g_auth.user[0]) toast_src(0, s->chan, "Already signed in to GitHub Copilot as %s", g_auth.user);
     else toast_src(1, s->chan, "The server offered no sign-in%s%s", st[0] ? ": " : "", st);
     return;
   }
   g_auth.signing = 1;
+  /* the code expires: after that the flow is over whether the server says so
+  ** or not, and the next Sign In must not be turned away by this one */
+  secs = json_num(json_get(res, "expiresIn"), 900);
+  if (!(secs >= 1 && secs <= 86400)) secs = 900;
+  g_auth.sign_by = os_now_us() + (long long)secs * 1000000LL;
   snprintf(g_auth.code, sizeof(g_auth.code), "%s", code);
   snprintf(g_auth.uri, sizeof(g_auth.uri), "%s", uri);
   clip_set(code, strlen(code));	/* it is pasted into the page: VS Code copies it too */
@@ -1996,15 +2033,17 @@ static void auth_prompt (Srv *s, const Json *res) {
   out_log(s->chan, "[info] device flow: paste %s at %s", code, uri);
   toast_src(0, s->chan, "GitHub Copilot: paste the code %s at %s (it is on the clipboard)", code, uri);
   if (cmd != NULL && json_get(cmd, "command") != NULL) auth_device(s, cmd);
-  else g_auth.signing = 0;	/* nothing to wait for: the server wants to be asked again */
+  else {	/* nothing to wait for: the server wants to be asked again */
+    g_auth.signing = 0;
+    g_auth.sign_by = 0;
+  }
 }
 
 
 /* the device flow ended: the user authorised, or it timed out */
 static void auth_done (Srv *s, const Json *msg) {
   const Json *err = json_get(msg, "error");
-  g_auth.signing = 0;
-  g_auth.code[0] = g_auth.uri[0] = '\0';
+  auth_stop_signing();
   if (err != NULL) {
     snprintf(g_auth.msg, sizeof(g_auth.msg), "%s", json_str(json_get(err, "message"), "the sign-in did not finish"));
     g_auth.kind = CS_ERROR;
@@ -2026,14 +2065,38 @@ void lsp_inline_signin (void) {
     return;
   }
   if (g_auth.signing) {
-    toast(0, "A sign-in is already running: paste %s at %s", g_auth.code, g_auth.uri);
+    if (g_auth.code[0]) toast(0, "A sign-in is already running: paste %s at %s", g_auth.code, g_auth.uri);
+    else toast(0, "A sign-in is already running.");
     return;
   }
   if (s->dead || !s->ready) {
     toast(0, "The inline-completion server is still starting.");
     return;
   }
+  /* from here, not from the answer: signIn takes a moment, and two of them
+  ** start two device flows with two codes, of which only one is on screen */
+  g_auth.signing = 1;
+  g_auth.sign_by = os_now_us() + 60000000LL;	/* until signIn itself has answered */
+  g_auth.code[0] = g_auth.uri[0] = '\0';
   request(s, "signIn", "{}", RQ_SIGNIN, NULL);
+}
+
+
+/*
+** A device flow is a request like any other, and the server may simply
+** never answer it: GitHub's own command waits for a browser that may never
+** come back. Nothing but this would ever clear g_auth.signing then, and
+** every later Sign In would be turned away with "a sign-in is already
+** running" for as long as the editor ran. It is over when the code the
+** server named has expired, or when the server it went to is gone.
+*/
+static void auth_idle (void) {
+  const Srv *s;
+  if (!g_auth.signing) return;
+  s = srv_of(INLINE_LANG);
+  if (s != NULL && !s->dead && (g_auth.sign_by == 0 || os_now_us() < g_auth.sign_by)) return;
+  if (s != NULL) out_log(s->chan, "[warning] the sign-in did not finish: it can be started again");
+  auth_stop_signing();
 }
 
 
@@ -3169,6 +3232,7 @@ int lsp_poll (void) {
     }
     if (now - l->seen_at >= SYNC_WAIT) did_change(l);
   }
+  auth_idle();	/* a device flow nobody will ever answer is given up on */
   return got;
 }
 

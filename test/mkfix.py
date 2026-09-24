@@ -85,6 +85,14 @@ def big_c(lines):
     return "".join(out)
 
 
+def wb(path, data):
+    """bytes as they are: for a fixture whose point is that it is not UTF-8"""
+    d = os.path.dirname(path)
+    if d and not os.path.isdir(d):
+        os.makedirs(d)
+    io.open(path, "wb").write(data)
+
+
 def git(repo, *args):
     r = subprocess.run(["git"] + list(args), cwd=repo, env=GIT_ENV,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -576,6 +584,12 @@ def build_git():
     git(word, "commit", "-q", "-m", "first commit: pair.c")
     w(os.path.join(word, "pair.c"),
       "int total (int a, int b) {\n\tcounted(a);\n\treturn added(a, c);\n}\n")
+
+    # raw 0xE9 in one makes every strict server throw it away.
+    wb(os.path.join(FIX, "lang", "latin1.c"),
+       C_FILE.replace("/* adds two numbers and remembers the sum */",
+                      "/* café naïve: adds two numbers */").encode("utf-8")
+       .replace(b"caf\xc3\xa9", b"caf\xe9").replace(b"na\xc3\xafve", b"na\xefve"))
 
     # one conflict with an empty side: it needs no resolving, and the merge
     # editor used to take that as licence to write its result over the file

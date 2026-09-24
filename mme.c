@@ -3486,7 +3486,8 @@ static void status_copilot (void) {
   else if (is.kind == CS_WARNING) icon = 0xEA6C;	/* codicon warning */
   else icon = 0xEA61;	/* codicon lightbulb: a suggestion is what it is for */
   sb_text(t, sizeof(t), icon, "");
-  if (is.signing) snprintf(tip, sizeof(tip), "GitHub Copilot: signing in - paste %s at %s", is.code, is.uri);
+  if (is.signing && is.code[0]) snprintf(tip, sizeof(tip), "GitHub Copilot: signing in - paste %s at %s", is.code, is.uri);
+  else if (is.signing) snprintf(tip, sizeof(tip), "GitHub Copilot: signing in");	/* the server has not named a code yet */
   else if (is.msg[0]) snprintf(tip, sizeof(tip), "GitHub Copilot: %s", is.msg);
   else if (is.user[0]) snprintf(tip, sizeof(tip), "GitHub Copilot: signed in as %s", is.user);
   else if (!is.ready) snprintf(tip, sizeof(tip), "GitHub Copilot: starting");
@@ -9229,7 +9230,8 @@ static void copilot_status (void) {
   lsp_inline_status(&is);
   pick_init(&p, "GitHub Copilot");
   p.keep_order = 1;
-  if (is.signing) snprintf(head, sizeof(head), "Signing in: paste the code %s", is.code);
+  if (is.signing && is.code[0]) snprintf(head, sizeof(head), "Signing in: paste the code %s", is.code);
+  else if (is.signing) snprintf(head, sizeof(head), "Signing in");	/* the server has not named a code yet */
   else if (is.user[0]) snprintf(head, sizeof(head), "Signed in as %s", is.user);
   else if (!is.ready) snprintf(head, sizeof(head), "The server is starting");
   else if (is.known) snprintf(head, sizeof(head), "Not signed in");
@@ -9240,10 +9242,12 @@ static void copilot_status (void) {
            is.user[0] ? 0xEAB2 : 0xEA74);	/* codicons error, warning, check, info */
   act[n++] = 0;
   if (is.signing) {	/* the flow is out: the code and the page again, for a lost browser tab */
-    pick_add(&p, "Copy the Code Again", is.code, 0xEAF0);	/* codicon files */
-    act[n++] = 1;
-    pick_add(&p, "Open the Page Again", is.uri, 0xEAB6);	/* codicon chevron-right */
-    act[n++] = 2;
+    if (is.code[0]) {	/* signIn itself may still be out, with no code named yet */
+      pick_add(&p, "Copy the Code Again", is.code, 0xEAF0);	/* codicon files */
+      act[n++] = 1;
+      pick_add(&p, "Open the Page Again", is.uri, 0xEAB6);	/* codicon chevron-right */
+      act[n++] = 2;
+    }
   }
   else if (is.user[0]) {
     pick_add(&p, "Sign Out", NULL, 0xEA76);	/* codicon close */

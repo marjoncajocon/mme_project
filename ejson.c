@@ -243,8 +243,37 @@ int json_bool (const Json *j, int def) {
 }
 
 
+/*
+** How many bytes at s are one whole UTF-8 character, 0 when they are not
+** one at all. The rule is utf8_decode's, so a byte counted here as its own
+** character is exactly a byte drawn as one replacement character and
+** counted as one UTF-16 unit by the positions that go with the text.
+*/
+static size_t utf8_seq (const char *s, size_t n) {
+  const unsigned char *u = (const unsigned char *)s;
+  size_t need, i;
+  if (u[0] < 0x80) return 1;
+  if (u[0] >= 0xF0 && u[0] < 0xF8) need = 4;
+  else if (u[0] >= 0xE0) need = 3;
+  else if (u[0] >= 0xC0) need = 2;
+  else return 0;	/* a continuation byte with nothing in front of it */
+  if (need > n) return 0;
+  for (i = 1; i < need; i++)
+    if ((u[i] & 0xC0) != 0x80) return 0;
+  return need;
+}
+
+
+/*
+** A JSON text is UTF-8 (RFC 8259), so a byte that is not part of a
+** character cannot go out as it is: a strict reader - Python's json,
+** llvm::json in clangd, serde - throws the whole message away, and one
+** stray byte in a Latin-1 source file would cost the file its language
+** server. Those bytes go as U+FFFD, which is what mme already draws for
+** them and what a lenient reader makes of them anyway.
+*/
 void json_put_str (Buf *b, const char *s, size_t n) {
-  size_t i;
+  size_t i, len;
   buf_putc(b, '"');
   for (i = 0; i < n; i++) {
     unsigned char c = (unsigned char)s[i];
@@ -256,7 +285,12 @@ void json_put_str (Buf *b, const char *s, size_t n) {
     else if (c == '\r') buf_puts(b, "\\r");
     else if (c == '\t') buf_puts(b, "\\t");
     else if (c < 32) buf_printf(b, "\\u%04x", c);
-    else buf_putc(b, (char)c);
+    else if (c < 0x80) buf_putc(b, (char)c);
+    else if ((len = utf8_seq(s + i, n - i)) == 0) buf_puts(b, "\\ufffd");
+    else {
+      buf_putn(b, s + i, len);
+      i += len - 1;
+    }
   }
   buf_putc(b, '"');
 }
