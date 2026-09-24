@@ -1,0 +1,32 @@
+---- cursor 18,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    >
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  New File  Ctrl+N                                                                          ⣒⣂⡀
+|       3  #incl  Open File...  Ctrl+O                                                                      ⠿
+|      4  #incl  Open Folder...                                                                            ⣭⣭⣥⡤⠄
+|       5         Open Project...  Ctrl+R                                                                   ⠟⠛
+|      6  #defi  Save  Ctrl+S                                                                              ⣿⡏⠉⠁
+|       7         Save As...  Ctrl+Shift+S                                                                  ⣋⣁⣀⡀
+|      8  typed  Close Editor  Ctrl+W                                                                      ⣿⠿⠗
+|       9  │   i  Exit  Ctrl+Q                                                                              ⡹⠿⠿⠃
+|     10  │   i  Undo  Ctrl+Z                                                                              ⠟⠛⠛⠋⠉⠉
+|      11  } Poi  Redo  Ctrl+Y
+|      12         Cut  Ctrl+X
+|      13  stati  Copy  Ctrl+C
+|      14         Paste  Ctrl+V
+|      15  /* ad  Find  Ctrl+F
+|      16  stati  Find in Files  Ctrl+Shift+F
+|      17  │   t
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

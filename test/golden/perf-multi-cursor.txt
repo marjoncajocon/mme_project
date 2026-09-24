@@ -1,0 +1,94 @@
+---- cursor 53,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      lines20k.txt  
+|     lines20k.txt
+|     19975  line 19974 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19976  line 19975 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19977  line 19976 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19978  line 19977 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19979  line 19978 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19980  line 19979 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19981  line 19980 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19982  line 19981 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19983  line 19982 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19984  line 19983 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19985  line 19984 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19986  line 19985 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19987  line 19986 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19988  line 19987 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19989  line 19988 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19990  line 19989 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19991  line 19990 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19992  line 19991 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19993  line 19992 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19994  line 19993 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19995  line 19994 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19996  line 19995 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19997  line 19996 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     19998  line 19997 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|    19999  line 19998 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     20000  line 19999 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ─
+|                                              Ln 20000, Col 42 (20000 selections)  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 54,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      lines20k.txt  ●
+|     lines20k.txt
+|     19975  line 19974 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|    19976  line 19975 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19977  line 19976 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|    19978  line 19977 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19979  line 19978 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|    19980  line 19979 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19981  line 19980 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|    19982  line 19981 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19983  line 19982 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|    19984  line 19983 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19985  line 19984 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19986  line 19985 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19987  line 19986 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19988  line 19987 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19989  line 19988 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19990  line 19989 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19991  line 19990 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19992  line 19991 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19993  line 19992 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19994  line 19993 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19995  line 19994 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19996  line 19995 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇
+|     19997  line 19996 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇       ▬
+|     19998  line 19997 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇       ▬
+|    19999  line 19998 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇       ▬
+|     20000  line 19999 of the file, a few words on itZ                                                     ⣿⣿⣿⣿⡇       ─
+|                                              Ln 20000, Col 43 (20000 selections)  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 53,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      lines20k.txt  
+|     lines20k.txt
+|     19975  line 19974 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19976  line 19975 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19977  line 19976 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19978  line 19977 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19979  line 19978 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19980  line 19979 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19981  line 19980 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19982  line 19981 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19983  line 19982 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|    19984  line 19983 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19985  line 19984 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19986  line 19985 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19987  line 19986 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19988  line 19987 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19989  line 19988 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19990  line 19989 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19991  line 19990 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19992  line 19991 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19993  line 19992 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19994  line 19993 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19995  line 19994 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19996  line 19995 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇
+|     19997  line 19996 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     19998  line 19997 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|    19999  line 19998 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     20000  line 19999 of the file, a few words on it                                                      ⣿⣿⣿⣿⡇       ─
+|                                                                 Ln 20000, Col 42  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

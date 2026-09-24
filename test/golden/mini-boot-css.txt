@@ -1,0 +1,94 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      boot.min.css  
+|     boot.min.css
+|       1  .c1{margin:1px;padding:1px;color:#377a4f}.c2{margin:2px;padding:2px;color:#6ef49e}.c3{margin:3px;⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉─
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                             Ln 1, Col 1  Spaces: 4  UTF-8  LF  CSS  
+---- cursor 106,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      boot.min.css  
+|     boot.min.css
+|       1  2px;padding:2px;color:#f32674}.c4223{margin:23px;padding:3px;color:#2aa0c4}.c4224{margin:24px;pa ⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉─
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                        Ln 1, Col 190001  Spaces: 4  UTF-8  LF  CSS  
+---- cursor 10,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      boot.min.css  
+|     boot.min.css
+|       1  .c1{margin:1px;padding:1px;color:#377a4f}.c2{margin:2px;padding:2px;color:#6ef49e}.c3{margin:3px;⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|                                                                                                                       ─
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                             Ln 2, Col 1  Spaces: 4  UTF-8  LF  CSS  
+exited=0

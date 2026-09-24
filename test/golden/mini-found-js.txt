@@ -1,0 +1,63 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      found.min.js  
+|     found.min.js
+|       1  /* generated: one long line */                                                                   ⠛⠛⠛⠒⠒⠒⠒⠒⠒⠒⠒⠒─
+|      2  function f1(a1,b1){return a1*1+b1.length;}function f2(a2,b2){return a2*2+b2.length;}function f3(a
+|       3
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      found.min.js  
+|     found.min.js
+|       1  /* generated: one long line */                                                                   ⠛⠛⠛⠒⠒⠒⠒⠒⠒⠒⠒⠒─
+|      2  function f1(a1,b1){return a1*1+b1.length;}function f2(a2,b2){return a2*2+b2.length;}function f3(a
+|       3
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                     Ln 1, Col 31  Spaces: 4  UTF-8  LF  JavaScript  
+exited=0

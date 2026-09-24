@@ -1,0 +1,2 @@
+exited=1
+file selfmerge.c: 30 bytes, starts <<<<<<< A\nx\n=======\n>>>>>>> B\n

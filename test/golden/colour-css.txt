@@ -1,0 +1,19 @@
+{868686}    {6e7681}   {cccccc}1  {6a9955}/* site.css - the CSS colour fixture. */                                                         {5b804a}????        {cccccc}?
+{868686} ?  {6e7681}   2  {d7ba7d}:root {ffd700}{                                                                                          {83b6d1}?{97ab8c}?
+{868686}    {6e7681}   3  {404040}? {9cdcfe}--bg{cccccc}: {ce9178}#1e1e1e{cccccc};                                                                                 {83b6d1}??{a9a9a9}??
+{868686} ?  {6e7681}   4  {404040}? {9cdcfe}--fg{cccccc}: {dcdcaa}rgb{da70d6}({b5cea8}212{cccccc}, {b5cea8}212{cccccc}, {b5cea8}212{da70d6}){cccccc};                                                                      {a9a9a9}??
+{868686}    {6e7681}   5  {404040}? {9cdcfe}--gap{cccccc}: {b5cea8}8px{cccccc};                                                                                    {83b6d1}?{a9a9a9}??
+{868686} ?  {6e7681}   6  {ffd700}}                                                                                                {a9a9a9}?{83b6d1}?{97ab8c}?
+{868686}    {6e7681}   7                                                                                                   {a9a9a9}?
+{868686} ?  {6e7681}   8  {d7ba7d}body {ffd700}{
+{868686}    {6e7681}   9  {404040}? {9cdcfe}background{cccccc}: {dcdcaa}var{da70d6}({9cdcfe}--bg{da70d6}){cccccc};
+{868686} ?  {6e7681}  10  {404040}? {9cdcfe}color{cccccc}: {dcdcaa}var{da70d6}({9cdcfe}--fg{da70d6}){cccccc};
+{868686}    {6e7681}  11  {404040}? {9cdcfe}font-family{cccccc}: {ce9178}"Segoe UI"{cccccc}, {ce9178}sans-serif{cccccc};
+{868686}    {6e7681}  12  {404040}? {9cdcfe}margin{cccccc}: {b5cea8}0{cccccc};
+{868686}    {6e7681}  13  {ffd700}}
+{868686}    {6e7681}  14
+{868686}    {6e7681}  15  {d7ba7d}.card {d4d4d4}> {d7ba7d}h2{cccccc},
+{868686}    {6e7681}  16  {d7ba7d}.card span {ffd700}{
+{868686}    {6e7681}  17  {404040}? {9cdcfe}padding{cccccc}: {dcdcaa}var{da70d6}({9cdcfe}--gap{da70d6}) {b5cea8}12px{cccccc};
+{868686}    {6e7681}  18  {404040}? {9cdcfe}border{cccccc}: {b5cea8}1px {ce9178}solid #333{cccccc};
+exited=0

@@ -1,0 +1,32 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │  main.c  
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│   1  /* main.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|    PROJ                   │   2  #include <stdio.h>                                                 ⣒⣂⡀
+|      deep/one/two              │   3  #include <stdlib.h>                                                ⠿
+|     docs                      │   4  #include <string.h>                                                ⣭⣭⣥⡤⠄
+|      many                      │   5                                                                     ⠟⠛
+|     src                       │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|      app.js                    │   7                                                                     ⣋⣁⣀⡀
+|     main.c                    │   8  typedef struct Point {                                             ⣿⠿⠗
+|      package.json              │   9  │   int x;                                                         ⡹⠿⠿⠃
+|     readme.md                 │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|      site.css                  │  11  } Point;
+|                                 │  12
+|                                 │  13  static int total = 0;
+|                                 │  14
+|                                 │  15  /* adds two numbers and remembers the sum */
+|    ─────────────────────────────│  16  static int add (int a, int b) {
+|     OUTLINE                  │  17  │   total += a + b;
+|        MAXN                    │  18  │   return a + b;
+|        Point                   │  19  }
+|        add                     │  20
+|        make                    │  21  static Point make (int x, int y) {
+|        main                    │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|   ─────────────────────────────│  25  │   return p;
+|     TIMELINE                   │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

@@ -1,0 +1,32 @@
+---- cursor 22,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    >fold
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  Fold  Ctrl+Shift+[                                                                        ⣒⣂⡀
+|       3  #incl  Fold All  Ctrl+K Ctrl+0                                                                   ⠿
+|      4  #incl  Fold Level 1  Ctrl+K Ctrl+1                                                               ⣭⣭⣥⡤⠄
+|       5         Fold Level 2  Ctrl+K Ctrl+2                                                               ⠟⠛
+|      6  #defi  Fold Level 3  Ctrl+K Ctrl+3                                                               ⣿⡏⠉⠁
+|       7         Fold Level 4  Ctrl+K Ctrl+4                                                               ⣋⣁⣀⡀
+|      8  typed  Fold Level 5  Ctrl+K Ctrl+5                                                               ⣿⠿⠗
+|       9  │   i  Fold Level 6  Ctrl+K Ctrl+6                                                               ⡹⠿⠿⠃
+|     10  │   i  Fold Level 7  Ctrl+K Ctrl+7                                                               ⠟⠛⠛⠋⠉⠉
+|      11  } Poi  Fold All Regions  Ctrl+K Ctrl+8
+|      12         Fold All Block Comments  Ctrl+K Ctrl+/
+|      13  stati  Open Folder...
+|      14         Find in Folder...  Shift+Alt+F
+|      15  /* ad  Unfold  Ctrl+Shift+]
+|      16  stati  Unfold All  Ctrl+K Ctrl+J
+|      17  │   t
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

@@ -1,0 +1,19 @@
+{868686}    {6e7681}   {cccccc}1  {ce9178}"""util.py - a Python fixture."""                                                                {ab7a66}????        {cccccc}?
+{868686} ?  {6e7681}   2  {c586c0}import {9cdcfe}os                                                                                        {45a0d2}?{97ab8c}?
+{868686}    {6e7681}   3  {c586c0}import {9cdcfe}sys                                                                                       {4b83b1}?{44a793}?{4b83b1}?{44a793}?
+{868686} ?  {6e7681}   4                                                                                                   {4b83b1}??{83b6d1}?{ab7a66}??
+{868686}    {6e7681}   5                                                                                                   {4b83b1}?{83b6d1}??{a9a9a9}?
+{868686} ?  {6e7681}   6  {4fc1ff}CONST {cccccc}= {b5cea8}3.14                                                                                     {a3719f}?{83b6d1}?{b6b68e}?{a9a9a9}?
+{868686}    {6e7681}   7
+{868686} ?  {6e7681}   8
+{868686}    {6e7681}   9  {569cd6}class {4ec9b0}Shape{cccccc}:
+{868686} ?  {6e7681}  10  {404040}?   {ce9178}"""A shape."""
+{868686}    {6e7681}  11  {404040}?
+{868686}    {6e7681}  12  {404040}?   {569cd6}def {dcdcaa}__init__{ffd700}({569cd6}self{cccccc}, {9cdcfe}sides{cccccc}: {4ec9b0}int {cccccc}= {b5cea8}3{ffd700}){cccccc}:
+{868686}    {6e7681}  13  {404040}?   ?   {569cd6}self{cccccc}.{9cdcfe}sides {cccccc}= {9cdcfe}sides
+{868686}    {6e7681}  14  {404040}?
+{868686}    {6e7681}  15  {404040}?   {569cd6}def {dcdcaa}describe{ffd700}({569cd6}self{ffd700}) {cccccc}-> {4ec9b0}str{cccccc}:
+{868686}    {6e7681}  16  {404040}?   ?   {c586c0}return {9cdcfe}f{ce9178}"shape with {self.sides} sides"
+{868686}    {6e7681}  17
+{868686}    {6e7681}  18
+exited=0

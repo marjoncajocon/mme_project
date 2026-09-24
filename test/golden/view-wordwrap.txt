@@ -1,0 +1,94 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      wrap.js  
+|     wrap.js
+|       1  // wrap.js - one very long logical line and a few short ones.                                    ⣿⣿⣛⣛⣛⣛⣓⣒⣒⣒⣒⣒─
+|      2  const sentence = "word00 word01 word02 word03 word04 word05 word06 word07 word08 word09 word10 wo⠉⠉
+|       3  const short = 1;
+|      4  const another = "tok00 tok01 tok02 tok03 tok04 tok05 tok06 tok07 tok08 tok09 tok10 tok11 tok12 to
+|       5  const done = true;
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      wrap.js  
+|     wrap.js
+|       1  // wrap.js - one very long logical line and a few short ones.                                    ⣿⣿⣛⣛⣛⣛⣓⣒⣒⣒⣒⣒─
+|      2  const sentence = "word00 word01 word02 word03 word04 word05 word06 word07 word08 word09 word10   ⠉⠉
+|          word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23
+|         word24 word25 word26 word27 word28 word29 word30 word31 word32 word33 word34 word35 word36
+|          word37 word38 word39";
+|      3  const short = 1;
+|       4  const another = "tok00 tok01 tok02 tok03 tok04 tok05 tok06 tok07 tok08 tok09 tok10 tok11 tok12
+|         tok13 tok14 tok15 tok16 tok17 tok18 tok19 tok20 tok21 tok22 tok23 tok24 tok25 tok26 tok27 tok28
+|          tok29 tok30 tok31 tok32 tok33 tok34 tok35 tok36 tok37 tok38 tok39";
+|      5  const done = true;
+|       6
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                            Word wrap: on         
+|
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      wrap.js  
+|     wrap.js
+|       1  // wrap.js - one very long logical line and a few short ones.                                    ⣿⣿⣛⣛⣛⣛⣓⣒⣒⣒⣒⣒─
+|      2  const sentence = "word00 word01 word02 word03 word04 word05 word06 word07 word08 word09 word10 wo⠉⠉
+|       3  const short = 1;
+|      4  const another = "tok00 tok01 tok02 tok03 tok04 tok05 tok06 tok07 tok08 tok09 tok10 tok11 tok12 to
+|       5  const done = true;
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                            Word wrap: off        
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+exited=0

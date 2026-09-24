@@ -1,0 +1,32 @@
+---- cursor 68,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      one400k.txt  
+|     one400k.txt
+|       1  the quick brown fox jumps over the lazy dog the quic  fox                           1 of 9091       ⠉▬
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                        Ln 1, Col 20 (3 selected)  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

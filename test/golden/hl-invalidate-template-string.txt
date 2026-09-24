@@ -1,0 +1,55 @@
+{868686}    {6e7681}   1  {6a9955}// app.js - the JS colour and highlight-invalidation fixture.                                    {5b804a}???????
+{868686} ?  {6e7681}   2  {569cd6}const {4fc1ff}NAME {d4d4d4}= {ce9178}"mme"{cccccc};                                                                              {5b804a}???
+{868686}    {6e7681}   {cccccc}3  {569cd6}let {9cdcfe}count {d4d4d4}= {b5cea8}0{cccccc};                                                                                   {a3719f}?{83b6d1}?          {cccccc}?
+{868686} ?  {6e7681}   4                                                                                                   {b6b68e}??{a9a9a9}?
+{868686}    {6e7681}   5  {6a9955}/* a block comment */                                                                            {b6b68e}?{4b83b1}??
+{868686} ?  {6e7681}   6  {569cd6}function {dcdcaa}greet{ffd700}({9cdcfe}who{ffd700}) {                                                                            {4b83b1}?{a9a9a9}?{97ab8c}?{a9a9a9}??{83b6d1}?{4b83b1}?{a9a9a9}?
+{868686}    {6e7681}   7  {404040}? {569cd6}const {4fc1ff}text {d4d4d4}= {ce9178}`hello {569cd6}${{9cdcfe}who{569cd6}}{ce9178}`{cccccc};                                                                   {a3719f}?{83b6d1}??
+{868686} ?  {6e7681}   8  {404040}? {9cdcfe}count {d4d4d4}+= {b5cea8}1{cccccc};
+{868686}    {6e7681}   9  {404040}? {c586c0}return {9cdcfe}text{cccccc};
+{868686} ?  {6e7681}  10  {ffd700}}
+{868686}    {6e7681}  11
+{868686}    {6e7681}  12  {569cd6}class {4ec9b0}Box {ffd700}{
+{868686}    {6e7681}  13  {404040}? {569cd6}constructor{da70d6}({9cdcfe}w{cccccc}, {9cdcfe}h{da70d6}) {
+{868686}    {6e7681}  14  {404040}? ? {569cd6}this{cccccc}.{9cdcfe}w {d4d4d4}= {9cdcfe}w{cccccc};
+{868686}    {6e7681}  15  {404040}? ? {569cd6}this{cccccc}.{9cdcfe}h {d4d4d4}= {9cdcfe}h{cccccc};
+{868686}    {6e7681}  16  {404040}? {da70d6}}
+{868686}    {6e7681}  17  {404040}? {dcdcaa}area{da70d6}() {
+{868686}    {6e7681}  18  {404040}? ? {c586c0}return {569cd6}this{cccccc}.{9cdcfe}w {d4d4d4}* {569cd6}this{cccccc}.{9cdcfe}h{cccccc};
+{868686}    {6e7681}   1  {6a9955}// app.js - the JS colour and highlight-invalidation fixture.                                    {5b804a}???????
+{868686} ?  {6e7681}   2  {569cd6}const {4fc1ff}NAME {d4d4d4}= {ce9178}"mme"{cccccc};                                                                              {ab7a66}???
+{868686}    {6e7681}   {cccccc}3  {569cd6}let {9cdcfe}count {d4d4d4}= {b5cea8}0{cccccc};{ce9178}`                                                                                  {ab7a66}??          {cccccc}?
+{868686} ?  {6e7681}   4                                                                                                   {ab7a66}???
+{868686}    {6e7681}   5  {ce9178}/* a block comment */                                                                            {ab7a66}???
+{868686} ?  {6e7681}   6  {ce9178}function greet(who) {                                                                            {ab7a66}????????
+{868686}    {6e7681}   7  {404040}? {ce9178}const text = `{9cdcfe}hello ${ffd700}{{9cdcfe}who{ffd700}}{ce9178}`;                                                                   {ab7a66}???
+{868686} ?  {6e7681}   8  {404040}? {ce9178}count += 1;
+{868686}    {6e7681}   9  {404040}? {ce9178}return text;
+{868686} ?  {6e7681}  10  {ce9178}}
+{868686}    {6e7681}  11
+{868686}    {6e7681}  12  {ce9178}class Box {
+{868686}    {6e7681}  13  {404040}? {ce9178}constructor(w, h) {
+{868686}    {6e7681}  14  {404040}? ? {ce9178}this.w = w;
+{868686}    {6e7681}  15  {404040}? ? {ce9178}this.h = h;
+{868686}    {6e7681}  16  {404040}? {ce9178}}
+{868686}    {6e7681}  17  {404040}? {ce9178}area() {
+{868686}    {6e7681}  18  {404040}? ? {ce9178}return this.w * this.h;
+{868686}    {6e7681}   1  {6a9955}// app.js - the JS colour and highlight-invalidation fixture.                                    {5b804a}???????
+{868686} ?  {6e7681}   2  {569cd6}const {4fc1ff}NAME {d4d4d4}= {ce9178}"mme"{cccccc};                                                                              {5b804a}???
+{868686}    {6e7681}   {cccccc}3  {569cd6}let {9cdcfe}count {d4d4d4}= {b5cea8}0{cccccc};                                                                                   {a3719f}?{83b6d1}?          {cccccc}?
+{868686} ?  {6e7681}   4                                                                                                   {b6b68e}??{a9a9a9}?
+{868686}    {6e7681}   5  {6a9955}/* a block comment */                                                                            {b6b68e}?{4b83b1}??
+{868686} ?  {6e7681}   6  {569cd6}function {dcdcaa}greet{ffd700}({9cdcfe}who{ffd700}) {                                                                            {4b83b1}?{a9a9a9}?{97ab8c}?{a9a9a9}??{83b6d1}?{4b83b1}?{a9a9a9}?
+{868686}    {6e7681}   7  {404040}? {569cd6}const {4fc1ff}text {d4d4d4}= {ce9178}`hello {569cd6}${{9cdcfe}who{569cd6}}{ce9178}`{cccccc};                                                                   {a3719f}?{83b6d1}??
+{868686} ?  {6e7681}   8  {404040}? {9cdcfe}count {d4d4d4}+= {b5cea8}1{cccccc};
+{868686}    {6e7681}   9  {404040}? {c586c0}return {9cdcfe}text{cccccc};
+{868686} ?  {6e7681}  10  {ffd700}}
+{868686}    {6e7681}  11
+{868686}    {6e7681}  12  {569cd6}class {4ec9b0}Box {ffd700}{
+{868686}    {6e7681}  13  {404040}? {569cd6}constructor{da70d6}({9cdcfe}w{cccccc}, {9cdcfe}h{da70d6}) {
+{868686}    {6e7681}  14  {404040}? ? {569cd6}this{cccccc}.{9cdcfe}w {d4d4d4}= {9cdcfe}w{cccccc};
+{868686}    {6e7681}  15  {404040}? ? {569cd6}this{cccccc}.{9cdcfe}h {d4d4d4}= {9cdcfe}h{cccccc};
+{868686}    {6e7681}  16  {404040}? {da70d6}}
+{868686}    {6e7681}  17  {404040}? {dcdcaa}area{da70d6}() {
+{868686}    {6e7681}  18  {404040}? ? {c586c0}return {569cd6}this{cccccc}.{9cdcfe}w {d4d4d4}* {569cd6}this{cccccc}.{9cdcfe}h{cccccc};
+exited=0

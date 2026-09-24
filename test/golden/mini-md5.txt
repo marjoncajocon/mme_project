@@ -1,0 +1,67 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      md5.js  
+|     md5.js
+|       1  /* generated: one long line */                                                                   ⠛⠛⠛⠒⠒⠒⠒⠒⠒⠒⠒⠒─
+|      2  function f1(a1,b1){return a1*1+b1.length;}function f2(a2,b2){return a2*2+b2.length;}function f3(a
+|       3
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+---- cursor 106,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      md5.js  
+|     md5.js   f1
+|       1                                                                                                   ⠛⠛⠛⠒⠒⠒⠒⠒⠒⠒⠒⠒
+|      2  {return a247*247+b247.length;}function f248(a248,b248){return a248*248+b248.length;}function f24
+|       3
+| 
+|
+| 
+|
+| 
+|                                                                                                                       ▬
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                  Ln 2, Col 12757  Spaces: 4  UTF-8  LF  JavaScript  
+{868686}    {6e7681}   1                                                                                                   {5b804a}???{a9a9a9}??{b6b68e}?{a9a9a9}??{83b6d1}?{4b83b1}?{83b6d1}??
+{868686} ?  {6e7681}   {cccccc}2  {ffd700}{{cccccc}return a247*247+b247.length;{ffd700}}{cccccc}function f248{ffd700}({cccccc}a248,b248{ffd700}){{cccccc}return a248*248+b248.length;{ffd700}}{cccccc}function f24 {1f1f1f}
+{868686}    {6e7681}   3
+{868686} ?  {cccccc}
+exited=0

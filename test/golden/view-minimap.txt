@@ -1,0 +1,63 @@
+---- cursor 11,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      big.c  
+|     big.c
+|        1  /* generated: an ordinary file of 1400 lines */                                                 ⣛⣛⣉⣉⡉       ─
+|       2  #include <stdio.h>                                                                              ⣿⣿⣿⣿⡇
+|        3                                                                                                  ⣿⣿⣯⣭⡅
+|       4  static int step0001 (int a) { return a + 1; }                                                   ⣿⣿⣿⣿⣿
+|        5  static int step0002 (int a) { return a + 2; }                                                   ⣿⣿⣷⣶⣶
+|       6  static int step0003 (int a) { return a + 3; }                                                   ⣛⣛⡛⠛⠛
+|        7  static int step0004 (int a) { return a + 4; }                                                   ⣿⣿⣿⣿⣿
+|       8  static int step0005 (int a) { return a + 5; }                                                   ⣿⣿⣟⣛⣛
+|        9  static int step0006 (int a) { return a + 6; }                                                   ⣿⣿⣿⣿⣿
+|      10  /* step 7 of the work */                                                                        ⣿⣿⣯⣭⣭
+|       11  static int step0008 (int a) { return a + 8; }                                                   ⣛⣛⣛⣛⣛
+|       12  static int step0009 (int a) { return a + 9; }                                                   ⣿⣿⣷⣶⣶
+|       13  static int step0010 (int a) { return a + 10; }                                                  ⣿⣿⡿⠿⠿
+|       14  static int step0011 (int a) { return a + 11; }                                                  ⣿⣿⣿⣿⣿
+|       15  static int step0012 (int a) { return a + 12; }                                                  ⣿⣿⣟⣛⣛
+|       16  static int step0013 (int a) { return a + 13; }                                                  ⣛⣛⣛⣛⣛
+|       17  /* step 14 of the work */                                                                       ⣿⣿⣯⣭⣭
+|       18  static int step0015 (int a) { return a + 15; }                                                  ⣿⣿⣿⣿⣿
+|       19  static int step0016 (int a) { return a + 16; }                                                  ⣿⣿⣷⣶⣶
+|       20  static int step0017 (int a) { return a + 17; }                                                  ⣿⣿⡿⠿⠿
+|       21  static int step0018 (int a) { return a + 18; }                                                  ⣛⣛⣛⣛⣛
+|       22  static int step0019 (int a) { return a + 19; }                                                  ⣿⣿⣟⣛⣛
+|       23                                                                                                  ⣿⣿⣿⣿⣿
+|       24  /* step 21 of the work */                                                                       ⣿⣿⣯⣭⣭
+|      25  static int step0022 (int a) { return a + 22; }                                                  ⣿⣿⣿⣿⣿
+|       26  static int step0023 (int a) { return a + 23; }                                                  ⣛⣛⣓⣒⣒
+|                                                                               Ln 1, Col 1  Spaces: 2  UTF-8  LF  C  
+---- cursor 11,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      big.c  
+|     big.c
+|        1  /* generated: an ordinary file of 1400 lines */                                                             ─
+|       2  #include <stdio.h>
+|        3
+|       4  static int step0001 (int a) { return a + 1; }
+|        5  static int step0002 (int a) { return a + 2; }
+|       6  static int step0003 (int a) { return a + 3; }
+|        7  static int step0004 (int a) { return a + 4; }
+|       8  static int step0005 (int a) { return a + 5; }
+|        9  static int step0006 (int a) { return a + 6; }
+|      10  /* step 7 of the work */
+|       11  static int step0008 (int a) { return a + 8; }
+|       12  static int step0009 (int a) { return a + 9; }
+|       13  static int step0010 (int a) { return a + 10; }
+|       14  static int step0011 (int a) { return a + 11; }
+|       15  static int step0012 (int a) { return a + 12; }
+|       16  static int step0013 (int a) { return a + 13; }
+|       17  /* step 14 of the work */
+|       18  static int step0015 (int a) { return a + 15; }
+|       19  static int step0016 (int a) { return a + 16; }
+|       20  static int step0017 (int a) { return a + 17; }
+|       21  static int step0018 (int a) { return a + 18; }
+|       22  static int step0019 (int a) { return a + 19; }
+|       23
+|       24  /* step 21 of the work */
+|      25  static int step0022 (int a) { return a + 22; }
+|       26  static int step0023 (int a) { return a + 23; }
+|                                                                               Ln 1, Col 1  Spaces: 2  UTF-8  LF  C  
+exited=0

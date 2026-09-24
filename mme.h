@@ -152,6 +152,7 @@ typedef struct Opt {
   int merge_editor;	/* git.mergeEditor: a conflicted file opens in the merge editor */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
+  int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */
 } Opt;
 
 enum { PANEL_BOTTOM, PANEL_RIGHT, PANEL_LEFT };
@@ -587,6 +588,7 @@ enum {
   CMD_MERGE_EDITOR, CMD_MERGE_COMPLETE, CMD_LENS_RUN,
   CMD_INLINE_TRIGGER, CMD_INLINE_ACCEPT, CMD_INLINE_WORD, CMD_INLINE_HIDE, CMD_INLINE_NEXT,
   CMD_INLINE_PREV, CMD_COPILOT_SIGNIN, CMD_COPILOT_SIGNOUT, CMD_COPILOT_STATUS,
+  CMD_NEDIT_JUMP, CMD_NEDIT_TOGGLE,
   CMD_N
 };
 
@@ -1283,6 +1285,12 @@ typedef struct InlineItem {	/* textDocument/inlineCompletion: a continuation off
   int snippet;	/* its insertText was {"kind":2}: tab stops, like a snippet's body */
 } InlineItem;
 
+typedef struct NEditItem {	/* textDocument/copilotInlineEdit: the next edit, somewhere else in the file */
+  char *text;	/* what goes in place of the range; its lines separated by 
+ */
+  Pos a, b;	/* the range it replaces, which is not where the cursor is */
+} NEditItem;
+
 typedef struct TextEdit {	/* a change the server asks for: its line and column, as it counts */
   char *path;
   size_t l0, c0, l1, c1;
@@ -1310,6 +1318,22 @@ void lsp_inline_cancel (void);	/* the answer is not wanted any more ($/cancelReq
 void lsp_inline_shown (size_t i);	/* item i is on the screen: textDocument/didShowCompletion */
 void lsp_inline_partial (size_t i, size_t len);	/* len bytes of item i taken: didPartiallyAcceptCompletion */
 void lsp_inline_accept (size_t i);	/* item i taken whole: its command, if it has one */
+
+/*
+** Next edit suggestions: textDocument/copilotInlineEdit, the same
+** server's other question. It proposes the edit the change just made
+** calls for somewhere else in the file, not a continuation at the
+** cursor. No capability announces it, so it is asked of whatever
+** answers inlineCompletion and dropped for good when that says the
+** method is not there.
+*/
+int lsp_nedit_able (const Doc *d);	/* its inline server is up and has not refused the method */
+void lsp_nedit (Doc *d, Pos at);	/* ask; the answer comes to on_nedit */
+void lsp_nedit_cancel (void);	/* the answer is not wanted any more ($/cancelRequest) */
+void lsp_nedit_shown (void);	/* it is on the screen: textDocument/didShowInlineEdit */
+void lsp_nedit_accept (void);	/* taken: its command, through workspace/executeCommand */
+enum { NE_IGNORED, NE_ACCEPTED, NE_REJECTED };	/* what became of a next edit that is going away */
+void lsp_nedit_done (int what);	/* tell the server which, and report the one held here */
 
 /*
 ** The inline-completion server's account and its status: Copilot's
@@ -1410,6 +1434,7 @@ void on_actions (const char *const *titles, size_t n);
 void on_bulb (Doc *d, size_t y, size_t n, int fix);	/* line y has n code actions */
 void on_inlay (Doc *d, size_t y0, size_t y1, InlayHint *v, size_t n);	/* takes v */
 void on_inline (Doc *d, unsigned long edits, Pos at, InlineItem *v, size_t n);	/* takes v */
+void on_nedit (Doc *d, unsigned long edits, Pos at, NEditItem *v, size_t n);	/* takes v */
 void on_semantic (Doc *d, unsigned long edits, SemTok *v, size_t n);	/* takes v */
 void on_lens (Doc *d, Lens *v, size_t n);	/* takes v */
 void on_symbols (Doc *d, Sym *v, size_t n);	/* takes v */

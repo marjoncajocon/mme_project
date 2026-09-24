@@ -1,0 +1,32 @@
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  
+|     edit.c
+|       1  /* edit.c - a small C file the editing scenarios type into. */                                   ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #include <stdio.h>                                                                               ⣒⣂⡀
+|       3  #include <stdlib.h>                                                                              ⠿
+|      4  #include <string.h>                                                                              ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|    ── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ───────── Filter (e.g. text, **/*.ts, !**/node_modul ────────
+|      No problems have been detected in the workspace.
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

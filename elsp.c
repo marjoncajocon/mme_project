@@ -20,7 +20,7 @@
 enum { RQ_INIT, RQ_COMPLETE, RQ_DEFINE, RQ_HOVER, RQ_SIGNATURE, RQ_RENAME, RQ_ACTIONS,
        RQ_RESOLVE, RQ_SYMBOLS, RQ_FORMAT, RQ_LOC_REFS, RQ_LOC_IMPL, RQ_LOC_TYPE, RQ_LOC_PEEK,
        RQ_WSYM, RQ_HIGHLIGHT, RQ_BULB, RQ_INLAY, RQ_SEMANTIC, RQ_LENS, RQ_LENS_RESOLVE, RQ_COMP_RESOLVE,
-       RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE,
+       RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE, RQ_NEDIT,
        RQ_SIGNIN, RQ_SIGNOUT, RQ_CHECK, RQ_DEVICE,
        RQ_OTHER };
 
@@ -60,6 +60,7 @@ typedef struct Srv {
   int readonly_bit;	/* the modifier "readonly": a constant; -1 none */
   int can_resolve, can_range, can_sel, can_fold, can_calls, can_types;	/* what it said it does */
   int can_inline;	/* inlineCompletionProvider: editor.inlineSuggest asks it, nothing else does */
+  int no_nedit;	/* it answered MethodNotFound to copilotInlineEdit: never asked again */
   char type_chars[16];	/* documentOnTypeFormattingProvider's characters */
   int sync_inc;	/* textDocumentSync 2: it takes the range that changed */
 } Srv;
@@ -889,6 +890,8 @@ void lsp_open (Doc *d, const char *syntax) {
 
 static void lens_forget (const Doc *d);	/* a closed file's code lenses, below */
 static void inline_forget (void);	/* the inline suggestions kept, below */
+static void nedit_forget (void);	/* and the next edit, below that */
+static const Doc *nedit_doc (void);
 static const Doc *inline_doc (void);
 
 
@@ -902,6 +905,7 @@ void lsp_close (Doc *d) {
       }
   lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
   if (inline_doc() == d) inline_forget();	/* and its inline suggestions */
+  if (nedit_doc() == d) nedit_forget();	/* and the next edit it was offered */
   for (i = (int)g_ndoc - 1; i >= 0; i--) {	/* a document may be on two servers */
     LDoc *l = &g_doc[i];
     if (l->d != d) continue;
@@ -1537,6 +1541,276 @@ void lsp_inline_accept (size_t i) {
   if ((cmd = json_get(j, "command")) != NULL && json_get(cmd, "command"))
     run_command(g_inl.s, cmd);	/* workspace/executeCommand, the code actions' path */
   json_free(j);
+}
+
+/* }================================================================== */
+
+/*
+** {==================================================================
+** Next edit suggestions: textDocument/copilotInlineEdit
+**
+** The same server answers a second question beside the continuation
+** at the cursor: given what has just been typed, the edit that change
+** calls for somewhere else in the file - the other three uses of the
+** variable that was renamed on line 10. It is the same server and the
+** same document, so ldoc_inline() picks it, and only one question is
+** out at a time exactly as above.
+**
+** Nothing in the initialize answer announces the method: Copilot's
+** server 1.551 advertises inlineCompletionProvider and no more. So it
+** is simply asked of whatever answers inlineCompletion, and a server
+** that says MethodNotFound is never asked again - which is what makes
+** this cost nothing against a server that has never heard of it.
+**
+** The shapes, confirmed against copilot-language-server 1.551:
+**   ->  textDocument/copilotInlineEdit
+**       {"textDocument":{"uri":U,"version":N},"position":{"line":L,"character":C}}
+**       (it validates: uri, line and character are required, version is
+**       an integer, and anything else it does not know is ignored)
+**   <-  {"edits":[{"text":T,"range":R,"textDocument":{"uri":U,"version":N},
+**                  "cacheTelemetryContext":S,"command":C}]}, and "edits":[]
+**       when it has none. The text is "text", not "newText"; the uri comes
+**       back the server's own way (file:///c%3A/... for file:///C:/...),
+**       which is why uri_same below undoes the escapes before comparing.
+**       C names the command to run when it is taken, and which one that is
+**       varies - didAcceptCompletionItem from the model, and
+**       didAcceptNextEditSuggestionItem from the server's own test hook -
+**       so what it names is what is run, never a command chosen here.
+**   ->  textDocument/didShowInlineEdit  {"item":<the edit as it came>}
+**       (it wants item.command.arguments: exactly one non-empty string)
+**   ->  textDocument/reportCachedInlineEdit
+**       {"opportunityId":ID,"context":S,"isShown":true,
+**        "acceptance":"accepted"|"rejected"}   (all four required, and
+**       this one alone refuses a field it does not know; the server takes
+**       "notAccepted" there too, which mme has no use for)
+** ===================================================================
+*/
+
+static struct {
+  Srv *s;
+  Doc *d;	/* the edit is for this text, as it was */
+  char *json;	/* the edit as the server sent it: what the notifications carry */
+  char *ctx;	/* its cacheTelemetryContext */
+  char *oid;	/* its command's one argument: the id the server knows it by */
+  int shown, told;	/* it reached the screen; reportCachedInlineEdit already went */
+  int id;	/* the question out now; 0: none */
+  Srv *asked;	/* who it went to */
+  unsigned long edits;	/* the text it was asked about */
+  Pos at;	/* and where the cursor was */
+} g_ne;
+
+
+static const Doc *nedit_doc (void) {
+  return g_ne.d;
+}
+
+
+static void nedit_forget (void) {
+  free(g_ne.json);
+  free(g_ne.ctx);
+  free(g_ne.oid);
+  g_ne.json = NULL;
+  g_ne.ctx = NULL;
+  g_ne.oid = NULL;
+  g_ne.shown = 0;
+  g_ne.told = 0;
+  g_ne.s = NULL;
+  g_ne.d = NULL;
+}
+
+
+void lsp_nedit_cancel (void) {
+  Srv *s = g_ne.asked;
+  int i;
+  if (g_ne.id == 0 || s == NULL) return;
+  for (i = 0; i < s->nreq; i++)	/* the answer is no longer wanted: dropped when it comes */
+    if (s->req[i].id == g_ne.id) {
+      s->req[i].kind = RQ_OTHER;
+      s->req[i].d = NULL;
+    }
+  if (!s->dead) {
+    char params[64];
+    snprintf(params, sizeof(params), "{\"id\":%d}", g_ne.id);
+    notify(s, "$/cancelRequest", params);
+  }
+  g_ne.id = 0;
+  g_ne.asked = NULL;
+}
+
+
+int lsp_nedit_able (const Doc *d) {
+  const LDoc *l = ldoc_inline(d);
+  return l && l->s->ready && !l->s->dead && l->s->can_inline && !l->s->no_nedit;
+}
+
+
+void lsp_nedit (Doc *d, Pos at) {
+  LDoc *l = ldoc_inline(d);
+  Buf q;
+  if (l == NULL || !l->s->ready || l->s->dead || l->s->no_nedit) return;
+  if (!l->opened) did_open(l);	/* synced(), but for whichever server answers these */
+  else if (l->sent != d->edits) did_change(l);
+  lsp_nedit_cancel();	/* one at a time, as the continuation is */
+  buf_init(&q);
+  buf_printf(&q, "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},"	/* version: it throws without one */
+             "\"position\":{\"line\":%lu,\"character\":%lu}}",
+             l->uri, l->version, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
+  g_ne.id = request(l->s, "textDocument/copilotInlineEdit", q.s, RQ_NEDIT, d);
+  g_ne.asked = l->s;
+  g_ne.edits = d->edits;
+  g_ne.at = at;
+  buf_free(&q);
+}
+
+
+/*
+** Are these two the same file? The server writes the uri its own way -
+** copilot-language-server answers file:///c%3A/Users/... for the
+** file:///C:/Users/... it was given - so a byte comparison would call
+** every edit a cross-file one. The escapes are undone and the case is
+** ignored, which is right for the only place this is used.
+*/
+static int uri_hex (int c) {	/* the value of one hex digit, -1: not one */
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+
+static int uri_char (const char **p) {	/* the next character of a uri, %XX undone */
+  int c = (unsigned char)*(*p)++, h, l;
+  if (c == '%' && (h = uri_hex((unsigned char)(*p)[0])) >= 0 && (l = uri_hex((unsigned char)(*p)[1])) >= 0) {
+    c = h * 16 + l;
+    *p += 2;
+  }
+  if (c == '\\') c = '/';	/* a separator is a separator */
+  if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  return c;
+}
+
+
+static int uri_same (const char *a, const char *b) {
+  while (*a && *b)
+    if (uri_char(&a) != uri_char(&b)) return 0;
+  return *a == '\0' && *b == '\0';
+}
+
+
+/* {"edits":[...]}: the first usable one to on_nedit, the raw edit kept here */
+static void nedits (Srv *s, Doc *d, const Json *res) {
+  const Json *items = res != NULL ? json_get(res, "edits") : NULL;
+  NEditItem *v = NULL;
+  size_t i, n = 0;
+  nedit_forget();
+  if (items == NULL || items->type != J_ARR || items->n == 0) {
+    on_nedit(d, g_ne.edits, g_ne.at, NULL, 0);
+    return;
+  }
+  v = (NEditItem *)xmalloc(sizeof(NEditItem));
+  for (i = 0; i < items->n && n == 0; i++) {	/* VS Code offers one at a time: the first that is whole */
+    const Json *it = items->kid[i], *rg = json_get(it, "range"), *arg;
+    const char *txt = json_str(json_get(it, "text"), NULL);
+    const char *in = json_str(json_get(it, "textDocument.uri"), NULL);
+    const LDoc *l = ldoc_inline(d);
+    Buf b;
+    if (txt == NULL || rg == NULL) continue;
+    /* the server may answer with an edit in another file (it marks those with
+    ** targetLine). mme has nowhere to point at one, so it is left alone rather
+    ** than applied to the wrong text - the range would mean the wrong lines. */
+    if (in != NULL && l != NULL && !uri_same(in, l->uri)) {
+      out_log(s->chan, "[info] next edit is in %s, not the file being edited: not shown", in);
+      continue;
+    }
+    v[n].text = xstrdup(txt);
+    v[n].a = pos_in(s, d, json_get(rg, "start"));
+    v[n].b = pos_in(s, d, json_get(rg, "end"));
+    buf_init(&b);
+    json_write(&b, it);
+    buf_putc(&b, '\0');
+    g_ne.json = buf_take(&b);
+    g_ne.ctx = xstrdup(json_str(json_get(it, "cacheTelemetryContext"), ""));
+    arg = json_get(it, "command.arguments");
+    g_ne.oid = xstrdup(arg != NULL && arg->type == J_ARR && arg->n > 0 ? json_str(arg->kid[0], "") : "");
+    n++;
+  }
+  if (n == 0) {
+    free(v);
+    v = NULL;
+  }
+  g_ne.s = s;
+  g_ne.d = d;
+  on_nedit(d, g_ne.edits, g_ne.at, v, n);
+}
+
+
+void lsp_nedit_shown (void) {
+  Buf b;
+  if (g_ne.json == NULL || g_ne.s == NULL || g_ne.s->dead) return;
+  g_ne.shown = 1;
+  if (g_ne.oid == NULL || g_ne.oid[0] == '\0') return;	/* no id: nothing the server could count */
+  buf_init(&b);
+  buf_printf(&b, "{\"item\":%s}", g_ne.json);
+  notify(g_ne.s, "textDocument/didShowInlineEdit", b.s);
+  buf_free(&b);
+}
+
+
+void lsp_nedit_accept (void) {
+  Json *j;
+  const Json *cmd;
+  if (g_ne.json == NULL || g_ne.s == NULL || g_ne.s->dead) return;
+  if ((j = json_parse(g_ne.json, strlen(g_ne.json))) == NULL) return;
+  if ((cmd = json_get(j, "command")) != NULL && json_get(cmd, "command") != NULL)
+    run_command(g_ne.s, cmd);	/* github.copilot.didAcceptCompletionItem, with the edit's id */
+  json_free(j);
+}
+
+
+/*
+** The edit is going away: NE_ACCEPTED (it went into the text),
+** NE_REJECTED (Esc, or the command) or NE_IGNORED (something else
+** happened and it was never answered). Two things go out for it:
+**
+**  - the command the server keeps for each, confirmed to take exactly
+**    one string, the edit's id, and to answer true:
+**    github.copilot.did{Accept,Reject,Ignore}NextEditSuggestionItem.
+**    The accepted one is the edit's own command instead, because the
+**    server names it there itself (didAcceptCompletionItem, with the
+**    same id) - what it asked for is what it gets.
+**
+**  - reportCachedInlineEdit: the edit was answered once and then held
+**    here, drawn again over every keystroke that did not change the
+**    text, so by the time it ends it has been served out of this cache.
+**    It goes once, and only for an edit that reached the screen.
+*/
+void lsp_nedit_done (int what) {
+  static const char *const cmd[] = {"github.copilot.didIgnoreNextEditSuggestionItem", NULL,
+                                    "github.copilot.didRejectNextEditSuggestionItem"};
+  const char *ctx;
+  Buf b;
+  if (g_ne.s == NULL || g_ne.s->dead || g_ne.told) return;
+  if (g_ne.oid == NULL || g_ne.oid[0] == '\0') return;	/* no id: nothing the server could count */
+  g_ne.told = 1;
+  if (what >= 0 && what <= NE_REJECTED && cmd[what] != NULL) {
+    buf_init(&b);
+    buf_printf(&b, "{\"command\":\"%s\",\"arguments\":[", cmd[what]);
+    json_put_str(&b, g_ne.oid, strlen(g_ne.oid));
+    buf_puts(&b, "]}");
+    request(g_ne.s, "workspace/executeCommand", b.s, RQ_OTHER, NULL);
+    buf_free(&b);
+  }
+  if (!g_ne.shown) return;	/* it never reached the screen: there is no cache hit to report */
+  ctx = (g_ne.ctx != NULL && g_ne.ctx[0] != '\0') ? g_ne.ctx : "{}";	/* it wants at least one character */
+  buf_init(&b);
+  buf_puts(&b, "{\"opportunityId\":");
+  json_put_str(&b, g_ne.oid, strlen(g_ne.oid));
+  buf_puts(&b, ",\"context\":");
+  json_put_str(&b, ctx, strlen(ctx));
+  buf_printf(&b, ",\"isShown\":true,\"acceptance\":\"%s\"}",
+             what == NE_ACCEPTED ? "accepted" : "rejected");
+  notify(g_ne.s, "textDocument/reportCachedInlineEdit", b.s);
+  buf_free(&b);
 }
 
 /* }================================================================== */
@@ -2645,6 +2919,16 @@ static void handle (Srv *s, const Json *msg) {
       g_inl.id = 0;
       g_inl.asked = NULL;
       inlines(s, r.d, json_get(msg, "result"));
+    }
+    else if (r.kind == RQ_NEDIT) {
+      g_ne.id = 0;
+      g_ne.asked = NULL;
+      if (inum(json_get(msg, "error.code"), 0) == -32601) {	/* it has never heard of it: never again */
+        s->no_nedit = 1;
+        nedit_forget();
+        on_nedit(r.d, g_ne.edits, g_ne.at, NULL, 0);
+      }
+      else nedits(s, r.d, json_get(msg, "result"));
     }
     else if (r.kind == RQ_LENS) lenses(s, r.d, json_get(msg, "result"));
     else if (r.kind == RQ_LENS_RESOLVE) {

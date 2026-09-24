@@ -1,0 +1,32 @@
+---- cursor 119,22
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │  main.c      readme.md  
+|▎   OPEN EDITORS               │  readme.md   mme regression fixture
+|         main.c                │   1  # mme regression fixture                                           ⠭⠭⠥⠤⠤⠤⠤⠤    ─
+|        readme.md              │   2                                                                     ⡍
+|    ─────────────────────────────│   3  A paragraph with **bold**, *italic*, `code` and a [link](https://ex⠿
+|    PROJ                   │   4                                                                     ⣍⣀
+|      deep/one/two              │   5  ## A list                                                          ⠏⠁
+|     docs                      │   6                                                                     ⠿⠿
+|      many                      │   7  - one                                                              ⠥
+|     src                       │   8  - two
+|      app.js                    │   9  │ - nested
+|     main.c                    │  10  1. first
+|      package.json              │  11  2. second
+|      readme.md                 │  12
+|      site.css                  │  13  > a quote
+|                                 │  14
+|                                 │  15  ```c
+|                                 │  16  int main (void) {
+|    ─────────────────────────────│  17  │   return 0;
+|     OUTLINE                  │  18  }
+|       mme regression fixture  │  19  ```
+|          A list                │  20
+|                                 │  21  | col a | col b |
+|                                 │  22  | ----- | ----- |
+|                                 │  23  | 1     | 2     |
+|                                 │  24
+|   ─────────────────────────────│  25  ---
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                        Ln 1, Col 1  Spaces: 4  UTF-8  LF  Markdown  
+exited=0

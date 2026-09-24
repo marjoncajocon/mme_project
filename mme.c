@@ -1902,6 +1902,7 @@ static struct {
 } GH;
 
 static int comp_showing (void);	/* the suggestion widget or a snippet is running, below */
+static void ne_suppress (void);	/* and the next edit goes with the ghost text, below that */
 
 
 /* is the suggestion on the screen? asked for every byte drawn, so it stays cheap */
@@ -1929,6 +1930,64 @@ static int gh_rows_at (size_t *after, int *rows) {
   if (!gh_on() || GH.nline < 2) return 0;
   *after = GH.at.y;
   *rows = (int)(GH.nline - 1);
+  return 1;
+}
+
+/* }================================================================== */
+
+/*
+** {==================================================================
+** github.copilot.nextEditSuggestions: the edit somewhere else
+**
+** Beside the continuation at the cursor, Copilot's server answers with
+** the edit that what was just typed calls for elsewhere in the file:
+** rename a variable on line 10 and it offers to change its three other
+** uses. One is held at a time. It is drawn as a small diff where it
+** is - the bytes it replaces tinted like a removed line, what it puts
+** there on rows of its own underneath, dim, tinted like an added one -
+** and the gutter carries an arrow on its line. Off the screen, the
+** arrow goes to the top or the bottom edge and points that way; the
+** view is never scrolled by itself, exactly as VS Code does it.
+**
+** The rows below reuse the block a peek puts in the view, and the
+** lines are drawn by put_ghost, both of them the inline suggestion's.
+** They never both take the block: ne_on() is false while ghost text
+** shows, because VS Code prefers the suggestion at the cursor.
+** ===================================================================
+*/
+
+#define NEDIT_WAIT	600000	/* us the text must rest before a next edit is asked for */
+
+static struct {
+  const Doc *d;	/* the edit is for this text, as it was */
+  unsigned long edits;
+  Pos at;	/* where the cursor was when it was asked */
+  Pos a, b;	/* the range it replaces, which is not where the cursor is */
+  char *text;	/* what goes there */
+  char **line;	/* the same, by line, tabs as spaces: what is drawn */
+  size_t nline;
+  const Doc *ask_d;	/* the debounce: what was asked about, and when it last moved */
+  unsigned long ask_edits;
+  Pos ask_at;
+  int asked, pending;
+  long long since;
+  int row;	/* the screen row its line was drawn on this frame; -1 not drawn */
+} NE;
+
+
+/* is the next edit on the screen? asked for every row drawn, so it stays cheap */
+static int ne_on (void) {
+  return NE.text != NULL && opt.next_edit && HAS_DOC && NE.d == T->doc &&
+         NE.edits == T->doc->edits && NE.a.y < T->doc->n && NE.b.y < T->doc->n &&
+         !T->sel && T->nmc == 0 && !G->diff && !T->page && !T->md && !comp_showing() && !gh_on();
+}
+
+
+/* the rows under the edit's last line that what it puts there needs */
+static int ne_rows_at (size_t *after, int *rows) {
+  if (!ne_on() || NE.nline == 0) return 0;
+  *after = NE.b.y;
+  *rows = (int)NE.nline;
   return 1;
 }
 
@@ -2717,6 +2776,20 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
       else if (tm == TM_SKIP) scr_put_rgb(x0, sy, 0xEABD, 0x848484, bg, 0);
       else scr_put_rgb(x0, sy, 0xEB2C, 0x73C991, bg, 0);	/* run */
     }
+  }
+  if (ne_on() && y >= NE.a.y && y <= NE.b.y) {	/* the bytes the next edit replaces, tinted like a removed line */
+    size_t xa = (y == NE.a.y) ? NE.a.x : 0, xb = (y == NE.b.y) ? NE.b.x : r->len;
+    size_t ca, cb;
+    int i;
+    if (xa > r->len) xa = r->len;
+    if (xb > r->len) xb = r->len;
+    if (from == 0) NE.row = sy;	/* it is on the screen: no arrow at the edge */
+    ca = vcol(r, y, xa);
+    cb = xb > xa ? vcol(r, y, xb) : ca + 1;	/* an insertion: one cell, so it can be seen at all */
+    for (i = (int)ca; i < (int)cb; i++)
+      if ((size_t)i >= left && (size_t)i < right) scr_set_bg(x0 + gw + i - (int)left, sy, ui_color(C_DIFF_DEL));
+    if (from == 0 && y == NE.a.y)	/* the gutter arrow points at the line it is on */
+      scr_put_rgb(x0, sy, 0xEA9C, ui_color(C_ACCENT), ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG), 0);
   }
   if (from == 0 && gw >= 4) {	/* the fold's chevron: folded, or where the cursor is */
     if (T->nfold && is_folded(y)) scr_put(x0 + gw - 2, sy, 0xEAB6, S_GUTTER_CUR);
@@ -4135,6 +4208,34 @@ static void draw_ghost_rows (int gw) {
 }
 
 
+/*
+** What the next edit puts there, on the rows the view block made for it,
+** and - when its line is not on the screen at all - the arrow at the top
+** or the bottom edge that points the way to it, as VS Code shows it.
+*/
+static void draw_nedit_rows (int gw) {
+  size_t after, k;
+  int rows, r, y0;
+  if (!ne_on()) return;
+  if (NE.row < 0) {	/* nothing drew its line this frame: it is off the screen */
+    int sy = NE.a.y < T->top ? L.text_y : L.text_y + L.text_h - 1;
+    uint32_t cp = NE.a.y < T->top ? 0xEAA1 : 0xEA9A;	/* codicon arrow-up, arrow-down */
+    scr_put_rgb(L.ed_x, sy, cp, ui_color(C_ACCENT), ui_color(C_EDITOR_BG), 0);
+    return;
+  }
+  if (!ne_rows_at(&after, &rows)) return;
+  if (!VB.on || VB.after != after || VB.rows != rows) return;	/* a peek took the block: only the tint shows */
+  if ((r = vb_start()) < 0) return;
+  y0 = L.text_y + r;
+  for (k = 0; k < NE.nline && y0 + (int)k < L.text_y + L.text_h; k++) {
+    int sy = y0 + (int)k, i, w = text_cols();
+    scr_fill(L.ed_x, sy, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+    for (i = 0; i < w; i++) scr_set_bg(L.ed_x + gw + i, sy, ui_color(C_DIFF_ADD));
+    put_ghost(sy, gw, 0, NE.line[k], E.wrap ? 0 : T->left, ui_color(C_DIFF_ADD));
+  }
+}
+
+
 /* the diff's file opened at the line of its cursor (Enter, or the title's icon) */
 static void diff_edit_file (void) {
   size_t line = diff_line();
@@ -4195,6 +4296,7 @@ static void draw_group (int other) {
       int lit = !other && cursor_brackets(&ba, &bb);
       if (!other) conflict_reset();	/* the conflicts' links, drawn again */
       LN.nhit = 0;
+      NE.row = -1;	/* draw_row sets it when the next edit's line is drawn */
       for (sy = 0; sy < L.text_h; sy++) {
         size_t y, from, to, left;
         int lens;
@@ -4234,6 +4336,7 @@ static void draw_group (int other) {
     if (!other) draw_dirty_peek();
     if (!other) draw_exception();
     if (!other) draw_ghost_rows(gw);
+    if (!other) draw_nedit_rows(gw);
     if (E.find_open && !other) draw_find();
     if (!other) {
       draw_signature(gw);
@@ -7718,6 +7821,7 @@ static void gh_trigger (void) {
 static void gh_dismiss (void) {
   gh_clear();
   gh_rest(1);	/* it stays gone until the cursor or the text moves */
+  ne_suppress();	/* one Esc puts away everything the server offered, as in VS Code */
 }
 
 
@@ -7827,6 +7931,238 @@ static int gh_key (int k) {
     return 1;
   }
   return 0;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The next edit itself: what came, what Tab does with it
+** (its geometry is up with the inlay hints, which it is drawn like)
+** ===================================================================
+*/
+
+static void ne_drop_text (void) {
+  size_t i;
+  for (i = 0; i < NE.nline; i++) free(NE.line[i]);
+  free(NE.line);
+  NE.line = NULL;
+  NE.nline = 0;
+  free(NE.text);
+  NE.text = NULL;
+}
+
+
+static void ne_clear (void) {
+  ne_drop_text();
+  NE.d = NULL;
+}
+
+
+/* what the edit puts there, by line, tabs as spaces: the rows that are drawn */
+static void ne_build (void) {
+  const char *s;
+  size_t i, rows = 1;
+  int tw;
+  if (NE.text == NULL || !HAS_DOC) return;
+  tw = T->doc->indent;
+  if (tw < 1 || tw > 16) tw = TABW;
+  for (i = 0; NE.text[i]; i++)
+    if (NE.text[i] == '\n') rows++;
+  NE.line = (char **)xmalloc(rows * sizeof(char *));
+  for (s = NE.text; ; ) {
+    const char *e = strchr(s, '\n');
+    size_t len = e ? (size_t)(e - s) : strlen(s);
+    Buf b;
+    buf_init(&b);
+    for (i = 0; i < len; i++) {	/* drawn with tabs as spaces, like a peek's lines */
+      if (s[i] == '\t') {
+        int q;
+        for (q = 0; q < tw; q++) buf_putc(&b, ' ');
+      }
+      else buf_putc(&b, (unsigned char)s[i] < 32 ? ' ' : s[i]);
+    }
+    buf_putc(&b, '\0');
+    NE.line[NE.nline++] = buf_take(&b);
+    if (e == NULL) break;
+    s = e + 1;
+  }
+}
+
+
+/* the debounce starts again on the text as it is now; asked: do not ask about it again */
+static void ne_rest (int asked) {
+  if (!HAS_DOC) return;
+  NE.ask_d = T->doc;
+  NE.ask_edits = T->doc->edits;
+  NE.ask_at = T->cur;
+  NE.asked = asked;
+  NE.pending = 0;
+  NE.since = os_now_us();
+}
+
+
+/* it is not wanted any more: NE_ACCEPTED, NE_REJECTED or NE_IGNORED tells the server which */
+static void ne_drop (int what) {
+  lsp_nedit_done(what);
+  ne_clear();
+}
+
+
+void on_nedit (Doc *d, unsigned long edits, Pos at, NEditItem *v, size_t n) {
+  size_t i;
+  NE.pending = 0;
+  if (d != NE.ask_d || edits != NE.ask_edits) {	/* late: the text moved on */
+    for (i = 0; i < n; i++) free(v[i].text);
+    free(v);
+    return;
+  }
+  ne_clear();	/* the one before it is already reported: nedits() forgot it */
+  if (n == 0) {
+    free(v);
+    return;
+  }
+  NE.d = d;
+  NE.edits = edits;
+  NE.at = at;
+  NE.a = v[0].a;
+  NE.b = v[0].b;
+  NE.text = v[0].text;	/* taken */
+  for (i = 1; i < n; i++) free(v[i].text);
+  free(v);
+  if (NE.a.y >= d->n || NE.b.y >= d->n || pos_cmp(NE.a, NE.b) > 0) {	/* not a range of this text */
+    ne_clear();
+    return;
+  }
+  {	/* an edit that changes nothing is no edit: VS Code shows none either */
+    size_t len = 0;
+    char *have = doc_text(d, NE.a, NE.b, &len);
+    int same = have != NULL && strlen(NE.text) == len && memcmp(have, NE.text, len) == 0;
+    free(have);
+    if (same) {
+      ne_clear();
+      return;
+    }
+  }
+  ne_build();
+  lsp_nedit_shown();	/* Copilot counts what it showed */
+}
+
+
+/*
+** When the document has rested: ask what edit it calls for elsewhere.
+** The wait is longer than the ghost text's, so the suggestion at the
+** cursor is always asked for first and has answered (or not) by the time
+** this goes, and nothing is asked at all while one of those is on the
+** screen or on its way: VS Code prefers the cursor's, and the two never
+** go out over the same keystroke.
+**
+** Moving the cursor starts the wait again but keeps the edit that is
+** showing - it is somewhere else in the file, so walking towards it must
+** not make it disappear, and that is what lets Tab jump to it and then
+** find it still there. Only a change to the text throws it away.
+*/
+static void nedit_idle (void) {
+  if (!opt.next_edit || !HAS_DOC || G->diff || T->page || T->md || T->sel || T->nmc ||
+      E.focus != F_EDITOR || comp_showing() || !lsp_nedit_able(T->doc)) return;
+  if (NE.ask_d != T->doc || NE.ask_edits != T->doc->edits) {
+    if (NE.pending) lsp_nedit_cancel();	/* typed again: the answer on its way is dropped */
+    if (NE.text) ne_drop(NE_IGNORED);	/* and what it offered for the old text is past */
+    ne_rest(0);
+    return;
+  }
+  if (pos_cmp(NE.ask_at, T->cur) != 0) {	/* only moved: the edit stays put, the wait starts again */
+    if (NE.pending) lsp_nedit_cancel();
+    ne_rest(0);	/* which is why Tab may jump to it and still find it there */
+    return;
+  }
+  if (NE.text != NULL || GH.text != NULL || GH.pending) return;	/* the cursor's comes first */
+  if (!NE.asked && os_now_us() - NE.since > NEDIT_WAIT) {
+    NE.asked = 1;
+    NE.pending = 1;
+    lsp_nedit(T->doc, T->cur);
+  }
+}
+
+
+/* Tab, once the cursor is not on its line yet: VS Code takes the cursor there */
+static void ne_jump (void) {
+  if (!ne_on()) return;
+  T->cur = NE.a;
+  if (T->cur.x > row_at(T->cur.y)->len) T->cur.x = row_at(T->cur.y)->len;
+  T->want = col_of(row_at(T->cur.y), T->cur.x);
+  scroll_to_cursor();
+}
+
+
+/* Tab again: what the server proposed goes in, in place of the range it named */
+static void ne_accept (void) {
+  Pos a, b, e, end;
+  char *text;
+  if (!ne_on()) return;
+  a = NE.a;
+  b = NE.b;
+  end = doc_end(T->doc);
+  if (pos_cmp(a, end) > 0) a = end;
+  if (pos_cmp(b, end) > 0) b = end;
+  text = xstrdup(NE.text);
+  doc_group(T->doc);
+  ed_delete(a, b);
+  e = ed_insert(a, text, strlen(text));
+  T->cur = e;
+  T->want = col_of(row_at(e.y), e.x);
+  doc_group(T->doc);
+  free(text);
+  lsp_nedit_accept();	/* the edit's command, through workspace/executeCommand */
+  ne_drop(NE_ACCEPTED);
+  ne_rest(0);	/* an edit may follow this one, as in VS Code */
+  scroll_to_cursor();
+}
+
+
+static void ne_dismiss (void) {
+  ne_drop(NE_REJECTED);
+  ne_rest(1);	/* it stays gone until the cursor or the text moves */
+}
+
+
+/*
+** Esc on the ghost text puts the next edit away too. The two are never on
+** the screen together - the cursor's wins - but one is waiting behind the
+** other, and in VS Code a single Esc leaves nothing of either.
+*/
+static void ne_suppress (void) {
+  if (NE.text != NULL) ne_drop(NE_REJECTED);
+  ne_rest(1);
+}
+
+
+/* a key while a next edit shows; 1: it was its */
+static int ne_key (int k) {
+  int code = KEY_CODE(k);
+  if (!ne_on()) return 0;
+  if (code == K_TAB && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) {
+    if (T->cur.y >= NE.a.y && T->cur.y <= NE.b.y) ne_accept();	/* already there: it goes in */
+    else ne_jump();
+    return 1;
+  }
+  if (code == K_ESC && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) {
+    ne_dismiss();
+    return 1;
+  }
+  return 0;
+}
+
+
+/* editor.action.inlineSuggest.jump */
+static void ne_jump_cmd (void) {
+  if (!ne_on()) {
+    toast(0, "No next edit suggestion");
+    return;
+  }
+  if (T->cur.y >= NE.a.y && T->cur.y <= NE.b.y) ne_accept();
+  else ne_jump();
 }
 
 /* }================================================================== */
@@ -13592,9 +13928,15 @@ static void view_blocks_update (int other) {
   }
   else if (!dirty_peek_at(&after, &rows) && !exception_at(&after, &rows)) {
     /* an inline suggestion of several lines: its rows push the lines under it down, like a peek's */
-    if (!gh_rows_at(&after, &rows) || after >= T->doc->n) return;
+    if (gh_rows_at(&after, &rows)) {
+      if (after >= T->doc->n) return;
+      view_block_set(after, rows);
+      return;	/* no vb_fit: ghost text must never scroll the view by itself */
+    }
+    /* and what a next edit would put there, under the line it replaces */
+    if (!ne_rows_at(&after, &rows) || after >= T->doc->n) return;
     view_block_set(after, rows);
-    return;	/* no vb_fit: ghost text must never scroll the view by itself */
+    return;	/* nor a next edit: VS Code points at it instead of scrolling */
   }
   if (after >= T->doc->n) return;
   view_block_set(after, rows);
@@ -14819,6 +15161,13 @@ static void run_command (int cmd) {
     case CMD_INLINE_HIDE: gh_dismiss(); break;
     case CMD_INLINE_NEXT: gh_cycle(1); break;
     case CMD_INLINE_PREV: gh_cycle(-1); break;
+    case CMD_NEDIT_JUMP: ne_jump_cmd(); break;
+    case CMD_NEDIT_TOGGLE:
+      opt.next_edit = !opt.next_edit;
+      settings_put("github.copilot.nextEditSuggestions.enabled", opt.next_edit ? "true" : "false");
+      if (!opt.next_edit && NE.text) ne_drop(NE_IGNORED);
+      toast(0, "Next edit suggestions %s", opt.next_edit ? "on" : "off");
+      break;
     case CMD_COPILOT_SIGNIN: lsp_inline_signin(); break;
     case CMD_COPILOT_SIGNOUT: lsp_inline_signout(); break;
     case CMD_COPILOT_STATUS: copilot_status(); break;
@@ -17820,6 +18169,7 @@ static void editor_key (int k) {
   }
   if (CP.open && comp_key(k)) return;
   if (gh_key(k)) return;	/* editor.inlineSuggest: Tab takes the ghost text, Esc drops it */
+  if (ne_key(k)) return;	/* and after it the next edit: Tab jumps to it, Tab again applies it */
   if (k == K_TAB && E.tab_focus) {	/* Toggle Tab Key Moves Focus: out of the editor */
     if (E.side) E.focus = F_SIDE;
     else if (E.panel) E.focus = F_PANEL;
@@ -19134,6 +19484,7 @@ int main (int argc, char **argv) {
       hl_idle();
       bulb_idle();
       ghost_idle();
+      nedit_idle();
       extras_idle();
       side_idle(E.view);
       files_index_idle();

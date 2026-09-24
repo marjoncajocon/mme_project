@@ -1,0 +1,63 @@
+---- cursor 119,16
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │
+|      deep/one/two              │
+|     docs                      │
+|      many                      │
+|     src                       │
+|        alpha.c                 │
+|       beta.c                  │                        Command Palette...   Ctrl+Shift+P
+|        gamma.h                 │
+|     app.js                    │                             Go to File...   Ctrl+P
+|      main.c                    │
+|      package.json              │                              Open File...   Ctrl+O
+|      readme.md                 │
+|      site.css                  │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,17
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │
+|      deep/one/two              │
+|     docs                      │
+|        guide.md                │
+|     many                      │
+|      src                       │
+|       alpha.c                 │                        Command Palette...   Ctrl+Shift+P
+|        beta.c                  │
+|       gamma.h                 │                             Go to File...   Ctrl+P
+|      app.js                    │
+|      main.c                    │                              Open File...   Ctrl+O
+|      package.json              │
+|      readme.md                 │                            Open Folder...
+|      site.css                  │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

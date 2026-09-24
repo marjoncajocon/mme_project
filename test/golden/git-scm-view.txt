@@ -1,0 +1,32 @@
+---- cursor 6,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      SOURCE CONTROL          │
+|      main                     │
+|      Message (Ctrl+Enter to co  │
+|     Changes                2  │
+|        tracked.c             M │
+|▎      untracked.txt         U │
+|  2   GRAPH                     │
+|    ◉   main  third commit: ad │
+|     ● second commit: notes.md r │
+|    ● first commit: tracked.c a │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|  main*                                                                                                             
+exited=0

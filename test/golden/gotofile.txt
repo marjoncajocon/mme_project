@@ -1,0 +1,63 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER
+|▎   OPEN EDIT  Search files by name (append : to go to line, @ to go to symbol, # for the workspace'
+|    ───────────
+|    PROJ        app.js
+|      deep/one   main.c
+|     docs       package.json
+|      many       readme.md
+|     src        site.css
+|      app.js     three.txt  deep/one/two
+|     main.c     guide.md  docs
+|      package.   file00.txt  many
+|     readme.m   file01.txt  many
+|      site.css   file02.txt  many
+|                  file03.txt  many
+|                  file04.txt  many
+|                  file05.txt  many
+|                  file06.txt  many
+|                  file07.txt  many
+|
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 21,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER
+|▎   OPEN EDIT  beta
+|    ───────────
+|    PROJ        beta.c  src
+|      deep/one
+|     docs                      │
+|      many                      │
+|     src                       │
+|      app.js                    │
+|     main.c                    │                        Command Palette...   Ctrl+Shift+P
+|      package.json              │
+|     readme.md                 │                             Go to File...   Ctrl+P
+|      site.css                  │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

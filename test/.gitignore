@@ -1,0 +1,17 @@
+# everything here is made by mkfix.py, mkprof.py, build.bat or a run;
+# what is committed is the runner, the scenarios, the goldens and the
+# programs' sources
+
+fix/
+tree/
+ptree/
+bin/
+pbin/
+work/
+*.exe
+*.pdb
+*.obj
+
+# python
+__pycache__/
+*.pyc

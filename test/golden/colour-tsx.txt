@@ -1,0 +1,19 @@
+{868686}    {6e7681}   {cccccc}1  {c586c0}import {9cdcfe}React{cccccc}, {ffd700}{ {9cdcfe}useState{cccccc}, {9cdcfe}useEffect {ffd700}} {c586c0}from {ce9178}"react"{cccccc};                                              {a3719f}?{44a793}?{83b6d1}??{a3719f}?{a9a9a9}?      {cccccc}?
+{868686} ?  {6e7681}   2                                                                                                   {83b6d1}?{44a793}??{4b83b1}?        {434343}
+{868686}    {6e7681}   3  {c586c0}export {569cd6}interface {4ec9b0}CardProps {ffd700}{                                                                     {4b83b1}?{a9a9a9}?{ab7a66}??        {434343}
+{868686} ?  {6e7681}   4  {404040}? {9cdcfe}title{d4d4d4}: {4ec9b0}string{cccccc};                                                                                 {a3719f}?{4b83b1}?{a9a9a9}?{83b6d1}??{44a793}?      {434343}
+{868686}    {6e7681}   5  {404040}? {9cdcfe}count{d4d4d4}: {4ec9b0}number{cccccc};                                                                                 {b6b68e}???{4b83b1}?        {434343}
+{868686} ?  {6e7681}   6  {404040}? {dcdcaa}onPick{d4d4d4}?: {da70d6}({9cdcfe}id{d4d4d4}: {4ec9b0}number{da70d6}) {569cd6}=> {4ec9b0}void{cccccc};                                                                 {a3719f}?{83b6d1}?{ab7a66}?{a9a9a9}?{83b6d1}?       {434343}
+{868686}    {6e7681}   7  {ffd700}}                                                                                                {a9a9a9}?{83b6d1}??{b6b68e}?{83b6d1}?{ab7a66}??{a9a9a9}?    {434343}
+{868686} ?  {6e7681}   8                                                                                                   {a9a9a9}?           {434343}
+{868686}    {6e7681}   9  {569cd6}type {4ec9b0}Mode {d4d4d4}= {ce9178}"list" {d4d4d4}| {ce9178}"grid"{cccccc};                                                                     {a3719f}??          {434343}
+{868686} ?  {6e7681}  10                                                                                                               {434343}
+{868686}    {6e7681}  11  {569cd6}const {4fc1ff}DEFAULT_MODE{d4d4d4}: {4ec9b0}Mode {d4d4d4}= {ce9178}"grid"{cccccc};                                                                           {434343}
+{868686}    {6e7681}  12                                                                                                               {434343}
+{868686}    {6e7681}  13  {c586c0}export {569cd6}function {dcdcaa}Card{ffd700}({da70d6}{ {9cdcfe}title{cccccc}, {9cdcfe}count{cccccc}, {9cdcfe}onPick {da70d6}}{d4d4d4}: {4ec9b0}CardProps{ffd700}) {                                                  {434343}
+{868686}    {6e7681}  14  {404040}? {569cd6}const {da70d6}[{4fc1ff}mode{cccccc}, {4fc1ff}setMode{da70d6}] {d4d4d4}= {dcdcaa}useState{cccccc}<{4ec9b0}Mode{cccccc}>{da70d6}({4fc1ff}DEFAULT_MODE{da70d6}){cccccc};                                                      {434343}
+{868686}    {6e7681}  15  {404040}? {569cd6}const {da70d6}[{4fc1ff}open{cccccc}, {4fc1ff}setOpen{da70d6}] {d4d4d4}= {dcdcaa}useState{da70d6}({569cd6}false{da70d6}){cccccc};                                                                   {434343}
+{868686}    {6e7681}  16  {404040}?                                                                                                            {434343}
+{868686}    {6e7681}  17  {404040}? {dcdcaa}useEffect{da70d6}({179fff}() {569cd6}=> {179fff}{                                                                                          {434343}
+{868686}    {6e7681}  18  {404040}? ? {c586c0}if {ffd700}({9cdcfe}count {d4d4d4}> {b5cea8}10{ffd700}) {dcdcaa}setOpen{ffd700}({569cd6}true{ffd700}){cccccc};                                                                           {434343}
+exited=0

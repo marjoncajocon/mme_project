@@ -1,0 +1,63 @@
+---- cursor 16,23
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  
+|     edit.c   make
+|       1  /* edit.c - a small C file the editing scenarios type into. */                                   ⣿⣿⠉⠉⠉⠉⠁
+|      2  #include <stdio.h>                                                                               ⣒⣂⡀
+|       3  #include <stdlib.h>                                                                              ⠿
+|      4  #include <string.h>                                                                              ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉      ▬
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14                                                                                                               ▬
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21 static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                             Ln 21, Col 7 (3 selections)  Tab Size: 4  UTF-8  LF  C  
+---- cursor 12,23
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  ●
+|     edit.c   make
+|       1  /* edit.c - a small C file the editing scenarios type into. */                                   ⣿⣿⠉⠉⠉⠉⠁
+|      2  #include <stdio.h>                                                                               ⣒⣂⡀
+|       3  #include <stdlib.h>                                                                              ⠿
+|      4  #include <string.h>                                                                              ⣭⣭⣤⠤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉      ▬
+|      11  } Point;
+|      12
+|      13  XX int total = 0;
+|      14                                                                                                               ▬
+|      15  /* adds two numbers and remembers the sum */
+|      16  XX int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21 XX Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                             Ln 21, Col 3 (3 selections)  Tab Size: 4  UTF-8  LF  C  
+exited=0

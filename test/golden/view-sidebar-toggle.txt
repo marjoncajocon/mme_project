@@ -1,0 +1,63 @@
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|                                          Command Palette...   Ctrl+Shift+P
+|
+|                                               Go to File...   Ctrl+P
+|
+|                                                 Open File...   Ctrl+O
+|
+|                                               Open Folder...
+|
+|                                              Open Project...   Ctrl+R
+|
+|                                                     New File   Ctrl+N
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │
+|      deep/one/two              │
+|     docs                      │
+|      many                      │
+|     src                       │
+|      app.js                    │
+|     main.c                    │                        Command Palette...   Ctrl+Shift+P
+|      package.json              │
+|     readme.md                 │                             Go to File...   Ctrl+P
+|      site.css                  │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

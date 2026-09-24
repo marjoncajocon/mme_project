@@ -1,0 +1,63 @@
+---- cursor 10,17
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  
+|     edit.c
+|       1  /* edit.c - a small C file the editing scenarios type into. */                                   ⣿⣿⠉⠉⠉⠉⠁
+|      2  #include <stdio.h>                                                                               ⣒⣂⡀
+|       3  #include <stdlib.h>                                                                              ⠿
+|      4  #include <string.h>                                                                              ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉      ─
+|      11  } Point;
+|      12
+|      13  static·int·total·=·0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                              Ln 15, Col 1 (23 selected)  Tab Size: 4  UTF-8  LF  C  
+---- cursor 10,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  ●
+|     edit.c
+|      16  static int add (int a, int b) {                                                                  ⣿⣿⠉⠉⠉⠉⠁
+|     18  │   return a + b;                                                                                ⣒⣂⡀
+|      19  }                                                                                                ⠿
+|     20                                                                                                   ⣭⣭⣥⡤⠄
+|      21  static Point make (int x, int y) {                                                               ⠟⠛
+|     22  │   Point p;                                                                                     ⣿⡏⠉⠁
+|      23  │   p.x = x;                                                                                     ⣋⣁⣀⡀
+|     24  │   p.y = y;                                                                                     ⣿⠿⠗
+|      25  │   return p;                                                                                    ⡹⠿⠿⠃
+|     26  }                                                                                                ⣟⣛⡛⠋⠉⠉
+|      27
+|      28  int main (int argc, char **argv) {
+|      29  │   Point p = make(1, 2);
+|      30  │   const char *name = "mme";
+|      31  │   double ratio = 1.5;
+|      32  │   int i;
+|      33  │   for (i = 0; i < MAXN; i++) {
+|      34  │   │   if (i % 2 == 0) continue;
+|      35  │   │   total = add(total, i);
+|      36  │   }
+|      37  │   printf("%s %d %d %f %d\n", name, p.x, p.y, ratio, argc);
+|      38  │   return argv == NULL ? 1 : 0;
+|      39  }
+|      40  static int total = 0;
+|     41
+|      42                                                                                                               ─
+|                                                                            Ln 42, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

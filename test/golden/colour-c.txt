@@ -1,0 +1,19 @@
+{868686}    {6e7681}   {cccccc}1  {6a9955}/* edit.c - a small C file the editing scenarios type into. */                                   {5b804a}???????     {cccccc}?
+{868686} ?  {6e7681}   2  {c586c0}#include {ce9178}<stdio.h>                                                                               {a3719f}?{4b83b1}?{a9a9a9}?         {434343}
+{868686}    {6e7681}   3  {c586c0}#include {ce9178}<stdlib.h>                                                                              {4b83b1}?           {434343}
+{868686} ?  {6e7681}   4  {c586c0}#include {ce9178}<string.h>                                                                              {4b83b1}?{83b6d1}?{a9a9a9}?{5b804a}??       {434343}
+{868686}    {6e7681}   5                                                                                                   {83b6d1}?{a9a9a9}?          {434343}
+{868686} ?  {6e7681}   6  {c586c0}#define {569cd6}MAXN {b5cea8}64                                                                                  {4b83b1}?{44a793}?{4b83b1}?{83b6d1}?        {434343}
+{868686}    {6e7681}   7                                                                                                   {a3719f}?{83b6d1}?{4b83b1}?{83b6d1}?        {434343}
+{868686} ?  {6e7681}   8  {569cd6}typedef struct {cccccc}Point {ffd700}{                                                                           {44a793}?{83b6d1}?{a9a9a9}?         {434343}
+{868686}    {6e7681}   9  {404040}?   {569cd6}int {cccccc}x;                                                                                       {a3719f}?{a9a9a9}?{45a0d2}?{a9a9a9}?        {434343}
+{868686} ?  {6e7681}  10  {404040}?   {569cd6}int {cccccc}y;                                                                                       {b6b68e}?{a9a9a9}?{ab7a66}?{83b6d1}?{a9a9a9}?{83b6d1}?      {434343}
+{868686}    {6e7681}  11  {ffd700}} {cccccc}Point;                                                                                                     {434343}
+{868686}    {6e7681}  12                                                                                                               {434343}
+{868686}    {6e7681}  13  {569cd6}static int {cccccc}total {d4d4d4}= {b5cea8}0{cccccc};                                                                                        {434343}
+{868686}    {6e7681}  14                                                                                                               {434343}
+{868686}    {6e7681}  15  {6a9955}/* adds two numbers and remembers the sum */                                                                 {434343}
+{868686}    {6e7681}  16  {569cd6}static int {dcdcaa}add {ffd700}({569cd6}int {9cdcfe}a{cccccc}, {569cd6}int {9cdcfe}b{ffd700}) {                                                                              {434343}
+{868686}    {6e7681}  17  {404040}?   {cccccc}total {d4d4d4}+= {cccccc}a {d4d4d4}+ {cccccc}b;
+{868686}    {6e7681}  18  {404040}?   {c586c0}return {cccccc}a {d4d4d4}+ {cccccc}b;
+exited=0

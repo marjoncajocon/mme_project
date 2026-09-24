@@ -1,0 +1,63 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      sticky.c  
+|     sticky.c   outer
+|       5  int outer (int n) {                                                                              ⠭⠭⠤⠤⠤⠄
+|     28  │   │   │   │   total += 16 * i + j;                                                             ⢿⡿
+|      29  │   │   │   │   total += 17 * i + j;                                                             ⠈⢿⣭⡥
+|     30  │   │   │   │   total += 18 * i + j;                                                              ⢸⣿⡇
+|      31  │   │   │   │   total += 19 * i + j;                                                              ⢸⣿⡇
+|     32  │   │   │   │   total += 20 * i + j;                                                              ⢸⣿⣷
+|      33  │   │   │   │   total += 21 * i + j;                                                              ⢸⣿⣿
+|     34  │   │   │   │   total += 22 * i + j;                                                              ⢸⣿⣿
+|      35  │   │   │   │   total += 23 * i + j;                                                              ⢸⣿⣿
+|     36  │   │   │   │   total += 24 * i + j;                                                              ⢸⣿⣿
+|      37  │   │   │   │   total += 25 * i + j;                                                              ⢸⣿⣿        ─
+|      38  │   │   │   │   total += 26 * i + j;                                                              ⢸⣿⣿
+|      39  │   │   │   │   total += 27 * i + j;                                                              ⡸⠿⠿
+|      40  │   │   │   │   total += 28 * i + j;                                                             ⡮⠤
+|      41  │   │   │   │   total += 29 * i + j;                                                             ⣶⡶⠤
+|      42  │   │   │   │   total += 30 * i + j;                                                             ⠁
+|      43  │   │   │   │   total += 31 * i + j;
+|      44  │   │   │   │   total += 32 * i + j;
+|      45  │   │   │   │   total += 33 * i + j;
+|      46  │   │   │   │   total += 34 * i + j;
+|      47  │   │   │   │   total += 35 * i + j;
+|      48  │   │   │   │   total += 36 * i + j;
+|      49  │   │   │   │   total += 37 * i + j;
+|      50  │   │   │   │   total += 38 * i + j;
+|     51  │   │   │   │   total += 39 * i + j;
+|      52  │   │   │   }
+|                                                                            Ln 27, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      sticky.c  
+|     sticky.c   outer
+|       5  int outer (int n) {                                                                              ⠭⠭⠤⠤⠤⠄
+|     54  │   }                                                                                            ⢿⡿
+|      55  │   return total;                                                                                ⠈⢿⣭⡥
+|     56  }                                                                                                 ⢸⣿⡇
+|      57                                                                                                    ⢸⣿⡇
+|     58  int main (void) {                                                                                 ⢸⣿⣷
+|      59  │   printf("%d\n", outer(3));                                                                     ⢸⣿⣿
+|     60  │   return 0;                                                                                     ⢸⣿⣿
+|      61  }                                                                                                 ⢸⣿⣿
+|     62                                                                                                    ⢸⣿⣿
+|                                                                                                            ⢸⣿⣿
+|                                                                                                            ⢸⣿⣿
+|                                                                                                            ⡸⠿⠿
+|                                                                                                           ⡮⠤
+|                                                                                                           ⣶⡶⠤
+|                                                                                                           ⠁
+|
+|
+|
+|
+|
+|                                                                                                                       ─
+|
+|
+| 
+|
+|                                                                            Ln 53, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

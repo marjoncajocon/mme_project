@@ -1,0 +1,32 @@
+---- cursor 27,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    >Next Edit
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  Jump to Next Edit Suggestion  Tab                                                         ⣒⣂⡀
+|       3  #incl  View: Move Editor into Next Group  Ctrl+Alt+Right                                         ⠿
+|      4  #incl  mme: Toggle Next Edit Suggestions                                                         ⣭⣭⣥⡤⠄
+|       5         View: Join Editor Group with Next Group                                                   ⠟⠛
+|      6  #defi  Accept Next Word Of Inline Suggestion  Ctrl+Right                                         ⣿⡏⠉⠁
+|       7         View: Reopen Editor With Hex Editor                                                       ⣋⣁⣀⡀
+|      8  typed  Terminal: Run Selected Text In Active Terminal                                            ⣿⠿⠗
+|       9  │   i                                                                                            ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

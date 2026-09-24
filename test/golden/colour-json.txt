@@ -1,0 +1,19 @@
+{868686}    {6e7681}   {cccccc}1{6e7681}? {ffd700}{{cccccc}                                                                                                {a9a9a9}?{ab7a66}?{a9a9a9}?         {cccccc}?
+{868686} ?  {6e7681}   2  {707070}? {9cdcfe}"name"{cccccc}: {ce9178}"fixture"{cccccc},                                                                             {83b6d1}?{97ab8c}?
+{868686}    {6e7681}   3  {707070}? {9cdcfe}"version"{cccccc}: {ce9178}"1.0.0"{cccccc},                                                                            {83b6d1}??{ab7a66}??
+{868686} ?  {6e7681}   4  {707070}? {9cdcfe}"private"{cccccc}: {569cd6}true{cccccc},                                                                               {83b6d1}?{97ab8c}?{ab7a66}?
+{868686}    {6e7681}   5  {707070}? {9cdcfe}"count"{cccccc}: {b5cea8}42{cccccc},
+{868686} ?  {6e7681}   6  {707070}? {9cdcfe}"ratio"{cccccc}: {b5cea8}1.5{cccccc},
+{868686}    {6e7681}   7  {707070}? {9cdcfe}"on"{cccccc}: {569cd6}true{cccccc},
+{868686} ?  {6e7681}   8  {707070}? {9cdcfe}"off"{cccccc}: {569cd6}false{cccccc},
+{868686}    {6e7681}   9  {707070}? {9cdcfe}"nothing"{cccccc}: {569cd6}null{cccccc},
+{868686} ?  {6e7681}  10  {707070}? {9cdcfe}"tags"{cccccc}: {da70d6}[{ce9178}"red"{cccccc}, {ce9178}"green"{cccccc}, {ce9178}"blue"{da70d6}]{cccccc},
+{868686}    {6e7681}  11  {707070}? {9cdcfe}"nested"{cccccc}: {da70d6}{
+{868686}    {6e7681}  12  {707070}? {404040}? {9cdcfe}"a"{cccccc}: {b5cea8}1{cccccc},
+{868686}    {6e7681}  13  {707070}? {404040}? {9cdcfe}"b"{cccccc}: {179fff}[{b5cea8}2{cccccc}, {b5cea8}3{179fff}]{cccccc},
+{868686}    {6e7681}  14  {707070}? {404040}? {9cdcfe}"c"{cccccc}: {179fff}{ {9cdcfe}"d"{cccccc}: {ce9178}"deep" {179fff}}
+{868686}    {6e7681}  15  {707070}? {da70d6}}
+{868686}    {6e7681}  16  {ffd700}}{cccccc}
+{868686}    {6e7681}  17
+{868686}    {cccccc}
+exited=0

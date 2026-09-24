@@ -1,0 +1,63 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    Type to search in keybindings
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  Open Keyboard Shortcuts (JSON)  keybindings.json                                          ⣒⣂⡀
+|       3  #incl  New File                       Ctrl+N  workbench.action.files.newUntitledFile   Defau     ⠿
+|      4  #incl  Open File...                   Ctrl+O  workbench.action.files.openFile   Default          ⣭⣭⣥⡤⠄
+|       5         Open Folder...                 -  workbench.action.files.openFolder                       ⠟⠛
+|      6  #defi  Open Project...                Ctrl+R  workbench.action.openRecent   Default              ⣿⡏⠉⠁
+|       7         Save                           Ctrl+S  workbench.action.files.save   Default              ⣋⣁⣀⡀
+|      8  typed  Save As...                     Ctrl+Shift+S  workbench.action.files.saveAs   Default      ⣿⠿⠗
+|       9  │   i  Close Editor                   Ctrl+W  workbench.action.closeActiveEditor   Default       ⡹⠿⠿⠃
+|     10  │   i  Exit                           Ctrl+Q  workbench.action.quit   Default                    ⠟⠛⠛⠋⠉⠉
+|      11  } Poi  Undo                           Ctrl+Z  undo   Default
+|      12         Redo                           Ctrl+Y  redo   Default
+|      13  stati  Cut                            Ctrl+X  editor.action.clipboardCutAction   Default
+|      14         Copy                           Ctrl+C  editor.action.clipboardCopyAction   Default
+|      15  /* ad  Paste                          Ctrl+V  editor.action.clipboardPasteAction   Default
+|      16  stati  Find                           Ctrl+F  actions.find   Default
+|      17  │   t
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 24,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    palette
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  Command Palette...             Ctrl+Shift+P  workbench.action.showCommands   Default      ⣒⣂⡀
+|       3  #incl  View: Set Panel Alignment to Center -  workbench.action.alignPanelCenter                  ⠿
+|      4  #incl                                                                                            ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

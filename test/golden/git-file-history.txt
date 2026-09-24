@@ -1,0 +1,32 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      tracked.
+|     tracked.  Select a commit to see its changes of the file
+|       1  #incl                                                                                            ⣭⡭⠄         ─
+|      2          first commit: tracked.c and notes.md  9ae8cba • Reg Suite, <AGO>                  ⣥⡤⠄
+|       3  int k                                                                                            ▎⡤⠄
+|      4  │   return 1;                                                                                    ▎⡤⠤
+|  2    5  }                                                                                                ⣥⡤
+|      6                                                                                                   ⣥⣤⣀⣀⣀⣀⣀
+|       7  int keep_two (void) {                                                                            ⠋⠁
+|      8  │   return 2;
+|       9  }
+|     10
+|      11  int changed_here (void) {                                                                                    ▌
+|      12 ▎│   return 33;
+|      13  }
+|      14                                                                                                               ▌
+|      15 ▎int added_function (void) {                                                                                  ▌
+|      16 ▎│   return 99;
+|      17  }
+|      18
+|      19  int last (void) {
+|      20  │   return 5;
+|      21  }
+|      22
+|      23  int main (void) {
+|      24  │   printf("%d\n", keep_one() + keep_two() + changed_here() + last());
+|     25  │   return 0;
+|      26  }
+|  main*   Reg Suite, <AGO>                                           Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

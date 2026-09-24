@@ -220,6 +220,8 @@ static const Setting set[] = {
    "Controls whether to automatically show inline suggestions in the editor."},
   {"editor.inlineSuggest.showToolbar", C_EDITOR, ST_ENUM, 0, "\"onHover\"", "onHover|always|never",
    "Controls when to show the inline suggestion toolbar."},
+  {"github.copilot.nextEditSuggestions.enabled", C_EDITOR, ST_BOOL, 0, "true", NULL,
+   "Controls whether to show next edit suggestions: the edit your change calls for elsewhere in the file, pointed at in the gutter."},
   {"editor.textmateGrammars", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Color the code with the TextMate grammars of VS Code and its extensions, exactly as VS Code does; off: mme's own simpler highlighter."},
   {"editor.maxTokenizationLineLength", C_EDITOR, ST_NUM, 0, "20000", NULL,

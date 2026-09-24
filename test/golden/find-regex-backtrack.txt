@@ -1,0 +1,32 @@
+---- cursor 70,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           odd
+|      aaa.txt  
+|     aaa.txt
+|       1  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  (a+)+                         1 of 1          ⠉▬
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                 Ln -, Col -  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

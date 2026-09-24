@@ -1,0 +1,7 @@
+[181818]    [1f1f1f]  12                                                                                                               [434343]
+[181818]    [1f1f1f]  13  [264f78]static?int?total?=?0; [1f1f1f]                                                                                       [434343]
+[181818]    [1f1f1f]  14  [264f78] [1f1f1f]                                                                                                            [434343]
+[181818]    [1f1f1f]  15  [264f78]/*?add[1f1f1f]s two numbers and remembers the sum */                                                                 [434343]
+{868686}    {6e7681}  13  {569cd6}static{464646}?{569cd6}int{464646}?{cccccc}total{464646}?{d4d4d4}={464646}?{b5cea8}0{cccccc};                                                                                        {434343}
+{868686}    {6e7681}  14  {cccccc}                                                                                                             {434343}
+exited=0

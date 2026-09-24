@@ -1,0 +1,64 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  
+|     edit.c
+|       1  /* edit.c - a small C file the editing scenarios type into. */                                   ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #include <stdio.h>                                                                               ⣒⣂⡀
+|       3  #include <stdlib.h>                                                                              ⠿
+|      4  #include <string.h>                                                                              ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20                                                                                                               ▬
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|  1  1                                                                  Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C    
+<-> ? 1 ? 1                                                                  Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  ?  ?
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    GitHub Copilot
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl   Signed in as stubuser  Ready                                                            ⣒⣂⡀
+|       3  #incl   Sign Out                                                                                ⠿
+|      4  #incl   Check Status                                                                            ⣭⣭⣥⡤⠄
+|       5          Show Output  python                                                                     ⠟⠛
+|      6  #defi                                                                                            ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20                                                                                                               ▬
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|  1  1                                                                  Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C    
+exited=0

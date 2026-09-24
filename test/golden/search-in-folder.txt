@@ -1,0 +1,32 @@
+---- cursor 18,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      SEARCH                  │
+|      NeedleWord            │
+|                                │
+|▎    41 results in 41 files     │
+|       guide.md docs        1 ▐│
+|       NeedleWord lives here to▐│
+|       file00.txt many      1 ▐│
+|       row 00 NeedleWord       ▐│
+|       file01.txt many      1 ▐│
+|       row 01 NeedleWord       ▐│                        Command Palette...   Ctrl+Shift+P
+|       file02.txt many      1 ▐│
+|       row 02 NeedleWord        │                             Go to File...   Ctrl+P
+|       file03.txt many      1  │
+|        row 03 NeedleWord        │                              Open File...   Ctrl+O
+|       file04.txt many      1  │
+|        row 04 NeedleWord        │                            Open Folder...
+|       file05.txt many      1  │
+|        row 05 NeedleWord        │                           Open Project...   Ctrl+R
+|       file06.txt many      1  │
+|        row 06 NeedleWord        │                                  New File   Ctrl+N
+|       file07.txt many      1  │
+|        row 07 NeedleWord        │
+|       file08.txt many      1  │
+|        row 08 NeedleWord        │
+|       file09.txt many      1  │
+|        row 09 NeedleWord        │
+|      file10.txt many      1  │
+|        row 10 NeedleWord        │
+|                                                                                                                     
+exited=0

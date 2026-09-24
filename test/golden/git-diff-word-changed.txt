@@ -1,0 +1,36 @@
+---- cursor 82,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         wordrepo
+|      SOURCE CONTROL          │  pair.c (Working Tree)                                                   ¶   
+|      main                     │  pair.c
+|      Message (Ctrl+Enter to co  │ 1   int total (int a, int b) {           │ 1   int total (int a, int b) {
+|     Changes                1  │▎2 -     return added(a, b);              → 2 +     counted(a);
+|        pair.c                M │▎╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 3 +     return added(a, c);
+|▎    GRAPH                     │ 3   }                                    │ 4   }
+|  1  ◉   main  first commit: pa │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|  main*                                                                                                             
+[181818]     [313131] Message (Ctrl+Enter to co [181818] ?[1f1f1f] 1   int total (int a, int b) {           ? 1   int total (int a, int b) {
+[181818] ?   ? Changes               [0078d4] 1 [181818] ?[0078d4]?[1f1f1f]2 [481e20]-     return added(a, [7d2628]b[481e20]);              [0078d4]?[1f1f1f] 2 [253a1e]+ [3e6426]    counted(a);[253a1e]
+[181818]    [04395e]   ? pair.c                M [181818]?[0078d4]?[1f1f1f]?????????????????????????????????????????? 3 [253a1e]+     return added(a, [3e6426]c[253a1e]);
+[181818]??   ? GRAPH                     ?[1f1f1f] 3   }                                    ? 4   }
+exited=0

@@ -1,0 +1,63 @@
+---- cursor 119,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │
+|      deep/one/two             ▐│
+|     docs                     ▐│
+|      many                     ▐│
+|       file00.txt             ▐│
+|        file01.txt             ▐│
+|       file02.txt             ▐│                        Command Palette...   Ctrl+Shift+P
+|        file03.txt             ▐│
+|       file04.txt             ▐│                             Go to File...   Ctrl+P
+|        file05.txt             ▐│
+|        file06.txt             ▐│                              Open File...   Ctrl+O
+|        file07.txt              │
+|        file08.txt              │                            Open Folder...
+|        file09.txt              │
+|        file10.txt              │                           Open Project...   Ctrl+R
+|        file11.txt              │
+|        file12.txt              │                                  New File   Ctrl+N
+|        file13.txt              │
+|        file14.txt              │
+|        file15.txt              │
+|        file16.txt              │
+|        file17.txt              │
+|        file18.txt              │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │
+|        file06.txt              │
+|       file07.txt              │
+|        file08.txt              │
+|       file09.txt              │
+|        file10.txt             ▐│
+|       file11.txt             ▐│                        Command Palette...   Ctrl+Shift+P
+|        file12.txt             ▐│
+|       file13.txt             ▐│                             Go to File...   Ctrl+P
+|        file14.txt             ▐│
+|        file15.txt             ▐│                              Open File...   Ctrl+O
+|        file16.txt             ▐│
+|        file17.txt             ▐│                            Open Folder...
+|        file18.txt             ▐│
+|        file19.txt             ▐│                           Open Project...   Ctrl+R
+|        file20.txt              │
+|        file21.txt              │                                  New File   Ctrl+N
+|        file22.txt              │
+|        file23.txt              │
+|        file24.txt              │
+|        file25.txt              │
+|        file26.txt              │
+|        file27.txt              │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

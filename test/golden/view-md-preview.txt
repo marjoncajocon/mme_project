@@ -1,0 +1,32 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      doc.md      Preview doc.md  
+|     doc.md
+|      mme regression fixture
+|     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+|
+|     A paragraph with bold, italic, code and a link.
+|
+|     A list
+|      ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+| 
+|        • one
+|       • two
+|          ◦ nested
+|        1. first
+|        2. second
+|
+|      ▎ a quote
+|
+|
+|        int main (void) {
+|            return 0;
+|        }
+|
+|
+|      ┌───────┬───────┐
+|      │ col a │ col b │
+|     ├───────┼───────┤
+|      │ 1     │ 2     │
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

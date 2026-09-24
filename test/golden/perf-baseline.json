@@ -1,0 +1,30 @@
+{
+  "mini-big-c": {
+    "max_us": 112633,
+    "over_20ms": 2
+  },
+  "mini-boot-css": {
+    "max_us": 163609,
+    "over_20ms": 1
+  },
+  "mini-found-js": {
+    "max_us": 288099,
+    "over_20ms": 1
+  },
+  "mini-md5": {
+    "max_us": 188328,
+    "over_20ms": 1
+  },
+  "mini-mid": {
+    "max_us": 178516,
+    "over_20ms": 1
+  },
+  "perf-find-long-line": {
+    "max_us": 0,
+    "over_20ms": 0
+  },
+  "nes-tab-jumps-then-applies": {
+    "max_us": 146021,
+    "over_20ms": 1
+  }
+}

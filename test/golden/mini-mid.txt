@@ -1,0 +1,96 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      mid.js  
+|     mid.js
+|       1  // mid.js - one line of about 12000 bytes, the window of the old hang.                           ⠿⠟⠛⠛⠛⠛⠛⠒⠒⠒⠒⠒─
+|      2  var v0000=function(a,b){return a*0+b};;var v0001=function(a,b){return a*1+b};;var v0002=function(
+|       3  var tail = 1;
+|      4
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+---- cursor 106,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      mid.js  
+|     mid.js
+|       1                                                                                                   ⠿⠟⠛⠛⠛⠛⠛⠒⠒⠒⠒⠒
+|      2  turn a*257+b};;var v0258=function(a,b){return a*258+b};;var v0259=function(a,b){return a*259+b};
+|       3
+|      4
+|
+| 
+|                                                                                                                       ─
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                  Ln 2, Col 10550  Spaces: 4  UTF-8  LF  JavaScript  
+---- cursor 10,6
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           mini
+|      mid.js  
+|     mid.js
+|       1  // mid.js - one line of about 12000 bytes, the window of the old hang.                           ⠿⠟⠛⠛⠛⠛⠛⠒⠒⠒⠒⠒
+|      2  var v0000=function(a,b){return a*0+b};;var v0001=function(a,b){return a*1+b};;var v0002=function(
+|       3  var tail = 1;
+|      4
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                                                       ─
+|
+|
+|
+|
+|
+| 
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                      Ln 4, Col 1  Spaces: 4  UTF-8  LF  JavaScript  
+{868686}    {6e7681}   1  {6a9955}// mid.js - one line of about 12000 bytes, the window of the old hang.                           {5b804a}???????{83b6d1}?{4b83b1}??{a9a9a9}??
+{868686} ?  {6e7681}   2  {569cd6}var {dcdcaa}v0000{d4d4d4}={569cd6}function{ffd700}({9cdcfe}a{cccccc},{9cdcfe}b{ffd700}){{c586c0}return {9cdcfe}a{d4d4d4}*{b5cea8}0{d4d4d4}+{9cdcfe}b{ffd700}}{cccccc};;{569cd6}var {dcdcaa}v0001{d4d4d4}={569cd6}function{ffd700}({9cdcfe}a{cccccc},{9cdcfe}b{ffd700}){{c586c0}return {9cdcfe}a{d4d4d4}*{b5cea8}1{d4d4d4}+{9cdcfe}b{ffd700}}{cccccc};;{569cd6}var {dcdcaa}v0002{d4d4d4}={569cd6}function{ffd700}(
+exited=0

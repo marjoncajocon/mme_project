@@ -1,0 +1,32 @@
+---- cursor 10,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  
+|     edit.c
+|     13  static int total = 0;                                                                            ⣿⣿⠉⠉⠉⠉⠁
+|     14                                                                                                   ⣒⣂⡀
+|      15  /* adds two numbers and remembers the sum */                                                     ⠿
+|         2 references                                                                                     ⣭⣭⣥⡤⠄
+|      16  static int add (int a, int b) {                                                                  ⠟⠛
+|     17  │   total += a + : intb;                                                                         ⣿⡏⠉⠁
+|      18  │   return a + b;                                                                                ⣋⣁⣀⡀
+|     19  }                                                                                                ⣿⠿⠗         ▬
+|      20                                                                                                   ⡹⠿⠿⠃
+|     21  static Point make (int x, int y) {                                                               ⠟⠛⠛⠋⠉⠉
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|      25  │   return p;
+|      26  }
+|      27
+|      28  int main (int argc, char **argv) {
+|              run test | debug test
+|      29  │   Point p = make(1, 2);
+|      30  │   const char *name = "mme";                                                                                ▬
+|      31  │   double ratio = 1.5;
+|      32  │   int i;
+|      33  │   for (i = 0; i < MAXN; i++) {                                                                             ─
+|      34  │   │   if (i % 2 == 0) continue;
+|     35  │   │   total = add(total, i);
+|      36  │   }
+|  1  1                                                                Ln 36, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

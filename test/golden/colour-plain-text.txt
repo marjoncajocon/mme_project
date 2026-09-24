@@ -1,0 +1,36 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      plain.txt  
+|     plain.txt
+|       1  plain text line 01 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      2  plain text line 02 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       3  plain text line 03 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      4  plain text line 04 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       5  plain text line 05 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      6  plain text line 06 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       7  plain text line 07 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      8  plain text line 08 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       9  plain text line 09 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     10  plain text line 10 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      11  plain text line 11 with several words on it                                                                  ▬
+|      12  plain text line 12 with several words on it                                                                  ▬
+|      13  plain text line 13 with several words on it                                                                  ▬
+|      14  plain text line 14 with several words on it                                                                  ▬
+|      15  plain text line 15 with several words on it                                                                  ▬
+|      16  plain text line 16 with several words on it                                                                  ▬
+|      17  plain text line 17 with several words on it                                                                  ▬
+|      18  plain text line 18 with several words on it                                                                  ▬
+|      19  plain text line 19 with several words on it                                                                  ▬
+|      20  plain text line 20 with several words on it                                                                  ▬
+|      21  plain text line 21 with several words on it                                                                  ▬
+|      22  plain text line 22 with several words on it                                                                  ▬
+|      23  plain text line 23 with several words on it                                                                  ▬
+|      24  plain text line 24 with several words on it                                                                  ▬
+|     25  plain text line 25 with several words on it                                                                  ▬
+|      26  plain text line 26 with several words on it
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+{868686}    {6e7681}   {cccccc}1  plain text line 01 with several words on it                                                      {b7b7b7}?{a9a9a9}????       {a0a0a0}?
+{868686} ?  {6e7681}   2  {cccccc}plain text line 02 with several words on it                                                      {b7b7b7}?{a9a9a9}????       {a0a0a0}?
+{868686} ?  {6e7681}   6  {cccccc}plain text line 06 with several words on it                                                      {b7b7b7}?{a9a9a9}????       {a0a0a0}?
+{868686} ?  {6e7681}  10  {cccccc}plain text line 10 with several words on it                                                      {b7b7b7}?{a9a9a9}????       {a0a0a0}?
+exited=0

@@ -1,0 +1,19 @@
+{868686}    {6e7681}   {cccccc}1  {569cd6}# mme regression fixture{cccccc}                                                                         {4b83b1}???{a9a9a9}?{ab7a66}?{a9a9a9}???    {cccccc}?
+{868686} ?  {6e7681}   2                                                                                                   {4b83b1}?           {434343}
+{868686}    {6e7681}   3  {cccccc}A paragraph with {569cd6}**bold**{cccccc}, {c586c0}*italic*{cccccc}, {ce9178}`code` {cccccc}and a {ffd700}[{ce9178}link{ffd700}]({cccccc}https://example.com{ffd700}){cccccc}.                   {a3719f}?           {434343}
+{868686} ?  {6e7681}   4                                                                                                   {a3719f}?{ab7a66}?          {434343}
+{868686}    {6e7681}   5  {569cd6}## A list{cccccc}                                                                                        {ab7a66}??          {434343}
+{868686} ?  {6e7681}   6                                                                                                   {a9a9a9}??          {434343}
+{868686}    {6e7681}   7  {6796e6}- {cccccc}one                                                                                            {a3719f}?           {434343}
+{868686} ?  {6e7681}   8  {6796e6}- {cccccc}two                                                                                                        {434343}
+{868686}    {6e7681}   9  {404040}? {cccccc}- nested                                                                                                   {434343}
+{868686} ?  {6e7681}  10  {6796e6}1. {cccccc}first                                                                                                     {434343}
+{868686}    {6e7681}  11  {6796e6}2. {cccccc}second                                                                                                    {434343}
+{868686}    {6e7681}  12                                                                                                               {434343}
+{868686}    {6e7681}  13  {6a9955}> {cccccc}a quote                                                                                                    {434343}
+{868686}    {6e7681}  14                                                                                                               {434343}
+{868686}    {6e7681}  15  {cccccc}```c                                                                                                         {434343}
+{868686}    {6e7681}  16  {569cd6}int {dcdcaa}main {ffd700}({569cd6}void{ffd700}) {                                                                                            {434343}
+{868686}    {6e7681}  17  {404040}?   {c586c0}return {b5cea8}0{d4d4d4};                                                                                                {434343}
+{868686}    {6e7681}  18  {ffd700}}                                                                                                            {434343}
+exited=0

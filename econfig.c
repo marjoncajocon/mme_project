@@ -32,7 +32,7 @@ Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1
            1, "", 0, 0,	/* command_center, win_title, panel_loc, panel_justify */
            1, 1,	/* markdown.preview.scroll* */
            1,	/* merge_editor */
-           1, 1};	/* inline_suggest, inline_toolbar */
+           1, 1, 1};	/* inline_suggest, inline_toolbar, next_edit */
 
 static Json *g_json;	/* the file as read, for what is looked up later */
 
@@ -80,6 +80,9 @@ static const char default_file[] =
   "  \"editor.inlineSuggest.enabled\": true,\n"
   "  // \"onHover\", \"always\" or \"never\": the buttons over the inline suggestion\n"
   "  \"editor.inlineSuggest.showToolbar\": \"onHover\",\n"
+  "  // the edit the change just made calls for somewhere else in the file,\n"
+  "  // pointed at in the gutter (Tab jumps to it, Tab again applies it)\n"
+  "  \"github.copilot.nextEditSuggestions.enabled\": true,\n"
   ;
 static const char default_file1[] =
   "  // the language server formats the file when it is saved (Shift+Alt+F: now)\n"
@@ -598,6 +601,7 @@ int settings_load (void) {
   opt.lightbulb = strcmp(json_str(json_get(j, "editor\\.lightbulb\\.enabled"), "onCode"), "off") != 0;
   opt.inline_suggest = json_bool(json_get(j, "editor\\.inlineSuggest\\.enabled"), 1);
   opt.inline_toolbar = strcmp(json_str(json_get(j, "editor\\.inlineSuggest\\.showToolbar"), "onHover"), "never") != 0;
+  opt.next_edit = json_bool(json_get(j, "github\\.copilot\\.nextEditSuggestions\\.enabled"), 1);
   edit_settings(j);
   view_settings(j);
   return 0;
