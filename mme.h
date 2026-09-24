@@ -150,6 +150,8 @@ typedef struct Opt {
   int md_scroll_preview;	/* markdown.preview.scrollPreviewWithEditor */
   int md_scroll_editor;	/* markdown.preview.scrollEditorWithPreview */
   int merge_editor;	/* git.mergeEditor: a conflicted file opens in the merge editor */
+  int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
+  int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
 } Opt;
 
 enum { PANEL_BOTTOM, PANEL_RIGHT, PANEL_LEFT };
@@ -394,6 +396,7 @@ enum {
 #define RGB_UNDER	4
 #define RGB_CURLY	8	/* a squiggle, see scr_squiggle */
 #define RGB_STRIKE	16	/* a line through it, for ~~this~~ */
+#define RGB_DIM		32	/* half bright, for the inline suggestion's ghost text */
 
 /* the colors of code (VS Code's Dark+ tokens) on the backgrounds of the editor */
 enum {
@@ -421,6 +424,7 @@ enum {
   C_ACCENT, C_MCURSOR, C_LIGHTBULB, C_MINIMAP_SLIDER, C_THUMB, C_THUMB_ON,
   C_BRACKET1, C_BRACKET2, C_BRACKET3, C_BRACKET_MATCH,
   C_GUIDE, C_GUIDE_ON, C_RULER, C_INLAY_FG, C_INLAY_BG, C_LENS,	/* indent guides, rulers, inlay hints, code lens */
+  C_GHOST,	/* editorGhostText.foreground: the inline suggestion drawn in the text */
   C_TERM_FG, C_TERM_BG, C_ANSI,	/* 16 of them */
   C_TOK = C_ANSI + 16,	/* T_N of them */
   C_N = C_TOK + T_N
@@ -580,6 +584,8 @@ enum {
   CMD_TOGGLE_CC,
   CMD_HEX_OPEN, CMD_IMG_ZOOM_IN, CMD_IMG_ZOOM_OUT, CMD_IMG_ZOOM_RESET,
   CMD_MERGE_EDITOR, CMD_MERGE_COMPLETE, CMD_LENS_RUN,
+  CMD_INLINE_TRIGGER, CMD_INLINE_ACCEPT, CMD_INLINE_WORD, CMD_INLINE_HIDE, CMD_INLINE_NEXT,
+  CMD_INLINE_PREV,
   CMD_N
 };
 
@@ -1270,6 +1276,12 @@ typedef struct Lens {	/* a code lens: "3 references", "run test" over line y */
   char *title;	/* "" until the server resolved it */
 } Lens;
 
+typedef struct InlineItem {	/* textDocument/inlineCompletion: a continuation offered at the cursor */
+  char *text;	/* what it inserts; its lines separated by \n */
+  Pos a, b;	/* the range it replaces; a == b == the cursor when it named none */
+  int snippet;	/* its insertText was {"kind":2}: tab stops, like a snippet's body */
+} InlineItem;
+
 typedef struct TextEdit {	/* a change the server asks for: its line and column, as it counts */
   char *path;
   size_t l0, c0, l1, c1;
@@ -1290,6 +1302,13 @@ void lsp_rename (Doc *d, Pos at, const char *name);	/* to on_edit */
 void lsp_actions (Doc *d, Pos a, Pos b);
 void lsp_bulb (Doc *d, size_t y);	/* to on_bulb */
 void lsp_inlay (Doc *d, size_t y0, size_t y1);	/* to on_inlay */
+int lsp_inline_able (const Doc *d);	/* its server said it answers textDocument/inlineCompletion */
+/* editor.inlineSuggest: the continuation at the cursor; invoked: the user asked, else idle. To on_inline */
+void lsp_inline (Doc *d, Pos at, int invoked);
+void lsp_inline_cancel (void);	/* the answer is not wanted any more ($/cancelRequest) */
+void lsp_inline_shown (size_t i);	/* item i is on the screen: textDocument/didShowCompletion */
+void lsp_inline_partial (size_t i, size_t len);	/* len bytes of item i taken: didPartiallyAcceptCompletion */
+void lsp_inline_accept (size_t i);	/* item i taken whole: its command, if it has one */
 void lsp_semantic (Doc *d);	/* to on_semantic */
 void lsp_lens (Doc *d);	/* to on_lens */
 void lsp_lens_run (size_t i);	/* the command of on_lens's lens i */	/* to on_actions; then lsp_action_run */
@@ -1363,6 +1382,7 @@ void on_edit (const TextEdit *v, size_t n);
 void on_actions (const char *const *titles, size_t n);
 void on_bulb (Doc *d, size_t y, size_t n, int fix);	/* line y has n code actions */
 void on_inlay (Doc *d, size_t y0, size_t y1, InlayHint *v, size_t n);	/* takes v */
+void on_inline (Doc *d, unsigned long edits, Pos at, InlineItem *v, size_t n);	/* takes v */
 void on_semantic (Doc *d, unsigned long edits, SemTok *v, size_t n);	/* takes v */
 void on_lens (Doc *d, Lens *v, size_t n);	/* takes v */
 void on_symbols (Doc *d, Sym *v, size_t n);	/* takes v */

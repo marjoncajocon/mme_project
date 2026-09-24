@@ -433,8 +433,9 @@ void scr_flush (void) {
       if (b[x].st == S_RGB) {	/* its own colors: sent when they change */
         const ECell *c = &b[x];
         if (st != S_RGB || c->fg != fg || c->bg != bg || c->at != at || c->ul != ul) {
-          buf_printf(&o, "\033[0;%s%s%s%s38;2;%u;%u;%u;48;2;%u;%u;%um",
-                     (c->at & RGB_BOLD) ? "1;" : "", (c->at & RGB_ITALIC) ? "3;" : "",
+          buf_printf(&o, "\033[0;%s%s%s%s%s38;2;%u;%u;%u;48;2;%u;%u;%um",
+                     (c->at & RGB_BOLD) ? "1;" : "", (c->at & RGB_DIM) ? "2;" : "",
+                     (c->at & RGB_ITALIC) ? "3;" : "",
                      (c->at & RGB_UNDER) ? "4;" : "", (c->at & RGB_STRIKE) ? "9;" : "",
                      (unsigned)(c->fg >> 16), (unsigned)((c->fg >> 8) & 255), (unsigned)(c->fg & 255),
                      (unsigned)(c->bg >> 16), (unsigned)((c->bg >> 8) & 255), (unsigned)(c->bg & 255));

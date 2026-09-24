@@ -128,7 +128,9 @@ static const char *const names[CMD_N] = {
   "View: Set Panel Alignment to Center", "View: Set Panel Alignment to Justify", "View: Toggle Command Center",
   "View: Reopen Editor With Hex Editor", "Image Preview: Zoom In", "Image Preview: Zoom Out",
   "Image Preview: Reset Zoom",
-  "Git: Open Merge Editor", "Merge Editor: Complete Merge", "Code Lens: Run..."
+  "Git: Open Merge Editor", "Merge Editor: Complete Merge", "Code Lens: Run...",
+  "Trigger Inline Suggestion", "Accept Inline Suggestion", "Accept Next Word Of Inline Suggestion",
+  "Hide Inline Suggestion", "Show Next Inline Suggestion", "Show Previous Inline Suggestion"
 };
 
 static const char *const keys[CMD_N] = {
@@ -183,7 +185,8 @@ static const char *const keys[CMD_N] = {
   "", "", "", "Ctrl+Shift+A", "",
   "", "", "", "", "", "", "",
   "", "", "", "",
-  "", "", ""
+  "", "", "",
+  "Alt+\\", "Tab", "Ctrl+Right", "Escape", "Alt+]", "Alt+["
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -326,7 +329,10 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "workbench.action.toggleCommandCenter",
   "workbench.action.reopenWithHexEditor", "imagePreview.zoomIn", "imagePreview.zoomOut",
   "imagePreview.resetZoom",
-  "git.openMergeEditor", "mergeEditor.acceptMerge", "codelens.showLensesInCurrentLine"
+  "git.openMergeEditor", "mergeEditor.acceptMerge", "codelens.showLensesInCurrentLine",
+  "editor.action.inlineSuggest.trigger", "editor.action.inlineSuggest.commit",
+  "editor.action.inlineSuggest.acceptNextWord", "editor.action.inlineSuggest.hide",
+  "editor.action.inlineSuggest.showNext", "editor.action.inlineSuggest.showPrevious"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

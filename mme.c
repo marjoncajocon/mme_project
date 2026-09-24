@@ -1730,20 +1730,29 @@ static void view_block_clear (void) {
 }
 
 
-/* the screen row its first row is at (it may be under the text's last row); -1: its line is not shown */
+/*
+** The screen row its first row is at (it may be under the text's last row);
+** -1: its line is not shown. The code lens rows over the lines above it are
+** rows of their own and count, exactly as vis_row counts them.
+*/
 static int vb_start (void) {
   size_t y, rows = 0, st[MAXSEG];
   if (!VB.on || !HAS_DOC || VB.after >= T->doc->n || VB.after < T->top) return -1;
   if (T->nfold && hidden_in(VB.after) != (size_t)-1) return -1;
   if (!E.wrap) {
-    if (T->nfold == 0) return (int)(VB.after - T->top) + 1;
-    for (y = T->top; y < VB.after; y = line_next(y)) rows++;
-    return (int)rows + 1;
+    if (T->nfold == 0) return (int)(VB.after - T->top + lens_rows_in(T->top, VB.after + 1)) + 1;
+    for (y = T->top; y < VB.after; y = line_next(y)) rows += 1 + (size_t)lens_row_at(y);
+    return (int)(rows + (size_t)lens_row_at(VB.after)) + 1;
   }
   for (y = T->top; y < VB.after; y = line_next(y)) rows += wrap_segs(y, st);
   rows += wrap_segs(VB.after, st);
   if (rows < T->sub) return -1;
-  return (int)(rows - T->sub);
+  rows -= T->sub;
+  for (y = T->top; y <= VB.after; y = line_next(y)) {
+    if (lens_row_at(y) && (y != T->top || T->sub == 0)) rows++;
+    if (y >= VB.after) break;
+  }
+  return (int)rows;
 }
 
 
@@ -1856,6 +1865,78 @@ static int vis_goto (int sy, size_t *line, size_t *from, size_t *to, size_t *lef
 
 /*
 ** {==================================================================
+** editor.inlineSuggest: the language server's ghost text
+**
+** A server that answers textDocument/inlineCompletion (Copilot's
+** language server, Codeium, Supermaven, a local-model shim) proposes a
+** continuation at the cursor. It is drawn dim where it would go and is
+** never in the document: Tab puts it there, Esc drops it, Ctrl+Right
+** takes one word of it, Alt+] and Alt+[ go through the candidates.
+**
+** The first line is virtual text on the cursor's own line, exactly as
+** an inlay hint is (ih_shift below counts it, so the rest of the line
+** moves right and a click still finds the right byte; the cursor stays
+** before it, which is why gh_shift counts it only past the cursor).
+** The lines after it are rows of their own, put into the view with the
+** same block a peek uses, so the lines below move down.
+** ===================================================================
+*/
+
+#define GHOST_WAIT	250000	/* us the cursor must rest before the server is asked */
+
+static struct {
+  const Doc *d;	/* the items are for this text, as it was, at this place */
+  unsigned long edits;
+  Pos at;
+  InlineItem *v;
+  size_t n, sel;	/* which candidate shows */
+  char *text;	/* item sel without what the line already has: what Tab would put in */
+  char **line;	/* the same, by line, tabs as spaces: what is drawn */
+  size_t nline;
+  int cols;	/* the first line's columns */
+  const Doc *ask_d;	/* the debounce: what was asked about, and when it last moved */
+  unsigned long ask_edits;
+  Pos ask_at;
+  int asked, pending;
+  long long since;
+} GH;
+
+static int comp_showing (void);	/* the suggestion widget or a snippet is running, below */
+
+
+/* is the suggestion on the screen? asked for every byte drawn, so it stays cheap */
+static int gh_on (void) {
+  return GH.text != NULL && opt.inline_suggest && HAS_DOC && GH.d == T->doc &&
+         GH.edits == T->doc->edits && GH.at.y == T->cur.y && GH.at.x == T->cur.x &&
+         !T->sel && T->nmc == 0 && !G->diff && !T->page && !T->md && !comp_showing();
+}
+
+
+/* the columns the ghost text takes before byte x of line y (it is drawn there) */
+static size_t gh_before (size_t y, size_t x) {
+  return (gh_on() && y == GH.at.y && x == GH.at.x) ? (size_t)GH.cols : 0;
+}
+
+
+/* what byte x is pushed right by: the ghost text before it. The cursor is at GH.at.x and is not */
+static size_t gh_shift (size_t y, size_t x) {
+  return (gh_on() && y == GH.at.y && x > GH.at.x) ? (size_t)GH.cols : 0;
+}
+
+
+/* the rows under the cursor's line that a suggestion of several lines needs */
+static int gh_rows_at (size_t *after, int *rows) {
+  if (!gh_on() || GH.nline < 2) return 0;
+  *after = GH.at.y;
+  *rows = (int)(GH.nline - 1);
+  return 1;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
 ** What the language server adds to the text: inlay hints (drawn in
 ** it, not with word wrap: vcol is a character's column with the hints
 ** before it), semantic tokens (the names' colors) and code lenses
@@ -1923,8 +2004,8 @@ static size_t ih_first (size_t y) {
 
 /* the width of line y's hints before its byte x (those at x come before its character) */
 static size_t ih_shift (size_t y, size_t x) {
-  size_t i, w = 0;
-  if (!ih_on()) return 0;
+  size_t i, w = gh_shift(y, x);	/* an inline suggestion moves the rest of the line right too */
+  if (!ih_on()) return w;
   for (i = ih_first(y); i < IH.n && IH.v[i].at.y == y && IH.v[i].at.x <= x; i++) w += (size_t)IH.w[i];
   return w;
 }
@@ -1945,12 +2026,14 @@ static size_t vcol_end (const Row *r, size_t y, size_t x) {
 /* the byte at screen column c of line y (on a hint: the character after it) */
 static size_t x_of_vcol (size_t y, size_t c) {
   const Row *r = row_at(y);
-  size_t x = 0, lc = 0, vs = 0, len, i;
-  if (!ih_on()) return x_of_col(r, c);
-  i = ih_first(y);
+  size_t x = 0, lc = 0, vs = 0, len, i = 0;
+  int hints = ih_on();
+  if (!hints && !gh_on()) return x_of_col(r, c);
+  if (hints) i = ih_first(y);
   while (x < r->len) {
     size_t w;
-    for (; i < IH.n && IH.v[i].at.y == y && IH.v[i].at.x <= x; i++) vs += (size_t)IH.w[i];
+    for (; hints && i < IH.n && IH.v[i].at.y == y && IH.v[i].at.x <= x; i++) vs += (size_t)IH.w[i];
+    vs += gh_before(y, x);	/* a click in the ghost text lands on the byte it is drawn before */
     if (c < lc + vs) return x;
     w = char_width(r, x, lc, &len);
     if (c < lc + vs + w) return x;
@@ -1977,6 +2060,22 @@ static void draw_hints (int sy, size_t y, size_t x, size_t *i, size_t col, size_
       k += len;
     }
     *vs += (size_t)IH.w[*i];
+  }
+}
+
+
+/* one line of ghost text, dim, from column c on; only what is between left and right is drawn */
+static void put_ghost (int sy, int gw, size_t c, const char *s, size_t left, uint32_t bg) {
+  size_t n = strlen(s), k = 0, len;
+  size_t right = left + (size_t)text_cols();
+  while (k < n) {
+    uint32_t cp = utf8_decode(s + k, n - k, &len);
+    int w = uc_width(cp);
+    if (w < 1) w = 1;
+    if (c >= left && c + (size_t)w <= right)
+      scr_put_rgb(L.ed_x + gw + (int)(c - left), sy, cp, ui_color(C_GHOST), bg, RGB_DIM);
+    c += (size_t)w;
+    k += len;
   }
 }
 
@@ -2486,6 +2585,8 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
   size_t hit_end = 0;	/* a find match lasts to here */
   size_t vs = 0, hi = 0;	/* the inlay hints' columns so far; the next hint */
   int hints = ih_on() && from == 0, tmc;
+  /* the inline suggestion's first line: virtual text at the cursor, on the row the cursor is on */
+  int ghost = gh_on() && y == GH.at.y && GH.at.x >= from && GH.at.x <= to, gdone = 0;
   const uint32_t *tfg = NULL;	/* a TextMate grammar's colors: the theme's own for each scope */
   const unsigned char *tfs = NULL, *tcls = NULL;
   char num[32];
@@ -2531,6 +2632,11 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     p.y = y;
     p.x = x;
     if (hints) draw_hints(sy, y, x, &hi, col, &vs, gw, left);	/* editor.inlayHints: before the character */
+    if (ghost && !gdone && x == GH.at.x) {	/* editor.inlineSuggest: the rest of the line follows it */
+      put_ghost(sy, gw, col + vs, GH.line[0], left, ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG));
+      vs += (size_t)GH.cols;
+      gdone = 1;
+    }
     if (E.find_open && n > 0 && x >= hit_end && (m = match_at(y, x)) > 0) hit_end = x + m;
     if (x < from) {	/* an earlier row of a wrapped line */
       col += w;
@@ -2569,6 +2675,10 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     x += len;
   }
   if (hints && x >= r->len) draw_hints(sy, y, r->len, &hi, col, &vs, gw, left);	/* the ones at the end */
+  if (ghost && !gdone) {	/* the cursor is past the last character drawn: the ghost text goes there */
+    put_ghost(sy, gw, col + vs, GH.line[0], left, ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG));
+    vs += (size_t)GH.cols;
+  }
   col += vs;
   if (from == 0) draw_guides(sy, y, gw, left);
   draw_rulers(sy, gw, left);
@@ -3969,6 +4079,23 @@ static void draw_exception (void) {
 }
 
 
+/* an inline suggestion of several lines: the rest of it, on the rows the view block made for it */
+static void draw_ghost_rows (int gw) {
+  size_t after, k;
+  int rows, r, y0;
+  if (!gh_rows_at(&after, &rows)) return;
+  if (!VB.on || VB.after != after || VB.rows != rows) return;	/* a peek took the block: only line one shows */
+  if ((r = vb_start()) < 0) return;
+  y0 = L.text_y + r;
+  for (k = 1; k < GH.nline && y0 + (int)k - 1 < L.text_y + L.text_h; k++) {
+    int sy = y0 + (int)k - 1;
+    scr_fill(L.ed_x, sy, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+    put_ghost(sy, gw, 0, GH.line[k], E.wrap ? 0 : T->left, ui_color(C_EDITOR_BG));
+    draw_rulers(sy, gw, E.wrap ? 0 : T->left);
+  }
+}
+
+
 /* the diff's file opened at the line of its cursor (Enter, or the title's icon) */
 static void diff_edit_file (void) {
   size_t line = diff_line();
@@ -4067,6 +4194,7 @@ static void draw_group (int other) {
     if (!other) draw_peek();
     if (!other) draw_dirty_peek();
     if (!other) draw_exception();
+    if (!other) draw_ghost_rows(gw);
     if (E.find_open && !other) draw_find();
     if (!other) {
       draw_signature(gw);
@@ -7399,6 +7527,270 @@ static void hover_idle (void) {
   }
   lsp_hover(T->doc, p);
 }
+
+
+/*
+** {==================================================================
+** The inline suggestion itself: what came, what is drawn, what Tab does
+** (its geometry is up with the inlay hints, which it is drawn like)
+** ===================================================================
+*/
+
+static int comp_showing (void) {
+  return CP.open || SN.t != NULL;	/* the suggestions and a snippet come first, as in VS Code */
+}
+
+
+static void gh_drop_text (void) {
+  size_t i;
+  for (i = 0; i < GH.nline; i++) free(GH.line[i]);
+  free(GH.line);
+  GH.line = NULL;
+  GH.nline = 0;
+  free(GH.text);
+  GH.text = NULL;
+  GH.cols = 0;
+}
+
+
+static void gh_clear (void) {
+  size_t i;
+  gh_drop_text();
+  for (i = 0; i < GH.n; i++) free(GH.v[i].text);
+  free(GH.v);
+  GH.v = NULL;
+  GH.n = 0;
+  GH.sel = 0;
+  GH.d = NULL;
+}
+
+
+/*
+** Candidate sel without the part of it the line already holds: what is
+** left is the ghost text. A candidate that does not go on from what is
+** typed is shown as nothing, which is how VS Code filters them too.
+*/
+static void gh_build (void) {
+  const InlineItem *it;
+  const char *s;
+  char *pre;
+  size_t plen = 0, n, i, rows = 1;
+  int tw;
+  gh_drop_text();
+  if (GH.n == 0 || GH.sel >= GH.n || !HAS_DOC || GH.d != T->doc || GH.at.y >= T->doc->n) return;
+  it = &GH.v[GH.sel];
+  if (it->a.y != GH.at.y || pos_cmp(it->a, GH.at) > 0 || pos_cmp(GH.at, it->b) > 0) return;
+  tw = T->doc->indent;
+  if (tw < 1 || tw > 16) tw = TABW;
+  pre = doc_text(T->doc, it->a, GH.at, &plen);
+  n = strlen(it->text);
+  if (plen > n || (plen > 0 && memcmp(it->text, pre, plen) != 0)) {
+    free(pre);
+    return;	/* it does not continue the line: nothing to show */
+  }
+  free(pre);
+  if (n == plen) return;	/* all of it is there already */
+  GH.text = xstrdup(it->text + plen);
+  for (i = 0; GH.text[i]; i++)
+    if (GH.text[i] == '\n') rows++;
+  GH.line = (char **)xmalloc(rows * sizeof(char *));
+  for (s = GH.text; ; ) {
+    const char *e = strchr(s, '\n');
+    size_t len = e ? (size_t)(e - s) : strlen(s);
+    Buf b;
+    buf_init(&b);
+    for (i = 0; i < len; i++) {	/* drawn with tabs as spaces, like a peek's lines */
+      if (s[i] == '\t') {
+        int q;
+        for (q = 0; q < tw; q++) buf_putc(&b, ' ');
+      }
+      else buf_putc(&b, (unsigned char)s[i] < 32 ? ' ' : s[i]);
+    }
+    buf_putc(&b, '\0');
+    GH.line[GH.nline++] = buf_take(&b);
+    if (e == NULL) break;
+    s = e + 1;
+  }
+  GH.cols = (int)str_cols(GH.line[0]);
+}
+
+
+/* the debounce starts again where the cursor is now; asked: do not ask about it again */
+static void gh_rest (int asked) {
+  if (!HAS_DOC) return;
+  GH.ask_d = T->doc;
+  GH.ask_edits = T->doc->edits;
+  GH.ask_at = T->cur;
+  GH.asked = asked;
+  GH.pending = 0;
+  GH.since = os_now_us();
+}
+
+
+void on_inline (Doc *d, unsigned long edits, Pos at, InlineItem *v, size_t n) {
+  size_t i;
+  GH.pending = 0;
+  if (d != GH.ask_d || edits != GH.ask_edits || pos_cmp(at, GH.ask_at) != 0) {	/* late: it moved on */
+    for (i = 0; i < n; i++) free(v[i].text);
+    free(v);
+    return;
+  }
+  gh_clear();
+  GH.v = v;
+  GH.n = n;
+  GH.d = d;
+  GH.edits = edits;
+  GH.at = at;
+  gh_build();
+  if (GH.text) lsp_inline_shown(GH.sel);	/* Copilot counts what it showed */
+}
+
+
+/* when the cursor has rested: ask for a continuation there. A new question drops the one before */
+static void ghost_idle (void) {
+  if (!opt.inline_suggest || !HAS_DOC || G->diff || T->page || T->md || T->sel || T->nmc ||
+      E.focus != F_EDITOR || comp_showing() || !lsp_inline_able(T->doc)) return;
+  if (GH.ask_d != T->doc || GH.ask_edits != T->doc->edits || pos_cmp(GH.ask_at, T->cur) != 0) {
+    if (GH.pending) lsp_inline_cancel();	/* typed again: the answer on its way is dropped */
+    gh_rest(0);
+    return;
+  }
+  if (!GH.asked && os_now_us() - GH.since > GHOST_WAIT) {
+    GH.asked = 1;
+    GH.pending = 1;
+    lsp_inline(T->doc, T->cur, 0);
+  }
+}
+
+
+/* editor.action.inlineSuggest.trigger: ask now, whatever the debounce says */
+static void gh_trigger (void) {
+  if (!HAS_DOC || G->diff || T->page || T->md || !lsp_inline_able(T->doc)) {
+    toast(0, "No inline suggestions here");
+    return;
+  }
+  gh_clear();
+  gh_rest(1);
+  GH.pending = 1;
+  lsp_inline(T->doc, T->cur, 1);
+}
+
+
+static void gh_dismiss (void) {
+  gh_clear();
+  gh_rest(1);	/* it stays gone until the cursor or the text moves */
+}
+
+
+/* Alt+] / Alt+[: the next or the previous candidate */
+static void gh_cycle (int d) {
+  if (GH.n < 2) return;
+  GH.sel = d > 0 ? (GH.sel + 1) % GH.n : (GH.sel + GH.n - 1) % GH.n;
+  gh_build();
+  if (GH.text) lsp_inline_shown(GH.sel);
+}
+
+
+/* Tab: the whole suggestion goes in, in place of the range the server named */
+static void gh_accept (void) {
+  InlineItem *it;
+  size_t sel = GH.sel;
+  Pos a, b, e, end;
+  char *text;
+  if (!gh_on()) return;
+  it = &GH.v[sel];
+  a = it->a;
+  b = it->b;
+  end = doc_end(T->doc);
+  if (pos_cmp(b, end) > 0) b = end;
+  text = xstrdup(it->text);
+  doc_group(T->doc);
+  if (it->snippet) snippet_insert(a, b, text);	/* {"kind":2}: its tab stops work as a snippet's */
+  else {
+    ed_delete(a, b);
+    e = ed_insert(a, text, strlen(text));
+    T->cur = e;
+    T->want = col_of(row_at(e.y), e.x);
+  }
+  doc_group(T->doc);
+  free(text);
+  lsp_inline_accept(sel);	/* the item's command, through workspace/executeCommand */
+  gh_clear();
+  gh_rest(0);	/* a suggestion may follow this one, as in VS Code */
+}
+
+
+static int gh_word_char (char c) {
+  unsigned char u = (unsigned char)c;
+  if (u == ' ' || u == '\t') return 0;
+  if (u >= 0x80) return 1;
+  return !(u < 32 || eopt.sep[u]);	/* editor.wordSeparators */
+}
+
+
+/* Ctrl+Right: one word of it goes in and the rest stays on the screen */
+static void gh_accept_word (void) {
+  InlineItem *it;
+  const char *g;
+  size_t i = 0, n, taken;
+  Pos at, e;
+  if (!gh_on()) return;
+  it = &GH.v[GH.sel];
+  g = GH.text;
+  n = strlen(g);
+  while (i < n && (g[i] == ' ' || g[i] == '\t')) i++;	/* the spaces before the word go with it */
+  if (i < n && g[i] == '\n') i++;	/* only a line break left to take */
+  else {
+    size_t k = i;
+    while (i < n && g[i] != '\n' && gh_word_char(g[i])) i++;
+    if (i == k) i++;	/* a bracket or a comma: one character */
+  }
+  if (i == 0 || i > n) return;
+  taken = strlen(it->text) - n + i;	/* of the item, counted from its start */
+  at = T->cur;
+  doc_group(T->doc);
+  e = ed_insert(at, g, i);	/* only what is taken goes in: the rest of the line stays as it is */
+  T->cur = e;
+  T->want = col_of(row_at(e.y), e.x);
+  doc_group(T->doc);
+  it->b = shift_ins(it->b, at, e);
+  GH.at = e;
+  GH.edits = T->doc->edits;
+  gh_build();
+  if (GH.text) lsp_inline_partial(GH.sel, taken);
+  else {	/* the last word: it is taken whole */
+    lsp_inline_accept(GH.sel);
+    gh_clear();
+  }
+  gh_rest(1);	/* what is left is still the server's answer: it is not asked again */
+}
+
+
+/* a key while the suggestion shows; 1: it was its */
+static int gh_key (int k) {
+  int code = KEY_CODE(k);
+  if (k == (']' | KM_ALT) || k == ('[' | KM_ALT)) {
+    if (!gh_on() || GH.n < 2) return 0;
+    gh_cycle(k == (']' | KM_ALT) ? 1 : -1);
+    return 1;
+  }
+  if (!gh_on()) return 0;
+  if (code == K_TAB && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) {
+    gh_accept();
+    return 1;
+  }
+  if (code == K_ESC && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) {
+    gh_dismiss();
+    return 1;
+  }
+  if (k == (K_RIGHT | KM_CTRL)) {
+    gh_accept_word();
+    return 1;
+  }
+  return 0;
+}
+
+/* }================================================================== */
 
 
 /* the links of the hover being drawn: [text](url) becomes \x02text\x03, its url kept here */
@@ -13094,7 +13486,12 @@ static void view_blocks_update (int other) {
     after = PK.anchor.y;
     rows = peek_rows();
   }
-  else if (!dirty_peek_at(&after, &rows) && !exception_at(&after, &rows)) return;
+  else if (!dirty_peek_at(&after, &rows) && !exception_at(&after, &rows)) {
+    /* an inline suggestion of several lines: its rows push the lines under it down, like a peek's */
+    if (!gh_rows_at(&after, &rows) || after >= T->doc->n) return;
+    view_block_set(after, rows);
+    return;	/* no vb_fit: ghost text must never scroll the view by itself */
+  }
   if (after >= T->doc->n) return;
   view_block_set(after, rows);
   vb_fit();
@@ -14312,6 +14709,12 @@ static void run_command (int cmd) {
     case CMD_DIFF_WS: diff_toggle_trim(); break;
     case CMD_DIFF_HIDE: diff_toggle_hide(); break;
     case CMD_LENS_RUN: lens_run_here(); break;
+    case CMD_INLINE_TRIGGER: gh_trigger(); break;
+    case CMD_INLINE_ACCEPT: gh_accept(); break;
+    case CMD_INLINE_WORD: gh_accept_word(); break;
+    case CMD_INLINE_HIDE: gh_dismiss(); break;
+    case CMD_INLINE_NEXT: gh_cycle(1); break;
+    case CMD_INLINE_PREV: gh_cycle(-1); break;
     case CMD_MANAGE: manage_menu(); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
@@ -17309,6 +17712,7 @@ static void editor_key (int k) {
     return;
   }
   if (CP.open && comp_key(k)) return;
+  if (gh_key(k)) return;	/* editor.inlineSuggest: Tab takes the ghost text, Esc drops it */
   if (k == K_TAB && E.tab_focus) {	/* Toggle Tab Key Moves Focus: out of the editor */
     if (E.side) E.focus = F_SIDE;
     else if (E.panel) E.focus = F_PANEL;
@@ -18622,6 +19026,7 @@ int main (int argc, char **argv) {
       hover_idle();
       hl_idle();
       bulb_idle();
+      ghost_idle();
       extras_idle();
       side_idle(E.view);
       files_index_idle();

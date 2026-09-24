@@ -493,6 +493,7 @@ static const struct {
   {"editorIndentGuide.activeBackground", C_GUIDE_ON}, {"editorIndentGuide.activeBackground1", C_GUIDE_ON},
   {"editorRuler.foreground", C_RULER}, {"editorInlayHint.foreground", C_INLAY_FG},
   {"editorInlayHint.background", C_INLAY_BG}, {"editorCodeLens.foreground", C_LENS},
+  {"editorGhostText.foreground", C_GHOST},
   {"panel.background", C_TERM_BG}, {"terminal.background", C_TERM_BG}, {"terminal.foreground", C_TERM_FG},
   {"terminal.ansiBlack", C_ANSI + 0}, {"terminal.ansiRed", C_ANSI + 1}, {"terminal.ansiGreen", C_ANSI + 2},
   {"terminal.ansiYellow", C_ANSI + 3}, {"terminal.ansiBlue", C_ANSI + 4}, {"terminal.ansiMagenta", C_ANSI + 5},
@@ -765,6 +766,7 @@ static int load_theme (void *arg, uint32_t *color) {
     if (!ld->set[C_INLAY_BG]) color[C_INLAY_BG] = mix(bg, fg, 6);
     if (!ld->set[C_INLAY_FG]) color[C_INLAY_FG] = mix(bg, fg, 55);
     if (!ld->set[C_LENS]) color[C_LENS] = mix(bg, fg, 55);
+    if (!ld->set[C_GHOST]) color[C_GHOST] = mix(bg, fg, 42);
   }
   if (!ld->set[C_STATUS_ITEM]) color[C_STATUS_ITEM] = mix(color[C_STATUS_BG], color[C_STATUS_FG], 12);
   if (!ld->set[C_TITLE_ON]) color[C_TITLE_ON] = mix(color[C_TITLE_BG], color[C_TITLE_FG], 12);

@@ -31,7 +31,8 @@ Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1
            1, 1, 1, 1, 1, 0, 1, 0, 1,	/* explorer.* */
            1, "", 0, 0,	/* command_center, win_title, panel_loc, panel_justify */
            1, 1,	/* markdown.preview.scroll* */
-           1};	/* merge_editor */
+           1,	/* merge_editor */
+           1, 1};	/* inline_suggest, inline_toolbar */
 
 static Json *g_json;	/* the file as read, for what is looked up later */
 
@@ -75,6 +76,10 @@ static const char default_file[] =
   "  \"editor.semanticHighlighting.enabled\": true,\n"
   "  // \"onCode\" or \"off\": the lightbulb when there are code actions\n"
   "  \"editor.lightbulb.enabled\": \"onCode\",\n"
+  "  // the language server's continuation at the cursor, dim in the text (Tab takes it)\n"
+  "  \"editor.inlineSuggest.enabled\": true,\n"
+  "  // \"onHover\", \"always\" or \"never\": the buttons over the inline suggestion\n"
+  "  \"editor.inlineSuggest.showToolbar\": \"onHover\",\n"
   ;
 static const char default_file1[] =
   "  // the language server formats the file when it is saved (Shift+Alt+F: now)\n"
@@ -587,6 +592,8 @@ int settings_load (void) {
       if (strcmp(v, so[i]) == 0) opt.exp_sort = i;
   }
   opt.lightbulb = strcmp(json_str(json_get(j, "editor\\.lightbulb\\.enabled"), "onCode"), "off") != 0;
+  opt.inline_suggest = json_bool(json_get(j, "editor\\.inlineSuggest\\.enabled"), 1);
+  opt.inline_toolbar = strcmp(json_str(json_get(j, "editor\\.inlineSuggest\\.showToolbar"), "onHover"), "never") != 0;
   edit_settings(j);
   view_settings(j);
   return 0;

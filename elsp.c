@@ -4,7 +4,8 @@
 ** A server per language (clangd, gopls, rust-analyzer ... as settings.json
 ** says) runs as a program; messages go to its stdin and come from its
 ** stdout, each a "Content-Length: n" header and n bytes of JSON-RPC. The
-** open files are told to it whole (didOpen, didChange with the full text);
+** open files are told to it whole at first (didOpen), then by the piece
+** (didChange with the range that changed, when the server takes those);
 ** it answers completions and definitions, and sends diagnostics by itself.
 ** Positions are bytes when the server agrees to UTF-8, else UTF-16 units.
 */
@@ -19,7 +20,8 @@
 enum { RQ_INIT, RQ_COMPLETE, RQ_DEFINE, RQ_HOVER, RQ_SIGNATURE, RQ_RENAME, RQ_ACTIONS,
        RQ_RESOLVE, RQ_SYMBOLS, RQ_FORMAT, RQ_LOC_REFS, RQ_LOC_IMPL, RQ_LOC_TYPE, RQ_LOC_PEEK,
        RQ_WSYM, RQ_HIGHLIGHT, RQ_BULB, RQ_INLAY, RQ_SEMANTIC, RQ_LENS, RQ_LENS_RESOLVE, RQ_COMP_RESOLVE,
-       RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_OTHER };
+       RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE,
+       RQ_OTHER };
 
 typedef struct Req {
   int id, kind;
@@ -56,7 +58,9 @@ typedef struct Srv {
   int nsem;
   int readonly_bit;	/* the modifier "readonly": a constant; -1 none */
   int can_resolve, can_range, can_sel, can_fold, can_calls, can_types;	/* what it said it does */
+  int can_inline;	/* inlineCompletionProvider: editor.inlineSuggest asks it, nothing else does */
   char type_chars[16];	/* documentOnTypeFormattingProvider's characters */
+  int sync_inc;	/* textDocumentSync 2: it takes the range that changed */
 } Srv;
 
 typedef struct LDoc {
@@ -68,6 +72,8 @@ typedef struct LDoc {
   unsigned long seen;	/* d->edits when it last changed, and when that was */
   long long seen_at;
   int opened;	/* didOpen went */
+  char *last;	/* the text the server has, to find what changed in it */
+  size_t nlast;
 } LDoc;
 
 #define SYNC_WAIT	200000	/* us of quiet before the text goes: typing does not send a file a key */
@@ -289,40 +295,109 @@ static int sem_tok (const char *t) {
 }
 
 
-static void put_text (Buf *b, const Doc *d) {
-  Pos a;
-  size_t len;
-  char *t;
-  a.y = a.x = 0;
-  t = doc_text(d, a, doc_end(d), &len);
-  json_put_str(b, t, len);
-  free(t);
+/* the line and the character of byte off, the way this server counts them */
+static void text_pos (const char *t, size_t n, size_t off, int utf16,
+                    unsigned long *line, unsigned long *ch) {
+  size_t i, ls = 0;
+  unsigned long ln = 0;
+  if (off > n) off = n;
+  for (i = 0; i < off; i++)
+    if (t[i] == '\n') {
+      ln++;
+      ls = i + 1;
+    }
+  *line = ln;
+  if (!utf16) {
+    *ch = (unsigned long)(off - ls);
+    return;
+  }
+  {	/* UTF-16 units, which is what a server asks for unless it took utf-8 */
+    size_t j = ls, u = 0, len;
+    while (j < off) {
+      uint32_t cp = utf8_decode(t + j, n - j, &len);
+      u += cp >= 0x10000 ? 2 : 1;
+      j += len;
+    }
+    *ch = (unsigned long)u;
+  }
+}
+
+
+/* a byte in the middle of a character: a change may not start or end there */
+static int cont_byte (const char *t, size_t n, size_t i) {
+  return i < n && ((unsigned char)t[i] & 0xC0) == 0x80;
 }
 
 
 static void did_open (LDoc *l) {
   Buf b;
+  Pos a;
+  size_t len = 0;
+  char *txt;
+  a.y = a.x = 0;
+  txt = doc_text(l->d, a, doc_end(l->d), &len);
+  if (txt == NULL) return;
   buf_init(&b);
   buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"%s\",\"version\":%d,\"text\":",
              l->uri, l->s->lang, ++l->version);
-  put_text(&b, l->d);
+  json_put_str(&b, txt, len);
   buf_puts(&b, "}}");
   notify(l->s, "textDocument/didOpen", b.s);
   buf_free(&b);
+  free(l->last);
+  l->last = txt;	/* what the server has now: didChange is found against it */
+  l->nlast = len;
   l->opened = 1;
   l->sent = l->d->edits;
 }
 
 
+/*
+** What changed since the server was last told: the common prefix and the
+** common suffix of the old text and the new one are what stayed, so one
+** content change covers what is between them. A server that wants the file
+** whole (textDocumentSync 1) still gets it whole.
+*/
 static void did_change (LDoc *l) {
   Buf b;
+  Pos a;
+  size_t len = 0, p = 0, s = 0, keep;
+  char *txt;
+  const char *old = l->last;
+  a.y = a.x = 0;
+  txt = doc_text(l->d, a, doc_end(l->d), &len);
+  if (txt == NULL) return;
   buf_init(&b);
-  buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},\"contentChanges\":[{\"text\":",
+  buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},\"contentChanges\":[{",
              l->uri, ++l->version);
-  put_text(&b, l->d);
+  if (!l->s->sync_inc || old == NULL) buf_puts(&b, "\"text\":");
+  else {
+    unsigned long l0, c0, l1, c1;
+    keep = len < l->nlast ? len : l->nlast;
+    while (p < keep && txt[p] == old[p]) p++;
+    while (s < len - p && s < l->nlast - p && txt[len - 1 - s] == old[l->nlast - 1 - s]) s++;
+    while (p > 0 && cont_byte(txt, len, p)) p--;	/* both ends on a character */
+    while (s > 0 && cont_byte(txt, len, len - s)) s--;
+    if (p == len && p == l->nlast) {	/* the same text after all: say nothing */
+      buf_free(&b);
+      free(txt);
+      l->version--;
+      l->sent = l->d->edits;
+      return;
+    }
+    text_pos(old, l->nlast, p, !l->s->utf8, &l0, &c0);
+    text_pos(old, l->nlast, l->nlast - s, !l->s->utf8, &l1, &c1);
+    buf_printf(&b, "\"range\":{\"start\":{\"line\":%lu,\"character\":%lu},"
+               "\"end\":{\"line\":%lu,\"character\":%lu}},\"text\":", l0, c0, l1, c1);
+  }
+  if (!l->s->sync_inc || old == NULL) json_put_str(&b, txt, len);
+  else json_put_str(&b, txt + p, len - s - p);
   buf_puts(&b, "}]}");
   notify(l->s, "textDocument/didChange", b.s);
   buf_free(&b);
+  free(l->last);
+  l->last = txt;
+  l->nlast = len;
   l->sent = l->d->edits;
 }
 
@@ -535,6 +610,9 @@ void lsp_restart (const char *lang) {
     LDoc *l = &g_doc[k];
     if (old == NULL || l->s != old) continue;
     diag_drop(l->uri);	/* the new one says them again */
+    free(l->last);	/* what the old server had: the new one has nothing */
+    l->last = NULL;
+    l->nlast = 0;
     if (ns) {
       l->s = ns;
       l->opened = 0;
@@ -763,6 +841,8 @@ void lsp_open (Doc *d, const char *syntax) {
 
 
 static void lens_forget (const Doc *d);	/* a closed file's code lenses, below */
+static void inline_forget (void);	/* the inline suggestions kept, below */
+static const Doc *inline_doc (void);
 
 
 void lsp_close (Doc *d) {
@@ -775,6 +855,7 @@ void lsp_close (Doc *d) {
         g_srv[i]->req[k].d = NULL;
       }
   lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
+  if (inline_doc() == d) inline_forget();	/* and its inline suggestions */
   if (l == NULL) return;
   if (l->opened) {
     Buf b;
@@ -784,6 +865,7 @@ void lsp_close (Doc *d) {
     buf_free(&b);
   }
   free(l->uri);
+  free(l->last);
   *l = g_doc[--g_ndoc];
 }
 
@@ -1237,6 +1319,172 @@ void lsp_complete (Doc *d, Pos at) {
 
 void lsp_define (Doc *d, Pos at) {
   ask(d, at, "textDocument/definition", RQ_DEFINE);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** editor.inlineSuggest: textDocument/inlineCompletion (LSP 3.18 draft)
+**
+** The same request GitHub's Copilot language server, Codeium and
+** Supermaven all answer: the server proposes a continuation at the
+** cursor, mme draws it dim without putting it in the text. The items
+** are kept as they came so the one the user takes can have its command
+** run and can be reported back with the notifications Copilot expects
+** (other servers drop a notification they do not know).
+**
+** Only one question is out at a time: asking again cancels the one
+** before, both here (its Req is disowned, so a late answer is dropped,
+** as a closed document's is) and at the server ($/cancelRequest).
+** ===================================================================
+*/
+
+static struct {
+  Srv *s;
+  Doc *d;
+  char **json;	/* the items as the server sent them */
+  size_t n;
+  int id;	/* the question out now; 0: none */
+  Srv *asked;	/* who it went to */
+  unsigned long edits;	/* the text it was asked about */
+  Pos at;	/* and where */
+} g_inl;
+
+
+static const Doc *inline_doc (void) {
+  return g_inl.d;
+}
+
+
+static void inline_forget (void) {
+  size_t i;
+  for (i = 0; i < g_inl.n; i++) free(g_inl.json[i]);
+  free(g_inl.json);
+  g_inl.json = NULL;
+  g_inl.n = 0;
+  g_inl.s = NULL;
+  g_inl.d = NULL;
+}
+
+
+void lsp_inline_cancel (void) {
+  Srv *s = g_inl.asked;
+  int i;
+  if (g_inl.id == 0 || s == NULL) return;
+  for (i = 0; i < s->nreq; i++)	/* the answer is no longer wanted: dropped when it comes */
+    if (s->req[i].id == g_inl.id) {
+      s->req[i].kind = RQ_OTHER;
+      s->req[i].d = NULL;
+    }
+  if (!s->dead) {
+    char params[64];
+    snprintf(params, sizeof(params), "{\"id\":%d}", g_inl.id);
+    notify(s, "$/cancelRequest", params);
+  }
+  g_inl.id = 0;
+  g_inl.asked = NULL;
+}
+
+
+int lsp_inline_able (const Doc *d) {
+  const LDoc *l = ldoc(d);
+  return l && l->s->ready && !l->s->dead && l->s->can_inline;
+}
+
+
+void lsp_inline (Doc *d, Pos at, int invoked) {
+  LDoc *l = synced(d);
+  Buf q;
+  if (l == NULL) return;
+  lsp_inline_cancel();	/* one at a time: the server drops the old one anyway */
+  buf_init(&q);
+  buf_printf(&q, "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},"	/* version: Copilot's, harmless elsewhere */
+             "\"position\":{\"line\":%lu,\"character\":%lu},"
+             "\"context\":{\"triggerKind\":%d},"
+             "\"formattingOptions\":{\"tabSize\":%d,\"insertSpaces\":%s}}",
+             l->uri, l->version, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x),
+             invoked ? 1 : 2, d->indent, d->tabs ? "false" : "true");
+  g_inl.id = request(l->s, "textDocument/inlineCompletion", q.s, RQ_INLINE, d);
+  g_inl.asked = l->s;
+  g_inl.edits = d->edits;
+  g_inl.at = at;
+  buf_free(&q);
+}
+
+
+/* InlineCompletionItem[] or {"items":[...]}: to on_inline, the raw items kept here */
+static void inlines (Srv *s, Doc *d, const Json *res) {
+  const Json *items = res;
+  InlineItem *v = NULL;
+  size_t i, n = 0;
+  inline_forget();
+  if (items && items->type == J_OBJ) items = json_get(items, "items");
+  if (items == NULL || items->type != J_ARR || items->n == 0) {
+    on_inline(d, g_inl.edits, g_inl.at, NULL, 0);
+    return;
+  }
+  g_inl.json = (char **)xmalloc(items->n * sizeof(char *));
+  v = (InlineItem *)xmalloc(items->n * sizeof(InlineItem));
+  for (i = 0; i < items->n; i++) {
+    const Json *it = items->kid[i], *ins = json_get(it, "insertText"), *rg = json_get(it, "range");
+    const char *txt;
+    Buf b;
+    int snip = 0;
+    if (ins && ins->type == J_OBJ) {	/* {"kind":2,"value":"..."}: a snippet */
+      snip = inum(json_get(ins, "kind"), 1) == 2;
+      ins = json_get(ins, "value");
+    }
+    if ((txt = json_str(ins, NULL)) == NULL || txt[0] == '\0') continue;
+    v[n].text = xstrdup(txt);
+    v[n].snippet = snip;
+    v[n].a = rg ? pos_in(s, d, json_get(rg, "start")) : g_inl.at;
+    v[n].b = rg ? pos_in(s, d, json_get(rg, "end")) : g_inl.at;
+    buf_init(&b);
+    json_write(&b, it);
+    buf_putc(&b, '\0');
+    g_inl.json[n] = buf_take(&b);
+    n++;
+  }
+  g_inl.s = s;
+  g_inl.d = d;
+  g_inl.n = n;
+  on_inline(d, g_inl.edits, g_inl.at, v, n);
+}
+
+
+/* {"item": <the item as it came>, <more>} for the notifications Copilot listens for */
+static void inline_notify (size_t i, const char *method, const char *more) {
+  Buf b;
+  if (i >= g_inl.n || g_inl.s == NULL || g_inl.s->dead) return;
+  buf_init(&b);
+  buf_printf(&b, "{\"item\":%s%s}", g_inl.json[i], more ? more : "");
+  notify(g_inl.s, method, b.s);
+  buf_free(&b);
+}
+
+
+void lsp_inline_shown (size_t i) {
+  inline_notify(i, "textDocument/didShowCompletion", NULL);
+}
+
+
+void lsp_inline_partial (size_t i, size_t len) {
+  char more[48];
+  snprintf(more, sizeof(more), ",\"acceptedLength\":%lu", (unsigned long)len);
+  inline_notify(i, "textDocument/didPartiallyAcceptCompletion", more);
+}
+
+
+void lsp_inline_accept (size_t i) {
+  Json *j;
+  const Json *cmd;
+  if (i >= g_inl.n || g_inl.s == NULL || g_inl.s->dead) return;
+  if ((j = json_parse(g_inl.json[i], strlen(g_inl.json[i]))) == NULL) return;
+  if ((cmd = json_get(j, "command")) != NULL && json_get(cmd, "command"))
+    run_command(g_inl.s, cmd);	/* workspace/executeCommand, the code actions' path */
+  json_free(j);
 }
 
 /* }================================================================== */
@@ -1983,7 +2231,10 @@ static void handle (Srv *s, const Json *msg) {
     if (r.kind == RQ_INIT) {
       size_t k;
       const char *enc = json_str(json_get(msg, "result.capabilities.positionEncoding"), "utf-16");
+      const Json *sy = json_get(msg, "result.capabilities.textDocumentSync");
       s->utf8 = strcmp(enc, "utf-8") == 0;
+      if (sy != NULL && sy->type == J_OBJ) sy = json_get(sy, "change");	/* the long form */
+      s->sync_inc = sy != NULL && (int)json_num(sy, 0) == 2;
       s->ready = 1;
       {	/* the semantic tokens' legend: its types as mme's tokens */
         const Json *ty = json_get(msg, "result.capabilities.semanticTokensProvider.legend.tokenTypes");
@@ -2009,6 +2260,8 @@ static void handle (Srv *s, const Json *msg) {
         s->can_calls = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
         p = json_get(c, "typeHierarchyProvider");
         s->can_types = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
+        p = json_get(c, "inlineCompletionProvider");
+        s->can_inline = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
         s->type_chars[0] = '\0';
         if ((ot = json_get(c, "documentOnTypeFormattingProvider")) != NULL) {
           const Json *more = json_get(ot, "moreTriggerCharacter");
@@ -2088,6 +2341,11 @@ static void handle (Srv *s, const Json *msg) {
         n++;
       }
       on_semantic(r.d, (unsigned long)r.at.x, v, n);
+    }
+    else if (r.kind == RQ_INLINE) {
+      g_inl.id = 0;
+      g_inl.asked = NULL;
+      inlines(s, r.d, json_get(msg, "result"));
     }
     else if (r.kind == RQ_LENS) lenses(s, r.d, json_get(msg, "result"));
     else if (r.kind == RQ_LENS_RESOLVE) {
