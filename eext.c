@@ -675,6 +675,59 @@ static int theme_file (const char *path, uint32_t *color, Load *ld, int depth) {
 }
 
 
+/*
+** The colors of one "colors" object onto the slots: the theme files and
+** workbench.colorCustomizations both hold VS Code's keys.
+*/
+static void colors_onto (const Json *cs, uint32_t *color) {
+  size_t i, m;
+  uint32_t rgb;
+  if (cs == NULL || cs->type != J_OBJ) return;
+  if (parse_color(json_str(json_get(cs, "editor\\.background"), NULL), 0, &rgb))
+    color[C_EDITOR_BG] = rgb;	/* first: a translucent color blends over it */
+  for (i = 0; i < cs->n; i++) {
+    const Json *k = cs->kid[i];
+    if (k->key == NULL || k->type != J_STR) continue;
+    for (m = 0; m < sizeof(colormap) / sizeof(colormap[0]); m++)
+      if (strcmp(colormap[m].key, k->key) == 0 && parse_color(k->str, color[C_EDITOR_BG], &rgb))
+        color[colormap[m].slot] = rgb;
+  }
+}
+
+
+/* "[Dark+]" or "[Dark+][Monokai]": does the key name this theme? "*" is all */
+static int scoped_to (const char *key, const char *theme) {
+  const char *p = key;
+  while (*p == '[') {
+    const char *e = strchr(p, ']');
+    size_t n;
+    if (e == NULL) return 0;
+    n = (size_t)(e - p) - 1;
+    if (n == 1 && p[1] == '*') return 1;
+    if (theme != NULL && n == strlen(theme) && m_strnicmp(p + 1, theme, n) == 0) return 1;
+    p = e + 1;
+  }
+  return 0;
+}
+
+
+/*
+** workbench.colorCustomizations over the theme's own colors: the ones for
+** every theme first, then the ones named for this one, which win.
+*/
+void theme_customize (uint32_t *color, const char *theme) {
+  const Json *cc = settings_get("workbench\\.colorCustomizations");
+  size_t i;
+  if (cc == NULL || cc->type != J_OBJ) return;
+  colors_onto(cc, color);
+  for (i = 0; i < cc->n; i++) {
+    const Json *k = cc->kid[i];
+    if (k->key != NULL && k->type == J_OBJ && k->key[0] == '[' && scoped_to(k->key, theme))
+      colors_onto(k, color);
+  }
+}
+
+
 /* a registered theme of an extension: its colors over the base mme has */
 static int load_theme (void *arg, uint32_t *color) {
   const ETheme *th = (const ETheme *)arg;

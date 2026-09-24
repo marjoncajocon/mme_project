@@ -1036,6 +1036,16 @@ static void srow_add (long l, long r) {
 }
 
 
+#define WORD_LINE_MAX	10000	/* a longer line keeps the whole-line colour: no word diff */
+#define WORD_CELLS_MAX	1000000	/* the word LCS is quadratic: the cells one pair of lines may cost */
+#define WORD_CELLS_ALL	8000000	/* and what every pair of one diff may cost together */
+#define PAIR_LINES_MAX	256	/* choosing the pairs of a block is quadratic too */
+#define PAIR_CELLS_MAX	4096
+#define SIG_BYTES	2048	/* of a line, for how alike two of them are */
+
+static long long g_wcells;	/* the word diff's work left, this rebuild */
+
+
 /* the changed middle of a pair: what is left without the same start and end */
 static void pair (DLine *a, DLine *b) {
   size_t p = 0, s = 0;
@@ -1096,20 +1106,22 @@ static void word_ranges (DLine *l, const size_t *at, size_t nt, const unsigned c
 ** lines fall back to what is left without the same start and end.
 */
 static void word_pair (DLine *a, DLine *b) {
-  size_t *wa, *wb, na, nb, i, j;
+  size_t *wa, *wb, na, nb, i, j, cells;
   unsigned short *lcs;
   unsigned char *ka, *kb;
   pair(a, b);	/* the fallback, and h0 / h1 for the old way of drawing */
-  if (a->len > 2000 || b->len > 2000) return;
+  if (a->len > WORD_LINE_MAX || b->len > WORD_LINE_MAX) return;
   wa = (size_t *)xmalloc((a->len + 2) * sizeof(size_t));
   wb = (size_t *)xmalloc((b->len + 2) * sizeof(size_t));
   na = words(a->s, a->len, wa);
   nb = words(b->s, b->len, wb);
-  if ((na + 1) * (nb + 1) > 250000) {
+  cells = (na + 1) * (nb + 1);	/* the table below: a minified file must not hang on it */
+  if (cells > WORD_CELLS_MAX || (long long)cells > g_wcells) {
     free(wa);
     free(wb);
     return;
   }
+  g_wcells -= (long long)cells;
   lcs = (unsigned short *)calloc((na + 1) * (nb + 1), sizeof(unsigned short));
   ka = (unsigned char *)calloc(na + 1, 1);
   kb = (unsigned char *)calloc(nb + 1, 1);
@@ -1148,6 +1160,109 @@ static void word_pair (DLine *a, DLine *b) {
 }
 
 
+/*
+** A line's words, hashed with how long each is: two lines are alike when
+** they share many, which is what pair_block goes by.
+*/
+typedef struct WSig {
+  unsigned long long *w;	/* (hash << 16) | the word's bytes, sorted */
+  size_t n;
+} WSig;
+
+
+static int cmp_word (const void *a, const void *b) {
+  unsigned long long x = *(const unsigned long long *)a, y = *(const unsigned long long *)b;
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+
+
+/* the words of the line, hashed and sorted; only its start, which is enough to tell lines apart */
+static void wsig_make (WSig *g, const DLine *l) {
+  size_t i = 0, k, n = l->len < SIG_BYTES ? l->len : SIG_BYTES;
+  g->w = (unsigned long long *)xmalloc((n + 1) * sizeof(unsigned long long));
+  g->n = 0;
+  while (i < n) {
+    size_t a = i;
+    unsigned h = 2166136261u;	/* FNV-1a */
+    int c = wclass((unsigned char)l->s[i]);
+    if (c == 2) i++;
+    else
+      while (i < n && wclass((unsigned char)l->s[i]) == c) i++;
+    for (k = a; k < i; k++) h = (h ^ (unsigned char)l->s[k]) * 16777619u;
+    g->w[g->n++] = ((unsigned long long)h << 16) | (unsigned long long)(i - a);
+  }
+  qsort(g->w, g->n, sizeof(unsigned long long), cmp_word);
+}
+
+
+/* how alike two lines are, per mille: twice the bytes of the words they share */
+static int wsig_alike (const WSig *a, const WSig *b, size_t la, size_t lb) {
+  size_t i = 0, j = 0;
+  unsigned long long same = 0;
+  while (i < a->n && j < b->n) {
+    if (a->w[i] < b->w[j]) i++;
+    else if (a->w[i] > b->w[j]) j++;
+    else {
+      same += a->w[i] & 0xFFFF;
+      i++;
+      j++;
+    }
+  }
+  if (la + lb == 0) return 1000;
+  return (int)(2000 * same / (la + lb));
+}
+
+
+/*
+** Which removed line became which added one, inside one block of changes.
+** A diff prints a block as everything that went and then everything that
+** came, so the k'th of each is not always the pair: one line inserted
+** above shifts them all, and pairing them in order then finds nothing in
+** common and paints whole lines. VS Code diffs the block as a whole, so
+** mme pairs the lines by how many words they share, in order; a line left
+** without a partner is new or gone and keeps its whole-line colour.
+*/
+static void pair_block (size_t d0, size_t d1, size_t a1) {
+  size_t nd = d1 - d0, na = a1 - d1, i, j, w = na + 1;
+  int *sim, *best;
+  WSig *sg;
+  for (i = d0; i < a1; i++) D.line[i].nhr = 0;	/* a line left without a partner keeps no ranges */
+  if (nd == 0 || na == 0) return;
+  if ((nd == 1 && na == 1) || nd > PAIR_LINES_MAX || na > PAIR_LINES_MAX || nd * na > PAIR_CELLS_MAX) {
+    for (i = 0; i < nd && i < na; i++) word_pair(&D.line[d0 + i], &D.line[d1 + i]);	/* nothing to choose */
+    return;
+  }
+  sg = (WSig *)xmalloc((nd + na) * sizeof(WSig));
+  for (i = 0; i < nd + na; i++) wsig_make(&sg[i], &D.line[i < nd ? d0 + i : d1 + i - nd]);
+  sim = (int *)xmalloc(nd * na * sizeof(int));
+  for (i = 0; i < nd; i++)
+    for (j = 0; j < na; j++)
+      sim[i * na + j] = wsig_alike(&sg[i], &sg[nd + j], D.line[d0 + i].len, D.line[d1 + j].len);
+  best = (int *)xmalloc((nd + 1) * w * sizeof(int));	/* best[i][j]: the most two tails can share */
+  for (i = 0; i <= nd; i++) best[i * w + na] = 0;
+  for (j = 0; j <= na; j++) best[nd * w + j] = 0;
+  for (i = nd; i-- > 0;)
+    for (j = na; j-- > 0;) {
+      int m = sim[i * na + j] + best[(i + 1) * w + j + 1], u = best[(i + 1) * w + j], v = best[i * w + j + 1];
+      best[i * w + j] = m >= u && m >= v ? m : u >= v ? u : v;
+    }
+  for (i = 0, j = 0; i < nd && j < na;) {	/* the pairs it chose, walked; a tie keeps them in order */
+    int m = sim[i * na + j] + best[(i + 1) * w + j + 1], u = best[(i + 1) * w + j], v = best[i * w + j + 1];
+    if (m >= u && m >= v) {
+      word_pair(&D.line[d0 + i], &D.line[d1 + j]);
+      i++;
+      j++;
+    }
+    else if (u >= v) i++;
+    else j++;
+  }
+  for (i = 0; i < nd + na; i++) free(sg[i].w);
+  free(sg);
+  free(sim);
+  free(best);
+}
+
+
 /* the colors of the code: the old lines and the new lines are each read in order */
 static void color_lines (const char *path) {
   const Syntax *sx = syntax_for(path);
@@ -1174,6 +1289,7 @@ static void color_lines (const char *path) {
 static void build_split (void) {
   size_t i = 0;
   D.nrow = 0;
+  g_wcells = WORD_CELLS_ALL;	/* the words are diffed once here, never while drawing */
   while (i < D.nline) {
     size_t d0 = i, d1, a1, j;
     if (D.line[i].kind == ' ') {
@@ -1185,10 +1301,10 @@ static void build_split (void) {
     d1 = i;
     while (i < D.nline && D.line[i].kind == '+') i++;
     a1 = i;
+    pair_block(d0, d1, a1);	/* which line became which, and the words in them that changed */
     for (j = 0; j < d1 - d0 || j < a1 - d1; j++) {
       long l = (j < d1 - d0) ? (long)(d0 + j) : -1;
       long r = (j < a1 - d1) ? (long)(d1 + j) : -1;
-      if (l >= 0 && r >= 0) word_pair(&D.line[l], &D.line[r]);
       srow_add(l, r);
     }
   }

@@ -346,6 +346,21 @@ static size_t col_of (const Row *r, size_t x) {
 }
 
 
+/*
+** col_of, given up on once the column reaches max: the callers that only
+** want to know whether a byte lands inside a window that many columns wide
+** pay for the window, not for how far into the line the byte is.
+*/
+static size_t col_of_upto (const Row *r, size_t x, size_t max) {
+  size_t i = 0, col = 0, len;
+  while (i < x && i < r->len && col < max) {
+    col += char_width(r, i, col, &len);
+    i += len;
+  }
+  return col;
+}
+
+
 /* the byte in r that is at column col, or the end of the line */
 static size_t x_of_col (const Row *r, size_t col) {
   size_t i = 0, c = 0, len;
@@ -559,6 +574,125 @@ static void snip_shift (int ins, Pos at, Pos e) {
 }
 
 
+/*
+** each_cursor runs a key for every cursor, the one lowest in the text
+** first, and every edit moves the cursors that sit after it. Moving them
+** one at a time is quadratic: at 50,000 cursors one keystroke took half a
+** minute. The batch below holds every cursor in one sorted array and moves
+** them with running totals instead. An edit adds the same number of lines
+** to every cursor after it, so that is one number kept in MB.dy and paid
+** into the cursors once, at the end; only the cursors left on the line the
+** edit changed need a column of their own, and those sit next to each
+** other in the sorted order.
+**
+** The totals only hold while the cursors are in order and none of them
+** reaches into another one's text. When they do overlap - a word-wise
+** Backspace that swallows the cursor before it, say - MB.slow turns the
+** batch back into the plain loop over every cursor, which is what the
+** editor did before, so the answer is the same either way.
+*/
+typedef struct McBatch {
+  Cur *all;	/* every cursor: the main one and T->mc, in their own order */
+  int *ord;	/* into all: the one lowest in the text first */
+  long *base;	/* MB.dy when that cursor was left behind: the lines it is owed */
+  int n, at;	/* at: where in ord the cursor the key is running for sits */
+  long dy;	/* lines put in or taken out since the batch began */
+  int slow;	/* the cursors overlap: move every one of them, as before */
+  int on;
+} McBatch;
+
+static McBatch MB;
+
+
+static Pos mb_lo (const Cur *c) {
+  return pos_cmp(c->anchor, c->cur) < 0 ? c->anchor : c->cur;
+}
+
+
+static Pos mb_hi (const Cur *c) {
+  return pos_cmp(c->anchor, c->cur) > 0 ? c->anchor : c->cur;
+}
+
+
+static Pos mb_down (Pos p, long d) {
+  p.y = (size_t)((long)p.y + d);
+  return p;
+}
+
+
+/* the cursor at place i of the sorted order, where it really is now */
+static void mb_get (int i, Cur *out) {
+  int k = MB.ord[i];
+  long d = (i < MB.at) ? MB.dy - MB.base[k] : 0;	/* the ones still to come owe nothing */
+  *out = MB.all[k];
+  out->cur = mb_down(out->cur, d);
+  out->anchor = mb_down(out->anchor, d);
+}
+
+
+/* the lines owed paid into every cursor that is done, so it can be moved by hand */
+static void mb_settle (void) {
+  int i;
+  for (i = 0; i < MB.at; i++) {
+    Cur *c = &MB.all[MB.ord[i]];
+    long d = MB.dy - MB.base[MB.ord[i]];
+    c->cur = mb_down(c->cur, d);
+    c->anchor = mb_down(c->anchor, d);
+    MB.base[MB.ord[i]] = MB.dy;
+  }
+}
+
+
+/* every cursor moved on its own, the way it was before the batch */
+static void mb_each (int ins, Pos a, Pos e) {
+  int i;
+  for (i = 0; i < MB.n; i++) {
+    Cur *c;
+    if (i == MB.at) continue;	/* the cursor the key is running for moves itself */
+    c = &MB.all[MB.ord[i]];
+    c->cur = ins ? shift_ins(c->cur, a, e) : shift_del(c->cur, a, e);
+    c->anchor = ins ? shift_ins(c->anchor, a, e) : shift_del(c->anchor, a, e);
+  }
+}
+
+
+/* what a change at a..e does to the other cursors, in one step for all of them */
+static void mb_shift (int ins, Pos a, Pos e) {
+  Pos from = ins ? a : e;	/* a delete: e is where the text that went ended */
+  Pos to = ins ? e : a;
+  long ky = (long)to.y - (long)from.y, kx = (long)to.x - (long)from.x;
+  size_t sy = from.y;
+  int i;
+  if (!MB.slow && MB.at + 1 < MB.n) {	/* nothing still to come may sit inside the change */
+    Cur nb;
+    int cmp;
+    mb_get(MB.at + 1, &nb);
+    cmp = pos_cmp(mb_hi(&nb), a);	/* an insert moves what is exactly at a too */
+    if (cmp > 0 || (ins && cmp == 0)) MB.slow = 1;
+  }
+  if (!MB.slow && MB.at > 0) {	/* nor may one that is already done */
+    Cur nb;
+    mb_get(MB.at - 1, &nb);
+    if (pos_cmp(mb_lo(&nb), from) < 0) MB.slow = 1;
+  }
+  if (MB.slow) {
+    mb_settle();
+    mb_each(ins, a, e);
+    return;
+  }
+  if (kx != 0)	/* only what is left on the line the edit changed moves sideways */
+    for (i = MB.at - 1; i >= 0; i--) {
+      Cur *c = &MB.all[MB.ord[i]];
+      long d = MB.dy - MB.base[MB.ord[i]];
+      size_t cy = (size_t)((long)c->cur.y + d), ay = (size_t)((long)c->anchor.y + d);
+      if (cy != sy && ay != sy) break;	/* sorted: nothing above it is on that line either */
+      if (cy == sy) c->cur.x = (size_t)((long)c->cur.x + kx);
+      if (ay == sy) c->anchor.x = (size_t)((long)c->anchor.x + kx);
+    }
+  MB.dy += ky;
+}
+
+
 /* every change of the text: the other cursors stay where their text is */
 static Pos ed_insert (Pos at, const char *s, size_t n) {
   Pos e = doc_insert(T->doc, at, s, n);
@@ -567,10 +701,12 @@ static Pos ed_insert (Pos at, const char *s, size_t n) {
   shift_views(1, at, e);
   snip_shift(1, at, e);
   fold_shift(1, at, e);
-  for (i = 0; i < T->nmc; i++) {
-    T->mc[i].cur = shift_ins(T->mc[i].cur, at, e);
-    T->mc[i].anchor = shift_ins(T->mc[i].anchor, at, e);
-  }
+  if (MB.on) mb_shift(1, at, e);	/* the batch has the cursors: it moves them all at once */
+  else
+    for (i = 0; i < T->nmc; i++) {
+      T->mc[i].cur = shift_ins(T->mc[i].cur, at, e);
+      T->mc[i].anchor = shift_ins(T->mc[i].anchor, at, e);
+    }
   return e;
 }
 
@@ -583,10 +719,12 @@ static void ed_delete (Pos a, Pos b) {
   shift_views(0, a, b);
   snip_shift(0, a, b);
   fold_shift(0, a, b);
-  for (i = 0; i < T->nmc; i++) {
-    T->mc[i].cur = shift_del(T->mc[i].cur, a, b);
-    T->mc[i].anchor = shift_del(T->mc[i].anchor, a, b);
-  }
+  if (MB.on) mb_shift(0, a, b);
+  else
+    for (i = 0; i < T->nmc; i++) {
+      T->mc[i].cur = shift_del(T->mc[i].cur, a, b);
+      T->mc[i].anchor = shift_del(T->mc[i].anchor, a, b);
+    }
 }
 
 
@@ -616,24 +754,82 @@ static void mc_push (void) {
 }
 
 
-/* cursors that ended up in the same place become one */
-static void mc_merge (void) {
-  int i, j, n = 0;
-  for (i = 0; i < T->nmc; i++) {
-    Cur *c = &T->mc[i];
-    int dup = pos_cmp(c->cur, T->cur) == 0;
-    for (j = 0; j < n && !dup; j++) dup = pos_cmp(T->mc[j].cur, c->cur) == 0;
-    if (!dup) T->mc[n++] = *c;
-  }
-  T->nmc = n;
+static const Cur *g_dedup;	/* for cmp_dedup */
+
+/* by place, and by where they sit in T->mc when the place is the same */
+static int cmp_dedup (const void *a, const void *b) {
+  int i = *(const int *)a, j = *(const int *)b;
+  int c = pos_cmp(g_dedup[i].cur, g_dedup[j].cur);
+  return c ? c : (i < j ? -1 : i > j);
 }
 
 
-/* is p in the selection of one of the other cursors? */
-static int in_other_sel (Pos p) {
+/*
+** Cursors that ended up in the same place become one, the first of them in
+** T->mc. Comparing every cursor with every other is quadratic, and with
+** 50,000 of them it was the slowest thing left in a keystroke, so the
+** places are sorted once and the copies are then next to each other.
+*/
+static void mc_merge (void) {
+  int i, n = T->nmc, keep = 0, *ord;
+  char *drop;
+  if (n <= 0) return;
+  ord = (int *)xmalloc((size_t)n * sizeof(int));
+  drop = (char *)xmalloc((size_t)n);
+  for (i = 0; i < n; i++) ord[i] = i;
+  memset(drop, 0, (size_t)n);
+  g_dedup = T->mc;
+  qsort(ord, (size_t)n, sizeof(int), cmp_dedup);
+  for (i = 0; i < n; i++) {
+    const Cur *c = &T->mc[ord[i]];
+    if (pos_cmp(c->cur, T->cur) == 0) drop[ord[i]] = 1;	/* the main cursor is there already */
+    else if (i > 0 && pos_cmp(c->cur, T->mc[ord[i - 1]].cur) == 0) drop[ord[i]] = 1;
+  }
+  for (i = 0; i < n; i++)
+    if (!drop[i]) T->mc[keep++] = T->mc[i];
+  T->nmc = keep;
+  free(drop);
+  free(ord);
+}
+
+
+/*
+** The other cursors that reach the line being drawn. draw_row asks about
+** every column of the line and again for every cursor block, and walking
+** all of T->mc each time made a screenful of 50,000 cursors cost 80 ms to
+** draw, every frame. One walk per row picks out the few that can matter.
+*/
+static struct {
+  const Cur **v;
+  int n, cap;
+} MR;
+
+static void mc_row_prep (size_t y) {
   int i;
+  MR.n = 0;
   for (i = 0; i < T->nmc; i++) {
     const Cur *c = &T->mc[i];
+    size_t a = c->cur.y, b = c->anchor.y;
+    if (a > b) {
+      size_t t = a;
+      a = b;
+      b = t;
+    }
+    if (y < a || y > b) continue;
+    if (MR.n == MR.cap) {
+      MR.cap = MR.cap ? MR.cap * 2 : 32;
+      MR.v = (const Cur **)xrealloc(MR.v, (size_t)MR.cap * sizeof(*MR.v));
+    }
+    MR.v[MR.n++] = c;
+  }
+}
+
+
+/* is p in the selection of one of the other cursors? (on the prepared row) */
+static int in_other_sel (Pos p) {
+  int i;
+  for (i = 0; i < MR.n; i++) {
+    const Cur *c = MR.v[i];
     Pos a = c->anchor, b = c->cur;
     if (!c->sel) continue;
     if (pos_cmp(a, b) > 0) {
@@ -2293,6 +2489,7 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
   const uint32_t *tfg = NULL;	/* a TextMate grammar's colors: the theme's own for each scope */
   const unsigned char *tfs = NULL, *tcls = NULL;
   char num[32];
+  mc_row_prep(y);	/* the other cursors this line has, once for the whole row */
   if (r->len + 1 > tokcap) {
     tokcap = r->len + 256;
     tok = (unsigned char *)xrealloc(tok, tokcap);
@@ -2444,8 +2641,8 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     }
   }
   hl_row(sy, y, gw, from, to, left);
-  for (x = 0; x < (size_t)T->nmc; x++) {	/* the other cursors: a block each */
-    const Cur *c = &T->mc[x];
+  for (x = 0; x < (size_t)MR.n; x++) {	/* the other cursors: a block each */
+    const Cur *c = MR.v[x];
     size_t cc;
     if (c->cur.y != y || c->cur.x < from || (c->cur.x >= to && to < r->len)) continue;
     cc = vcol(r, y, c->cur.x);
@@ -3323,12 +3520,12 @@ static void mm_line (size_t y, uint32_t *dot) {
 
 /* the minimap's marks: its cell of line y, column x (a byte), tinted col when it is stronger (pri) */
 static void mm_mark (uint32_t *tint, unsigned char *pri, size_t top, size_t y, size_t x, uint32_t col, int p) {
-  size_t lpr = mm_lpr(), cell;
+  size_t lpr = mm_lpr(), cell, lim = (size_t)mm_width() * 2 * mm_ch();
   long row;
   if (y < top || y >= T->doc->n) return;
   row = (long)((y - top) / lpr);
   if (row >= L.text_h) return;
-  cell = col_of(row_at(y), x) / (2 * mm_ch());
+  cell = col_of_upto(row_at(y), x, lim) / (2 * mm_ch());	/* past the last cell: it is not drawn */
   if (cell >= (size_t)mm_width()) return;
   if (pri[row * MM_W + cell] < p) {
     pri[row * MM_W + cell] = (unsigned char)p;
@@ -3364,8 +3561,10 @@ static void draw_minimap (void) {
     if (E.find_open && E.find[0])
       for (y = top; y < last; y++) {
         const Row *r = row_at(y);
-        size_t xx;
-        for (xx = 0; xx < r->len; xx++)
+        /* only the bytes the minimap's cells can show: the rest of a very
+        ** long line would be scanned for matches that are never drawn */
+        size_t xx, end = x_of_col(r, (size_t)mm_width() * 2 * mm_ch());
+        for (xx = 0; xx < end; xx++)
           if (match_at(y, xx)) mm_mark(tint, pri, top, y, xx, 0xD18616, 2);
       }
     for (d = 0; d < nd; d++)
@@ -10065,12 +10264,17 @@ static const Pos *hl_ranges (size_t *n) {
 
 /* after a row is drawn: its occurrences get VS Code's word highlight */
 static void hl_row (int sy, size_t y, int gw, size_t from, size_t to, size_t left) {
-  size_t n, i;
+  size_t n, i, seen_a, seen_b;
   const Pos *v = hl_ranges(&n);
   const Row *r = row_at(y);
   uint32_t bg0 = ui_color(C_EDITOR_BG), sel = ui_color(C_SEL_BG), bg = 0;
   int k;
   if (n == 0) return;
+  /* the bytes the visible columns cover, found once: a range outside them
+  ** is skipped before vcol, which walks the line from its start */
+  seen_a = x_of_vcol(y, left);
+  seen_b = x_of_vcol(y, left + (size_t)text_cols());
+  if (seen_b < r->len) seen_b++;	/* a character straddling the right edge */
   for (k = 0; k < 3; k++) {	/* halfway between the text's color and the selection's */
     uint32_t c0 = (bg0 >> (k * 8)) & 0xFF, c1 = (sel >> (k * 8)) & 0xFF;
     bg |= ((c0 + c1) / 2) << (k * 8);
@@ -10084,6 +10288,7 @@ static void hl_row (int sy, size_t y, int gw, size_t from, size_t to, size_t lef
     if (x0 < from) x0 = from;
     if (x1 > to) x1 = to;
     if (x1 <= x0 || x0 > r->len) continue;
+    if (x1 <= seen_a || x0 >= seen_b) continue;	/* off screen: no column walk for it */
     p.y = y;
     p.x = x0;
     if (T->sel) {	/* the selection itself stays as it is */
@@ -15706,29 +15911,57 @@ static int cmp_cur (const void *a, const void *b) {	/* the last one in the text 
 }
 
 
-/* runs key_one for every cursor, the one lowest in the text first */
+/*
+** Runs key_one for every cursor, the one lowest in the text first. The
+** others are no longer copied into and out of T->mc for each of them -
+** that alone was 200 GB of memcpy at 50,000 cursors - they stay in all[]
+** and ed_insert / ed_delete move them through the batch above. T->nmc
+** still counts them, because what key_one asks it (auto indent, Emmet,
+** the suggestions) has to answer the same as before.
+*/
 static void each_cursor (int k) {
-  int n = T->nmc + 1, i, j;
+  int n = T->nmc + 1, i, sorted = 1;
   Cur *all = (Cur *)xmalloc((size_t)n * sizeof(Cur));
   int *ord = (int *)xmalloc((size_t)n * sizeof(int));
+  long *base = (long *)xmalloc((size_t)n * sizeof(long));
+  McBatch was = MB;
   cur_get(&all[0]);	/* the main cursor is all[0] */
   memcpy(all + 1, T->mc, (size_t)T->nmc * sizeof(Cur));
-  for (i = 0; i < n; i++) ord[i] = i;
-  g_sort = all;
-  qsort(ord, (size_t)n, sizeof(int), cmp_cur);
-  for (i = 0; i < n; i++) {	/* all[me] in front, the others are T->mc */
+  for (i = 0; i + 1 < n && sorted; i++)	/* they are nearly always made in order */
+    if (pos_cmp(all[i].cur, all[i + 1].cur) >= 0) sorted = 0;
+  if (sorted)
+    for (i = 0; i < n; i++) ord[i] = n - 1 - i;
+  else {
+    for (i = 0; i < n; i++) ord[i] = i;
+    g_sort = all;
+    qsort(ord, (size_t)n, sizeof(int), cmp_cur);
+  }
+  memset(base, 0, (size_t)n * sizeof(long));
+  MB.all = all;
+  MB.ord = ord;
+  MB.base = base;
+  MB.n = n;
+  MB.at = 0;
+  MB.dy = 0;
+  MB.slow = 0;
+  MB.on = 1;
+  for (i = 0; i + 1 < n && !MB.slow; i++)	/* a cursor inside another one's text: the plain loop */
+    if (pos_cmp(mb_lo(&all[ord[i]]), mb_hi(&all[ord[i + 1]])) < 0) MB.slow = 1;
+  for (i = 0; i < n; i++) {
     int me = ord[i];
-    T->nmc = 0;
-    for (j = 0; j < n; j++)
-      if (j != me) T->mc[T->nmc++] = all[j];
+    MB.at = i;
     cur_set(&all[me]);
     key_one(k);
     cur_get(&all[me]);
-    for (j = 0, T->nmc = 0; j < n; j++)	/* the others moved with the edit */
-      if (j != me) all[j] = T->mc[T->nmc++];
+    base[me] = MB.dy;
+    T->nmc = n - 1;	/* key_one may have cleared it (Escape with the find box open) */
   }
+  MB.at = n;
+  mb_settle();	/* the lines every cursor is owed, paid in one pass */
+  MB = was;
   cur_set(&all[0]);
-  for (j = 1, T->nmc = 0; j < n; j++) T->mc[T->nmc++] = all[j];
+  for (i = 1, T->nmc = 0; i < n; i++) T->mc[T->nmc++] = all[i];
+  free(base);
   free(ord);
   free(all);
   mc_merge();

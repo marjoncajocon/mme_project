@@ -254,6 +254,9 @@ static const char default_window[] =	/* the window's */
   "  \"workbench.panel.alignment\": \"center\",\n"
   ;
 static const char default_file2[] =	/* the rest: one literal may not be longer than 4095 */
+  "  // a color of the theme, changed: \"workbench.colorCustomizations\": {\n"
+  "  //   \"diffEditor.removedTextBackground\": \"#B35A00\" }, and a block named\n"
+  "  //   for one theme, \"[Dark+]\": { ... }, wins over a plain key\n"
   "  // the language servers (IntelliSense): a command per language.\n"
   "  // \"*\" is what a language not named here gets: \"*\": \"\" turns them all off\n"
   "  \"mme.languageServers\": {\n"

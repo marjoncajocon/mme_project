@@ -305,6 +305,7 @@ int theme_set (const char *name) {
       for (i = 0; i < (int)(sizeof(light_plus) / sizeof(Color)); i++) g_color[light_plus[i].slot] = light_plus[i].rgb;
     a->load(a->arg, g_color);
   }
+  theme_customize(g_color, theme_name(t));	/* workbench.colorCustomizations has the last word */
   snprintf(g_curname, sizeof(g_curname), "%s", theme_name(t));
   for (i = 0; i < S_N; i++)
     make_sgr(g_sgr[i], sizeof(g_sgr[i]), style[i].attr, g_color[style[i].fg], g_color[style[i].bg]);
