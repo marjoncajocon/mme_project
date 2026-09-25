@@ -313,7 +313,18 @@ static Mouse g_pending_mouse;
 
 static int read_key (int ms);
 
+static int term_key_raw (int ms);
+
+void (*term_key_hook) (int k);	/* every key read, whoever reads it (screencast mode) */
+
 int term_key (int ms) {
+  int k = term_key_raw(ms);
+  if (k != K_NONE && term_key_hook) term_key_hook(k);
+  return k;
+}
+
+
+static int term_key_raw (int ms) {
   int k;
   if (g_pending != K_NONE) {	/* what was read ahead */
     k = g_pending;

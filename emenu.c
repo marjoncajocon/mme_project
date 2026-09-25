@@ -145,7 +145,8 @@ static const char *const names[CMD_N] = {
   "Test: Run All Tests with Coverage", "Test: Run Tests in Current File with Coverage",
   "Test: Run Test at Cursor with Coverage", "Test: Close Coverage", "Test: Toggle Inline Coverage",
   "Profiles: Switch Profile...", "Profiles: New Profile...", "Profiles: Rename Profile...", "Profiles: Delete Profile...",
-  "Git: Create Worktree...", "Git: Open Worktree...", "Git: Delete Worktree..."
+  "Git: Create Worktree...", "Git: Open Worktree...", "Git: Delete Worktree...",
+  "Workspaces: Manage Workspace Trust", "Developer: Toggle Screencast Mode"
 };
 
 static const char *const keys[CMD_N] = {
@@ -210,7 +211,8 @@ static const char *const keys[CMD_N] = {
   "", "Ctrl+K S", "", "",
   "", "", "", "", "",
   "", "", "", "",
-  "", "", ""
+  "", "", "",
+  "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -371,7 +373,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "testing.coverage.close", "testing.toggleInlineCoverage",
   "workbench.profiles.actions.switchProfile", "workbench.profiles.actions.createProfile",
   "workbench.profiles.actions.renameProfile", "workbench.profiles.actions.deleteProfile",
-  "git.createWorktree", "git.openWorktree", "git.deleteWorktree"
+  "git.createWorktree", "git.openWorktree", "git.deleteWorktree",
+  "workbench.trust.manage", "workbench.action.toggleScreencastMode"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

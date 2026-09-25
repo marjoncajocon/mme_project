@@ -411,11 +411,14 @@ void scr_image (int x, int y, int w, int h, const char *data, size_t n) {
 }
 
 
+void (*scr_overlay_hook) (void);	/* drawn over everything, just before it shows (screencast mode) */
+
 void scr_flush (void) {
   Buf o;
   int x, y, st = -1, img_dirty = 0;
   uint32_t fg = 0, bg = 0, at = 0, ul = 0;
   size_t row = (size_t)S.cols * sizeof(ECell);
+  if (scr_overlay_hook) scr_overlay_hook();
   buf_init(&o);
   buf_puts(&o, "\033[?25l");
   for (y = 0; y < S.rows; y++) {

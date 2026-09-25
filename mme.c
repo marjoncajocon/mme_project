@@ -250,6 +250,7 @@ static void editor_key (int k);
 static int indent_more (const char *s, size_t n);
 static void cursor_forget (Tab *t);	/* Ctrl+U: the tab is closing */
 static void profile_follow (void);	/* the folder opened: its profile */
+static void trust_prompt (void);	/* and its trust, asked */
 static const char *tab_lang (const Tab *t);	/* its language, for its settings ("[python]") */
 static const char *doc_lang_id (void);	/* the language of the file in front ("python") */
 static void doc_comment (const char **line, const char **open, const char **close);
@@ -3540,6 +3541,11 @@ static void sb_text (char *out, size_t n, uint32_t icon, const char *text) {
 static void status_items (void) {
   char t[200], tip[200];
   const char *br = git_branch();
+  if (!workspace_trusted()) {	/* Restricted Mode, leftmost */
+    sb_text(t, sizeof(t), 0xEA6C, "Restricted Mode");
+    status_add("status.workspaceTrust", "Workspace Trust", 0, 100, t,
+               "Restricted Mode is intended for safe code browsing. Trust this folder to enable all features.", CMD_TRUST_MANAGE);
+  }
   if (br[0]) {	/* the branch, on the left */
     char b[160];
     snprintf(b, sizeof(b), "%s%s", br, git_count() > 0 ? "*" : "");
@@ -6108,6 +6114,7 @@ static void open_folder (const char *dir) {
   recent_add(side_root());
   profile_follow();	/* the profile it was last used with */
   apply_settings(0);	/* its .vscode/settings.json */
+  trust_prompt();	/* a folder never trusted: VS Code's question */
   git_refresh();
   E.side = 1;
   E.view = VIEW_FILES;
@@ -13584,6 +13591,98 @@ static void profile_command (int cmd) {
 /* }================================================================== */
 
 
+/*
+** {==================================================================
+** Workspace trust (econfig.c keeps it): VS Code's question when a folder
+** is opened, Restricted Mode, Manage Workspace Trust
+** ===================================================================
+*/
+
+/* the folder trusted now (1), or not (0), or not known (-1): its settings again, the status bar says so */
+static void trust_apply (const char *dir, int trusted) {
+  trust_set(dir, trusted);
+  apply_settings(0);	/* the settings Restricted Mode kept out, in (or out) */
+  git_refresh();
+}
+
+
+/* VS Code's dialog: "Do you trust the authors of the files in this folder?" */
+static void trust_prompt (void) {
+  static const char *const bt[] = {"Yes, I trust the authors", "No, I don't trust the authors", "Trust the Parent Folder"};
+  const char *root = side_root(), *mode = json_str(settings_get("security\\.workspace\\.trust\\.startupPrompt"), "once");
+  int c = trust_check(root), r;
+  char detail[700], *parent;
+  if (!trust_enabled() || c == 1 || strcmp(mode, "never") == 0 || (c == 0 && strcmp(mode, "always") != 0)) return;
+  parent = path_dirname(root);
+  snprintf(detail, sizeof(detail),
+           MME_NAME " provides features that may automatically execute files in this folder: tasks, debugging, tests, "
+           "the programs its settings name. If you don't trust the authors of these files, continue in Restricted Mode, "
+           "as the files may be malicious. (Trust the Parent Folder: every folder in '%s'.)", parent ? path_basename(parent) : "");
+  draw();
+  r = dialog("Do you trust the authors of the files in this folder?", detail, bt, 3);
+  if (r == 0) trust_apply(root, 1);
+  else if (r == 2 && parent) trust_apply(parent, 1);
+  else if (r == 1) {
+    trust_apply(root, 0);
+    toast(0, "Restricted Mode is intended for safe code browsing: tasks, debugging and tests are off. "
+             "Workspaces: Manage Workspace Trust trusts the folder.");
+  }
+  free(parent);
+}
+
+
+/* what needs trust asks for it in Restricted Mode; 1: go on */
+int trust_require (const char *what) {
+  static const char *const bt[] = {"Trust", "Cancel"};
+  char msg[300];
+  if (workspace_trusted()) return 1;
+  snprintf(msg, sizeof(msg), "%s is disabled in Restricted Mode.", what);
+  if (dialog(msg, "Trust the authors of the files in this folder to enable all features.", bt, 2) != 0) return 0;
+  trust_apply(side_root(), 1);
+  return 1;
+}
+
+
+/* Workspaces: Manage Workspace Trust: VS Code's page, as a list */
+static void trust_manage (void) {
+  Pick p;
+  int r, t = workspace_trusted();
+  char *parent = path_dirname(side_root()), lp[400];
+  if (!trust_enabled()) {
+    toast(0, "Workspace trust is off (security.workspace.trust.enabled): every folder is trusted.");
+    free(parent);
+    return;
+  }
+  pick_init(&p, t ? "This folder is trusted: all features are enabled" : "Restricted Mode: tasks, debugging and tests are off");
+  p.keep_order = 1;
+  if (t) {
+    pick_add(&p, "Don't Trust", "Restricted Mode: safe code browsing", 0xEA6C);
+  }
+  else {
+    snprintf(lp, sizeof(lp), "every folder in %s", parent ? parent : "");
+    pick_add(&p, "Trust", side_root(), 0xEBA4);
+    pick_add(&p, "Trust the Parent Folder", lp, 0xEBA4);
+    pick_add(&p, "Stay in Restricted Mode", NULL, 0xEA6C);
+  }
+  r = pick_run(&p);
+  pick_free(&p);
+  if (t && r == 0) {
+    char *top = NULL;
+    trust_apply(side_root(), 0);
+    if (workspace_trusted()) {	/* a parent is: say which */
+      top = path_dirname(side_root());
+      toast(1, "A folder it is in is trusted: Manage Workspace Trust there, or edit mme-data/trust.json.");
+    }
+    free(top);
+  }
+  else if (!t && r == 0) trust_apply(side_root(), 1);
+  else if (!t && r == 1 && parent) trust_apply(parent, 1);
+  free(parent);
+}
+
+/* }================================================================== */
+
+
 /* the Manage gear at the foot of the activity bar: VS Code's menu, from it upwards */
 static void manage_menu (void) {
   static const char *const label[] = {"Command Palette...", "Profiles", "", "Settings", "Extensions",
@@ -16216,8 +16315,130 @@ static void drop_tab (void) {
 /* }================================================================== */
 
 
+/*
+** {==================================================================
+** Screencast mode, VS Code's "Developer: Toggle Screencast Mode": the keys
+** pressed (and the command a shortcut ran) in a box near the bottom, and a
+** mark where the mouse is pressed, for those watching a recording.
+** screencastMode.keyboardOverlayTimeout, .onlyKeyboardShortcuts,
+** .showCommands, .showKeys and .verticalOffset are VS Code's settings.
+** ===================================================================
+*/
+static struct {
+  int on;
+  char keys[160];	/* what the box shows: typed text, or the keys of a shortcut */
+  int typing;	/* keys is typed text: the next letter goes on it */
+  const char *cmd;	/* the command the shortcut ran */
+  long long at;	/* the last key */
+  int mx, my;	/* the last press of the mouse */
+  long long mat;
+} SC;
+
+
+static int sc_num (const char *key, int def, int lo, int hi) {
+  const Json *j = settings_get(key);
+  int v = j && j->type == J_NUM ? (int)j->num : def;
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+
+/* a key read (every one, wherever it goes) */
+static void sc_key (int k) {
+  long long now = os_now_us();
+  int code = KEY_CODE(k), plain = IS_TEXT(k) && !(k & (KM_CTRL | KM_ALT));
+  size_t n;
+  if (!SC.on) return;
+  if (code == K_MOUSE) {
+    if (term_mouse.press && !term_mouse.drag && term_mouse.button < 3) {
+      SC.mx = term_mouse.x;
+      SC.my = term_mouse.y;
+      SC.mat = now;
+    }
+    return;
+  }
+  if (code == K_PASTE) return;
+  if (plain && json_bool(settings_get("screencastMode\\.onlyKeyboardShortcuts"), 0)) return;
+  if (now - SC.at > (long long)sc_num("screencastMode\\.keyboardOverlayTimeout", 800, 500, 60000) * 1000) {
+    SC.keys[0] = '\0';	/* quiet a while: the box starts again */
+    SC.typing = 0;
+  }
+  n = strlen(SC.keys);
+  if (plain) {	/* letters typed: they go on */
+    char u[8];
+    int len = utf8_encode((uint32_t)k, u);
+    if (!SC.typing || n + (size_t)len + 1 >= sizeof(SC.keys)) {
+      n = 0;
+      SC.cmd = NULL;
+    }
+    memcpy(SC.keys + n, u, (size_t)len);
+    SC.keys[n + (size_t)len] = '\0';
+    SC.typing = 1;
+  }
+  else {	/* a shortcut: its name ("Ctrl+K Ctrl+T" for a chord) */
+    char name[64];
+    key_name(k, 1, name, sizeof(name));
+    if (E.chord && !SC.typing && n + strlen(name) + 2 < sizeof(SC.keys)) snprintf(SC.keys + n, sizeof(SC.keys) - n, " %s", name);
+    else snprintf(SC.keys, sizeof(SC.keys), "%s", name);
+    SC.typing = 0;
+    SC.cmd = NULL;
+  }
+  SC.at = now;
+}
+
+
+/* a command ran: a shortcut's, when a key was pressed just now */
+static void sc_command (int cmd) {
+  if (!SC.on || SC.typing || os_now_us() - SC.at > 300000) return;
+  if (cmd == CMD_SCREENCAST) return;
+  SC.cmd = cmd_name(cmd);
+}
+
+
+/* the box and the mouse's mark, over the picture */
+static void sc_overlay (void) {
+  long long now = os_now_us();
+  int cols = scr_cols(), rows = scr_rows();
+  if (!SC.on) return;
+  if (now - SC.mat < 600000 && SC.mx >= 0 && SC.mx < cols && SC.my >= 0 && SC.my < rows)	/* the mouse: a red dot where it pressed */
+    scr_put_rgb(SC.mx, SC.my, 0x25CF, 0xFF4040, ui_color(C_EDITOR_BG), 1);
+  if (SC.keys[0] && now - SC.at < (long long)sc_num("screencastMode\\.keyboardOverlayTimeout", 800, 500, 60000) * 1000) {
+    char t[300];
+    int show_cmd = json_bool(settings_get("screencastMode\\.showCommands"), 1) && SC.cmd && SC.cmd[0];
+    int show_keys = json_bool(settings_get("screencastMode\\.showKeys"), 1) || !show_cmd;
+    int off = sc_num("screencastMode\\.verticalOffset", 20, 0, 90), w, x, y, i;
+    if (show_cmd && show_keys) snprintf(t, sizeof(t), "%s   %s", SC.cmd, SC.keys);
+    else snprintf(t, sizeof(t), "%s", show_cmd ? SC.cmd : SC.keys);
+    w = (int)str_cols(t) + 6;
+    if (w > cols - 2) w = cols - 2;
+    x = (cols - w) / 2;
+    y = rows - 3 - (rows - 3) * off / 100;	/* verticalOffset: from the bottom, as a part of the height */
+    if (y < 0) y = 0;
+    for (i = 0; i < 3; i++) scr_fill(x, y + i, w, S_TOAST);
+    scr_putsw(x + 3, y + 1, w - 6, t, S_TOAST);
+    if (show_cmd && show_keys) {	/* the keys brighter, as VS Code's key labels */
+      int kx = x + 3 + (int)str_cols(SC.cmd) + 3;
+      if (kx < x + w - 3) scr_putsw(kx, y + 1, x + w - 3 - kx, SC.keys, S_BOX_HIT);
+    }
+  }
+}
+
+
+static void sc_toggle (void) {
+  SC.on = !SC.on;
+  SC.keys[0] = '\0';
+  SC.cmd = NULL;
+  SC.mat = 0;
+  scr_overlay_hook = SC.on ? sc_overlay : NULL;
+  term_key_hook = SC.on ? sc_key : NULL;
+  toast(0, "Screencast mode %s", SC.on ? "on" : "off");
+}
+
+/* }================================================================== */
+
+
 static void run_command (int cmd) {
   E.follow = 1;
+  sc_command(cmd);	/* screencast mode: the shortcut's command */
   switch (cmd) {
     case CMD_NEW:
       tab_new();
@@ -16473,6 +16694,8 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_MANAGE: manage_menu(); break;
+    case CMD_TRUST_MANAGE: trust_manage(); break;
+    case CMD_SCREENCAST: sc_toggle(); break;
     case CMD_PROFILE_SWITCH: case CMD_PROFILE_NEW: case CMD_PROFILE_RENAME: case CMD_PROFILE_DELETE: profile_command(cmd); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
@@ -20605,6 +20828,13 @@ static void on_mouse (void) {
       side_wheel(E.view, m->wheel);
       return;
     }
+    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_DEBUG && m->y > L.body_y + 2) {	/* Run and Debug: a row's menu */
+      E.focus = F_SIDE;
+      memset(&act, 0, sizeof(act));
+      debug_menu(debug_row_at(m->y - L.body_y), m->x, m->y + 1, &act);
+      apply_act(&act);
+      return;
+    }
     if (m->button == 2 && m->press && !m->drag && E.view == VIEW_FILES && !(OL.h > 0 && m->y >= OL.y0)) {
       E.focus = F_SIDE;	/* the right button: the Explorer's menu */
       E.outline_focus = 0;
@@ -20950,6 +21180,7 @@ int main (int argc, char **argv) {
   else if (argc > 1) {	/* mme file: its folder, the sidebar closed */
     char *real = os_realpath(argv[1]), *dir;
     dir = real ? path_dirname(real) : os_getcwd();
+    trust_temp(dir);	/* a file alone is trusted, as VS Code's empty window */
     side_open(dir);
     free(dir);
     free(real);
@@ -21007,6 +21238,7 @@ int main (int argc, char **argv) {
     move_h(doc_clamp(T->doc, p), 0);
     center_cursor();
   }
+  trust_prompt();	/* the folder opened, never trusted: VS Code's question */
   while (!E.quit) {
     int k;
     lsp_poll();

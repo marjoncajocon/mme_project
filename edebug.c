@@ -45,7 +45,7 @@ typedef int Sock;
 
 enum { RQ_INIT, RQ_LAUNCH, RQ_SETBP, RQ_CONFDONE, RQ_THREADS, RQ_STACK, RQ_SCOPES,
        RQ_VARS, RQ_WATCH, RQ_REPL, RQ_HOVER, RQ_STEP, RQ_DISCONNECT, RQ_SETVAR, RQ_GOTOT, RQ_GOTO,
-       RQ_EXCINFO, RQ_OTHER };
+       RQ_EXCINFO, RQ_DBINFO, RQ_SETDBP, RQ_OTHER };
 
 typedef struct Req {
   int seq, kind;
@@ -61,6 +61,14 @@ typedef struct Bp {	/* a breakpoint: a line of a file */
   char *cond, *hit, *log;	/* its condition, hit count, log message (a logpoint); NULL none */
   int temp;	/* Run to Cursor's: it goes when the program stops */
 } Bp;
+
+typedef struct DBp {	/* a data breakpoint: a value the adapter watches */
+  char *id;	/* its dataId */
+  char *label;	/* what the adapter called it ("counter") */
+  char *access;	/* "write", "read", "readWrite" */
+  int enabled, verified;
+  int persist;	/* canPersist: it outlives the session */
+} DBp;
 
 typedef struct ExcFilter {	/* the adapter's exception breakpoints: "Uncaught Exceptions" ... */
   char *filter, *label;
@@ -124,7 +132,7 @@ static struct {
   Frame *fr;
   int nfr, cur;	/* the frames of the stopped thread; the one looked at */
   int conf_done;
-  int cap_cond, cap_hit, cap_log, cap_setvar, cap_goto, cap_excinfo, cap_exc;	/* what the adapter can */
+  int cap_cond, cap_hit, cap_log, cap_setvar, cap_goto, cap_excinfo, cap_exc, cap_data;	/* what the adapter can */
   char *exc_title, *exc_desc;	/* stopped on an exception: what it says (the peek) */
 } D;
 
@@ -132,6 +140,8 @@ static VarList g_vars;	/* VARIABLES: the scopes and their values */
 static VarList g_wvars;	/* WATCH: a row for each expression (depth 0) and their values */
 static Bp *g_bp;
 static int g_nbp, g_capbp;
+static DBp *g_dbp;	/* the data breakpoints */
+static int g_ndbp;
 static char **g_watch;
 static int g_nwatch;
 static ExcFilter *g_exf;	/* the last adapter's exception filters, and which are on */
@@ -610,8 +620,13 @@ static void send_bps (const char *path) {
 }
 
 
+static void send_dbps (void);
+static void dbp_session_end (void);
+static void got_dbinfo (const Req *r, int ok, const Json *msg, const Json *body);
+
 static void send_all_bps (void) {
   int i, j;
+  send_dbps();	/* the data breakpoints kept from the last session */
   for (i = 0; i < g_nbp; i++) {
     for (j = 0; j < i; j++)
       if (same_path(g_bp[j].path, g_bp[i].path)) break;
@@ -817,6 +832,7 @@ static void got_caps (const Json *c) {
   D.cap_setvar = json_bool(json_get(c, "supportsSetVariable"), 0);
   D.cap_goto = json_bool(json_get(c, "supportsGotoTargetsRequest"), 0);
   D.cap_excinfo = json_bool(json_get(c, "supportsExceptionInfoRequest"), 0);
+  D.cap_data = json_bool(json_get(c, "supportsDataBreakpoints"), 0);
   if (l == NULL || l->type != J_ARR) return;
   D.cap_exc = 1;
   nf = (ExcFilter *)xmalloc((l->n + 1) * sizeof(ExcFilter));
@@ -1186,6 +1202,7 @@ static void end_session (void) {
   D.sock = NO_SOCK;
   D.to = D.from = D.out = -1;
   for (i = 0; i < g_nbp; i++) g_bp[i].verified = 0;
+  dbp_session_end();
   on_debug(DE_END, NULL, 0);
   if (again) dbg_start(nd);
 }
@@ -1218,6 +1235,7 @@ static Json *pick_config (void) {
 
 
 static int dbg_start (int nodebug) {
+  if (!trust_require(nodebug ? "Running" : "Debugging")) return -1;	/* Restricted Mode */
   Json *cfg, *m;
   char *cmd, **argv, *root;
   int to[2], from[2], io[3], null, i, tcp, r;
@@ -1624,6 +1642,15 @@ static void got_response (const Json *msg) {
         end_session();
       }
       break;
+    case RQ_DBINFO: got_dbinfo(&r, ok, msg, body); break;
+    case RQ_SETDBP: {	/* in the order they went: the enabled ones */
+      const Json *list = json_get(body, "breakpoints");
+      int k = 0, j;
+      for (j = 0; ok && list && list->type == J_ARR && j < g_ndbp; j++)
+        if (g_dbp[j].enabled && k < (int)list->n) g_dbp[j].verified = json_bool(json_get(list->kid[k++], "verified"), 0);
+      if (!ok) toast(1, "%s", json_str(json_get(msg, "message"), "The data breakpoints were not set"));
+      break;
+    }
     case RQ_SETBP: {
       const Json *list = json_get(body, "breakpoints");
       int k = 0, j;
@@ -2090,7 +2117,7 @@ void dbg_command (int cmd) {
 */
 
 enum { SEC_VARS, SEC_WATCH, SEC_STACK, SEC_BPS, SEC_N };
-enum { R_HEAD, R_VAR, R_WATCH, R_WADD, R_THREAD, R_FRAME, R_BP, R_NOTE, R_EXC };
+enum { R_HEAD, R_VAR, R_WATCH, R_WADD, R_THREAD, R_FRAME, R_BP, R_NOTE, R_EXC, R_DBP };
 
 typedef struct VRow {
   int kind, i;
@@ -2100,6 +2127,7 @@ static const char *const sec_name[SEC_N] = {"VARIABLES", "WATCH", "CALL STACK", 
 static int g_closed[SEC_N];
 static VRow *g_row;
 static int g_nrow, g_caprow, g_sel = -1, g_top, g_h;
+static int g_vx, g_vy;	/* where the view was drawn: Shift+F10's menu goes under the row */
 
 #define VHEAD	3	/* the title, the start button, a line */
 
@@ -2143,6 +2171,7 @@ static void build_rows (void) {
         for (i = 0; i < g_nexf; i++) add_row(R_EXC, i);
         for (i = 0; i < g_nbp; i++)
           if (!g_bp[i].temp) add_row(R_BP, i);
+        for (i = 0; i < g_ndbp; i++) add_row(R_DBP, i);
         break;
     }
   }
@@ -2150,10 +2179,202 @@ static void build_rows (void) {
 }
 
 
+/*
+** Data breakpoints, VS Code's "Break on Value Change" (Read, Access): a
+** variable's value watched by the adapter (supportsDataBreakpoints). The
+** adapter says with dataBreakpointInfo whether the variable can be watched
+** and how; setDataBreakpoints sends them all. One the adapter cannot keep
+** from session to session (canPersist) goes when the session ends.
+*/
+static const char *const g_access[] = {"write", "read", "readWrite"};
+
+static void send_dbps (void) {
+  Buf b;
+  int i, first = 1;
+  if (!D.on || !D.ready || D.nodebug || !D.cap_data) return;
+  buf_init(&b);
+  buf_puts(&b, "{\"breakpoints\":[");
+  for (i = 0; i < g_ndbp; i++)
+    if (g_dbp[i].enabled) {
+      buf_puts(&b, first ? "{\"dataId\":" : ",{\"dataId\":");
+      json_put_str(&b, g_dbp[i].id, strlen(g_dbp[i].id));
+      buf_puts(&b, ",\"accessType\":");
+      json_put_str(&b, g_dbp[i].access, strlen(g_dbp[i].access));
+      buf_putc(&b, '}');
+      first = 0;
+    }
+  buf_puts(&b, "]}");
+  request("setDataBreakpoints", b.s, RQ_SETDBP, 0, NULL);
+  buf_free(&b);
+}
+
+
+static void dbp_remove (int i) {
+  if (i < 0 || i >= g_ndbp) return;
+  free(g_dbp[i].id);
+  free(g_dbp[i].label);
+  free(g_dbp[i].access);
+  memmove(g_dbp + i, g_dbp + i + 1, (size_t)(g_ndbp - i - 1) * sizeof(DBp));
+  g_ndbp--;
+  send_dbps();
+}
+
+
+static void dbp_enable (int i) {
+  if (i < 0 || i >= g_ndbp) return;
+  g_dbp[i].enabled = !g_dbp[i].enabled;
+  send_dbps();
+}
+
+
+/* the session ended: the ones the adapter cannot keep go, the rest wait for the next */
+static void dbp_session_end (void) {
+  int i;
+  for (i = g_ndbp; i-- > 0;) {
+    g_dbp[i].verified = 0;
+    if (!g_dbp[i].persist) {
+      free(g_dbp[i].id);
+      free(g_dbp[i].label);
+      free(g_dbp[i].access);
+      memmove(g_dbp + i, g_dbp + i + 1, (size_t)(g_ndbp - i - 1) * sizeof(DBp));
+      g_ndbp--;
+    }
+  }
+}
+
+
+/* Break on Value Change (access 0), Read (1), Access (2) for row i of l: the adapter is asked first */
+static void data_break (VarList *l, int i, int access) {
+  int p;
+  Buf b;
+  if (i < 0 || i >= l->n || l->v[i].depth == 0 || l->v[i].value == NULL) return;
+  if (!D.stopped) {
+    toast(0, "The program must be paused to watch a value");
+    return;
+  }
+  if (!D.cap_data) {
+    toast(0, "The debug adapter does not support data breakpoints");
+    return;
+  }
+  for (p = i - 1; p >= 0 && l->v[p].depth >= l->v[i].depth; p--) ;
+  if (p < 0 || l->v[p].ref <= 0) return;
+  buf_init(&b);
+  buf_printf(&b, "{\"variablesReference\":%ld,\"name\":", l->v[p].ref);
+  json_put_str(&b, l->v[i].name, strlen(l->v[i].name));
+  buf_putc(&b, '}');
+  request("dataBreakpointInfo", b.s, RQ_DBINFO, access, l->v[i].name);
+  buf_free(&b);
+}
+
+
+/* dataBreakpointInfo's answer: the data breakpoint, when the variable can have it */
+static void got_dbinfo (const Req *r, int ok, const Json *msg, const Json *body) {
+  const char *id = json_str(json_get(body, "dataId"), NULL), *desc = json_str(json_get(body, "description"), NULL);
+  const Json *types = json_get(body, "accessTypes");
+  const char *want = g_access[r->arg >= 0 && r->arg < 3 ? r->arg : 0];
+  size_t k;
+  int i;
+  DBp *d;
+  if (!ok) {
+    toast(1, "%s", json_str(json_get(msg, "message"), "The value cannot be watched"));
+    return;
+  }
+  if (id == NULL || !id[0]) {
+    toast(0, "%s", desc && desc[0] ? desc : "A data breakpoint cannot be set on this value");
+    return;
+  }
+  if (types && types->type == J_ARR) {	/* what it can watch it for: "write" when it says nothing */
+    for (k = 0; k < types->n && strcmp(json_str(types->kid[k], ""), want) != 0; k++) ;
+    if (k == types->n) {
+      toast(0, "The debug adapter cannot break on value %s here", r->arg == 1 ? "read" : r->arg == 2 ? "access" : "change");
+      return;
+    }
+  }
+  else if (r->arg != 0) {
+    toast(0, "The debug adapter can only break when the value changes");
+    return;
+  }
+  for (i = 0; i < g_ndbp; i++)
+    if (strcmp(g_dbp[i].id, id) == 0 && strcmp(g_dbp[i].access, want) == 0) {
+      toast(0, "That data breakpoint is there already");
+      return;
+    }
+  g_dbp = (DBp *)xrealloc(g_dbp, (size_t)(g_ndbp + 1) * sizeof(DBp));
+  d = &g_dbp[g_ndbp++];
+  d->id = xstrdup(id);
+  d->label = xstrdup(desc && desc[0] ? desc : (r->path ? r->path : id));
+  d->access = xstrdup(want);
+  d->enabled = 1;
+  d->verified = 0;
+  d->persist = json_bool(json_get(body, "canPersist"), 0);
+  g_closed[SEC_BPS] = 0;	/* BREAKPOINTS shows it */
+  send_dbps();
+}
+
+
+static void set_value (VarList *l, int i);
+
+/* the row at the view's line `line` (0 its title); -1 none */
+int debug_row_at (int line) {
+  int k = g_top + line - VHEAD;
+  build_rows();
+  return line >= VHEAD && k < g_nrow ? k : -1;
+}
+
+
+/* the menu of a row, VS Code's context menu: a variable's (Break on Value ...), a breakpoint's; at x, y */
+void debug_menu (int row, int x, int y, SideAct *act) {
+  const VRow *r;
+  act->what = SA_NONE;
+  build_rows();
+  if (row >= 0) g_sel = row;
+  if (g_sel < 0 || g_sel >= g_nrow) return;
+  r = &g_row[g_sel];
+  if (r->kind == R_VAR || r->kind == R_WATCH) {
+    static const char *const label[] = {"Set Value", "Copy Value", "Add to Watch", "", "Break on Value Change",
+                                        "Break on Value Read", "Break on Value Access"};
+    VarList *l = r->kind == R_VAR ? &g_vars : &g_wvars;
+    const Var *v = &l->v[r->i];
+    int flags[7] = {0, 0, 0, MF_LINE, 0, 0, 0}, c, k;
+    int leaf = v->depth > 0 && v->value != NULL;
+    if (!leaf || !D.stopped || !D.cap_setvar) flags[0] = MF_OFF;
+    if (v->value == NULL) flags[1] = MF_OFF;
+    if (r->kind != R_VAR || !leaf) flags[2] = MF_OFF;
+    for (k = 4; k < 7; k++)
+      if (!leaf || !D.stopped || !D.cap_data) flags[k] = MF_OFF;
+    c = popup_list(x, y, label, flags, 7);
+    if (c == 0) set_value(l, r->i);
+    else if (c == 1 && v->value) {
+      act->what = SA_CLIP;
+      act->path = v->value;
+    }
+    else if (c == 2) dbg_add_watch(v->name);
+    else if (c >= 4) data_break(l, r->i, c - 4);
+  }
+  else if (r->kind == R_BP || r->kind == R_DBP) {
+    static const char *const label[] = {"Enable Breakpoint", "Remove Breakpoint"};
+    static const char *const label2[] = {"Disable Breakpoint", "Remove Breakpoint"};
+    int on = r->kind == R_BP ? g_bp[r->i].enabled : g_dbp[r->i].enabled, c;
+    static const int flags[2] = {0, 0};
+    c = popup_list(x, y, on ? label2 : label, flags, 2);
+    if (c == 0) {
+      if (r->kind == R_BP) bp_enable(r->i);
+      else dbp_enable(r->i);
+    }
+    else if (c == 1) {
+      if (r->kind == R_BP) bp_remove(r->i);
+      else dbp_remove(r->i);
+    }
+  }
+}
+
+
 void debug_draw (int x, int y, int w, int h, int focus) {
   int row, n;
   char t[256];
   scr_box(x, y, w, h, S_SIDE);
+  g_vx = x;
+  g_vy = y;
   if (h <= VHEAD) return;
   bp_sync();
   scr_puts(x + 2, y, "RUN AND DEBUG", S_SIDE_HEAD);
@@ -2266,6 +2487,17 @@ void debug_draw (int x, int y, int w, int h, int focus) {
         else snprintf(nm, sizeof(nm), "%s", path_basename(b->path));
         scr_putsw(cx + 7, sy, w - 12 - (int)strlen(ln), nm, st);
         scr_puts(x + w - (int)strlen(ln) - 1, sy, ln, st == S_SIDE ? S_SIDE_DIM : st);
+        break;
+      }
+      case R_DBP: {	/* a data breakpoint: VS Code's icon, what it watches, and for what */
+        const DBp *d = &g_dbp[r->i];
+        char nm[300];
+        uint32_t dot = (D.on && D.ready && !D.nodebug && !d->verified) ? 0xEAA8 : 0xEAA9;	/* debug-breakpoint-data */
+        scr_put(cx + 1, sy, d->enabled ? 0xF046 : 0xF096, st);
+        scr_put_rgb(cx + 3, sy, dot, d->enabled ? 0xE51400 : 0x848484, ui_color(C_SIDE_BG), 0);
+        snprintf(nm, sizeof(nm), "%s%s", d->label,
+                 strcmp(d->access, "read") == 0 ? " (read)" : strcmp(d->access, "readWrite") == 0 ? " (access)" : "");
+        scr_putsw(cx + 5, sy, w - 7, nm, st);
         break;
       }
       case R_EXC: {
@@ -2438,6 +2670,7 @@ int debug_key (int k, SideAct *act) {
     case K_DEL: case K_BS:
       if (r && r->kind == R_WATCH) del_watch(watch_of_row(r->i));
       else if (r && r->kind == R_BP) bp_remove(r->i);
+      else if (r && r->kind == R_DBP) dbp_remove(r->i);
       return 1;
     case K_F2:	/* Edit Breakpoint, Edit Expression, Set Value */
       if (r && r->kind == R_BP) dbg_edit_bp(g_bp[r->i].path, g_bp[r->i].line, -1);
@@ -2447,7 +2680,12 @@ int debug_key (int k, SideAct *act) {
       return 1;
     case ' ':
       if (r && r->kind == R_BP) bp_enable(r->i);
+      else if (r && r->kind == R_DBP) dbp_enable(r->i);
       else row_act(g_sel, act);
+      return 1;
+    case K_F10:	/* Shift+F10: the selected row's menu, under it */
+      if (!(k & KM_SHIFT) || g_sel < 0) return 0;
+      debug_menu(-1, g_vx + 4, g_vy + VHEAD + (g_sel - g_top) + 1, act);
       return 1;
   }
   if (k == CTRL('c') && r && (r->kind == R_VAR || r->kind == R_WATCH)) {	/* Copy Value */
@@ -2488,6 +2726,10 @@ void debug_click (int row, int col, SideAct *act) {
   }
   if (g_row[k].kind == R_BP && col <= 3) {
     bp_enable(g_row[k].i);
+    return;
+  }
+  if (g_row[k].kind == R_DBP) {	/* its box: on / off */
+    if (col <= 3) dbp_enable(g_row[k].i);
     return;
   }
   if (g_row[k].kind == R_EXC) {

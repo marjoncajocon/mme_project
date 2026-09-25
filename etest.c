@@ -1569,6 +1569,7 @@ int test_idle (void) {
 /* the tests picked go to the queue; what was asked is kept for Rerun */
 static void run_picks (const Pick1 *sel, int n) {
   int i, q0;
+  if (n > 0 && !trust_require("Running tests")) return;	/* Restricted Mode: the tests are the folder's code */
   if (n == 0) {
     toast(0, "No tests found to run.");
     return;
@@ -2129,6 +2130,7 @@ void test_command (int cmd) {
       break;
     }
     case CMD_TEST_RERUN:
+      if (g_nlast > 0 && !trust_require("Running tests")) break;	/* Restricted Mode */
       if (g_nlast == 0) {
         toast(0, "No test run to run again.");
         break;

@@ -746,18 +746,196 @@ static void overlay (Json *dst, const Json *src) {
 
 
 /*
+** Workspace trust, VS Code's: a folder is trusted (its settings in full,
+** its tasks, debugging, tests) or in Restricted Mode. mme-data/trust.json
+** keeps the folders trusted (a folder in one is trusted too) and the ones
+** the user said no to. security.workspace.trust.enabled is read from the
+** user's settings only: a folder cannot turn it off for itself.
+*/
+static Vec g_trusted, g_untrusted;
+static int g_tloaded;
+static int g_trust_on = 1;	/* security.workspace.trust.enabled */
+static char *g_trust_temp;	/* trusted for this run only: the folder of a file opened alone */
+
+
+static char *trust_json (void) {
+  return data_path("trust.json");
+}
+
+
+static void trust_load (void) {
+  char *f, *s;
+  size_t len, i;
+  Json *j;
+  if (g_tloaded) return;
+  g_tloaded = 1;
+  vec_init(&g_trusted);
+  vec_init(&g_untrusted);
+  f = trust_json();
+  s = read_file(f, &len);
+  free(f);
+  j = s ? json_parse(s, len) : NULL;
+  free(s);
+  if (j && j->type == J_OBJ) {
+    const Json *t = json_get(j, "trusted"), *u = json_get(j, "untrusted");
+    for (i = 0; t && t->type == J_ARR && i < t->n; i++)
+      if (t->kid[i]->type == J_STR) vec_push(&g_trusted, xstrdup(t->kid[i]->str));
+    for (i = 0; u && u->type == J_ARR && i < u->n; i++)
+      if (u->kid[i]->type == J_STR) vec_push(&g_untrusted, xstrdup(u->kid[i]->str));
+  }
+  json_free(j);
+}
+
+
+static void trust_save (void) {
+  Buf b;
+  size_t i;
+  int fd, k;
+  char *f = trust_json();
+  buf_init(&b);
+  buf_puts(&b, "{");
+  for (k = 0; k < 2; k++) {
+    const Vec *v = k ? &g_untrusted : &g_trusted;
+    buf_puts(&b, k ? ",\n  \"untrusted\": [" : "\n  \"trusted\": [");
+    for (i = 0; i < v->n; i++) {
+      buf_puts(&b, i ? ",\n    " : "\n    ");
+      json_put_str(&b, v->v[i], strlen(v->v[i]));
+    }
+    buf_puts(&b, v->n ? "\n  ]" : "]");
+  }
+  buf_puts(&b, "\n}\n");
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, b.s, b.len);
+    os_close(fd);
+  }
+  buf_free(&b);
+  free(f);
+}
+
+
+/* dir is under (or is) top */
+static int under_dir (const char *dir, const char *top) {
+  size_t n = strlen(top);
+  if (n > 0 && path_is_sep(top[n - 1])) n--;
+  return m_strnicmp(dir, top, n) == 0 && (dir[n] == '\0' || path_is_sep(dir[n]));
+}
+
+
+int trust_enabled (void) {
+  return g_trust_on;
+}
+
+
+/* the folder: 1 trusted, 0 the user said no, -1 never asked */
+int trust_check (const char *root) {
+  size_t i;
+  if (!g_trust_on || root == NULL) return 1;
+  if (g_trust_temp && m_fncmp(g_trust_temp, root) == 0) return 1;
+  trust_load();
+  for (i = 0; i < g_trusted.n; i++)
+    if (under_dir(root, g_trusted.v[i])) return 1;
+  for (i = 0; i < g_untrusted.n; i++)
+    if (m_fncmp(g_untrusted.v[i], root) == 0) return 0;
+  return -1;
+}
+
+
+/* the folder in front is trusted: its settings in full, its tasks ... */
+int workspace_trusted (void) {
+  return trust_check(side_root()) == 1;
+}
+
+
+/* dir trusted (1: it and what is in it), not (0), or not known again (-1) */
+void trust_set (const char *dir, int trusted) {
+  size_t i;
+  trust_load();
+  for (i = g_trusted.n; i-- > 0;)	/* what is said now replaces what was said of it */
+    if (m_fncmp(g_trusted.v[i], dir) == 0 || (trusted != 1 && under_dir(dir, g_trusted.v[i]))) {
+      free(g_trusted.v[i]);
+      memmove(g_trusted.v + i, g_trusted.v + i + 1, (g_trusted.n - i - 1) * sizeof(char *));
+      g_trusted.n--;
+    }
+  for (i = g_untrusted.n; i-- > 0;)
+    if (under_dir(g_untrusted.v[i], dir)) {
+      free(g_untrusted.v[i]);
+      memmove(g_untrusted.v + i, g_untrusted.v + i + 1, (g_untrusted.n - i - 1) * sizeof(char *));
+      g_untrusted.n--;
+    }
+  if (trusted == 1) vec_push(&g_trusted, xstrdup(dir));
+  else if (trusted == 0) vec_push(&g_untrusted, xstrdup(dir));
+  trust_save();
+}
+
+
+/* trusted for this run, not remembered (a file opened alone: VS Code's trusted empty window) */
+void trust_temp (const char *dir) {
+  free(g_trust_temp);
+  g_trust_temp = dir ? xstrdup(dir) : NULL;
+}
+
+
+/*
+** The settings a folder in Restricted Mode cannot set (VS Code's
+** "restricted" ones): what names a program to run, or where the Chat key
+** goes. The rest of its .vscode/settings.json applies.
+*/
+static int restricted_key (const char *k) {
+  static const char *const pre[] = {
+    "mme.languageServers", "mme.debugAdapters", "mme.inlineCompletionServer", "mme.chat.",
+    "terminal.integrated.shell", "terminal.integrated.profiles", "terminal.integrated.defaultProfile",
+    "terminal.integrated.env", "terminal.integrated.cwd", "git.path", "security.", "mme.extensions."
+  };
+  size_t i;
+  for (i = 0; i < sizeof(pre) / sizeof(pre[0]); i++)
+    if (strncmp(k, pre[i], strlen(pre[i])) == 0) return 1;
+  return 0;
+}
+
+
+/* src without what Restricted Mode keeps out (a copy of it, or src itself) */
+static Json *trust_filter (const Json *src, Json **own) {
+  size_t i;
+  Json *c;
+  *own = NULL;
+  if (src == NULL || src->type != J_OBJ || workspace_trusted()) return (Json *)src;
+  c = json_parse("{}", 2);
+  for (i = 0; c && i < src->n; i++) {
+    Json one, *kid[1];
+    if (restricted_key(src->kid[i]->key)) continue;
+    memset(&one, 0, sizeof(one));
+    one.type = J_OBJ;
+    kid[0] = src->kid[i];
+    one.kid = kid;
+    one.n = one.cap = 1;
+    overlay(c, &one);
+  }
+  *own = c;
+  return c;
+}
+
+
+/*
 ** The settings over the user's, like VS Code: a workspace's "settings", or
-** the folder's .vscode/settings.json.
+** the folder's .vscode/settings.json (in Restricted Mode, without the ones
+** that name programs).
 */
 static void overlay_workspace (Json *j) {
-  if (ws_active()) overlay(j, ws_settings());
+  Json *own;
+  if (ws_active()) {
+    overlay(j, trust_filter(ws_settings(), &own));
+    json_free(own);
+  }
   else {
     char *d = path_join(side_root(), ".vscode"), *f = path_join(d, "settings.json"), *s;
     size_t len;
     free(d);
     if ((s = read_file(f, &len)) != NULL) {
       Json *w = json_parse(s, len);
-      if (w && w->type == J_OBJ) overlay(j, w);
+      if (w && w->type == J_OBJ) {
+        overlay(j, trust_filter(w, &own));
+        json_free(own);
+      }
       json_free(w);
       free(s);
     }
@@ -926,6 +1104,7 @@ int settings_load (void) {
     json_free(j);
     return -1;
   }
+  g_trust_on = json_bool(json_get(j, "security\\.workspace\\.trust\\.enabled"), 1);	/* the user's own: before the folder's */
   overlay_workspace(j);
   lang_forget();
   json_free(g_json);

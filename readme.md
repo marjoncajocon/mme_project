@@ -402,6 +402,14 @@ With no file open the editor shows the keys to start with.
   WATCH values open like VARIABLES, F2 on a variable sets its value, Ctrl+C
   copies it. Breakpoints, watches and the filters are kept per folder in
   `mme-data/state`.
+- **Data breakpoints** — the right button on a variable (or Shift+F10 on the
+  one selected) gives VS Code's menu: Set Value, Copy Value, Add to Watch, and
+  Break on Value Change / Read / Access, when the adapter can
+  (supportsDataBreakpoints). The adapter is asked first (dataBreakpointInfo)
+  and says why when the value cannot be watched; the breakpoint is listed
+  under BREAKPOINTS with VS Code's data icon, "(read)" or "(access)" after
+  it, where Space turns it off and Delete removes it. One the adapter cannot
+  keep (canPersist) goes when the session ends.
 - **Tasks** — Terminal > Run Task, Run Build Task (Ctrl+Shift+B): the tasks
   of `.vscode/tasks.json` (VS Code's format: command, args, group,
   problemMatcher), else the ones found: a Makefile's targets, a Go module's
@@ -872,6 +880,13 @@ With no file open the editor shows the keys to start with.
   unchanged lines folded. Enter or a click on a header folds the file (Left
   / Right too); Enter or a double click on a line opens the file there, on a
   fold opens it. The tab follows git: a save shows at once.
+- **Screencast mode** — "Developer: Toggle Screencast Mode": every key
+  pressed shows in a box near the bottom, VS Code's keyboard overlay (typed
+  text as it grows, a shortcut with the command it ran: "Toggle Primary Side
+  Bar   Ctrl+B", a chord as "Ctrl+K Ctrl+T"), in the pickers and dialogs
+  too, and a red dot marks where the mouse is pressed. screencastMode's
+  keyboardOverlayTimeout, onlyKeyboardShortcuts, showCommands, showKeys and
+  verticalOffset are VS Code's settings.
 - **Title bar** — the command center in the middle (window.commandCenter): the
   folder's name in a box that opens Go to File, with Go Back and Go Forward
   beside it. `window.title` takes VS Code's variables (`${activeEditorShort}`,
@@ -881,6 +896,17 @@ With no file open the editor shows the keys to start with.
   Command Palette, Settings, Extensions, Keyboard Shortcuts, Snippets, Tasks,
   Themes and About. The activity bar's icons carry VS Code's badges: how many
   files changed, how many tests failed, a dot while debugging.
+- **Workspace trust** — like VS Code, a folder opened for the first time asks
+  "Do you trust the authors of the files in this folder?": Yes, No, or Trust
+  the Parent Folder (every folder in it). Not trusted, it is in Restricted
+  Mode ("Restricted Mode" at the left of the status bar): tasks, debugging
+  and tests ask for trust first, and its .vscode/settings.json applies without
+  the settings that name programs (language servers, debug adapters, the
+  terminal's shell, Chat's endpoint). "Workspaces: Manage Workspace Trust"
+  (or a click on the status item) trusts it or takes the trust back. A file
+  opened alone (`mme file`) is trusted. mme-data/trust.json keeps the
+  answers; security.workspace.trust.enabled (false: no trust at all) and
+  .startupPrompt (once, always, never) are read from the user's settings only.
 - **Profiles** — like VS Code's: the gear's Profiles (or "Profiles: New
   Profile...", "Switch Profile...", "Rename Profile...", "Delete Profile...").
   A profile has its own settings.json, keybindings.json and snippets, in
@@ -979,9 +1005,7 @@ kitty, WezTerm, foot, Ghostty); elsewhere F1 and Alt+1 / 2 / 3 do the same.
 mmc-term keeps Ctrl+Shift+F, Ctrl+Shift+E and Ctrl+Tab for itself: use Alt+2,
 Alt+1 and Ctrl+PgDn there.
 
-## What comes next
-
-Data breakpoints, workspace trust and screencast mode.
+## What is not here
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and

@@ -587,6 +587,7 @@ static void configure_tasks (void) {
 
 
 void task_command (int cmd) {
+  if ((cmd == CMD_TASK_RUN || cmd == CMD_TASK_BUILD) && !trust_require("Running tasks")) return;	/* Restricted Mode */
   if (cmd == CMD_TASK_RUN) run_task_pick(0);
   else if (cmd == CMD_TASK_BUILD) run_task_pick(1);
   else if (cmd == CMD_TASK_CONFIGURE) configure_tasks();

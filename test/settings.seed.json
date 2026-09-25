@@ -6,6 +6,8 @@
 // no restored session, no welcome page, no timed suggestions.
 // A scenario can put its own values over these with Scen(settings={...}).
 {
+  // no workspace trust question in front of every scenario
+  "security.workspace.trust.enabled": false,
   "workbench.colorTheme": "Dark Modern",
   "editor.tabSize": 4,
   "editor.insertSpaces": true,

@@ -220,6 +220,12 @@ void data_init (const char *argv0);	/* mme-data, next to the program */
 const char *data_dir (void);
 char *data_path (const char *name);	/* a file in it */
 char *settings_path (void);
+int trust_enabled (void);	/* security.workspace.trust.enabled (the user's settings) */
+int trust_check (const char *root);	/* 1 trusted, 0 not, -1 never asked */
+int workspace_trusted (void);	/* the folder open is: else Restricted Mode */
+void trust_set (const char *dir, int trusted);	/* 1 trusted (and what is in it), 0 not, -1 forgotten */
+void trust_temp (const char *dir);	/* trusted for this run only */
+int trust_require (const char *what);	/* mme.c: 1 trusted (asked, when in Restricted Mode); what: "Running tasks" */
 char *profile_file (const char *file);	/* a file of the profile in use: settings.json, keybindings.json, snippets */
 const char *profile_name (void);	/* the profile in use; "": Default */
 const Vec *profiles (void);	/* the profiles, Default not among them */
@@ -512,6 +518,8 @@ void scr_pointer (int shape);	/* over what can be clicked: PTR_POINTER */
 void scr_image (int x, int y, int w, int h, const char *data, size_t n);
 
 void scr_flush (void);
+extern void (*scr_overlay_hook) (void);	/* edraw.c: drawn over everything before it shows */
+extern void (*term_key_hook) (int k);	/* eterm.c: every key read, whoever reads it */
 void scr_redraw (void);	/* send everything on the next flush */
 
 /*
@@ -633,6 +641,7 @@ enum {
   CMD_TEST_COV_ALL, CMD_TEST_COV_FILE, CMD_TEST_COV_CURSOR, CMD_TEST_COV_CLOSE, CMD_TEST_COV_INLINE,	/* etest.c */
   CMD_PROFILE_SWITCH, CMD_PROFILE_NEW, CMD_PROFILE_RENAME, CMD_PROFILE_DELETE,
   CMD_GIT_WT_CREATE, CMD_GIT_WT_OPEN, CMD_GIT_WT_DELETE,	/* egitlog.c: git_command too */
+  CMD_TRUST_MANAGE, CMD_SCREENCAST,
   CMD_N
 };
 
@@ -1630,6 +1639,8 @@ int dbg_exception (const char *path, size_t line, const char **title, const char
 void debug_draw (int x, int y, int w, int h, int focus);	/* the Run and Debug view */
 int debug_key (int k, SideAct *act);
 void debug_click (int row, int col, SideAct *act);
+void debug_menu (int row, int x, int y, SideAct *act);	/* a row's context menu (row -1: the selected one) at x, y */
+int debug_row_at (int line);	/* the Run and Debug view's row at a line of it; -1 none */
 void debug_wheel (int d);
 void console_draw (int x, int y, int w, int h, int focus);	/* the DEBUG CONSOLE */
 int console_key (int k);
