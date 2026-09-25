@@ -4280,7 +4280,7 @@ static void draw_group (int other) {
   view_blocks_update(other);	/* a peek's rows, before the lines are drawn */
   if (G->diff && HAS_DIFF) {
     draw_crumbs_full();
-    diff_draw(L.ed_x, L.text_y, L.ed_w, L.text_h);
+    diff_draw(L.ed_x, L.text_y, L.ed_w, L.text_h, E.wrap);
     diff_title_draw(L.ed_x + L.ed_w, L.ed_y);	/* its actions in the tab bar, like VS Code's */
   }
   else if (!HAS_DOC) draw_watermark();
@@ -18922,6 +18922,11 @@ static void on_mouse (void) {
     hscrollbar_mouse(m);
     return;
   }
+  if (!m->wheel && diff_bar_held()) {	/* the diff's scrollbar: the same */
+    if (m->drag) diff_bar_drag(m->x, m->y);
+    else if (!m->press) diff_bar_up();
+    return;
+  }
   if (E.drag_sb) {	/* the thumb follows the mouse until the button comes up */
     if (m->drag) scrollbar_mouse(m);
     else if (!m->press) E.drag_sb = 0;
@@ -19195,10 +19200,11 @@ static void on_mouse (void) {
     return;
   }
   if (G->diff && HAS_DIFF) {
-    if (m->wheel) diff_wheel(m->wheel);
+    if (m->wheel) diff_wheel(m->wheel, m->mods);
     else if (press || (m->button == 0 && m->drag)) {
       if (press) E.focus = F_EDITOR;
-      if (diff_click(m->x, m->y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
+      if (press && diff_bar_press(m->x, m->y)) ;	/* its scrollbars */
+      else if (diff_click(m->x, m->y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
     }
     return;
   }

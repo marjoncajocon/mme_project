@@ -358,6 +358,11 @@ SCENARIOS = [
          ["w:2500", "k:" + CTRL_SHIFT_G, "w:1500"] + click(13, 6) + ["w:1800"] +
          brows(16, 17, 19, 20) + crows(16, 19),
          "the added and removed backgrounds of the diff editor"),
+    Scen("git-diff-word-wrap", "gitrepo",
+         ["w:2500", "k:" + CTRL_SHIFT_G, "w:1500"] + click(13, 6) + ["w:1800", "k:" + ALT_Z, "w:800", "d"],
+         "Alt+Z wraps the diff's long lines too: a line wider than its side goes on\n"
+         "         in the rows under it, the other side's rows stay level with it, and\n"
+         "         the horizontal scrollbar goes away"),
     Scen("git-file-history", "gitrepo/tracked.c",
          ["w:2500", "k:" + CTRL_SHIFT_P, "w:300", "k:View File History", "w:700",
           "k:|", "w:2000", "d"],

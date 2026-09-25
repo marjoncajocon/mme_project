@@ -2,7 +2,7 @@
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         dashrepo
 |      SOURCE CONTROL          │  lead.lua (Working Tree)                                                 ¶   
 |      main                     │  lead.lua
-|      Message (Ctrl+Enter to co  │▎1 - -- the first comment line            → 1 + -- the FIRST comment line, edited
+|      Message (Ctrl+Enter to co  │▎1 - -- the first comment line            → 1 + -- the FIRST comment line, edited    ▌
 |     Changes                1  │ 2   local x = 1                          │ 2   local x = 1
 |        lead.lua              M │ 3   local y = 2                          │ 3   local y = 2
 |▎    GRAPH                     │ 4   print(x + y)                         │ 4   print(x + y)

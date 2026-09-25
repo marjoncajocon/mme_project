@@ -1,7 +1,7 @@
-[181818]                                 ?[1f1f1f] 14                                       ? 14
-[181818]                                 ?[1f1f1f] 15 [481e20]- int [7d2628]deleted_below[481e20] (void) {          [0078d4]?[1f1f1f] 15 [253a1e]+ int [3e6426]added_function[253a1e] (void) {
-[181818]                                 ?[1f1f1f] 17   }                                   ? 17   }
-[181818]                                 ?[1f1f1f] 18                                       ? 18
-{868686}                                 {2b2b2b}?{6e7681} 14                                       {2b2b2b}? {6e7681}14
-{868686}                                 {2b2b2b}?{6e7681} 17   {cccccc}}                                   {2b2b2b}? {6e7681}17   {cccccc}}
+[181818]                                 ?[1f1f1f] 15 [481e20]- int [7d2628]deleted_below[481e20] (void) {          [0078d4]?[1f1f1f] 15 [253a1e]+ int [3e6426]added_function[253a1e] (void) {         [434343]
+[181818]                                 ?[1f1f1f] 16 [481e20]-     return [7d2628]4[481e20];                       [1f1f1f]? 16 [253a1e]+     return [3e6426]99[253a1e];                      [434343]?
+[181818]                                 ?[1f1f1f] 18                                       ? 18                                       [434343]
+[181818]                                 ?[1f1f1f] 19   int last (void) {                   ? 19   int last (void) {                   [434343]
+{868686}                                 {2b2b2b}?{6e7681} 15 {cccccc}- {569cd6}int {dcdcaa}deleted_below{cccccc} ({569cd6}void{cccccc}) {          ?{6e7681} 15 {cccccc}+ {569cd6}int {dcdcaa}added_function{cccccc} ({569cd6}void{cccccc}) {         {434343}
+{868686}                                 {2b2b2b}?{6e7681} 18                                       {2b2b2b}? {6e7681}18                                       {434343}
 exited=0

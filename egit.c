@@ -990,6 +990,16 @@ static struct {
   int cx, cy;	/* where the caret was drawn, -1 none */
   int x, y, w, hw, arrow_x, mmw;	/* where it was drawn: for the mouse */
   int act_x[6], nact;	/* the title's icons */
+  int wrap;	/* editor.wordWrap: a long line goes on in the rows under it */
+  int nw, tcl, tcr;	/* the numbers' width; the text's on the left / right (inline: tcr) */
+  int sbw, hsb;	/* the scrollbar's width (1 or 0); the horizontal one shows (under the rows) */
+  int hbx[2], hbw[2], nhb;	/* the horizontal ones: one under each side's text */
+  int drag_sb, drag_hsb;	/* a thumb is held: 1 + where it was taken */
+  size_t wide;	/* the widest line's columns */
+  int wide_ok;
+  size_t lastrow, lastcol;	/* the caret when last drawn: the view follows it when it moves */
+  size_t *sri, *srs;	/* each screen row drawn: its view row, and which row of it (word wrap) */
+  int nsr, capsr;
 } D;
 
 #define CTX	3	/* hideUnchangedRegions: the lines kept around a change */
@@ -1022,6 +1032,7 @@ static void dline_add (char kind, size_t o, size_t n, const char *s, size_t len)
   l->nhr = 0;
   if (o > D.nmax) D.nmax = o;
   if (n > D.nmax) D.nmax = n;
+  D.wide_ok = 0;
 }
 
 
@@ -1321,6 +1332,7 @@ static void lines_free (void) {
   }
   D.nline = 0;
   D.nmax = 0;
+  D.wide_ok = 0;
 }
 
 
@@ -1335,6 +1347,8 @@ void diff_close (void) {
   free(D.tb);
   free(D.vis);
   free(D.exp);
+  free(D.sri);
+  free(D.srs);
   memset(&D, 0, sizeof(D));
 }
 
@@ -2024,12 +2038,20 @@ static size_t vpos (size_t k) {	/* the place of row k among those shown (a hidde
 
 
 /* the cursor d rows on (of those shown); the view follows */
+/* the columns cp takes at column col, as scr_code draws it */
+static size_t ccw (uint32_t cp, size_t col) {
+  if (cp == '\t') return (size_t)TABW - col % (size_t)TABW;
+  if (cp < 32 || cp == 127) return 2;
+  return (size_t)uc_width(cp);
+}
+
+
 /* the column byte c of s is drawn at (tabs expanded, like scr_code) */
 static size_t dcol (const char *s, size_t n, size_t c) {
   size_t i = 0, col = 0, len;
   while (i < n && i < c) {
     uint32_t cp = utf8_decode(s + i, n - i, &len);
-    col += cp == '\t' ? (size_t)TABW - col % (size_t)TABW : (uc_width(cp) ? (size_t)uc_width(cp) : 1);
+    col += ccw(cp, col);
     i += len;
   }
   return col;
@@ -2041,10 +2063,122 @@ static size_t dbyte (const char *s, size_t n, size_t col) {
   size_t i = 0, c = 0, len;
   while (i < n && c < col) {
     uint32_t cp = utf8_decode(s + i, n - i, &len);
-    c += cp == '\t' ? (size_t)TABW - c % (size_t)TABW : (uc_width(cp) ? (size_t)uc_width(cp) : 1);
+    c += ccw(cp, c);
     i += len;
   }
   return i;
+}
+
+
+/* the widest line's columns, either side */
+static size_t diff_wide (void) {
+  size_t i;
+  if (D.wide_ok) return D.wide;
+  D.wide = 0;
+  for (i = 0; i < D.nline; i++) {
+    size_t c = dcol(D.line[i].s, D.line[i].len, D.line[i].len);
+    if (D.line[i].os) {
+      size_t o = dcol(D.line[i].os, D.line[i].olen, D.line[i].olen);
+      if (o > c) c = o;
+    }
+    if (c > D.wide) D.wide = c;
+  }
+  D.wide_ok = 1;
+  return D.wide;
+}
+
+
+/*
+** Word wrap in the diff: a line wider than its side's text is cut into
+** rows, after a space when there is one, like the editor's. dsegs gives
+** where each row starts (bytes); side by side, a row is as high as its
+** higher side.
+*/
+#define DSEG	512
+
+static size_t dsegs (const char *s, size_t n, int tw, size_t *st) {
+  size_t k = 1, i = 0, col = 0, segcol = 0, sp = 0, len;
+  st[0] = 0;
+  if (!D.wrap || tw < 4) return 1;
+  while (i < n) {
+    uint32_t cp = utf8_decode(s + i, n - i, &len);
+    size_t cw = ccw(cp, col);
+    if (col + cw - segcol > (size_t)tw && i > st[k - 1]) {	/* it does not fit: a new row */
+      size_t cut = sp > st[k - 1] ? sp : i;
+      if (k == DSEG) break;
+      st[k++] = cut;
+      i = cut;
+      col = segcol = dcol(s, n, cut);
+      sp = 0;
+      continue;
+    }
+    if (cp == ' ' || cp == '\t') sp = i + len;
+    col += cw;
+    i += len;
+  }
+  return k;
+}
+
+
+/* the text a side shows of l: the old side of an unchanged line may have its old spaces */
+static const char *side_text (const DLine *l, int left, size_t *n, const unsigned char **tok) {
+  if (left && l->kind == ' ' && l->os) {
+    *n = l->olen;
+    if (tok) *tok = NULL;
+    return l->os;
+  }
+  *n = l->len;
+  if (tok) *tok = l->tok;
+  return l->s;
+}
+
+
+/* the rows of view row i on the screen: 1 but with word wrap */
+static size_t row_h (size_t i) {
+  size_t st[DSEG], k, n, a = 1, b = 1;
+  const char *s;
+  if (!D.wrap || (D.nvis && D.vis[i].hidden)) return 1;
+  k = vk(i);
+  if (D.split_now) {
+    if (k >= D.nrow) return 1;
+    if (D.row[k].l >= 0) {
+      s = side_text(&D.line[D.row[k].l], 1, &n, NULL);
+      a = dsegs(s, n, D.tcl, st);
+    }
+    if (D.row[k].r >= 0) {
+      s = side_text(&D.line[D.row[k].r], 0, &n, NULL);
+      b = dsegs(s, n, D.tcr, st);
+    }
+    return a > b ? a : b;
+  }
+  return k < D.nline ? dsegs(D.line[k].s, D.line[k].len, D.tcr, st) : 1;
+}
+
+
+/* the last view row that can be the top: the rows from it fill the screen to the end */
+static size_t last_top (void) {
+  size_t n = vcount(), i = n, used = 0, h = D.h > 0 ? (size_t)D.h : 1;
+  if (!D.wrap) return n > h ? n - h : 0;
+  while (i > 0) {
+    size_t rh = row_h(i - 1);
+    if (used + rh > h) break;
+    used += rh;
+    i--;
+  }
+  return i < n ? i : (n ? n - 1 : 0);
+}
+
+
+/* the view follows view row i: it goes on the screen, whole when it fits */
+static void show_row (size_t i) {
+  size_t i0 = vpos(D.top), h = D.h > 0 ? (size_t)D.h : 1, t = i, used;
+  if (i < i0) {
+    D.top = vk(i);
+    return;
+  }
+  used = row_h(i);
+  while (t > i0 && used + row_h(t - 1) <= h) used += row_h(--t);
+  if (t > i0) D.top = vk(t);
 }
 
 
@@ -2084,7 +2218,7 @@ static size_t next_byte (const char *s, size_t c) {
 
 
 static void crow_move (long d) {
-  size_t n = vcount(), h = D.h > 0 ? (size_t)D.h : 1, i, i0;
+  size_t n = vcount(), i;
   long p;
   if (n == 0) return;
   p = (long)vpos(D.crow) + d;
@@ -2093,9 +2227,7 @@ static void crow_move (long d) {
   i = (size_t)p;
   D.crow = vk(i);
   if (is_change(D.crow)) D.cur = D.crow;	/* the change Stage / Revert Selected Ranges takes */
-  i0 = vpos(D.top);
-  if (i < i0) D.top = vk(i);
-  else if (i >= i0 + h) D.top = vk(i - h + 1);
+  show_row(i);
 }
 
 
@@ -2112,7 +2244,7 @@ size_t diff_caret (size_t *col) {
 
 /* the caret on the file's line (from 1) and byte, the row shown */
 void diff_set_caret (size_t line, size_t col) {
-  size_t n = nrows(), k, best = (size_t)-1, h = D.h > 0 ? (size_t)D.h : 1, i, i0;
+  size_t n = nrows(), k, best = (size_t)-1;
   for (k = 0; k < n; k++) {
     size_t l = new_line_of(k);
     if (l == line) {
@@ -2124,10 +2256,7 @@ void diff_set_caret (size_t line, size_t col) {
   if (best == (size_t)-1) return;
   D.crow = best;
   D.ccol = col;
-  i = vpos(D.crow);
-  i0 = vpos(D.top);
-  if (i < i0) D.top = vk(i);
-  else if (i >= i0 + h) D.top = vk(i + 1 > h ? i - h + 1 : 0);
+  show_row(vpos(D.crow));
 }
 
 
@@ -2170,24 +2299,51 @@ void diff_change (int back) {
 
 
 /* the changed words of a line drawn at x (from its column left on): their background brighter */
-static void paint_words (int x, int y, int w, const char *s, size_t n, const DLine *l, uint32_t rgb) {
-  size_t i = 0, col = 0, len, right = D.left + (size_t)(w > 0 ? w : 0), r = 0;
+static void paint_words (int x, int y, int w, const char *s, size_t n, const DLine *l, size_t left, uint32_t rgb) {
+  size_t i = 0, col = 0, len, right = left + (size_t)(w > 0 ? w : 0), r = 0;
   while (i < n && col < right && r < l->nhr) {
     uint32_t cp = utf8_decode(s + i, n - i, &len);
     size_t cw = cp == '\t' ? (size_t)TABW - col % (size_t)TABW : (cp < 32 || cp == 127) ? 2 : (size_t)uc_width(cp), k;
     while (r < l->nhr && i >= l->hr[2 * r + 1]) r++;
     if (r < l->nhr && i >= l->hr[2 * r])
       for (k = 0; k < cw; k++)
-        if (col + k >= D.left && col + k < right) scr_set_bg(x + (int)(col + k - D.left), y, rgb);
+        if (col + k >= left && col + k < right) scr_set_bg(x + (int)(col + k - left), y, rgb);
     col += cw;
     i += len;
   }
 }
 
 
-static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, int cur) {
+/* row seg of l's text s (word wrap; without it, the part from D.left on) at x, in w columns */
+static void draw_text (int x, int y, int w, const DLine *l, const char *s, size_t n, const unsigned char *tok,
+                       size_t seg, int cur) {
+  size_t st[DSEG], ns = dsegs(s, n, w, st), c0 = D.left, cw = w > 0 ? (size_t)w : 0;
+  int plain = l->kind == ' ' || l->nhr;
+  if (seg >= ns) return;
+  if (D.wrap) {
+    size_t c1 = dcol(s, n, seg + 1 < ns ? st[seg + 1] : n);
+    c0 = dcol(s, n, st[seg]);
+    if (c1 - c0 < cw) cw = c1 - c0;
+  }
+  scr_code(x, y, (int)cw, s, n, c0, tok, l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : cur ? B_LINE : B_EDITOR,
+           plain ? 0 : l->h0, plain ? 0 : l->h1, l->kind == '+' ? B_ADD_HI : l->kind == '-' ? B_DEL_HI : B_EDITOR);
+  if (l->nhr) paint_words(x, y, (int)cw, s, n, l, c0, ui_color(l->kind == '+' ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
+}
+
+
+/* where the caret (byte c of s, drawn at x in tw columns) is on row seg; -1: not on it */
+static int caret_x (int x, const char *s, size_t n, int tw, size_t seg, size_t c) {
+  size_t st[DSEG], ns = dsegs(s, n, tw, st), j = 0;
+  if (!D.wrap) return seg == 0 ? x + (int)dcol(s, n, c) - (int)D.left : -1;
+  while (j + 1 < ns && st[j + 1] <= c) j++;
+  if (j != seg) return -1;
+  return x + (int)(dcol(s, n, c) - dcol(s, n, st[j]));
+}
+
+
+static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, int cur, size_t seg) {
   char num[32];
-  int st, hst;
+  int st;
   const char *s;
   size_t len;
   const unsigned char *tok;
@@ -2196,24 +2352,14 @@ static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, in
     for (i = 0; i < w; i++) scr_put(x + i, y, 0x2571, S_DIFF_FILL);
     return;
   }
-  s = l->s;
-  len = l->len;
-  tok = l->tok;
-  if (left && l->kind == ' ' && l->os) {	/* its old spaces */
-    s = l->os;
-    len = l->olen;
-    tok = NULL;
-  }
+  s = side_text(l, left, &len, &tok);
   st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : cur ? S_LINE : S_TEXT;
-  hst = l->kind == '+' ? B_ADD_HI : l->kind == '-' ? B_DEL_HI : B_EDITOR;
-  snprintf(num, sizeof(num), "%*lu ", nw - 1, (unsigned long)(left ? l->o : l->n));
+  if (seg == 0) snprintf(num, sizeof(num), "%*lu ", nw - 1, (unsigned long)(left ? l->o : l->n));
+  else snprintf(num, sizeof(num), "%*s ", nw - 1, "");	/* a wrapped line's next rows: no number */
   scr_puts(x, y, num, cur ? S_GUTTER_CUR : S_DIFF_NUM);
   scr_fill(x + nw, y, w - nw, st);
-  if (l->kind != ' ') scr_put(x + nw, y, l->kind == '+' ? '+' : '-', st);
-  scr_code(x + nw + 2, y, w - nw - 2, s, len, D.left, tok,
-           l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : cur ? B_LINE : B_EDITOR,
-           l->kind == ' ' || l->nhr ? 0 : l->h0, l->kind == ' ' || l->nhr ? 0 : l->h1, hst);
-  if (l->nhr) paint_words(x + nw + 2, y, w - nw - 2, s, len, l, ui_color(l->kind == '+' ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
+  if (seg == 0 && l->kind != ' ') scr_put(x + nw, y, l->kind == '+' ? '+' : '-', st);
+  draw_text(x + nw + 2, y, w - nw - 2, l, s, len, tok, seg, cur);
 }
 
 
@@ -2310,9 +2456,92 @@ static int in_current (size_t k) {
 }
 
 
-void diff_draw (int x, int y, int w, int h) {
-  int nw = 2, row;
-  size_t m = D.nmax, n, i0;
+#define SB_ADD	0x2EA043	/* the scrollbar's marks: the editor's overview ruler colors */
+#define SB_MOD	0x0078D4
+#define SB_DEL	0xF85149
+
+/* what row k changes: 1 a line came, 2 one went, 3 both */
+static unsigned row_kinds (size_t k) {
+  unsigned m = 0;
+  if (D.split_now) {
+    if (k >= D.nrow) return 0;
+    if (D.row[k].l >= 0 && D.line[D.row[k].l].kind == '-') m |= 2;
+    if (D.row[k].r >= 0 && D.line[D.row[k].r].kind == '+') m |= 1;
+    return m;
+  }
+  if (k >= D.nline) return 0;
+  return D.line[k].kind == '+' ? 1 : D.line[k].kind == '-' ? 2 : 0;
+}
+
+
+/* the vertical scrollbar's thumb in h rows: its size, and where it is */
+static int vthumb (int h, int *pos) {
+  size_t lt = last_top(), i0 = vpos(D.top);
+  int size;
+  *pos = 0;
+  if (lt == 0 || h < 1) return h;
+  size = (int)((size_t)h * (size_t)h / (lt + (size_t)h));
+  if (size < 1) size = 1;
+  *pos = (int)((double)(i0 < lt ? i0 : lt) * (double)(h - size) / (double)lt + 0.5);
+  if (*pos > h - size) *pos = h - size;
+  return size;
+}
+
+
+/* the vertical scrollbar at x: the thumb, and the changes where they are, like the editor's */
+static void draw_vbar (int x, int y, int h) {
+  int pos, size = vthumb(h, &pos), r;
+  size_t n = vcount(), all = n > (size_t)h ? n : (size_t)h;	/* all fits: a row of it is a row of the bar */
+  for (r = 0; r < h; r++) {
+    size_t a = all * (size_t)r / (size_t)h, b = all * (size_t)(r + 1) / (size_t)h, i;
+    unsigned kinds = 0;
+    int on = size < h && r >= pos && r < pos + size;
+    uint32_t bg = ui_color(on ? (D.drag_sb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    if (b <= a) b = a + 1;
+    for (i = a; i < b && i < n; i++)
+      if (!(D.nvis && D.vis[i].hidden)) kinds |= row_kinds(vk(i));
+    if (kinds) scr_put_rgb(x, y + r, 0x258C, kinds == 1 ? SB_ADD : kinds == 2 ? SB_DEL : SB_MOD, bg, 0);
+    else scr_put_rgb(x, y + r, ' ', bg, bg, 0);
+  }
+}
+
+
+/* the columns the text shows side by side: the narrower side's */
+static size_t text_cols (void) {
+  int tc = D.tcl < D.tcr ? D.tcl : D.tcr;
+  return tc > 1 ? (size_t)tc : 1;
+}
+
+
+/* a horizontal scrollbar's thumb in bw columns: its size, and where it is */
+static int hthumb (int bw, int *pos) {
+  size_t wide = diff_wide() + 1, tc = text_cols();
+  int size;
+  *pos = 0;
+  if (wide <= tc || bw < 1) return bw;
+  size = (int)((size_t)bw * tc / wide);
+  if (size < 2) size = 2;
+  if (size > bw) size = bw;
+  *pos = (int)((double)D.left * (double)(bw - size) / (double)(wide - tc) + 0.5);
+  if (*pos > bw - size) *pos = bw - size;
+  return size;
+}
+
+
+/* the horizontal scrollbar: half a row high, the lower half of the cell, like the editor's */
+static void draw_hbar (int x, int y, int bw) {
+  int pos, size = hthumb(bw, &pos), i;
+  for (i = 0; i < bw; i++) {
+    int on = i >= pos && i < pos + size;
+    uint32_t fg = ui_color(on ? (D.drag_hsb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    scr_put_rgb(x + i, y, 0x2584, fg, ui_color(C_EDITOR_BG), 0);
+  }
+}
+
+
+void diff_draw (int x, int y, int w, int h, int wrap) {
+  int nw = 2, sy;
+  size_t m = D.nmax, n, i0, i, lt;
   if (D.ta && D.trim != vopt.diff_trim) {	/* ignoreTrimWhitespace changed: the lines again */
     relines(vopt.diff_trim);
     rebuild();
@@ -2324,77 +2553,199 @@ void diff_draw (int x, int y, int w, int h) {
   }
   nw++;
   D.split_now = !D.inline_mode && w >= 80;
+  D.wrap = wrap;
   D.cx = D.cy = -1;
-  D.h = h;
   D.x = x;
   D.y = y;
   D.w = w;
+  D.nw = nw;
   D.mmw = (opt.minimap && w >= 100) ? DMM_W : 0;	/* its minimap, when there is room */
-  w -= D.mmw;
+  D.sbw = (w >= 30 && h >= 2) ? 1 : 0;	/* its scrollbar, at the right edge like the editor's */
+  w -= D.mmw + D.sbw;
   D.hw = (w - 1) / 2;
   D.arrow_x = 2 * nw - 1;
+  if (D.split_now) {
+    D.tcl = D.hw - nw - 2;
+    D.tcr = w - D.hw - 1 - nw - 2;
+  }
+  else D.tcl = D.tcr = w - 2 * nw - 2;
   if (D.vis_split != D.split_now || D.vis_hide != vopt.diff_hide) vis_build();
+  D.hsb = !wrap && h > 3 && diff_wide() + 1 > text_cols();	/* a line wider than the text: a scrollbar under it */
+  if (D.hsb) h--;
+  D.h = h;
+  if (wrap) D.left = 0;
+  else {
+    size_t wide = diff_wide() + 1, tc = text_cols(), maxl = wide > tc ? wide - tc : 0;
+    if (diff_editable() && (D.crow != D.lastrow || D.ccol != D.lastcol)) {	/* the caret moved: the view follows it */
+      size_t c = dcol(caret_line(), caret_len(), D.ccol < caret_len() ? D.ccol : caret_len());
+      size_t tw = D.tcr > 1 ? (size_t)D.tcr : 1;
+      if (c < D.left) D.left = c;
+      else if (c >= D.left + tw) D.left = c - tw + 1;
+    }
+    if (D.left > maxl) D.left = maxl;
+  }
+  D.lastrow = D.crow;
+  D.lastcol = D.ccol;
   n = vcount();
   i0 = vpos(D.top);
-  if (i0 + (size_t)h > n) i0 = n > (size_t)h ? n - (size_t)h : 0;
+  lt = last_top();
+  if (i0 > lt) i0 = lt;
   D.top = n ? vk(i0) : 0;
+  if (D.capsr < h) {
+    D.capsr = h;
+    D.sri = (size_t *)xrealloc(D.sri, (size_t)h * sizeof(size_t));
+    D.srs = (size_t *)xrealloc(D.srs, (size_t)h * sizeof(size_t));
+  }
+  D.nsr = 0;
   scr_box(x, y, w, h, S_TEXT);
-  for (row = 0; row < h; row++) {
-    size_t i = i0 + (size_t)row, k;
-    int sy = y + row, cur;
-    if (i >= n) break;
-    k = vk(i);
+  for (i = i0, sy = y; i < n && sy < y + h; i++) {
+    size_t k = vk(i), rh, seg;
+    int cur;
     if (D.nvis && D.vis[i].hidden) {
       draw_fold(x, sy, w, D.vis[i].hidden);
+      D.sri[D.nsr] = i;
+      D.srs[D.nsr++] = 0;
+      sy++;
       continue;
     }
     cur = k == D.crow;
-    if (D.split_now) {
-      int hw = D.hw;
-      const SRow *r = &D.row[k];
-      draw_side(x, sy, hw, r->l >= 0 ? &D.line[r->l] : NULL, 1, nw, cur);
-      if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);	/* the change Stage Selected Ranges takes */
-      if (D.kind == DK_TREE && block_start(k)) scr_put(x + hw, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
-      else scr_put(x + hw, sy, 0x2502, S_DIFF_FILL);
-      draw_side(x + hw + 1, sy, w - hw - 1, r->r >= 0 ? &D.line[r->r] : NULL, 0, nw, cur);
-      if (cur && diff_editable() && r->r >= 0) {	/* the caret: the modified side is typed in */
-        const DLine *l = &D.line[r->r];
-        size_t c = D.ccol < l->len ? D.ccol : l->len;
-        D.cx = x + hw + 1 + nw + 2 + (int)(dcol(l->s, l->len, c) - D.left);
-        D.cy = sy;
+    rh = row_h(i);
+    for (seg = 0; seg < rh && sy < y + h; seg++, sy++) {
+      D.sri[D.nsr] = i;
+      D.srs[D.nsr++] = seg;
+      if (D.split_now) {
+        int hw = D.hw;
+        const SRow *r = &D.row[k];
+        draw_side(x, sy, hw, r->l >= 0 ? &D.line[r->l] : NULL, 1, nw, cur, seg);
+        if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);	/* the change Stage Selected Ranges takes */
+        if (seg == 0 && D.kind == DK_TREE && block_start(k)) scr_put(x + hw, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
+        else scr_put(x + hw, sy, 0x2502, S_DIFF_FILL);
+        draw_side(x + hw + 1, sy, w - hw - 1, r->r >= 0 ? &D.line[r->r] : NULL, 0, nw, cur, seg);
+        if (cur && diff_editable() && r->r >= 0) {	/* the caret: the modified side is typed in */
+          const DLine *l = &D.line[r->r];
+          int cx = caret_x(x + hw + 1 + nw + 2, l->s, l->len, D.tcr, seg, D.ccol < l->len ? D.ccol : l->len);
+          if (cx >= 0) {
+            D.cx = cx;
+            D.cy = sy;
+          }
+        }
       }
-    }
-    else {	/* inline: both numbers, then the line */
-      const DLine *l = &D.line[k];
-      char num[64];
-      int st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : cur ? S_LINE : S_TEXT;
-      int hst = l->kind == '+' ? B_ADD_HI : l->kind == '-' ? B_DEL_HI : B_EDITOR;
-      char a[24], b[24];
-      if (l->o) snprintf(a, sizeof(a), "%lu", (unsigned long)l->o);
-      else a[0] = '\0';
-      if (l->n) snprintf(b, sizeof(b), "%lu", (unsigned long)l->n);
-      else b[0] = '\0';
-      snprintf(num, sizeof(num), "%*s %*s ", nw - 1, a, nw - 1, b);
-      scr_puts(x, sy, num, cur ? S_GUTTER_CUR : S_DIFF_NUM);
-      scr_fill(x + 2 * nw, sy, w - 2 * nw, st);
-      if (l->kind != ' ') scr_put(x + 2 * nw, sy, (uint32_t)l->kind, st);
-      scr_code(x + 2 * nw + 2, sy, w - 2 * nw - 2, l->s, l->len, D.left, l->tok,
-               l->kind == '+' ? B_ADD : l->kind == '-' ? B_DEL : cur ? B_LINE : B_EDITOR,
-               l->kind == ' ' || l->nhr ? 0 : l->h0, l->kind == ' ' || l->nhr ? 0 : l->h1, hst);
-      if (l->nhr)
-        paint_words(x + 2 * nw + 2, sy, w - 2 * nw - 2, l->s, l->len, l,
-                    ui_color(l->kind == '+' ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
-      if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);
-      if (D.kind == DK_TREE && block_start(k)) scr_put(x + D.arrow_x, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
-      if (cur && diff_editable() && l->kind != '-') {	/* the caret */
-        size_t c = D.ccol < l->len ? D.ccol : l->len;
-        D.cx = x + 2 * nw + 2 + (int)(dcol(l->s, l->len, c) - D.left);
-        D.cy = sy;
+      else {	/* inline: both numbers, then the line */
+        const DLine *l = &D.line[k];
+        char num[64];
+        int st = l->kind == '+' ? S_DIFF_ADD : l->kind == '-' ? S_DIFF_DEL : cur ? S_LINE : S_TEXT;
+        char a[24], b[24];
+        a[0] = b[0] = '\0';
+        if (seg == 0 && l->o) snprintf(a, sizeof(a), "%lu", (unsigned long)l->o);
+        if (seg == 0 && l->n) snprintf(b, sizeof(b), "%lu", (unsigned long)l->n);
+        snprintf(num, sizeof(num), "%*s %*s ", nw - 1, a, nw - 1, b);
+        scr_puts(x, sy, num, cur ? S_GUTTER_CUR : S_DIFF_NUM);
+        scr_fill(x + 2 * nw, sy, w - 2 * nw, st);
+        if (seg == 0 && l->kind != ' ') scr_put(x + 2 * nw, sy, (uint32_t)l->kind, st);
+        draw_text(x + 2 * nw + 2, sy, w - 2 * nw - 2, l, l->s, l->len, l->tok, seg, cur);
+        if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);
+        if (seg == 0 && D.kind == DK_TREE && block_start(k)) scr_put(x + D.arrow_x, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
+        if (cur && diff_editable() && l->kind != '-') {	/* the caret */
+          int cx = caret_x(x + 2 * nw + 2, l->s, l->len, D.tcr, seg, D.ccol < l->len ? D.ccol : l->len);
+          if (cx >= 0) {
+            D.cx = cx;
+            D.cy = sy;
+          }
+        }
       }
     }
   }
   if (D.mmw > 0) draw_dmap(x + w, y, h, i0);
+  if (D.sbw > 0) draw_vbar(x + w + D.mmw, y, h);
+  D.nhb = 0;
+  if (D.hsb) {	/* the row under the text: a scrollbar under each side's text */
+    scr_fill(x, y + h, D.w, S_TEXT);
+    if (D.split_now) {
+      scr_put(x + D.hw, y + h, 0x2502, S_DIFF_FILL);
+      D.hbx[0] = x + nw + 2;
+      D.hbw[0] = D.tcl;
+      D.hbx[1] = x + D.hw + 1 + nw + 2;
+      D.hbw[1] = D.tcr;
+      D.nhb = 2;
+    }
+    else {
+      D.hbx[0] = x + 2 * nw + 2;
+      D.hbw[0] = D.tcr;
+      D.nhb = 1;
+    }
+    for (i = 0; i < (size_t)D.nhb; i++)
+      if (D.hbw[i] > 0) draw_hbar(D.hbx[i], y + h, D.hbw[i]);
+  }
   if (D.cx >= x && D.cx < x + w && D.cy >= y) scr_cursor(D.cx, D.cy);
+}
+
+
+/* the vertical thumb follows the mouse at row my */
+static void vbar_mouse (int my) {
+  int pos, size = vthumb(D.h, &pos), ry = my - D.y;
+  size_t lt = last_top(), i;
+  if (lt == 0 || D.h - size <= 0) return;
+  if (!D.drag_sb) {
+    if (ry >= pos && ry < pos + size) D.drag_sb = 1 + (ry - pos);	/* the thumb is taken */
+    else D.drag_sb = 1 + size / 2;	/* elsewhere: it jumps there, like VS Code */
+  }
+  ry -= D.drag_sb - 1;
+  if (ry < 0) ry = 0;
+  i = (size_t)((double)ry * (double)lt / (double)(D.h - size) + 0.5);
+  D.top = vk(i < lt ? i : lt);
+}
+
+
+/* a horizontal thumb (the one taken, hbar) follows the mouse at column mx */
+static void hbar_mouse (int b, int mx) {
+  int bw = D.hbw[b], pos, size = hthumb(bw, &pos), rx = mx - D.hbx[b];
+  size_t wide = diff_wide() + 1, tc = text_cols(), left;
+  if (wide <= tc || bw - size <= 0) return;
+  if (!D.drag_hsb) {
+    if (rx >= pos && rx < pos + size) D.drag_hsb = 1 + (rx - pos);
+    else D.drag_hsb = 1 + size / 2;
+  }
+  rx -= D.drag_hsb - 1;
+  if (rx < 0) rx = 0;
+  left = (size_t)((double)rx * (double)(wide - tc) / (double)(bw - size) + 0.5);
+  D.left = left < wide - tc ? left : wide - tc;
+}
+
+
+static int g_hbar;	/* the horizontal scrollbar taken: 0 left, 1 right */
+
+/* a press at mx, my on the diff's scrollbars: 1 it was one of them (its thumb is taken) */
+int diff_bar_press (int mx, int my) {
+  int b;
+  D.drag_sb = D.drag_hsb = 0;
+  if (!D.open) return 0;
+  if (D.sbw && mx == D.x + D.w - 1 && my >= D.y && my < D.y + D.h) {
+    vbar_mouse(my);
+    return 1;
+  }
+  if (!D.hsb || my != D.y + D.h || mx < D.x || mx >= D.x + D.w) return 0;
+  for (b = 0; b < D.nhb; b++)
+    if (mx >= D.hbx[b] && mx < D.hbx[b] + D.hbw[b]) {
+      g_hbar = b;
+      hbar_mouse(b, mx);
+    }
+  return 1;	/* the row of the scrollbars: nothing else is there */
+}
+
+
+int diff_bar_held (void) {
+  return D.open && (D.drag_sb || D.drag_hsb);
+}
+
+
+void diff_bar_drag (int mx, int my) {
+  if (D.drag_sb) vbar_mouse(my);
+  else if (D.drag_hsb) hbar_mouse(g_hbar, mx);
+}
+
+
+void diff_bar_up (void) {
+  D.drag_sb = D.drag_hsb = 0;
 }
 
 
@@ -2458,19 +2809,20 @@ int diff_title_click (int x) {
 
 /* a click in the diff at screen mx, my: a fold opens, an arrow reverts, else the cursor goes there */
 int diff_click (int mx, int my) {
-  size_t i, k;
+  size_t i, k, seg;
   int row = my - D.y;
   if (!D.open || row < 0 || row >= D.h) return DIFF_NO;
-  if (D.mmw > 0 && mx >= D.x + D.w - D.mmw) {	/* its minimap: the rows there */
+  if (D.mmw > 0 && mx >= D.x + D.w - D.sbw - D.mmw && mx < D.x + D.w - D.sbw) {	/* its minimap: the rows there */
     size_t n = vcount(), per = (n + (size_t)D.h - 1) / (size_t)D.h, want;
     if (per == 0) per = 1;
     want = (size_t)row * per;
-    if (want + (size_t)D.h > n) want = n > (size_t)D.h ? n - (size_t)D.h : 0;
+    if (want > last_top()) want = last_top();
     D.top = n ? vk(want) : 0;
     return DIFF_YES;
   }
-  i = vpos(D.top) + (size_t)row;
-  if (i >= vcount()) return DIFF_YES;
+  if (row >= D.nsr) return DIFF_YES;	/* under the end */
+  i = D.sri[row];
+  seg = D.srs[row];
   k = vk(i);
   if (D.nvis && D.vis[i].hidden) {	/* the fold opens */
     if (D.exp && k < D.nexp) D.exp[k] = 1;
@@ -2487,11 +2839,20 @@ int diff_click (int mx, int my) {
     }
     nw++;
     cx = mx - (D.split_now ? D.x + D.hw + 1 + nw + 2 : D.x + 2 * nw + 2);
-    D.ccol = cx > 0 ? dbyte(caret_line(), caret_len(), D.left + (size_t)cx) : 0;
+    if (D.wrap) {	/* the row of the line clicked: from where it starts */
+      size_t st[DSEG], ns = dsegs(caret_line(), caret_len(), D.tcr, st);
+      if (seg >= ns) D.ccol = caret_len();
+      else {
+        size_t c0 = dcol(caret_line(), caret_len(), st[seg]), e = seg + 1 < ns ? st[seg + 1] : caret_len();
+        D.ccol = dbyte(caret_line(), caret_len(), c0 + (size_t)(cx > 0 ? cx : 0));
+        if (seg + 1 < ns && D.ccol >= e) D.ccol = prev_byte(caret_line(), e);	/* past the row's end: its last character */
+      }
+    }
+    else D.ccol = cx > 0 ? dbyte(caret_line(), caret_len(), D.left + (size_t)cx) : 0;
     if (D.ccol > caret_len()) D.ccol = caret_len();
   }
   if (is_change(k)) D.cur = k;
-  if (D.kind == DK_TREE && block_start(k) && mx == D.x + (D.split_now ? D.hw : D.arrow_x)) return DIFF_REVERT;
+  if (D.kind == DK_TREE && seg == 0 && block_start(k) && mx == D.x + (D.split_now ? D.hw : D.arrow_x)) return DIFF_REVERT;
   return DIFF_YES;
 }
 
@@ -2660,10 +3021,15 @@ void diff_toggle_inline (void) {
 }
 
 
-void diff_wheel (int d) {
-  size_t i = vpos(D.top), n = vcount(), st = (size_t)wheel_step(0);
+void diff_wheel (int d, int mods) {
+  size_t i = vpos(D.top), n = vcount(), st = (size_t)wheel_step(mods & ~KM_SHIFT), lt = last_top();
+  if ((mods & KM_SHIFT) && !D.wrap) {	/* Shift+wheel: to the side, like VS Code (diff_draw keeps it in) */
+    st *= 2;
+    D.left = d < 0 ? (D.left > st ? D.left - st : 0) : D.left + st;
+    return;
+  }
   if (d < 0) i = i > st ? i - st : 0;
-  else i = i + st < n ? i + st : (n ? n - 1 : 0);
+  else i = i + st < lt ? i + st : lt;
   D.top = n ? vk(i) : 0;
 }
 

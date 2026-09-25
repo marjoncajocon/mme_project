@@ -1049,9 +1049,13 @@ int diff_editable (void);	/* the modified side is the working tree's file: it is
 size_t diff_caret (size_t *col);	/* the caret's line (from 1) and byte, 0: nowhere */
 void diff_set_caret (size_t line, size_t col);
 void diff_new_text (const char *s, size_t n);	/* the modified side's text again: the lines are made from it */
-void diff_draw (int x, int y, int w, int h);
+void diff_draw (int x, int y, int w, int h, int wrap);	/* wrap: editor.wordWrap */
 int diff_key (int k);	/* DIFF_* */
-void diff_wheel (int d);
+void diff_wheel (int d, int mods);	/* Shift: to the side */
+int diff_bar_press (int mx, int my);	/* a press on its scrollbars: 1 it took it */
+int diff_bar_held (void);	/* a scrollbar's thumb is held */
+void diff_bar_drag (int mx, int my);
+void diff_bar_up (void);
 void diff_change (int back);
 void diff_toggle_inline (void);	/* side by side, or one above the other */	/* F7 / Shift+F7 */
 
