@@ -74,6 +74,9 @@ static struct {
   long long font_seen;	/* when the settings were looked at last */
   float wheel_x, wheel_y;	/* a touchpad's scrolling, less than a line so far */
   int ime_x, ime_y;	/* where the IME's window was told the caret is */
+  int custom;	/* window.titleBarStyle "custom" (VS Code's default): mme's menu bar is the title bar */
+  int borderless;	/* no system frame now (custom, and the menu bar is shown) */
+  int tb_hover, tb_press;	/* the title bar's button under the mouse, held down; -1 none */
 } W;
 
 
@@ -500,6 +503,97 @@ static void out_size (int *w, int *h) {
 }
 
 
+/*
+** {==================================================================
+** The title bar (window.titleBarStyle "custom", VS Code's default on
+** Windows): no system frame; mme's menu bar is the title bar - its empty
+** parts move the window (a double-click maximizes it, dragged to the
+** screen's top it snaps), the window's edges resize it, and its minimize,
+** maximize and close buttons are drawn here at its right end
+** ===================================================================
+*/
+
+static int tb_width (void) {	/* a button: VS Code's 46 pixels (at 96 DPI, zoomed), as high as a row */
+  int w = (int)(46.0f * W.scale * (W.px0 > 0.0f ? W.px / W.px0 : 1.0f) + 0.5f);
+  return w > W.ch ? w : W.ch;
+}
+
+
+static int tb_left (void) {
+  return W.fr.w - 3 * tb_width();
+}
+
+
+/* the button at pixel (x, y) of the picture: 0 minimize, 1 maximize, 2 close; -1 none */
+static int tb_button (int x, int y) {
+  if (!W.borderless || y < 0 || y >= W.ch || x < tb_left() || x >= W.fr.w) return -1;
+  x = (x - tb_left()) / tb_width();
+  return x > 2 ? 2 : x;
+}
+
+
+static double seg_dist (double px, double py, double ax, double ay, double bx, double by);
+
+
+static void aa_line (Frame *f, double x0, double y0, double x1, double y1, double t, uint32_t c) {
+  int i, j, l = (int)floor((x0 < x1 ? x0 : x1) - t), r = (int)ceil((x0 > x1 ? x0 : x1) + t);
+  int top = (int)floor((y0 < y1 ? y0 : y1) - t), bot = (int)ceil((y0 > y1 ? y0 : y1) + t);
+  for (j = top; j <= bot; j++)
+    for (i = l; i <= r; i++) {
+      double a = t / 2.0 + 0.5 - seg_dist(i + 0.5, j + 0.5, x0, y0, x1, y1);
+      uint32_t *p;
+      if (a <= 0.0 || i < 0 || j < 0 || i >= f->w || j >= f->h) continue;
+      p = &f->px[(size_t)j * (size_t)f->w + (size_t)i];
+      *p = mix(*p, c, a >= 1.0 ? 255 : (int)(a * 255.0));
+    }
+}
+
+
+static void box_outline (Frame *f, int x, int y, int w, int h, int t, uint32_t c) {
+  fill(f, x, y, w, t, c);
+  fill(f, x, y + h - t, w, t, c);
+  fill(f, x, y, t, h, c);
+  fill(f, x + w - t, y, t, h, c);
+}
+
+
+/* the three buttons, in the colors of the row's right end (the menu bar's); row0: the grid's row 0 */
+static void tb_paint (const ECell *row0) {
+  Frame *f = &W.fr;
+  int bw = tb_width(), x0 = tb_left(), i, h = W.ch / 3, th = (int)(W.scale + 0.5f);
+  int maxed = (SDL_GetWindowFlags(W.win) & SDL_WINDOW_MAXIMIZED) != 0;
+  uint32_t fg, bg, at, ul;
+  cell_colors(&row0[S.cols - 1], &fg, &bg, &at, &ul);
+  if (h < 4) h = 4;
+  h /= 2;
+  if (th < 1) th = 1;
+  for (i = 0; i < 3; i++) {
+    int bx = x0 + i * bw, cx = bx + bw / 2, cy = W.ch / 2;
+    uint32_t b = bg, ic = fg;
+    if (W.tb_hover == i && i == 2) {	/* close: red, as Windows' own */
+      b = W.tb_press == i ? 0xF1707Au : 0xE81123u;
+      ic = 0xFFFFFFu;
+    }
+    else if (W.tb_hover == i) b = mix(bg, fg, W.tb_press == i ? 60 : 32);
+    fill(f, bx, 0, i == 2 ? f->w - bx : bw, W.ch, b);
+    if (i == 0) fill(f, cx - h, cy, 2 * h + 1, th, ic);	/* _ */
+    else if (i == 1 && !maxed) box_outline(f, cx - h, cy - h, 2 * h + 1, 2 * h + 1, th, ic);	/* a square */
+    else if (i == 1) {	/* restore: two squares, one behind the other */
+      int d = h / 2 > 1 ? h / 2 : 2;
+      box_outline(f, cx - h, cy - h + d, 2 * h + 1 - d, 2 * h + 1 - d, th, ic);
+      fill(f, cx - h + d, cy - h, 2 * h + 1 - d, th, ic);
+      fill(f, cx + h + 1 - th, cy - h, th, 2 * h + 1 - d, ic);
+    }
+    else {	/* x */
+      aa_line(f, cx - h, cy - h, cx + h + 1, cy + h + 1, th, ic);
+      aa_line(f, cx + h + 1, cy - h, cx - h, cy + h + 1, th, ic);
+    }
+  }
+}
+
+/* }================================================================== */
+
+
 /* row y of a grid (S.back, or S.front: what is shown) into the picture: every background, then the characters */
 static void paint_row (int y, const ECell *grid) {
   const ECell *b = &grid[(size_t)y * (size_t)S.cols];
@@ -513,14 +607,31 @@ static void paint_row (int y, const ECell *grid) {
       if (pass == 0) fill(&W.fr, x * W.cw, y * W.ch, W.cw * (wide ? 2 : 1), W.ch, bg);
       else paint_fg(&b[x], x, y, wide, fg, bg, at, ul, 1);
     }
+  {	/* the window is not a whole number of cells: the row's colors go on to its edges */
+    int gx = S.cols * W.cw, gy = S.rows * W.ch;
+    uint32_t fg, bg, at, ul;
+    cell_colors(&b[S.cols - 1], &fg, &bg, &at, &ul);
+    fill(&W.fr, gx, y * W.ch, W.fr.w - gx, W.ch, bg);
+    if (y == S.rows - 1 && W.fr.h > gy) {	/* under the last row (the status bar) */
+      fill(&W.fr, gx, gy, W.fr.w - gx, W.fr.h - gy, bg);
+      for (x = 0; x < S.cols; x++) {
+        cell_colors(&b[x], &fg, &bg, &at, &ul);
+        fill(&W.fr, x * W.cw, gy, W.cw, W.fr.h - gy, bg);
+      }
+    }
+  }
+  if (y == 0 && W.borderless) tb_paint(b);	/* the title bar's buttons, over its right end */
   if (W.car_on && W.car_y == y) W.car_on = 0;	/* painted over */
   mark(y);
 }
 
 
-/* the picture as big as the grid of cells: a new frame (and texture), everything painted again */
+/* the picture as big as the window: a new frame (and texture), everything painted again */
 static void picture_size (void) {
-  int w = S.cols * W.cw, h = S.rows * W.ch;
+  int w = 0, h = 0;
+  out_size(&w, &h);	/* the window, cells and the bit past them */
+  if (w < S.cols * W.cw) w = S.cols * W.cw;
+  if (h < S.rows * W.ch) h = S.rows * W.ch;
   if (w < 1) w = 1;
   if (h < 1) h = 1;
   if (W.fr.px && w == W.tw && h == W.th && W.nrowdirty == S.rows && (W.use_surface || W.tex)) return;
@@ -812,7 +923,7 @@ static void present_surface (void) {
       r.x = 0;
       r.y = y0 * W.ch;
       r.w = W.tw;
-      r.h = (y - y0 + 1) * W.ch;
+      r.h = y == W.nrowdirty - 1 ? W.th - r.y : (y - y0 + 1) * W.ch;	/* the last row: the strip under it too */
       d = r;
       SDL_BlitSurface(W.fsurf, &r, s, &d);
       W.rects[n++] = r;
@@ -839,7 +950,7 @@ static void present (void) {
     r.x = 0;
     r.y = W.up0 * W.ch;
     r.w = W.tw;
-    r.h = (W.up1 - W.up0 + 1) * W.ch;
+    r.h = W.up1 >= S.rows - 1 ? W.th - r.y : (W.up1 - W.up0 + 1) * W.ch;
     if (r.y + r.h > W.th) r.h = W.th - r.y;
     if (r.h > 0) SDL_UpdateTexture(W.tex, &r, W.fr.px + (size_t)r.y * (size_t)W.fr.w, W.fr.w * 4);
   }
@@ -889,6 +1000,114 @@ static void font_settings (void);
 
 
 /*
+** The system frame goes when the menu bar is the title bar (custom), and
+** comes back when it is not (window.menuBarVisibility hidden, Zen mode, or
+** "native"): the window must still be moved and closed
+*/
+static void tb_update (void) {
+  int menu = S.cols > 2 && S.front[1].ch == 0xF121;	/* the app's icon at row 0: mme's menu bar */
+  int want = W.custom && menu;
+  if (want == W.borderless) return;
+  W.borderless = want;
+  W.tb_hover = W.tb_press = -1;
+  SDL_SetWindowBordered(W.win, want ? SDL_FALSE : SDL_TRUE);
+  S.full = 1;	/* another size: drawn again */
+}
+
+
+/* the buttons' look changed (the mouse over one, one held): row 0 shown again */
+static void tb_refresh (void) {
+  if (!W.shown || S.full || S.front == NULL || W.fr.px == NULL) return;
+  paint_row(0, S.front);
+  caret_sync();
+  present();
+}
+
+
+static void quit_request (void);
+
+
+static void tb_action (int b) {
+  if (b == 0) SDL_MinimizeWindow(W.win);
+  else if (b == 1 && (SDL_GetWindowFlags(W.win) & SDL_WINDOW_MAXIMIZED)) SDL_RestoreWindow(W.win);
+  else if (b == 1) SDL_MaximizeWindow(W.win);
+  else if (b == 2) quit_request();
+}
+
+
+/* the mouse in window points, as picture pixels (macOS's Retina has more) */
+static void to_pixels (int *x, int *y) {
+  int ww = 0, wh = 0, pw = 0, ph = 0;
+  SDL_GetWindowSize(W.win, &ww, &wh);
+  out_size(&pw, &ph);
+  if (ww > 0 && wh > 0 && pw > 0 && pw != ww) {
+    *x = *x * pw / ww;
+    *y = *y * ph / wh;
+  }
+}
+
+
+/*
+** The system asks what is under the mouse (Windows' WM_NCHITTEST): the
+** edges resize the window, the empty parts of the title bar move it; the
+** menus, the command center, the buttons are mme's
+*/
+static SDL_HitTestResult SDLCALL hit_test (SDL_Window *win, const SDL_Point *pt, void *data) {
+  int ww = 0, wh = 0, x = pt->x, y = pt->y, e = (int)(5.0f * W.scale + 0.5f), col;
+  (void)data;
+  if (!W.borderless || W.fr.px == NULL) return SDL_HITTEST_NORMAL;
+  SDL_GetWindowSize(win, &ww, &wh);
+  if (!(SDL_GetWindowFlags(win) & SDL_WINDOW_MAXIMIZED)) {
+    int l = x < e, r = x >= ww - e, t = y < e, b = y >= wh - e;
+    if (t && l) return SDL_HITTEST_RESIZE_TOPLEFT;
+    if (t && r) return SDL_HITTEST_RESIZE_TOPRIGHT;
+    if (b && l) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+    if (b && r) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+    if (t) return SDL_HITTEST_RESIZE_TOP;
+    if (b) return SDL_HITTEST_RESIZE_BOTTOM;
+    if (l) return SDL_HITTEST_RESIZE_LEFT;
+    if (r) return SDL_HITTEST_RESIZE_RIGHT;
+  }
+  to_pixels(&x, &y);
+  if (y >= W.ch || x >= tb_left()) return SDL_HITTEST_NORMAL;
+  col = x / W.cw;
+  if (col < S.cols && (menubar_hit(col) >= 0 || menubar_cc_hit(col) != 0)) return SDL_HITTEST_NORMAL;
+  return SDL_HITTEST_DRAGGABLE;
+}
+
+
+/* the mouse over the buttons: theirs, not mme's (1) */
+static int tb_mouse (int x, int y, int type) {
+  int b;
+  if (!W.borderless) return 0;
+  to_pixels(&x, &y);
+  b = tb_button(x, y);
+  if (type == SDL_MOUSEMOTION) {
+    if (b != W.tb_hover) {
+      W.tb_hover = b;
+      tb_refresh();
+    }
+    return b >= 0 || W.tb_press >= 0;
+  }
+  if (type == SDL_MOUSEBUTTONDOWN) {
+    if (b < 0) return 0;
+    W.tb_press = b;
+    W.tb_hover = b;
+    tb_refresh();
+    return 1;
+  }
+  if (W.tb_press < 0) return 0;	/* up */
+  {
+    int was = W.tb_press;
+    W.tb_press = -1;
+    tb_refresh();
+    if (b == was) tb_action(b);
+  }
+  return 1;
+}
+
+
+/*
 ** The picture shown: the rows that changed painted into the frame, the
 ** image preview's picture over its cells, the caret (it blinks, as the
 ** settings say), then the rows painted copied into the texture; the
@@ -914,6 +1133,7 @@ void scr_flush (void) {
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
   S.full = 0;
+  tb_update();
   image_flush(painted0, painted1);
   if (!caret_blinks() || W.ccx != S.cx || W.ccy != S.cy || caret_row) {	/* it moved, or typing: shown at once */
     W.blink_on = 1;
@@ -1013,6 +1233,7 @@ static int font_setup (void) {
 /* editor.fontFamily or editor.fontSize changed in the settings: the font is made again (the zoom goes) */
 static void font_settings (void) {
   const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
+  W.custom = strcmp(json_str(settings_get("window\\.titleBarStyle"), "custom"), "native") != 0;
   double size = json_num(settings_get("editor\\.fontSize"), 14);
   W.font_seen = (long long)SDL_GetTicks();
   if (size == W.font_size && strcmp(fam, W.font_fam) == 0) return;
@@ -1152,12 +1373,28 @@ void term_size (int *cols, int *rows) {
 ** keyboard's scan code, and SDL 2 drops a key it cannot place by scan code:
 ** Enter, Ctrl+S never arrive. The window's messages go through key_proc
 ** first, which gives such a key the scan code its virtual key has (and the
-** extended bit a real keyboard sets for the arrows, Home, Insert ...).
+** extended bit a real keyboard sets for the arrows, Home, Insert ...). It
+** also keeps a maximized window without a frame on the screen (the custom
+** title bar).
 */
 #ifdef _WIN32
 static WNDPROC g_sdl_proc;
 
 static LRESULT CALLBACK key_proc (HWND h, UINT m, WPARAM w, LPARAM l) {
+  if (m == WM_NCCALCSIZE && w == TRUE && W.borderless && IsZoomed(h)) {
+    /*
+    ** Maximized without a frame: Windows puts the window its frame's width
+    ** past the screen's edges, which would hide the title bar's top and the
+    ** edges; the picture is the monitor's work area (the taskbar stays)
+    */
+    NCCALCSIZE_PARAMS *p = (NCCALCSIZE_PARAMS *)l;
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST), &mi)) {
+      p->rgrc[0] = mi.rcWork;
+      return 0;
+    }
+  }
   if ((m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP) && ((l >> 16) & 0xFF) == 0) {
     UINT sc = MapVirtualKeyW((UINT)w, 0) & 0xFF;	/* MAPVK_VK_TO_VSC */
     switch (w) {
@@ -1223,6 +1460,9 @@ int term_open (void) {
   SDL_SetMainReady();
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");	/* sharp on a high DPI screen */
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
+  SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");	/* the click that activates the window does its work too (a button, the caret) */
+  SDL_SetHint("SDL_BORDERLESS_RESIZABLE_STYLE", "1");	/* without a frame still maximized, resized by its edges */
+  SDL_SetHint("SDL_BORDERLESS_WINDOWED_STYLE", "1");	/* and snapped, minimized with Windows' animation */
   SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");	/* mme.rc's icon, in the title bar and the taskbar */
   SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
   if (SDL_Init(SDL_INIT_VIDEO) != 0) return -1;
@@ -1241,9 +1481,14 @@ int term_open (void) {
       if (h > u.h * 9 / 10) h = u.h * 9 / 10;
     }
   }
+  W.custom = strcmp(json_str(settings_get("window\\.titleBarStyle"), "custom"), "native") != 0;
+  W.borderless = W.custom;	/* the menu bar is shown, mostly: tb_update says when not */
+  W.tb_hover = W.tb_press = -1;
   W.win = SDL_CreateWindow("mme", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h,
-                           SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+                           SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (W.custom ? SDL_WINDOW_BORDERLESS : 0));
   if (W.win == NULL) return -1;
+  SDL_SetWindowHitTest(W.win, hit_test, NULL);
+  SDL_SetWindowMinimumSize(W.win, 40 * W.cw, 10 * W.ch);
 #ifndef __APPLE__
   SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");	/* the window's own bitmap (GDI, X11's), not a texture */
   W.use_surface = SDL_GetWindowSurface(W.win) != NULL;
@@ -1523,13 +1768,17 @@ static void wheel_push (int d, int n, int mods) {
 static int g_drops;	/* the files of this drop pasted so far */
 
 
+/* the window's x (the system's, or the title bar's): File > Exit, which asks about unsaved files */
+static void quit_request (void) {
+  if (when_ctx("terminalFocus") == NULL) push(K_ESC);	/* a question, a list open: it goes first (the shell keeps its line) */
+  push(CTRL('q'));
+}
+
+
 /* an SDL event as keys in the queue */
 static void on_event (const SDL_Event *e) {
   switch (e->type) {
-    case SDL_QUIT:	/* the window's x: File > Exit, which asks about unsaved files */
-      if (when_ctx("terminalFocus") == NULL) push(K_ESC);	/* a question, a list open: it goes first (the shell keeps its line) */
-      push(CTRL('q'));
-      break;
+    case SDL_QUIT: quit_request(); break;
     case SDL_WINDOWEVENT:
       switch (e->window.event) {
         case SDL_WINDOWEVENT_SIZE_CHANGED: case SDL_WINDOWEVENT_RESIZED: case SDL_WINDOWEVENT_DISPLAY_CHANGED:
@@ -1544,6 +1793,12 @@ static void on_event (const SDL_Event *e) {
           break;
         case SDL_WINDOWEVENT_FOCUS_LOST:
           W.focused = 0;
+          break;
+        case SDL_WINDOWEVENT_LEAVE:	/* no button is under the mouse */
+          if (W.tb_hover >= 0 && W.tb_press < 0) {
+            W.tb_hover = -1;
+            tb_refresh();
+          }
           break;
       }
       W.dirty = 1;
@@ -1575,6 +1830,7 @@ static void on_event (const SDL_Event *e) {
       int b = e->button.button == SDL_BUTTON_LEFT ? 0 : e->button.button == SDL_BUTTON_MIDDLE ? 1 :
               e->button.button == SDL_BUTTON_RIGHT ? 2 : -1;
       if (b < 0) break;
+      if (b == 0 && tb_mouse(e->button.x, e->button.y, (int)e->type)) break;	/* the title bar's buttons */
       if (b == 2 && e->type == SDL_MOUSEBUTTONDOWN) clip_sync();	/* a right-click menu may paste */
       memset(&term_mouse, 0, sizeof(term_mouse));
       mouse_at(e->button.x, e->button.y);
@@ -1588,6 +1844,7 @@ static void on_event (const SDL_Event *e) {
       break;
     }
     case SDL_MOUSEMOTION:	/* a drag with the button held, else a move (hover): once a cell */
+      if (tb_mouse(e->motion.x, e->motion.y, SDL_MOUSEMOTION)) break;
       memset(&term_mouse, 0, sizeof(term_mouse));
       mouse_at(e->motion.x, e->motion.y);
       if (term_mouse.x == g_mcol && term_mouse.y == g_mrow) break;

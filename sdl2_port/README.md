@@ -101,6 +101,15 @@ German keyboard) are typed, not taken for Ctrl+Alt shortcuts; the right Alt
 is Alt. The window's x is File > Exit (Ctrl+Q), after closing a question or a
 list that is open: mme asks about files not saved.
 
+The window has no system frame (`window.titleBarStyle`: `"custom"`, VS Code's
+default): mme's menu bar is the title bar, with its own minimize, maximize and
+close buttons at the right end. Its empty parts move the window (a
+double-click maximizes it, dragged to the screen's top it snaps), and the
+window's edges resize it. `"native"` gives the system's frame back; so does a
+hidden menu bar (`window.menuBarVisibility`, Zen mode), since the window must
+still be moved. It uses plain Windows messages (WM_NCHITTEST, WM_NCCALCSIZE),
+which Windows XP has too.
+
 Ctrl+= / Ctrl+- (the keypad's too) and Ctrl+NumPad0 zoom, as in VS Code;
 `editor.fontFamily` and `editor.fontSize` are VS Code's settings, and a change
 to them shows at once. Moved to a screen with another DPI, the font keeps its

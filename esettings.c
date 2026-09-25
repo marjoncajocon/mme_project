@@ -276,6 +276,8 @@ static const Setting set[] = {
    "Controls the location of the primary side bar and activity bar. They can either show on the left or right of the workbench."},
   {"window.menuBarVisibility", C_LOOK, ST_ENUM, 0, "\"classic\"", "classic|visible|toggle|hidden|compact",
    "Control the visibility of the menu bar. A setting of 'toggle' or 'hidden' hides it (Alt+F, F10 still open the menus)."},
+  {"window.titleBarStyle", C_LOOK, ST_ENUM, 0, "\"custom\"", "custom|native",
+   "Adjust the appearance of the window title bar (mme-sdl): 'custom' draws it with the menu bar, its own minimize, maximize and close buttons, no system frame; 'native' uses the system's frame. In a terminal the terminal has the frame."},
   {"workbench.statusBar.visible", C_LOOK, ST_BOOL, 0, "true", NULL,
    "Controls the visibility of the status bar at the bottom of the workbench."},
   {"workbench.activityBar.location", C_LOOK, ST_ENUM, 0, "\"default\"", "default|top|bottom|hidden",
