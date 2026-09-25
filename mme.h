@@ -220,6 +220,16 @@ void data_init (const char *argv0);	/* mme-data, next to the program */
 const char *data_dir (void);
 char *data_path (const char *name);	/* a file in it */
 char *settings_path (void);
+char *profile_file (const char *file);	/* a file of the profile in use: settings.json, keybindings.json, snippets */
+const char *profile_name (void);	/* the profile in use; "": Default */
+const Vec *profiles (void);	/* the profiles, Default not among them */
+void profile_use (const char *name);	/* "" or "Default": Default */
+const char *profile_for_folder (const char *root);	/* the one it was last used with; "": Default */
+void profile_set_folder (const char *root, const char *name);
+const char *profile_bad_name (const char *name);	/* why it cannot be a profile's name; NULL: fine */
+int profile_create (const char *name, int copy);	/* copy: the one in use's files; 0 made */
+int profile_delete (const char *name);
+int profile_rename (const char *name, const char *to);
 void settings_create (void);
 int settings_load (void);	/* -1: the file is not good JSON */
 int settings_lang (const char *lang);	/* opt, eopt, vopt for a language's files ("[python]": {...}); 1 when they changed */
@@ -621,6 +631,7 @@ enum {
   CMD_SEARCHED_MORE_CONTEXT, CMD_SEARCHED_LESS_CONTEXT, CMD_SEARCHED_FOCUS, CMD_SEARCHED_DELETE_FILE,	/* ... to here */
   CMD_VIM_TOGGLE, CMD_SAVE_ALL, CMD_GIT_VIEW_CHANGES, CMD_GIT_VIEW_STAGED,
   CMD_TEST_COV_ALL, CMD_TEST_COV_FILE, CMD_TEST_COV_CURSOR, CMD_TEST_COV_CLOSE, CMD_TEST_COV_INLINE,	/* etest.c */
+  CMD_PROFILE_SWITCH, CMD_PROFILE_NEW, CMD_PROFILE_RENAME, CMD_PROFILE_DELETE,
   CMD_N
 };
 

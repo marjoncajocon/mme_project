@@ -121,7 +121,7 @@ const char *snip_lang (const char *syntax) {
 
 
 char *snip_dir (void) {
-  char *d = data_path("snippets");
+  char *d = profile_file("snippets");	/* the profile in use's */
   mkdir_p(d);
   return d;
 }

@@ -121,7 +121,7 @@ void key_name (int k, int pretty, char *out, size_t n) {
 
 
 char *keys_path (void) {
-  return data_path("keybindings.json");
+  return profile_file("keybindings.json");	/* the profile in use's */
 }
 
 

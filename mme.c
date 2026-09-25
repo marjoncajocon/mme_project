@@ -249,6 +249,7 @@ static void fold_shift (int ins, Pos a, Pos b);
 static void editor_key (int k);
 static int indent_more (const char *s, size_t n);
 static void cursor_forget (Tab *t);	/* Ctrl+U: the tab is closing */
+static void profile_follow (void);	/* the folder opened: its profile */
 static const char *tab_lang (const Tab *t);	/* its language, for its settings ("[python]") */
 static const char *doc_lang_id (void);	/* the language of the file in front ("python") */
 static void doc_comment (const char **line, const char **open, const char **close);
@@ -3789,6 +3790,7 @@ static void title_var (const char *v, size_t n, Buf *b) {
   else if (IS("folderPath") || IS("rootPath")) buf_puts(b, root);
   else if (IS("rootName")) buf_puts(b, ws_active() ? ws_title() : path_basename(root));	/* "x (Workspace)" */
   else if (IS("appName")) buf_puts(b, MME_NAME);
+  else if (IS("profileName")) buf_puts(b, profile_name());	/* Default: nothing, as VS Code */
   else if (IS("dirty")) buf_puts(b, HAS_DOC && !G->diff && doc_dirty(T->doc) ? "\xE2\x97\x8F " : "");
   else if (IS("activeRepositoryBranchName")) buf_puts(b, git_branch());
 #undef IS
@@ -3802,7 +3804,7 @@ static void title_var (const char *v, size_t n, Buf *b) {
 ** ${separator} that come out empty go, with their separator.
 */
 static void update_title (void) {
-  const char *t = opt.win_title[0] ? opt.win_title : "${dirty}${activeEditorShort}${separator}${rootName}${separator}${appName}";
+  const char *t = opt.win_title[0] ? opt.win_title : "${dirty}${activeEditorShort}${separator}${rootName}${separator}${profileName}${separator}${appName}";
   Buf out, part;
   buf_init(&out);
   buf_init(&part);
@@ -6104,6 +6106,7 @@ static void open_folder (const char *dir) {
   ws_forget();
   side_open(dir);
   recent_add(side_root());
+  profile_follow();	/* the profile it was last used with */
   apply_settings(0);	/* its .vscode/settings.json */
   git_refresh();
   E.side = 1;
@@ -13462,18 +13465,168 @@ static void open_keys_json (void) {
 ** (Default: mme's, User: keybindings.json) like VS Code's editor; Enter
 ** on one: change its keys or when, remove it, reset it.
 */
+/*
+** {==================================================================
+** Profiles (econfig.c keeps them): switching one in brings its settings,
+** keybindings and snippets; the folder remembers it
+** ===================================================================
+*/
+
+/* the profile in use is name from now on, for this folder too */
+static void profile_switch (const char *name) {
+  profile_use(name);
+  profile_set_folder(side_root(), profile_name());
+  apply_settings(0);
+  keys_load();
+  snip_reload();
+  {	/* the open files' indentation, by the new settings of their languages */
+    int g, i;
+    char was[64];
+    snprintf(was, sizeof(was), "%s", settings_lang_now());
+    for (g = 0; g < g_ngrp; g++)
+      for (i = 0; i < g_grp[g].ntab; i++) {
+        Tab *t = g_grp[g].tab[i];
+        if (t->page || t->md || t->doc->path == NULL) continue;
+        settings_lang(tab_lang(t));
+        doc_detect_indent(t->doc);
+        edconf_apply(t->doc, 0);	/* .editorconfig still wins */
+      }
+    settings_lang(was);
+  }
+  toast(0, "Profile: %s", profile_name()[0] ? profile_name() : "Default");
+}
+
+
+/* the folder just opened: the profile it was used with, when that is another one */
+static void profile_follow (void) {
+  const char *want = profile_for_folder(side_root());
+  if (strcmp(want, profile_name()) == 0) return;
+  profile_use(want);
+  keys_load();
+  snip_reload();	/* the settings: the caller reads them again */
+}
+
+
+/* a profile picked from a list: Default first when with_default; NULL: Esc */
+static char *profile_pick (const char *title, int with_default) {
+  const Vec *v = profiles();
+  Pick p;
+  size_t i;
+  int r;
+  char *out = NULL;
+  pick_init(&p, title);
+  if (with_default) pick_add(&p, "Default", profile_name()[0] ? NULL : "current", 0xEB99);
+  for (i = 0; i < v->n; i++) pick_add(&p, v->v[i], strcmp(v->v[i], profile_name()) == 0 ? "current" : NULL, 0xEB99);
+  if (p.n == 0) {
+    pick_free(&p);
+    toast(0, "There are no profiles but Default: Profiles: New Profile... makes one.");
+    return NULL;
+  }
+  r = pick_run(&p);
+  if (r >= 0) out = xstrdup(p.item[r].label);
+  pick_free(&p);
+  return out;
+}
+
+
+static void profile_command (int cmd) {
+  char *name = NULL, *to = NULL;
+  const char *bad;
+  switch (cmd) {
+    case CMD_PROFILE_SWITCH:
+      if ((name = profile_pick("Select Profile", 1)) != NULL) profile_switch(name);
+      break;
+    case CMD_PROFILE_NEW: {
+      static const char *const from[] = {"Empty Profile", "Copy of the Current Profile"};
+      Pick p;
+      int r;
+      if ((name = ask_text("Profile name", "")) == NULL) break;
+      if ((bad = profile_bad_name(name)) != NULL) {
+        toast(1, "%s", bad);
+        break;
+      }
+      pick_init(&p, "Create from");
+      p.keep_order = 1;
+      pick_add(&p, from[0], "default settings, no keybindings or snippets", 0xEA7B);
+      pick_add(&p, from[1], profile_name()[0] ? profile_name() : "Default", 0xEBCC);
+      r = pick_run(&p);
+      pick_free(&p);
+      if (r < 0) break;
+      if (profile_create(name, r == 1) != 0) toast(1, "The profile could not be made.");
+      else profile_switch(name);	/* VS Code's "Use for Current Window" */
+      break;
+    }
+    case CMD_PROFILE_RENAME:
+      if ((name = profile_pick("Rename Profile", 0)) == NULL || (to = ask_text("New name", name)) == NULL) break;
+      if (strcmp(to, name) == 0) break;
+      if ((bad = profile_bad_name(to)) != NULL) toast(1, "%s", bad);
+      else if (profile_rename(name, to) != 0) toast(1, "The profile could not be renamed.");
+      else toast(0, "Profile %s is now %s", name, to);
+      break;
+    case CMD_PROFILE_DELETE: {
+      static const char *const bt[] = {"Delete", "Cancel"};
+      int cur;
+      char msg[300];
+      if ((name = profile_pick("Delete Profile", 0)) == NULL) break;
+      snprintf(msg, sizeof(msg), "Are you sure you want to delete the profile '%s'?", name);
+      if (dialog(msg, "Its settings, keybindings and snippets are deleted.", bt, 2) != 0) break;
+      cur = strcmp(name, profile_name()) == 0;
+      if (profile_delete(name) != 0) toast(1, "The profile could not be deleted.");
+      else if (cur) profile_switch("");	/* the one in use went: Default */
+      else toast(0, "Profile %s deleted", name);
+      break;
+    }
+  }
+  free(name);
+  free(to);
+}
+
+/* }================================================================== */
+
+
 /* the Manage gear at the foot of the activity bar: VS Code's menu, from it upwards */
 static void manage_menu (void) {
   static const char *const label[] = {"Command Palette...", "Profiles", "", "Settings", "Extensions",
                                       "Keyboard Shortcuts", "Snippets", "Tasks", "Themes", "",
                                       "Check for Updates...", "About"};
-  static const int flags[] = {0, MF_OFF, MF_LINE, 0, 0, 0, 0, 0, MF_SUB, MF_LINE, 0, 0};
+  static const int flags[] = {0, MF_SUB, MF_LINE, 0, 0, 0, 0, 0, MF_SUB, MF_LINE, 0, 0};
   static const int cmd[] = {CMD_PALETTE, 0, 0, CMD_SETTINGS, CMD_EXTENSIONS, CMD_KEYS, CMD_SNIPPETS,
                             CMD_TASK_CONFIGURE, 0, 0, 0, CMD_ABOUT};
   int n = (int)(sizeof(label) / sizeof(label[0])), x = L.act_w > 0 ? (opt.side_right ? L.act_x - popup_width(label, flags, n) : L.act_x + L.act_w) : 0;
   int gy = act_manage_row(L.body_y, L.body_h), y = (gy >= 0 ? gy : E.rows - 2) - n - 1, r;
   r = popup_list(x, y, label, flags, n);
-  if (r == 8) {	/* Themes: its submenu beside it */
+  if (r == 1) {	/* Profiles: every one (the one in use checked), and what can be done with them */
+    const Vec *v = profiles();
+    const char **pl = (const char **)xmalloc((v->n + 6) * sizeof(char *));
+    int *pf = (int *)xmalloc((v->n + 6) * sizeof(int)), np = 0, pr;
+    size_t i;
+    pl[np] = "Default";
+    pf[np++] = profile_name()[0] ? 0 : MF_CHECK;
+    for (i = 0; i < v->n; i++) {
+      pl[np] = v->v[i];
+      pf[np++] = strcmp(v->v[i], profile_name()) == 0 ? MF_CHECK : 0;
+    }
+    pl[np] = "";	/* a line */
+    pf[np++] = MF_LINE;
+    pl[np] = "New Profile...";
+    pf[np++] = 0;
+    pl[np] = "Rename Profile...";
+    pf[np++] = v->n ? 0 : MF_OFF;
+    pl[np] = "Delete Profile...";
+    pf[np++] = v->n ? 0 : MF_OFF;
+    pr = popup_list(x + popup_width(label, flags, n) - 1, (y < 0 ? 0 : y) + 2, pl, pf, np);
+    if (pr >= 0 && pr < np - 4) {
+      char *nm = xstrdup(pl[pr]);
+      profile_switch(nm);
+      free(nm);
+    }
+    else if (pr == np - 3) run_command(CMD_PROFILE_NEW);
+    else if (pr == np - 2) run_command(CMD_PROFILE_RENAME);
+    else if (pr == np - 1) run_command(CMD_PROFILE_DELETE);
+    free(pl);
+    free(pf);
+  }
+  else if (r == 8) {	/* Themes: its submenu beside it */
     static const char *const th[] = {"Color Theme", "File Icon Theme", "Product Icon Theme"};
     static const int thf[] = {0, MF_OFF, MF_OFF};
     if (popup_list(x + popup_width(label, flags, n) - 1, (y < 0 ? 0 : y) + 1 + 8, th, thf, 3) == 0) run_command(CMD_THEME);
@@ -16320,6 +16473,7 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_MANAGE: manage_menu(); break;
+    case CMD_PROFILE_SWITCH: case CMD_PROFILE_NEW: case CMD_PROFILE_RENAME: case CMD_PROFILE_DELETE: profile_command(cmd); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
       settings_put("workbench.panel.defaultLocation", opt.panel_loc == PANEL_RIGHT ? "right" : opt.panel_loc == PANEL_LEFT ? "left" : "bottom");
@@ -20824,6 +20978,7 @@ int main (int argc, char **argv) {
     E.side = opt.sidebar;
     E.focus = F_SIDE;
   }
+  profile_follow();	/* the profile the folder was last used with */
   apply_settings(0);	/* the folder's .vscode/settings.json, a workspace's settings */
   git_refresh();
   if (term_open() != 0) {

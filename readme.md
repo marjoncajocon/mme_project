@@ -873,6 +873,14 @@ With no file open the editor shows the keys to start with.
   Command Palette, Settings, Extensions, Keyboard Shortcuts, Snippets, Tasks,
   Themes and About. The activity bar's icons carry VS Code's badges: how many
   files changed, how many tests failed, a dot while debugging.
+- **Profiles** — like VS Code's: the gear's Profiles (or "Profiles: New
+  Profile...", "Switch Profile...", "Rename Profile...", "Delete Profile...").
+  A profile has its own settings.json, keybindings.json and snippets, in
+  mme-data/profiles/<name>; Default is mme-data's own. A new one starts empty
+  or as a copy of the one in use. Switching applies it at once (the open
+  files' indentation too), and the folder remembers it: opening that folder
+  again brings the profile back. The title says which one is in use
+  (`${profileName}`, nothing for Default).
 - **Status bar** — its items are VS Code's (the branch, the problems, the
   position, the indentation, the encoding, the line ends, the language, the
   notifications). Resting the mouse on one shows what it does, a click runs it,
@@ -965,8 +973,7 @@ Alt+1 and Ctrl+PgDn there.
 
 ## What comes next
 
-Profiles, git worktrees, data breakpoints, workspace trust and screencast
-mode.
+Git worktrees, data breakpoints, workspace trust and screencast mode.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and

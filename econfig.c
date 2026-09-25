@@ -391,9 +391,293 @@ char *data_path (const char *name) {
 }
 
 
-/* settings.json, in the data folder */
+/*
+** Profiles, VS Code's: a named set of settings.json, keybindings.json and
+** snippets, in mme-data/profiles/<name>; "Default" is mme-data's own. A
+** folder remembers the profile it was last used with (profiles.json keeps
+** the names, and each folder's), so opening it brings that profile back.
+*/
+static char g_profile[128];	/* the one in use; "": Default */
+static Vec g_pnames;	/* the profiles, not Default */
+static Vec g_pfold, g_pfname;	/* a folder, and its profile */
+static int g_ploaded;
+
+
+static char *profiles_json (void) {
+  return data_path("profiles.json");
+}
+
+
+static void profiles_load (void) {
+  char *f, *s;
+  size_t len, i;
+  Json *j;
+  if (g_ploaded) return;
+  g_ploaded = 1;
+  vec_init(&g_pnames);
+  vec_init(&g_pfold);
+  vec_init(&g_pfname);
+  f = profiles_json();
+  s = read_file(f, &len);
+  free(f);
+  j = s ? json_parse(s, len) : NULL;
+  free(s);
+  if (j && j->type == J_OBJ) {
+    const Json *ps = json_get(j, "profiles"), *fs = json_get(j, "folders");
+    for (i = 0; ps && ps->type == J_ARR && i < ps->n; i++)
+      if (ps->kid[i]->type == J_STR && ps->kid[i]->str[0]) vec_push(&g_pnames, xstrdup(ps->kid[i]->str));
+    for (i = 0; fs && fs->type == J_OBJ && i < fs->n; i++)
+      if (fs->kid[i]->type == J_STR) {
+        vec_push(&g_pfold, xstrdup(fs->kid[i]->key));
+        vec_push(&g_pfname, xstrdup(fs->kid[i]->str));
+      }
+  }
+  json_free(j);
+}
+
+
+static void profiles_save (void) {
+  Buf b;
+  size_t i;
+  char *f = profiles_json();
+  int fd;
+  buf_init(&b);
+  buf_puts(&b, "{\n  \"profiles\": [");
+  for (i = 0; i < g_pnames.n; i++) {
+    buf_puts(&b, i ? ", " : "");
+    json_put_str(&b, g_pnames.v[i], strlen(g_pnames.v[i]));
+  }
+  buf_puts(&b, "],\n  \"folders\": {");
+  for (i = 0; i < g_pfold.n; i++) {
+    buf_puts(&b, i ? ",\n    " : "\n    ");
+    json_put_str(&b, g_pfold.v[i], strlen(g_pfold.v[i]));
+    buf_puts(&b, ": ");
+    json_put_str(&b, g_pfname.v[i], strlen(g_pfname.v[i]));
+  }
+  buf_puts(&b, g_pfold.n ? "\n  }\n}\n" : "}\n}\n");
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, b.s, b.len);
+    os_close(fd);
+  }
+  buf_free(&b);
+  free(f);
+}
+
+
+static long pindex (const char *name) {
+  size_t i;
+  profiles_load();
+  for (i = 0; i < g_pnames.n; i++)
+    if (strcmp(g_pnames.v[i], name) == 0) return (long)i;
+  return -1;
+}
+
+
+static char *profile_dir (const char *name) {
+  char *d = data_path("profiles"), *p = path_join(d, name);
+  free(d);
+  return p;
+}
+
+
+const char *profile_name (void) {
+  return g_profile;
+}
+
+
+/* a file of the profile in use (settings.json, keybindings.json, snippets): Default's is mme-data's own */
+char *profile_file (const char *file) {
+  char *d, *p;
+  if (!g_profile[0]) return data_path(file);
+  d = profile_dir(g_profile);
+  mkdir_p(d);
+  p = path_join(d, file);
+  free(d);
+  return p;
+}
+
+
+/* the profiles there are, Default not among them */
+const Vec *profiles (void) {
+  profiles_load();
+  return &g_pnames;
+}
+
+
+/* the profile to use: "" or "Default" for Default; one that is gone is Default too */
+void profile_use (const char *name) {
+  if (name == NULL || !name[0] || strcmp(name, "Default") == 0 || pindex(name) < 0) g_profile[0] = '\0';
+  else snprintf(g_profile, sizeof(g_profile), "%s", name);
+}
+
+
+/* the profile the folder was last used with; "": Default */
+const char *profile_for_folder (const char *root) {
+  size_t i;
+  profiles_load();
+  for (i = 0; root && i < g_pfold.n; i++)
+    if (m_fncmp(g_pfold.v[i], root) == 0) return pindex(g_pfname.v[i]) >= 0 ? g_pfname.v[i] : "";
+  return "";
+}
+
+
+static void vec_drop (Vec *v, size_t i) {
+  free(v->v[i]);
+  memmove(v->v + i, v->v + i + 1, (v->n - i - 1) * sizeof(char *));
+  v->n--;
+}
+
+
+/* the folder uses name from now on ("": Default) */
+void profile_set_folder (const char *root, const char *name) {
+  size_t i;
+  if (root == NULL) return;
+  profiles_load();
+  for (i = 0; i < g_pfold.n; i++)
+    if (m_fncmp(g_pfold.v[i], root) == 0) {
+      vec_drop(&g_pfold, i);
+      vec_drop(&g_pfname, i);
+      break;
+    }
+  if (name && name[0] && strcmp(name, "Default") != 0) {
+    vec_push(&g_pfold, xstrdup(root));
+    vec_push(&g_pfname, xstrdup(name));
+  }
+  profiles_save();
+}
+
+
+static void copy_file (const char *from, const char *to) {
+  size_t len;
+  char *s = read_file(from, &len);
+  int fd;
+  if (s == NULL) return;
+  if ((fd = os_open(to, OS_WRITE)) >= 0) {
+    os_write(fd, s, len);
+    os_close(fd);
+  }
+  free(s);
+}
+
+
+/* a name a profile can have (it is a folder's too); what is wrong with it, NULL: fine */
+const char *profile_bad_name (const char *name) {
+  const char *c;
+  if (name == NULL || !name[0]) return "A profile needs a name.";
+  if (strcmp(name, "Default") == 0 || pindex(name) >= 0) return "A profile with that name exists already.";
+  if (name[0] == '.' || name[0] == ' ' || name[strlen(name) - 1] == ' ') return "A profile's name cannot start with '.' or a space.";
+  for (c = name; *c; c++)
+    if (strchr("/\\:*?\"<>|", *c) || (unsigned char)*c < 32) return "A profile's name cannot have / \\ : * ? \" < > |.";
+  if (strlen(name) >= sizeof(g_profile)) return "The name is too long.";
+  return NULL;
+}
+
+
+/* a new profile: empty, or with the one in use's settings, keybindings and snippets (copy); 0 made */
+int profile_create (const char *name, int copy) {
+  char *d, *sd, *from;
+  Vec names;
+  size_t i;
+  if (profile_bad_name(name)) return -1;
+  d = profile_dir(name);
+  mkdir_p(d);
+  if (copy) {
+    static const char *const files[] = {"settings.json", "keybindings.json"};
+    for (i = 0; i < 2; i++) {
+      char *to = path_join(d, files[i]);
+      from = profile_file(files[i]);
+      copy_file(from, to);
+      free(from);
+      free(to);
+    }
+    from = profile_file("snippets");
+    sd = path_join(d, "snippets");
+    vec_init(&names);
+    if (os_listdir(from, &names) == 0 && names.n) {
+      mkdir_p(sd);
+      for (i = 0; i < names.n; i++) {
+        char *a = path_join(from, names.v[i]), *b = path_join(sd, names.v[i]);
+        copy_file(a, b);
+        free(a);
+        free(b);
+      }
+    }
+    vec_free(&names);
+    free(from);
+    free(sd);
+  }
+  free(d);
+  vec_push(&g_pnames, xstrdup(name));
+  profiles_save();
+  return 0;
+}
+
+
+/* a profile goes: its files, its name, the folders' use of it (they are Default again); 0 gone */
+int profile_delete (const char *name) {
+  long k = pindex(name);
+  char *d, *sd, *f;
+  Vec names;
+  size_t i;
+  if (k < 0) return -1;
+  d = profile_dir(name);
+  sd = path_join(d, "snippets");
+  vec_init(&names);
+  if (os_listdir(sd, &names) == 0)
+    for (i = 0; i < names.n; i++) {
+      f = path_join(sd, names.v[i]);
+      os_unlink(f);
+      free(f);
+    }
+  vec_free(&names);
+  for (i = 0; i < 2; i++) {
+    f = path_join(d, i ? "keybindings.json" : "settings.json");
+    os_unlink(f);
+    free(f);
+  }
+  free(sd);
+  free(d);
+  vec_drop(&g_pnames, (size_t)k);
+  for (i = g_pfold.n; i-- > 0;)
+    if (strcmp(g_pfname.v[i], name) == 0) {
+      vec_drop(&g_pfold, i);
+      vec_drop(&g_pfname, i);
+    }
+  if (strcmp(g_profile, name) == 0) g_profile[0] = '\0';
+  profiles_save();
+  return 0;
+}
+
+
+/* a profile is called to from now on; 0 done */
+int profile_rename (const char *name, const char *to) {
+  long k = pindex(name);
+  char *a, *b;
+  size_t i;
+  int r;
+  if (k < 0 || profile_bad_name(to)) return -1;
+  a = profile_dir(name);
+  b = profile_dir(to);
+  r = rename(a, b);	/* its folder, with it */
+  free(a);
+  free(b);
+  if (r != 0) return -1;
+  free(g_pnames.v[k]);
+  g_pnames.v[k] = xstrdup(to);
+  for (i = 0; i < g_pfold.n; i++)
+    if (strcmp(g_pfname.v[i], name) == 0) {
+      free(g_pfname.v[i]);
+      g_pfname.v[i] = xstrdup(to);
+    }
+  if (strcmp(g_profile, name) == 0) snprintf(g_profile, sizeof(g_profile), "%s", to);
+  profiles_save();
+  return 0;
+}
+
+
+/* settings.json, of the profile in use */
 char *settings_path (void) {
-  return data_path("settings.json");
+  return profile_file("settings.json");
 }
 
 /* }================================================================== */
