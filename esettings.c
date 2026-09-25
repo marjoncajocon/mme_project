@@ -469,6 +469,74 @@ static void write_value (const Setting *s, const char *v, PageAct *a) {
   a->what = PA_APPLY;
 }
 
+/* v into b for a snippet: in a choice (,|\ escaped) or a placeholder ($}\ escaped) */
+static void snip_esc (Buf *b, const char *v, int choice) {
+  for (; *v; v++) {
+    if (*v == '\\' || (choice ? *v == ',' || *v == '|' : *v == '$' || *v == '}')) buf_putc(b, '\\');
+    buf_putc(b, *v);
+  }
+}
+
+
+/*
+** The settings as suggestions in settings.json, VS Code's: the key, and
+** what goes in is "key": value with the value to pick or type (the
+** default first). The ones in have[] (keys, nhave of them) are left out.
+*/
+CompItem *settings_suggest (const char *const *have, size_t nhave, size_t *n) {
+  CompItem *v = (CompItem *)xmalloc((NSET + 1) * sizeof(CompItem));
+  int i, k;
+  size_t o = 0, h;
+  for (i = 0; i < NSET; i++) {
+    const Setting *s = &set[i];
+    CompItem *c;
+    Buf b;
+    char d[256], e[256], text[2048];
+    for (h = 0; h < nhave && strcmp(have[h], s->key) != 0; h++) {}
+    if (h < nhave) continue;
+    c = &v[o++];
+    memset(c, 0, sizeof(*c));
+    def_of(s, d, sizeof(d));
+    buf_init(&b);
+    buf_printf(&b, "\"%s\": ", s->key);
+    if (s->type == ST_BOOL) buf_puts(&b, strcmp(d, "true") == 0 ? "${1|true,false|}" : "${1|false,true|}");
+    else if (s->type == ST_ENUM) {
+      buf_puts(&b, "\"${1|");
+      snip_esc(&b, d, 1);
+      for (k = 0; k < enum_count(s); k++) {
+        enum_at(s, k, e, sizeof(e));
+        if (strcmp(e, d) == 0) continue;
+        buf_putc(&b, ',');
+        snip_esc(&b, e, 1);
+      }
+      buf_puts(&b, "|}\"");
+    }
+    else if (s->type == ST_STR) {
+      buf_puts(&b, "\"${1:");
+      snip_esc(&b, d, 0);
+      buf_puts(&b, "}\"");
+    }
+    else {	/* a number, an object */
+      buf_puts(&b, "${1:");
+      snip_esc(&b, s->def, 0);
+      buf_putc(&b, '}');
+    }
+    c->label = xstrdup(s->key);
+    c->detail = xstrdup("");
+    c->insert = buf_take(&b);
+    c->filter = xstrdup(s->key);
+    c->sort = xstrdup(s->key);
+    c->kind = 10;	/* property */
+    c->snippet = 1;
+    desc_of(s, text, sizeof(text));
+    buf_init(&b);
+    buf_printf(&b, "%s\n\nDefault: `%s`", text, s->def);
+    c->doc = buf_take(&b);
+  }
+  *n = o;
+  return v;
+}
+
 /* }================================================================== */
 
 

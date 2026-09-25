@@ -946,6 +946,7 @@ char *import_preview (const char *dir);	/* what would be taken, as text */
 void import_run (const char *dir, int *settings, int *keys, int *snippets);
 int import_offered (void);	/* a VS Code folder is there and it was not imported yet */
 int settings_known (const char *key);	/* esettings.c: a setting mme has */
+struct CompItem *settings_suggest (const char *const *have, size_t nhave, size_t *n);	/* esettings.c: the keys to suggest in settings.json, not the ones in have */
 void side_reveal (const char *real);
 void side_follow (const char *real);	/* side_reveal when explorer.autoReveal */
 void files_gap (int rows);	/* rows under "EXPLORER" left for OPEN EDITORS */

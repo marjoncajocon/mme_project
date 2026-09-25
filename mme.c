@@ -6804,6 +6804,7 @@ static struct {
   int forced;	/* Ctrl+Space: say so when there is nothing */
   unsigned gen;	/* the server's answer it is (lsp_comp_gen) */
   int choice;	/* a snippet's choices: not filtered by what is typed */
+  int skey;	/* settings.json's keys: the word is the key, dots and all */
 } CP;
 
 static int g_comp_details = 1;	/* the documentation beside the list (Ctrl+Space: Read Less / More) */
@@ -7068,9 +7069,109 @@ static void comp_local (int forced) {
 }
 
 
+/*
+** settings.json: the keys suggested where a key goes, as VS Code does
+** from its schema. A key is typed in its quotes ("editor.ta|) or bare.
+*/
+static int is_settings_doc (void) {
+  return HAS_DOC && T->doc->path && m_stricmp(path_basename(T->doc->path), "settings.json") == 0;
+}
+
+
+static int is_key_char (int c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+}
+
+
+/* the file up to p: how deep in braces p is; the keys of the top object into *keys (when keys) */
+static int skey_scan (Pos p, char ***keys, size_t *nk) {
+  size_t y, x, cap = 0;
+  int depth = 0, at = -1, com = 0;	/* com: in a comment */
+  for (y = 0; y < T->doc->n; y++) {
+    const Row *r = row_at(y);
+    for (x = 0; x < r->len; x++) {
+      char c = r->s[x];
+      if (at < 0 && (y > p.y || (y == p.y && x >= p.x))) {
+        at = depth;
+        if (keys == NULL) return at;
+      }
+      if (com) {
+        if (c == '*' && x + 1 < r->len && r->s[x + 1] == '/') {
+          com = 0;
+          x++;
+        }
+      }
+      else if (c == '/' && x + 1 < r->len && r->s[x + 1] == '/') break;
+      else if (c == '/' && x + 1 < r->len && r->s[x + 1] == '*') {
+        com = 1;
+        x++;
+      }
+      else if (c == '{' || c == '[') depth++;
+      else if (c == '}' || c == ']') depth--;
+      else if (c == '"') {
+        size_t b = ++x, k;
+        while (x < r->len && r->s[x] != '"') x += r->s[x] == '\\' ? 2 : 1;
+        if (x > r->len) x = r->len;
+        for (k = x + 1; k < r->len && (r->s[k] == ' ' || r->s[k] == '\t'); k++) {}
+        if (keys && depth == 1 && x < r->len && k < r->len && r->s[k] == ':' && !(y == p.y && b == p.x)) {
+          if (*nk == cap) *keys = (char **)xrealloc(*keys, (cap = cap ? cap * 2 : 64) * sizeof(char *));
+          (*keys)[(*nk)++] = xstrndup(r->s + b, x - b);
+        }
+      }
+    }
+    if (at < 0 && y == p.y) at = depth;	/* p at the row's end */
+  }
+  return at < 0 ? depth : at;
+}
+
+
+/* the cursor is where a key of the top object goes: *q where it starts (its quote), *k its text */
+static int skey_at (Pos *q, Pos *k) {
+  const Row *r;
+  size_t x, i;
+  if (!is_settings_doc() || T->nmc) return 0;
+  r = row_at(T->cur.y);
+  x = T->cur.x;
+  while (x > 0 && is_key_char((unsigned char)r->s[x - 1])) x--;
+  k->y = q->y = T->cur.y;
+  k->x = q->x = x;
+  if (x > 0 && r->s[x - 1] == '"') q->x = --x;
+  else if (x == T->cur.x) return 0;	/* nothing typed, no quote */
+  for (i = 0; i < x; i++)
+    if (r->s[i] != ' ' && r->s[i] != '\t' && r->s[i] != '{' && r->s[i] != ',') return 0;
+  return skey_scan(*q, NULL, NULL) == 1;
+}
+
+
+/* the settings not yet in the file, as suggestions */
+static void comp_settings (int forced) {
+  Pos q, k;
+  char **have = NULL;
+  size_t nh = 0, n;
+  CompItem *v;
+  if (!skey_at(&q, &k)) return;
+  skey_scan(k, &have, &nh);
+  v = settings_suggest((const char *const *)have, nh, &n);
+  while (nh > 0) free(have[--nh]);
+  free(have);
+  comp_free();
+  CP.v = v;
+  CP.n = n;
+  CP.skey = 1;
+  CP.vis = (size_t *)xmalloc((n + 1) * sizeof(size_t));
+  comp_filter();
+  if (!CP.open && forced) toast(0, "No suggestions.");
+}
+
+
 /* ask the server what fits here (the answer comes to on_completion) */
 static void comp_ask (int forced) {
+  Pos q, k;
   if (!HAS_DOC) return;
+  if (skey_at(&q, &k)) {
+    comp_settings(forced);
+    return;
+  }
   if (!lsp_active(T->doc)) {
     comp_local(forced);
     return;
@@ -7112,6 +7213,13 @@ static void comp_filter (void) {
   int *score;
   if (CP.choice) return;	/* a snippet's choices: all of them */
   CP.start = word_start();
+  if (CP.skey) {
+    Pos q;
+    if (!skey_at(&q, &CP.start)) {
+      CP.open = 0;
+      return;
+    }
+  }
   r = row_at(T->cur.y);
   n = T->cur.x - CP.start.x;
   if (CP.n == 0 || n >= sizeof(pre)) {
@@ -7264,8 +7372,46 @@ static void comp_accept (void) {
     a = c->a;
     if (c->b.y == b.y && pos_cmp(c->b, b) > 0) b = c->b;
   }
+  if (CP.skey) {	/* the key from its quote, the closing one too; its value when it has none */
+    const Row *r = row_at(T->cur.y);
+    size_t e = b.x, y;
+    Buf o;
+    int more = 0;
+    if (a.x > 0 && r->s[a.x - 1] == '"') a.x--;
+    while (e < r->len && is_key_char((unsigned char)r->s[e])) e++;
+    if (e < r->len && r->s[e] == '"') b.x = e + 1;
+    for (e = b.x; e < r->len && (r->s[e] == ' ' || r->s[e] == '\t'); e++) {}
+    buf_init(&o);
+    if (e < r->len && r->s[e] == ':') {	/* only the key changes */
+      buf_printf(&o, "\"%s\"", c->label);
+      free(ins);
+      ins = buf_take(&o);
+      comp_free();
+      doc_group(T->doc);
+      T->sel = 0;
+      ed_delete(a, b);
+      T->cur = ed_insert(a, ins, strlen(ins));
+      T->want = col_of(row_at(T->cur.y), T->cur.x);
+      doc_group(T->doc);
+      free(ins);
+      free(extra);
+      return;
+    }
+    for (y = b.y; y < T->doc->n && !more; y++) {	/* another key after it: a comma */
+      const Row *q = row_at(y);
+      size_t x = y == b.y ? e : 0;
+      while (x < q->len && (q->s[x] == ' ' || q->s[x] == '\t')) x++;
+      if (x == q->len) continue;
+      more = q->s[x] == '"';
+      break;
+    }
+    buf_puts(&o, ins);
+    if (more) buf_putc(&o, ',');
+    free(ins);
+    ins = buf_take(&o);
+  }
   int snippet = c->snippet;
-  if (snippet && !c->has_range) {	/* "#ifn" for "#ifndef": the '#' typed before the word goes too */
+  if (snippet && !c->has_range && !CP.skey) {	/* "#ifn" for "#ifndef": the '#' typed before the word goes too */
     const Row *r = row_at(a.y);
     size_t typed = b.x - a.x, k, ll = strlen(c->label), took = 0;
     for (k = ll > typed ? ll - typed : 0; k > 0; k--)
@@ -7486,7 +7632,8 @@ static void comp_after_key (int k) {
   }
   if (CP.open || CP.n) {
     if ((IS_TEXT(k) && (code == '_' || code >= 0x80 || (code >= '0' && code <= '9') ||
-                        (lower(code) >= 'a' && lower(code) <= 'z'))) || code == K_BS) {
+                        (lower(code) >= 'a' && lower(code) <= 'z') || (CP.skey && (code == '.' || code == '-')))) ||
+        code == K_BS) {
       comp_filter();
       comp_resolve_sel();
       if (CP.open || code == K_BS) return;
@@ -7495,6 +7642,13 @@ static void comp_after_key (int k) {
   }
   if (SG.label && (code == ')' || code == K_ESC || T->cur.y != SG.y)) sig_close();
   if (!IS_TEXT(k) || T->nmc) return;
+  if (is_settings_doc()) {	/* a key's quote or its first letter: the settings */
+    Pos q, kp;
+    if (skey_at(&q, &kp)) {
+      if (code == '"' || T->cur.x - kp.x == 1) comp_settings(0);
+      return;
+    }
+  }
   if (!lsp_active(T->doc)) {	/* the snippets and the words, from the first letter */
     if (T->cur.x > 0 && char_class(r, T->cur.x - 1) == 1 && T->cur.x - word_start().x == 1 && qs_allowed()) comp_local(0);
     return;
