@@ -28,8 +28,13 @@ mmc-term, with JetBrains Mono Nerd Font from mmc's `usr/share/fonts` (or the
 | | mme in mmc-term | mme-sdl |
 | --- | --- | --- |
 | programs | mme + OpenConsole + mmc-term | mme-sdl |
-| memory (one file open, Copilot left out) | 63 MB | 45 MB |
-| idle CPU | 1.3-1.5 % of a core | 1.0 % |
+| memory (a folder open, Copilot left out) | 58 MB | 41 MB |
+| idle CPU | 1.2-1.7 % of a core | 1.0 % |
+| typing: CPU per 1000 keys (one every 25 ms) | 1.5-2.0 s | 1.2-1.7 s |
+
+The window is shown through SDL's window surface (on Windows GDI's own
+bitmap): a key typed sends the rows it changed to the screen, not the whole
+window (macOS keeps SDL's renderer, for Retina's pixels).
 
 ## Building
 

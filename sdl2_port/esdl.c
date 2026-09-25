@@ -58,7 +58,14 @@ static struct {
   int focused;	/* the window has the keyboard: else the caret is a hollow box */
   int ccx, ccy;	/* where the caret was last flush (it moved: shown at once) */
   int car_on, car_x, car_y, car_shape, car_focus;	/* the caret painted into the picture now */
-  int up0, up1;	/* the rows of the picture painted since it was last copied to the texture */
+  int up0, up1;	/* the rows of the picture painted since it was last shown */
+  int use_surface;	/* shown through SDL's window surface (GDI's own bitmap on Windows), only the rows that
+                   changed: no renderer, no texture (macOS: the renderer, for Retina's pixels) */
+  SDL_Surface *fsurf;	/* the frame as a surface, its rows copied from */
+  SDL_Surface *last;	/* the window surface shown into last (made again when the window's size changes) */
+  unsigned char *rowdirty;	/* the rows painted since they were last shown */
+  int nrowdirty;
+  SDL_Rect *rects;
   char title[512];
   SDL_Cursor *ptr[3];
   int ptr_now;
@@ -481,6 +488,15 @@ static void paint_fg (const ECell *c, int col, int row, int wide, uint32_t fg, u
 static void mark (int y) {
   if (y < W.up0) W.up0 = y;
   if (y > W.up1) W.up1 = y;
+  if (y >= 0 && y < W.nrowdirty) W.rowdirty[y] = 1;
+}
+
+
+/* the window's size in pixels: the renderer's (macOS's Retina has more than its points), else the window's */
+static void out_size (int *w, int *h) {
+  *w = *h = 0;
+  if (W.ren) SDL_GetRendererOutputSize(W.ren, w, h);
+  else if (W.win) SDL_GetWindowSize(W.win, w, h);
 }
 
 
@@ -502,21 +518,29 @@ static void paint_row (int y, const ECell *grid) {
 }
 
 
-/* the picture as big as the window: a new texture, everything painted again */
+/* the picture as big as the grid of cells: a new frame (and texture), everything painted again */
 static void picture_size (void) {
   int w = S.cols * W.cw, h = S.rows * W.ch;
   if (w < 1) w = 1;
   if (h < 1) h = 1;
-  if (W.tex && w == W.tw && h == W.th) return;
+  if (W.fr.px && w == W.tw && h == W.th && W.nrowdirty == S.rows && (W.use_surface || W.tex)) return;
   if (W.tex) SDL_DestroyTexture(W.tex);
-  W.tex = SDL_CreateTexture(W.ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
+  W.tex = W.use_surface ? NULL : SDL_CreateTexture(W.ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, w, h);
   W.tw = w;
   W.th = h;
+  if (W.fsurf) SDL_FreeSurface(W.fsurf);
   free(W.fr.px);
   W.fr.px = (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t));
   W.fr.w = w;
   W.fr.h = h;
+  W.fsurf = W.use_surface ? SDL_CreateRGBSurfaceWithFormatFrom(W.fr.px, w, h, 32, w * 4, SDL_PIXELFORMAT_RGB888) : NULL;
+  free(W.rowdirty);
+  free(W.rects);
+  W.nrowdirty = S.rows;
+  W.rowdirty = (unsigned char *)calloc((size_t)S.rows + 1, 1);
+  W.rects = (SDL_Rect *)calloc((size_t)S.rows + 1, sizeof(SDL_Rect));
   S.full = 1;
+  W.dirty = 1;
 }
 
 
@@ -742,7 +766,7 @@ static void caret_sync (void) {
     SDL_Rect r;
     int ww = 0, wh = 0, pw = 0, ph = 0;
     SDL_GetWindowSize(W.win, &ww, &wh);
-    SDL_GetRendererOutputSize(W.ren, &pw, &ph);
+    out_size(&pw, &ph);
     r.x = S.cx * W.cw;
     r.y = S.cy * W.ch;
     r.w = W.cw;
@@ -760,8 +784,56 @@ static void caret_sync (void) {
 }
 
 
+/*
+** The window surface: the rows painted since last time copied into it and
+** only they shown (a key typed: a row or two, the status bar), everything
+** when the window was uncovered or resized
+*/
+static void present_surface (void) {
+  SDL_Surface *s = SDL_GetWindowSurface(W.win);
+  int y, n = 0;
+  if (s == NULL || W.fsurf == NULL) return;
+  if (W.dirty || s != W.last) {
+    uint32_t bgc = ui_color(C_EDITOR_BG);
+    SDL_Rect r;
+    SDL_FillRect(s, NULL, SDL_MapRGB(s->format, (Uint8)(bgc >> 16), (Uint8)(bgc >> 8), (Uint8)bgc));	/* the strip past the last cell */
+    r.x = r.y = 0;
+    r.w = W.tw;
+    r.h = W.th;
+    SDL_BlitSurface(W.fsurf, NULL, s, &r);
+    SDL_UpdateWindowSurface(W.win);
+  }
+  else {
+    for (y = 0; y < W.nrowdirty; y++) {
+      SDL_Rect r, d;
+      int y0 = y;
+      if (!W.rowdirty[y]) continue;
+      while (y + 1 < W.nrowdirty && W.rowdirty[y + 1]) y++;
+      r.x = 0;
+      r.y = y0 * W.ch;
+      r.w = W.tw;
+      r.h = (y - y0 + 1) * W.ch;
+      d = r;
+      SDL_BlitSurface(W.fsurf, &r, s, &d);
+      W.rects[n++] = r;
+    }
+    if (n > 0) SDL_UpdateWindowSurfaceRects(W.win, W.rects, n);
+  }
+  W.last = s;
+}
+
+
 /* the rows painted since last time into the texture, and the window shown */
 static void present (void) {
+  if (W.use_surface) {
+    present_surface();
+    if (W.rowdirty) memset(W.rowdirty, 0, (size_t)W.nrowdirty);
+    W.up0 = S.rows;
+    W.up1 = -1;
+    W.dirty = 0;
+    W.shown = 1;
+    return;
+  }
   if (W.up1 >= W.up0) {
     SDL_Rect r;
     r.x = 0;
@@ -827,7 +899,7 @@ void scr_flush (void) {
   size_t row = (size_t)S.cols * sizeof(ECell);
   long long now = (long long)SDL_GetTicks();
   if (scr_overlay_hook) scr_overlay_hook();
-  if (W.ren == NULL || S.back == NULL) return;
+  if (W.win == NULL || S.back == NULL) return;
   if (S.full || now - W.font_seen >= 1000) font_settings();	/* editor.fontSize changed: the font too */
   if (S.full) memset(g_style, 0, sizeof(g_style));	/* the theme may have changed */
   picture_size();
@@ -1066,7 +1138,7 @@ int term_cell_px (int *w, int *h) {	/* the image preview's pictures: a cell's pi
 
 void term_size (int *cols, int *rows) {
   int w = 0, h = 0;
-  if (W.ren) SDL_GetRendererOutputSize(W.ren, &w, &h);
+  out_size(&w, &h);
   *cols = w / (W.cw > 0 ? W.cw : 8);
   *rows = h / (W.ch > 0 ? W.ch : 16);
   if (*cols < 20) *cols = 20;
@@ -1172,9 +1244,15 @@ int term_open (void) {
   W.win = SDL_CreateWindow("mme", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h,
                            SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   if (W.win == NULL) return -1;
-  W.ren = SDL_CreateRenderer(W.win, -1, SDL_RENDERER_SOFTWARE);	/* the picture is painted here already: no GPU driver to load (tens of MB) */
-  if (W.ren == NULL) W.ren = SDL_CreateRenderer(W.win, -1, 0);
-  if (W.ren == NULL) return -1;
+#ifndef __APPLE__
+  SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");	/* the window's own bitmap (GDI, X11's), not a texture */
+  W.use_surface = SDL_GetWindowSurface(W.win) != NULL;
+#endif
+  if (!W.use_surface) {	/* the picture is painted here already: no GPU driver to load (tens of MB) */
+    W.ren = SDL_CreateRenderer(W.win, -1, SDL_RENDERER_SOFTWARE);
+    if (W.ren == NULL) W.ren = SDL_CreateRenderer(W.win, -1, 0);
+    if (W.ren == NULL) return -1;
+  }
   window_icon();
   key_filter();
   W.ptr[PTR_DEFAULT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
@@ -1200,6 +1278,8 @@ void term_close (void) {
     if (W.ptr[i]) SDL_FreeCursor(W.ptr[i]);
   if (W.tex) SDL_DestroyTexture(W.tex);
   if (W.ren) SDL_DestroyRenderer(W.ren);
+  if (W.fsurf) SDL_FreeSurface(W.fsurf);
+  W.fsurf = NULL;
   SDL_DestroyWindow(W.win);
   W.win = NULL;
   W.ren = NULL;
@@ -1410,7 +1490,7 @@ static void on_text (const char *s) {
 static void mouse_at (int x, int y) {
   int ww = 0, wh = 0, pw = 0, ph = 0;
   SDL_GetWindowSize(W.win, &ww, &wh);	/* macOS's Retina: the mouse in points, the picture in pixels */
-  if (W.ren) SDL_GetRendererOutputSize(W.ren, &pw, &ph);
+  out_size(&pw, &ph);
   if (ww > 0 && pw > 0 && pw != ww) {
     x = x * pw / ww;
     y = y * ph / wh;
