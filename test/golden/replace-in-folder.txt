@@ -1,32 +1,32 @@
 ---- cursor 16,3
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
-|      SEARCH                  │
+|      SEARCH                 │
 |      NeedleWord            │
 |        HayStack               │
 |▎                              │
 |      41 results in 41 files     │
-|      guide.md docs        ▐│
-|        NeedleWordHayStack lives▐│
-|      file00.txt many      1 ▐│
-|        row 00 NeedleWordHayStac▐│
-|      file01.txt many      1 ▐│                        Command Palette...   Ctrl+Shift+P
-|        row 01 NeedleWordHayStac▐│
-|      file02.txt many      1  │                             Go to File...   Ctrl+P
-|        row 02 NeedleWordHayStac │
-|       file03.txt many      1  │                              Open File...   Ctrl+O
-|        row 03 NeedleWordHayStac │
-|       file04.txt many      1  │                            Open Folder...
-|        row 04 NeedleWordHayStac │
-|       file05.txt many      1  │                           Open Project...   Ctrl+R
-|        row 05 NeedleWordHayStac │
-|       file06.txt many      1  │                                  New File   Ctrl+N
+|     Open in editor             │
+|       guide.md docs        ▐│
+|       NeedleWordHayStack lives▐│
+|       file00.txt many      1 ▐│
+|       row 00 NeedleWordHayStac▐│                        Command Palette...   Ctrl+Shift+P
+|       file01.txt many      1 ▐│
+|       row 01 NeedleWordHayStac▐│                             Go to File...   Ctrl+P
+|       file02.txt many      1  │
+|        row 02 NeedleWordHayStac │                              Open File...   Ctrl+O
+|       file03.txt many      1  │
+|        row 03 NeedleWordHayStac │                            Open Folder...
+|       file04.txt many      1  │
+|        row 04 NeedleWordHayStac │                           Open Project...   Ctrl+R
+|       file05.txt many      1  │
+|        row 05 NeedleWordHayStac │                                  New File   Ctrl+N
+|       file06.txt many      1  │
 |        row 06 NeedleWordHayStac │
 |       file07.txt many      1  │
 |        row 07 NeedleWordHayStac │
 |       file08.txt many      1  │
 |        row 08 NeedleWordHayStac │
-|       file09.txt many      1  │
-|       row 09 NeedleWordHayStac │
-|       file10.txt many      1  │
+|      file09.txt many      1  │
+|        row 09 NeedleWordHayStac │
 |                                                                                                                     
 exited=0

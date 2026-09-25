@@ -25,7 +25,7 @@
 |      Extensions              │   Editor: Word Wrap
 |        Emmet                 │   Controls how lines should wrap.
 |        HTML                  │    off                                    
-|                              │
+|        Vim                   │
 |                             │   Editor: Format On Save
 |                              │     Format a file on save. A formatter must be available and the editor must not be
 |                                                                                                                     
