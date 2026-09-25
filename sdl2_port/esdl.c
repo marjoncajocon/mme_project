@@ -607,6 +607,44 @@ void term_size (int *cols, int *rows) {
 
 
 /*
+** Keys sent by another program (SendInput with only the virtual key: an
+** automation tool, an on-screen keyboard, a remote desktop) come without the
+** keyboard's scan code, and SDL 2 drops a key it cannot place by scan code:
+** Enter, Ctrl+S never arrive. The window's messages go through key_proc
+** first, which gives such a key the scan code its virtual key has (and the
+** extended bit a real keyboard sets for the arrows, Home, Insert ...).
+*/
+#ifdef _WIN32
+static WNDPROC g_sdl_proc;
+
+static LRESULT CALLBACK key_proc (HWND h, UINT m, WPARAM w, LPARAM l) {
+  if ((m == WM_KEYDOWN || m == WM_KEYUP || m == WM_SYSKEYDOWN || m == WM_SYSKEYUP) && ((l >> 16) & 0xFF) == 0) {
+    UINT sc = MapVirtualKeyW((UINT)w, 0) & 0xFF;	/* MAPVK_VK_TO_VSC */
+    switch (w) {
+      case VK_UP: case VK_DOWN: case VK_LEFT: case VK_RIGHT: case VK_HOME: case VK_END: case VK_PRIOR:
+      case VK_NEXT: case VK_INSERT: case VK_DELETE: case VK_RCONTROL: case VK_RMENU: case VK_DIVIDE:
+      case VK_NUMLOCK:
+        l |= (LPARAM)1 << 24;	/* extended */
+        break;
+    }
+    l |= (LPARAM)sc << 16;
+  }
+  return CallWindowProcW(g_sdl_proc, h, m, w, l);
+}
+#endif
+
+
+static void key_filter (void) {
+#ifdef _WIN32
+  SDL_SysWMinfo wm;
+  SDL_VERSION(&wm.version);
+  if (!SDL_GetWindowWMInfo(W.win, &wm)) return;
+  g_sdl_proc = (WNDPROC)SetWindowLongPtrW(wm.info.win.window, GWLP_WNDPROC, (LONG_PTR)key_proc);
+#endif
+}
+
+
+/*
 ** The icon of a build without mme.rc in it (tcc cannot compile it): mme.ico
 ** next to the program, given to the window (WM_SETICON) big and small.
 */
@@ -670,6 +708,7 @@ int term_open (void) {
   if (W.ren == NULL) W.ren = SDL_CreateRenderer(W.win, -1, 0);
   if (W.ren == NULL) return -1;
   window_icon();
+  key_filter();
   W.ptr[PTR_DEFAULT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
   W.ptr[PTR_TEXT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
   W.ptr[PTR_POINTER] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
