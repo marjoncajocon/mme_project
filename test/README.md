@@ -33,6 +33,7 @@ so their timings mean something.
 | `mkprof.py` | makes `ptree/` from `tree/` by adding the tick profiler |
 | `settings.seed.json` | the `settings.json` every run starts from |
 | `stublsp.py` | a fake language server that always answers the same thing, and stands in for GitHub Copilot's account surface |
+| `stubclaude.py` | a fake Anthropic Messages API on a local port: checks the request, streams a canned answer (or a 401, a 529, a refusal) for the `chat-*` scenarios |
 | `browser/` | a no-op `rundll32.exe` (and its source) that the sign-in scenarios put in front of the PATH, so opening a URL never opens a browser |
 | `try.py` | scratch driver for working out a scenario's steps: `python try.py [-p] <target> <steps...>` |
 | `hx.c` / `hx.exe` | `../harness.c` with background and attribute dumps added |
@@ -150,6 +151,11 @@ Scen("view-folding", "lang/fold.c",
   takes the first `rundll32` on the PATH, so the sign-in scenarios hand the
   device-flow page to a program that writes it to `$MME_URLLOG` and exits
   instead of to a real browser window.
+* **stub_claude="ok"** — run `stubclaude.py --mode=` (`ok`, `401`, `529`,
+  `refusal`) on a free port and point `mme.chat.baseUrl` at it, with a dummy
+  `mme.chat.apiKey`. Every run drops `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`
+  and `ANTHROPIC_BASE_URL` from the environment, so no scenario can ever reach
+  the real API with the user's key.
 * **perf=True** — also record and assert the event-loop tick profile.
 * **private=True** — give the scenario its own copy of the target, for a
   scenario that saves.
@@ -243,12 +249,15 @@ To move the baseline after a deliberate change: `python run.py --update -k mini-
 | `tabs-*` | opening, switching by click, closing, pinning, preview replacement and the italics of a preview tab that is not in front |
 | `palette-*`, `gotofile*` | the command palette and Go to File, and their filtering |
 | `find-*`, `replace-*`, `search-*` | find and replace in the file and across the folder, and the colours of the matches |
+| `editorconfig-*` | `.editorconfig`: the indent it says over the detected one, its globs, a closer file winning, `root = true`, charset, and what a save does (trim, final newline, CR LF) |
 | `git-*` | the gutter bars, the blame decoration, SOURCE CONTROL, the diff editor and its backgrounds, file history |
-| `lsp-*` | code lens rows, inlay hints, PROBLEMS, hover and the diagnostic squiggle — all against `stublsp.py` |
+| `lsp-*` | code lens rows, inlay hints, PROBLEMS, hover and the diagnostic squiggle, pull diagnostics (`--pull`), color decorators and the color picker (`--colors`), document links (`--links`), the imports a rename in the Explorer updates (`--rename`) — all against `stublsp.py` |
 | `copilot-*` | the GitHub Copilot status item (its icon, its dimming, its hover and its menu), the sign-in device flow end to end, sign-out, and the three palette commands — all against `stublsp.py --auth=...`, never a real account |
+| `chat-*` | the Chat view and Inline Chat against `stubclaude.py`: the streamed Markdown answer, the implicit context, Insert and Apply, the diff's Accept and Discard, the missing key, HTTP errors and a refusal |
 | `panel-*` | the terminal, PROBLEMS and OUTPUT tabs of the panel |
 | `page-*` | the Settings editor and the Keyboard Shortcuts list |
 | `view-*` | word wrap, the minimap, sticky scroll, folding, the Markdown preview, the side bar |
+| `vim-*` | Vim mode (vim.enable): the modes in the status bar, motions and counts, operators and text objects, Visual line and block, `.`, undo, `/` search, `:s`, `:w`, macros |
 
 ## What the suite cannot cover
 

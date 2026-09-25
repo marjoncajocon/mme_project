@@ -182,5 +182,9 @@
   },
   "markdown.preview.scrollPreviewWithEditor": true,
   "markdown.preview.scrollEditorWithPreview": true,
-  "github.copilot.nextEditSuggestions.enabled": true
+  "github.copilot.nextEditSuggestions.enabled": true,
+  "mme.chat.apiKey": "",
+  "mme.chat.baseUrl": "",
+  "mme.chat.model": "claude-opus-5",
+  "mme.chat.fallbacks": true
 }

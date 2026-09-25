@@ -79,7 +79,7 @@ class Scen(object):
 
     def __init__(self, name, target, steps, guards, settings=None, subs=None,
                  perf=False, private=False, stub_lsp=(), watch=(),
-                 inline_lsp=None, fake_browser=False):
+                 inline_lsp=None, fake_browser=False, stub_claude=None):
         self.stub_lsp = stub_lsp    # languages that get reg/stublsp.py
         self.inline_lsp = inline_lsp  # stublsp.py as mme.inlineCompletionServer,
                                     # with this --auth= state ("out", "in",
@@ -87,6 +87,10 @@ class Scen(object):
         self.fake_browser = fake_browser  # reg/browser goes in front of the PATH,
                                     # so opening a URL runs the no-op rundll32
                                     # there and never a real browser window
+        self.stub_claude = stub_claude  # stubclaude.py as the Messages API, with
+                                    # this --mode= ("ok", "401", "529",
+                                    # "refusal"); mme.chat.baseUrl points at it
+                                    # and mme.chat.apiKey is its dummy key
         self.name = name
         self.target = target        # relative to fix/, or an absolute path
         self.steps = steps          # harness steps
@@ -134,7 +138,12 @@ CTRL_0 = csiu("0", ctrl=True)
 CTRL_J = csiu("j", ctrl=True)
 ALT_Z = csiu("z", alt=True)
 ALT_R = csiu("r", alt=True)                         # Find: use regular expression
+ALT_P = csiu("p", alt=True)                         # Replace: Preserve Case (AB)
+CTRL_ALT_ENTER = "`[13;7u"                          # Replace All
 ALT_SHIFT_I = csiu("i", shift=True, alt=True)       # Add Cursors to Line Ends
+CTRL_ALT_I = csiu("i", ctrl=True, alt=True)         # Chat: Open Chat
+CTRL_I = csiu("i", ctrl=True)                       # Inline Chat: Start
+CTRL_ENTER = "`[13;5u"                              # Inline Chat: Accept Changes
 ENTER = "|"
 ESC = "`"
 UP, DOWN, RIGHT, LEFT = "`[A", "`[B", "`[C", "`[D"
@@ -170,6 +179,12 @@ def arows(*rows):
 
 # the editor's text starts at screen row 3 (0 menu, 1 tabs, 2 breadcrumbs)
 COLOUR_ROWS = crows(3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)
+
+# Search Editor: New Search Editor from the palette; the query box then has the keys
+SE_NEW = ["w:1500", "k:" + CTRL_SHIFT_P, "w:400", "k:New Search Editor", "w:500", "k:|", "w:600"]
+CTRL_O = csiu("o", ctrl=True)
+CTRL_PGUP = "`[5;5~"
+F12 = "`[24~"
 
 SCENARIOS = [
     # ---------------------------------------------------------- plain editing
@@ -343,6 +358,105 @@ SCENARIOS = [
          ["w:1800", "k:" + CTRL_SHIFT_H, "w:400", "k:NeedleWord", "w:3000",
           "k:" + TAB, "w:300", "k:HayStack", "w:2500", "d"],
          "Replace in Files shows the replacement struck through beside each hit"),
+    Scen("replace-preserve-case", "case/case.txt",
+         ["w:900", "k:" + CTRL_H, "w:300", "k:foo", "k:" + TAB, "w:200", "k:baz",
+          "k:" + ALT_P, "w:500", "d", "b:4", "k:" + CTRL_ALT_ENTER, "w:700", "d"],
+         "AB (Alt+P) in the replace box lights up, and Replace All gives each match\n"
+         "         its own case: baz, Baz, BAZ, and baz for fOO (its first letter's)"),
+    Scen("replace-preserve-case-hyphen", "case/case.txt",
+         ["w:900", "k:" + CTRL_H, "w:300", "k:foo-bar", "k:" + TAB, "w:200", "k:new-name",
+          "k:" + ALT_P, "k:" + CTRL_ALT_ENTER, "w:700", "d"],
+         "Preserve Case part by part, like VS Code: Foo-Bar gives New-Name, each\n"
+         "         part between the '-' in its own part's case"),
+    Scen("replace-preserve-case-underscore", "case/case.txt",
+         ["w:900", "k:" + CTRL_H, "w:300", "k:foo_bar", "k:" + TAB, "w:200", "k:new_name",
+          "k:" + ALT_P, "k:" + CTRL_ALT_ENTER, "w:700", "d"],
+         "Preserve Case part by part: Foo_Bar gives New_Name, FOO_BAR NEW_NAME"),
+    Scen("replace-preserve-case-search", "case",
+         ["w:1800", "k:" + CTRL_SHIFT_H, "w:400", "k:foo", "w:3000",
+          "k:" + TAB, "w:300", "k:baz", "k:" + ALT_P, "w:1500", "d", "b:3",
+          "k:" + CTRL_ALT_ENTER, "w:800", "d", "k:" + ENTER, "w:1500", "d"],
+         "the Search view's AB: the preview shows each hit's replacement in its\n"
+         "         case, and Replace All writes them so",
+         private=True, watch=("case/case.txt",)),
+
+    # ------------------------------------------------------------ editorconfig
+    Scen("editorconfig-indent", "ec/proj/four.c",
+         ["w:1200", "d", "k:" + DOWN, "k:" + HOME, "k:" + TAB, "w:400", "d"],
+         ".editorconfig's indent_style / indent_size win over the detected indent:\n"
+         "         a file indented by 4 shows Spaces: 2, and Tab puts in 2 spaces"),
+    Scen("editorconfig-tabs", "ec/proj/main.go",
+         ["w:1200", "d"],
+         "[*.{go,mk}] indent_style = tab, tab_width = 8: Tab Size: 8, a tab is 8 wide"),
+    Scen("editorconfig-closer-wins", "ec/proj/sub/deep.c",
+         ["w:1200", "d"],
+         "the .editorconfig closest to the file says the last word: Spaces: 4\n"
+         "         from sub/ over the root's 2, and over the detected 2"),
+    Scen("editorconfig-glob-star", "ec/proj/lib/a/b/deep.js",
+         ["w:1200", "d"],
+         "[lib/**.js] reaches a file folders below lib/: Spaces: 3"),
+    Scen("editorconfig-glob-range", "ec/proj/num2.txt",
+         ["w:1200", "d"],
+         "[num{1..3}.txt] takes num2.txt: Spaces: 6"),
+    Scen("editorconfig-glob-range-out", "ec/proj/num4.txt",
+         ["w:1200", "d"],
+         "[num{1..3}.txt] does not take num4.txt: [*]'s Spaces: 2"),
+    Scen("editorconfig-not-root", "ec/open/a.txt",
+         ["w:1200", "d"],
+         "a .editorconfig without root = true lets the one above it speak too:\n"
+         "         indent_style = tab here, indent_size = 7 from above: Tab Size: 7"),
+    Scen("editorconfig-charset", "ec/proj/cafe.latin",
+         ["w:1200", "d"],
+         "charset = latin1 reads the file as Latin-1: cafe with its accent, and\n"
+         "         Western (ISO 8859-1) in the status bar"),
+    Scen("editorconfig-new-file", "ec/proj/brand-new.txt",
+         ["w:1200", "d"],
+         "a file that is not there yet gets end_of_line = crlf at once: CRLF"),
+    Scen("editorconfig-save", "ec/proj",
+         ["w:1800", "k:" + CTRL_P, "w:500", "k:save.txt", "w:500", "k:|", "w:800",
+          "k:x", "k:" + CTRL_S, "w:900", "d"],
+         "saving does what .editorconfig says: the trailing blanks go, a final\n"
+         "         newline comes, and every line ends in CR LF",
+         private=True, watch=("proj/save.txt",)),
+
+    # ---------------------------------------------------------- search editor
+    Scen("search-editor-new", "sedit",
+         SE_NEW + ["k:total", "w:2000", "d"] + crows(4, 6, 7, 12) + brows(8, 13),
+         "Search Editor: New Search Editor opens a 'Search: total' tab whose results are VS Code's "
+         ".code-search text: the count, each path, '  3: ' matches and '  2  ' context lines, "
+         "an empty line at a gap; paths, line numbers and matches coloured"),
+    Scen("search-editor-open-result", "sedit",
+         SE_NEW + ["k:total", "w:2000", "k:" + TAB, "k:" + TAB] + ["k:" + DOWN] * 13 +
+         ["w:300", "d", "k:|", "w:1200", "d", "k:" + CTRL_PGUP, "w:500"] + ["k:" + UP] * 9 +
+         ["k:" + F12, "w:1200", "d"],
+         "Enter or F12 on a result line opens its file at that line with the match selected"),
+    Scen("search-editor-select-copy", "sedit",
+         SE_NEW + ["k:total", "w:2000", "k:" + TAB, "k:" + TAB] + ["k:" + DOWN] * 6 +
+         ["k:" + SH_DOWN, "k:" + SH_DOWN, "w:300"] + brows(10, 11, 12) +
+         ["k:" + CTRL_C, "k:" + csiu("n", ctrl=True), "w:500", "k:" + CTRL_V, "w:600", "d"],
+         "the results are text that Shift+arrows select (the selection's background) and "
+         "Ctrl+C copies: pasted into a new file they come out as they are"),
+    Scen("search-editor-rerun", "sedit",
+         SE_NEW + ["k:total", "w:1200", "d", "k:" + csiu("r", ctrl=True, shift=True), "w:1500", "d",
+                   "k:" + csiu("c", alt=True), "k:" + csiu("l", alt=True), "k:|", "w:1500", "d"],
+         "with search.searchOnType off nothing is searched until Ctrl+Shift+R (Rerun Search); "
+         "Alt+C (Match Case) and Alt+L (context lines off) then Enter search again",
+         settings={"search.searchOnType": False}),
+    Scen("search-editor-save", "sedit",
+         SE_NEW + ["k:total", "w:2000", "k:" + CTRL_S, "w:600", "k:|", "w:800", "k:" + CTRL_W, "w:500",
+                   "k:" + CTRL_O, "w:600", "d", "k:total.code-search", "w:800", "k:|", "w:1200", "d"],
+         "Ctrl+S writes VS Code's header and results to <query>.code-search, and that file "
+         "opens again as a Search Editor with its query and results",
+         private=True, watch=("sedit/total.code-search",)),
+    Scen("search-editor-open-file", "sedit/saved.code-search",
+         ["w:1800", "d"] + crows(7, 8) + brows(2),
+         "a .code-search file opens in the Search Editor: its header fills the query, "
+         "Match Case and the context lines, and its results show as they were saved"),
+    Scen("search-editor-from-view", "sedit",
+         ["w:1500", "k:" + CTRL_SHIFT_F, "w:400", "k:total", "w:2000", "d",
+          "k:" + csiu("\r", alt=True), "w:2000", "d"],
+         "the Search view says 'Open in editor' under its count, and Alt+Enter opens its "
+         "search in a Search Editor with the context lines"),
 
     # -------------------------------------------------------------------- git
     Scen("git-gutter-and-blame", "gitrepo/tracked.c",
@@ -565,6 +679,57 @@ SCENARIOS = [
           "k:" + CTRL_K, "k:" + csiu("i", ctrl=True), "w:1200", "d"],
          "Ctrl+K Ctrl+I shows the server's hover over the name at the cursor",
          stub_lsp=("c",)),
+    Scen("lsp-pull-diagnostics", "lang/edit.c",
+         ["w:3000", "k:" + CTRL_SHIFT_M, "w:1200", "d"] + click(40, 6) +
+         ["k:x", "w:1000", "d", "w:3500", "d"],
+         "a server with diagnosticProvider is asked for the problems (textDocument/\n"
+         "         diagnostic) and PROBLEMS lists them, the related document's too; after\n"
+         "         an edit the pull sends the last resultId and \"unchanged\" keeps them;\n"
+         "         workspace/diagnostic/refresh pulls again and the new ones replace them",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--pull")}}),
+    Scen("lsp-color-decorators", "lsp/colors.c",
+         ["w:3000", "d"] + crows(4, 5, 6, 7),
+         "a swatch in each color the server finds is drawn before it, the text after\n"
+         "         it moved right like an inlay hint's (the faded one mixed with the\n"
+         "         background by its alpha)",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--colors")}}),
+    Scen("lsp-color-picker", "lsp/colors.c",
+         ["w:3000"] + click(32, 6) + ["w:1000", "d", "k:" + DOWN, "k:|", "w:1500", "d"],
+         "a click on a swatch lists the server's color presentations, the current one\n"
+         "         marked, and picking one writes the color that way (its textEdit)",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--colors")}}),
+    Scen("lsp-color-picker-hex", "lsp/colors.c",
+         ["w:3000", "k:" + DOWN + RIGHT * 20, "k:" + CTRL_SHIFT_P,
+          "k:Show or Focus Standalone Color Picker", "w:700", "k:|", "w:1000", "d",
+          "k:#00f", "w:500", "k:|", "w:1500", "d"],
+         "Show or Focus Standalone Color Picker at a color opens its picker, and a hex\n"
+         "         color typed there is written in the format the color had (#0000ff)",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--colors")}}),
+    Scen("lsp-links-ctrl-hover", "lsp/links.c",
+         ["w:3000", "k:`[<51;25;6M", "w:600", "d", "a:5"],
+         "Ctrl+hover over a document link underlines the whole link (a URL), not\n"
+         "         just the word under the mouse",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--links")}}),
+    Scen("lsp-links-ctrl-click", "lsp/links.c",
+         ["w:3000", "k:`[<16;22;5M", "k:`[<16;22;5m", "w:1500", "d"],
+         "Ctrl+Click on a document link opens its file at the line and column of\n"
+         "         its #L4,14 fragment (colors.c, line 4), instead of Go to Definition",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--links")}}),
+    Scen("lsp-links-resolve", "lsp/links.c",
+         ["w:3000", "k:`[<16;22;7M", "k:`[<16;22;7m", "w:1500", "d"],
+         "a document link with no target is resolved (documentLink/resolve) when it\n"
+         "         is Ctrl+Clicked, and then opened: renamer/main.c at line 4",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--links")}}),
+    Scen("lsp-rename-updates-imports", "lsp/renamer",
+         ["w:1800"] + click(12, 6) + ["w:2500"] + click(12, 7) +
+         ["w:700", "k:`OQ", "w:500", "k:helper", "w:300", "k:|", "w:1500", "d"] +
+         click(38, 2) + ["w:1500", "d"],
+         "renaming a header in the Explorer asks the server first (workspace/\n"
+         "         willRenameFiles, its filter **/*.{h,hpp}) and makes its edit - the\n"
+         "         #include in main.c now names helper.h, the tab dirty, not saved - then\n"
+         "         the file moves and the server is told (didRenameFiles, echoed)",
+         settings={"mme.languageServers": {"*": "", "c": stub_cmd("--rename")}},
+         private=True, watch=("renamer/util.h", "renamer/helper.h", "renamer/main.c")),
 
     # ------------------------------------------------------------------ panel
     Scen("lsp-inline-ghost", "lang/edit.c",
@@ -660,6 +825,87 @@ SCENARIOS = [
          "the palette carries the three GitHub Copilot commands, whether or not an "
          "inline-completion server is set"),
 
+    # ------------------------------------------ Chat and Inline Chat (Claude)
+    # stubclaude.py plays Anthropic's Messages API on a free local port: it
+    # checks the request as the API would (headers, model, fallbacks, roles)
+    # and streams a canned answer in pieces. No scenario can reach the real
+    # API: run_once() drops ANTHROPIC_* from the environment, and the key is
+    # a dummy. The Chat view opens at the right of the editors, columns
+    # 86-119; its box to type in is at the bottom.
+    Scen("chat-open-welcome", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:900", "d"],
+         "Ctrl+Alt+I opens the Chat view in the secondary side bar: its title with "
+         "New Chat and close, the welcome, and the box with the current file's chip",
+         stub_claude="ok"),
+    Scen("chat-missing-key", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:900", "d", "k:hello", "k:|", "w:900", "d"],
+         "with no API key anywhere the view says how to set one, and asking "
+         "sends nothing: it answers with the same notice"),
+    Scen("chat-send-streamed", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:How do I double a number?", "w:300", "d",
+          "k:|", "w:3500", "d"] + crows(13, 14, 15, 16, 17),
+         "a question goes to the API with the lines the editor shows, and the answer "
+         "streams in as Markdown: bold, a list, and a C code block in C's colors "
+         "with Copy, Insert and Apply on its top row; the thinking block is not shown",
+         stub_claude="ok"),
+    Scen("chat-two-turns", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:first|", "w:3500",
+          "k:second|", "w:3500", "d"],
+         "a second question sends the whole talk again, roles taking turns: the stub "
+         "counts two questions and says Answer 2",
+         stub_claude="ok"),
+    Scen("chat-selection-context", "lang/edit.c",
+         ["w:1500", "k:" + DOWN * 15, "k:" + SH_DOWN * 3, "k:" + CTRL_ALT_I, "w:700", "d",
+          "k:what does it do|", "w:3500", "d"],
+         "the selection is the implicit context: the chip says edit.c:16-18 and the "
+         "API is told those lines",
+         stub_claude="ok"),
+    Scen("chat-code-insert", "lang/edit.c",
+         ["w:1500", "k:" + DOWN * 4, "k:" + CTRL_ALT_I, "w:700", "k:helper please|", "w:3500"] +
+         click(107, 15) + ["w:900", "d"],
+         "a code block's Insert puts its code at the editor's cursor, as a paste: "
+         "the lines are in the file and its tab is dirty",
+         stub_claude="ok"),
+    Scen("chat-code-apply", "lang/edit.c",
+         ["w:1500", "k:" + DOWN * 15, "k:" + SH_DOWN * 4, "k:" + CTRL_ALT_I, "w:700",
+          "k:make it a helper|", "w:3500"] + click(114, 15) + ["w:900", "d",
+          "k:" + CTRL_ENTER, "w:900", "d"],
+         "a code block's Apply shows it in place of the selection as a diff, with "
+         "Accept and Discard, and the editor has the keys: Ctrl+Enter puts it in",
+         stub_claude="ok"),
+    Scen("chat-new-chat", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:first|", "w:3500",
+          "k:" + csiu("l", ctrl=True), "w:700", "d"],
+         "Ctrl+L in the view starts a new chat: the talk goes, the welcome is back",
+         stub_claude="ok"),
+    Scen("chat-http-401", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:hi|", "w:2500", "d"],
+         "a key the API refuses is told in words in the talk, not as raw JSON",
+         stub_claude="401"),
+    Scen("chat-overloaded", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:hi|", "w:2500", "d"],
+         "an overloaded API (529) is told as such, with try again",
+         stub_claude="529"),
+    Scen("chat-refusal", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:hi|", "w:2500", "d"],
+         "stop_reason refusal is a short notice that Claude declined",
+         stub_claude="refusal"),
+    Scen("chat-inline-accept", "lang/edit.c",
+         ["w:1500", "k:" + DOWN * 15, "k:" + SH_DOWN * 4, "k:" + CTRL_I, "w:700", "d",
+          "k:use long", "k:|", "w:3000", "d", "k:" + CTRL_ENTER, "w:900", "d"],
+         "Ctrl+I asks for a change of the selection in a box over it; the answer is a "
+         "diff in the text (old tinted, new under it) with Accept and Discard, and "
+         "Ctrl+Enter puts it in",
+         stub_claude="ok"),
+    Scen("chat-inline-discard", "lang/edit.c",
+         ["w:1500", "k:" + DOWN * 15, "k:" + SH_DOWN * 4, "k:" + CTRL_I, "w:700",
+          "k:use long", "k:|", "w:3000", "k:" + ESC, "w:900", "d"],
+         "Esc throws Inline Chat's diff away: the file is as it was and not dirty",
+         stub_claude="ok"),
+    Scen("chat-palette-commands", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:Chat", "w:900", "d"],
+         "the palette carries Chat's and Inline Chat's commands by VS Code's names"),
+
     # ------------------------------------------------------------------ panel
     Scen("panel-terminal", "lang/edit.c",
          ["w:900", "k:" + CTRL_BACKTICK, "w:2500", "d",
@@ -710,6 +956,81 @@ SCENARIOS = [
     Scen("view-sidebar-toggle", "proj",
          ["w:1800", "k:" + CTRL_B, "w:700", "d", "k:" + CTRL_B, "w:700", "d"],
          "Ctrl+B hides the side bar and the editor takes the width"),
+
+    # ------------------------------------------------------------- Vim mode
+    # vim.enable on: VSCodeVim's keys. Row 29 is the status bar, where the mode,
+    # the keys of a command not finished yet, and the : and / lines show.
+    Scen("vim-modes-status", "vim/text.txt",
+         ["w:1200", "c:29", "k:i", "c:29", "k:" + ESC, "c:29", "k:v", "c:29",
+          "k:V", "c:29", "k:^V", "c:29", "k:" + ESC, "k:R", "c:29", "k:" + ESC,
+          "k:d2", "c:29", "k:" + ESC, "k::set nu", "c:29", "k:" + ESC,
+          "k:qa", "c:29", "k:q", "k::bogus|", "c:29", "d"],
+         "the mode in the status bar as VSCodeVim writes it (-- NORMAL --,\n"
+         "         -- INSERT --, the three VISUALs, -- REPLACE --), the keys of a\n"
+         "         command not whole yet, the : line, recording @a, and E492",
+         settings={"vim.enable": True}),
+    Scen("vim-motions-counts", "vim/text.txt",
+         ["w:1200", "k:3w", "c:29", "k:2e", "c:29", "k:ge", "c:29", "k:$", "c:29",
+          "k:b", "c:29", "k:0fo", "c:29", "k:;", "c:29", "k:,", "c:29", "k:tz", "c:29",
+          "k:2j", "c:29", "k:0f(%", "c:29", "k:}", "c:29", "k:{", "c:29", "k:G", "c:29",
+          "k:gg", "c:29", "k:5G", "c:29", "k:k" + csiu("^"), "c:29", "k:2W", "c:29", "k:e", "c:29"],
+         "w b e ge $ 0 ^ f t ; , % { } G gg with counts land where Vim puts the\n"
+         "         cursor (Ln, Col in the status bar after each)",
+         settings={"vim.enable": True}),
+    Scen("vim-operators-objects", "vim/text.txt",
+         ["w:1200", "k:wd3w", "k:jgUiw", "k:jf(di(", "k:f\"ci\"X" + ESC, "k:j>>",
+          "k:jjdap", "k:gg0daw", "k:jc$ZZ" + ESC, "w:300", "d"],
+         "operators with motions and text objects: d3w gUiw di( ci\" >> dap daw c$",
+         settings={"vim.enable": True}),
+    Scen("vim-visual-line", "vim/text.txt",
+         ["w:1200", "k:Vj", "w:200", "d", "k:y", "k:8Gp", "w:300", "d",
+          "k:ggVjd", "k:jP", "w:300", "d"],
+         "Visual Line mode: the lines lit, yanked, put after the last line,\n"
+         "         deleted and put back above",
+         settings={"vim.enable": True}),
+    Scen("vim-visual-block", "vim/text.txt",
+         ["w:1200", "k:^Vjjll", "w:600", "d", "k:d", "k:^VjjI// " + ESC, "w:300",
+          "k:gg$^VjjA;" + ESC, "w:300", "d"],
+         "Visual Block mode: the block drawn with a cursor per line, d, and I / A\n"
+         "         typing on every line at once (A after $ at each line's end)",
+         settings={"vim.enable": True}),
+    Scen("vim-dot-repeat", "vim/text.txt",
+         ["w:1200", "k:dw", "k:..", "k:jA!" + ESC, "k:j.", "k:jwciwNEW" + ESC,
+          "k:w.", "k:3G3ia-" + ESC, "k:j.", "k:6GVd", "k:.", "w:300", "d"],
+         ". repeats the last change: a delete, an append with what was typed, a\n"
+         "         change of a word, an insert with a count, a Visual Line delete",
+         settings={"vim.enable": True}),
+    Scen("vim-undo-redo", "vim/text.txt",
+         ["w:1200", "k:dd", "k:jciwONE" + ESC, "k:3ia-" + ESC, "w:200", "d",
+          "k:u", "w:200", "d", "k:uu", "w:200", "d", "k:^R^R", "w:300", "d"],
+         "u and Ctrl+R: each command and each visit to Insert mode is one step",
+         settings={"vim.enable": True}),
+    Scen("vim-search", "vim/text.txt",
+         ["w:1200", "k:/fo", "w:300"] + brows(3, 6) + ["c:29", "k:|", "w:200"] +
+         brows(3, 6) + ["c:29", "k:n", "c:29", "k:n", "c:29", "k:N", "c:29",
+                        "k:gg*", "c:29", "k:/nothing|", "c:29"],
+         "/ lights every match as it is typed and moves to the first; Enter keeps\n"
+         "         it (the lights go: vim.hlsearch is off); n N * go on; E486",
+         settings={"vim.enable": True}),
+    Scen("vim-substitute", "vim/text.txt",
+         ["w:1200", "k::%s/foo/BAR/g|", "k::2,3s/\\(t\\w*\\)/<\\1>/|",
+          "k::6,8s/" + csiu("^") + "/# /|", "w:300", "d"],
+         ":s with ranges: % every line and g every match, a group put back with\n"
+         "         \\1, and an empty match at the start of each line (the last line's\n"
+         "         message is Vim's: 3 substitutions on 3 lines)",
+         settings={"vim.enable": True}),
+    Scen("vim-write", "vim/text.txt",
+         ["w:1200", "k:dd", "k::w|", "w:800", "d"],
+         ":w saves the file: its first line is gone on disk and the tab is clean",
+         settings={"vim.enable": True}, private=True, watch=("text.txt",)),
+    Scen("vim-macros", "vim/text.txt",
+         ["w:1200", "k:qaI# " + ESC, "k:jq", "c:29", "k:2@a", "k:@@", "w:300", "d"],
+         "q records the keys (recording @a), @a plays them twice, @@ once more",
+         settings={"vim.enable": True}),
+    Scen("vim-toggle-command", "vim/text.txt",
+         ["w:1200", "c:29", "k:" + CTRL_SHIFT_P, "w:300", "k:Vim: Toggle Vim Mode",
+          "w:400", "k:|", "w:400", "c:29", "k:dd", "w:300", "d"],
+         "Vim is off by default; Vim: Toggle Vim Mode turns it on and dd deletes"),
 ]
 
 
@@ -801,7 +1122,7 @@ def wipe(path):
     raise SystemExit("cannot clear %s" % path)
 
 
-def prepare(scen, exe_src):
+def prepare(scen, exe_src, extra=None):
     """a private folder with its own mme.exe and its own empty mme-data"""
     d = os.path.join(WORK, scen.name)
     exe = os.path.join(d, "mme.exe")
@@ -814,6 +1135,7 @@ def prepare(scen, exe_src):
         shutil.copyfile(exe_src, exe)
     conf = dict(SEED_JSON)
     conf.update(scen.settings)
+    conf.update(extra or {})
     stub = "python " + os.path.join(HERE, "stublsp.py").replace("\\", "/")
     if scen.stub_lsp:
         servers = dict(conf["mme.languageServers"])
@@ -840,10 +1162,40 @@ def target_path(scen, work):
     return dst
 
 
+# the key stubclaude.py wants; never a real one
+STUB_CLAUDE_KEY = "sk-ant-test-dummy-key"
+
+
+def start_stub_claude(mode):
+    """stubclaude.py on a free port: (process, its base URL)"""
+    p = subprocess.Popen([sys.executable, os.path.join(HERE, "stubclaude.py"), "--mode=" + mode],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    line = p.stdout.readline().decode("ascii", "replace").split()
+    return p, "http://127.0.0.1:%s" % (line[1] if len(line) > 1 else "9")
+
+
 def run_once(scen, use_prof):
-    work = prepare(scen, PBIN if use_prof else BIN)
+    stub = None
+    extra = {}
+    if scen.stub_claude:
+        stub, url = start_stub_claude(scen.stub_claude)
+        extra = {"mme.chat.baseUrl": url, "mme.chat.apiKey": STUB_CLAUDE_KEY}
+    try:
+        return run_once_(scen, use_prof, extra)
+    finally:
+        if stub:
+            stub.kill()
+            stub.wait()
+
+
+def run_once_(scen, use_prof, extra):
+    work = prepare(scen, PBIN if use_prof else BIN, extra)
     tgt = target_path(scen, work)
     env = dict(os.environ)
+    # the user's own Anthropic key must never reach a scenario: a chat that
+    # found one would talk to the real API, and spend money doing it
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+        env.pop(k, None)
     log = os.path.join(work, "tick.log")
     env["MME_TICKLOG"] = log
     # nothing below may reach into the user's own git or VS Code configuration
@@ -959,7 +1311,8 @@ def read_golden(name):
     p = golden_path(name)
     if not os.path.isfile(p):
         return None
-    return io.open(p, encoding="utf-8", newline="").read()
+    # a checkout with core.autocrlf has them with CR LF; a screen never has a CR
+    return io.open(p, encoding="utf-8", newline="").read().replace("\r\n", "\n")
 
 
 def write_golden(name, text):

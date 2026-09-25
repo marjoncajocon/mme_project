@@ -40,6 +40,25 @@ state it pretends to be in is the one argument it takes:
 It also takes --name=x, which puts "x: " in front of every diagnostic, so two
 of these can be told apart when a scenario has one per language.
 
+And four flags for the newer surfaces, each off by default so every other
+scenario sees exactly what it always saw:
+
+    --pull      diagnosticProvider instead of publishDiagnostics: the problems
+                are only there when asked for (textDocument/diagnostic). The
+                first pull of a file is "full", with a related document; the
+                second, against the resultId of the first, is "unchanged";
+                2.5 s later the server sends workspace/diagnostic/refresh and
+                the pull after that is "full" again, with other problems
+    --colors    colorProvider: the colors of fix/lsp/colors.c by position, and
+                colorPresentation's two ways to write one (hex and rgb())
+    --links     documentLinkProvider with resolveProvider: the links of
+                fix/lsp/links.c by position; the one to renamer/main.c has no target
+                until documentLink/resolve gives it one
+    --rename    workspace.fileOperations willRename/didRename for **/*.h: the
+                rename of a header edits the #include on line 2 of main.c
+                beside it, and didRenameFiles is said back as a message
+
+
 signIn always answers with the device flow, and the command it names
 (github.copilot.finishDeviceFlow) answers DEVICE_WAIT seconds later from a
 thread of its own -- the server keeps answering everything else meanwhile,
@@ -62,6 +81,10 @@ for _a in sys.argv[1:]:
         AUTH = _a.split("=", 1)[1]
     elif _a.startswith("--name="):
         NAME = _a.split("=", 1)[1]
+PULL = "--pull" in sys.argv[1:]
+COLORS = "--colors" in sys.argv[1:]
+LINKS = "--links" in sys.argv[1:]
+RENAME = "--rename" in sys.argv[1:]
 
 USER = "stubuser"
 DEVICE_CODE = "ABCD-1234"
@@ -117,6 +140,24 @@ NEDIT = {
     (17, 0): (12, 0, 12, 21, "static int total = 7;", True),
 }
 NEDIT_ID = "stub-nes-1"     # the id its command carries, and the notifications
+
+# --pull: what textDocument/diagnostic reports, by how many times a file was
+# asked (the second is "unchanged", against the first's resultId)
+PULLED_FIRST = [(12, 11, 12, 16, "pulled: total is never read", 1),
+                (30, 1, 30, 8, "pulled: prefer a const pointer here", 2)]
+PULLED_RELATED = [(2, 0, 2, 8, "pulled: a related document's problem", 2)]
+PULLED_AFTER_REFRESH = [(16, 1, 16, 6, "pulled again after workspace/diagnostic/refresh", 1)]
+PULLS = {}                       # uri -> how many times it was asked
+REFRESH_WAIT = 2.5               # seconds after the unchanged pull the refresh comes
+
+# --colors: fix/lsp/colors.c's colors, (line, start, end, r, g, b, a)
+COLOR_AT = [(1, 19, 26, 1, 0, 0, 1), (2, 21, 28, 0, 1, 0, 1),
+            (3, 20, 34, 0, 0, 1, 1), (4, 21, 30, 1, 0, 0, 0.5)]
+
+# --links: fix/lsp/links.c's links, (line, start, end, target or None, fragment)
+LINK_AT = [(1, 9, 19, "colors.c", "#L4,14"),
+           (2, 9, 32, "https://example.com/mme", ""),
+           (3, 9, 25, None, "#L4")]     # its target comes from documentLink/resolve
 
 
 def send(msg):
@@ -217,6 +258,61 @@ CAPS = {
 }
 
 
+def diag(a, b, c, d, msg, sev):
+    return {"range": rng(a, b, c, d), "severity": sev, "source": "stub",
+            "message": msg}
+
+
+def sibling(uri, name):
+    """the uri of name in the folder of uri (or, with ../, beside it)"""
+    return uri.rsplit("/", 1)[0] + "/" + name
+
+
+def pulled(mid, params):
+    """--pull: textDocument/diagnostic, full, then unchanged, then (after the
+    refresh this sends) full again"""
+    uri = params["textDocument"]["uri"]
+    n = PULLS.get(uri, 0) + 1
+    PULLS[uri] = n
+    if n == 1:
+        send({"jsonrpc": "2.0", "id": mid, "result": {
+            "kind": "full", "resultId": "r1",
+            "items": [diag(*d) for d in PULLED_FIRST],
+            "relatedDocuments": {sibling(uri, "fold.c"): {
+                "kind": "full", "resultId": "rel1",
+                "items": [diag(*d) for d in PULLED_RELATED]}}}})
+    elif n == 2 and params.get("previousResultId") == "r1":
+        send({"jsonrpc": "2.0", "id": mid,
+              "result": {"kind": "unchanged", "resultId": "r1"}})
+        threading.Thread(target=refresh_later, daemon=True).start()
+    elif n == 2:
+        # the client forgot the resultId: say so where the screen shows it
+        send({"jsonrpc": "2.0", "id": mid, "result": {"kind": "full", "items": [
+            diag(0, 0, 0, 1, "pulled: previousResultId was not sent", 1)]}})
+    else:
+        send({"jsonrpc": "2.0", "id": mid, "result": {
+            "kind": "full", "resultId": "r%d" % n,
+            "items": [diag(*d) for d in PULLED_AFTER_REFRESH]}})
+
+
+def refresh_later():
+    time.sleep(REFRESH_WAIT)
+    send({"jsonrpc": "2.0", "id": "refresh-1",
+          "method": "workspace/diagnostic/refresh", "params": None})
+
+
+def color_pres(mid, params):
+    """--colors: the color as hex and as rgb(), each replacing the range"""
+    c = params["color"]
+    r, g, b = (int(round(c[k] * 255)) for k in ("red", "green", "blue"))
+    a = c.get("alpha", 1)
+    hexa = "#%02x%02x%02x" % (r, g, b) + ("" if a >= 1 else "%02x" % int(round(a * 255)))
+    rgb = "rgb(%d, %d, %d)" % (r, g, b) if a >= 1 else "rgba(%d, %d, %d, %g)" % (r, g, b, a)
+    send({"jsonrpc": "2.0", "id": mid, "result": [
+        {"label": lab, "textEdit": {"range": params["range"], "newText": lab}}
+        for lab in (hexa, rgb)]})
+
+
 def main():
     while True:
         msg = read()
@@ -224,9 +320,23 @@ def main():
             return 0
         method = msg.get("method")
         mid = msg.get("id")
-        if method == "initialize":
+        if method is None:
+            pass                 # the answer to a request of ours (the refresh)
+        elif method == "initialize":
+            caps = dict(CAPS)
+            if PULL:
+                caps["diagnosticProvider"] = {"identifier": "stub", "interFileDependencies": True,
+                                              "workspaceDiagnostics": False}
+            if COLORS:
+                caps["colorProvider"] = True
+            if LINKS:
+                caps["documentLinkProvider"] = {"resolveProvider": True}
+            if RENAME:
+                ops = {"filters": [{"scheme": "file",
+                                    "pattern": {"glob": "**/*.{h,hpp}", "matches": "file"}}]}
+                caps["workspace"] = {"fileOperations": {"willRename": ops, "didRename": ops}}
             send({"jsonrpc": "2.0", "id": mid,
-                  "result": {"capabilities": CAPS,
+                  "result": {"capabilities": caps,
                              "serverInfo": {"name": "stub-lsp", "version": "1"}}})
             # the status the editor sees before it has asked anything
             if AUTH == "error":
@@ -293,7 +403,44 @@ def main():
             return 0
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
             uri = msg["params"]["textDocument"]["uri"]
-            publish(uri)
+            if not PULL:         # --pull: only when asked
+                publish(uri)
+        elif method == "textDocument/diagnostic":
+            pulled(mid, msg["params"])
+        elif method == "textDocument/documentColor":
+            send({"jsonrpc": "2.0", "id": mid, "result": [
+                {"range": rng(l, a, l, b),
+                 "color": {"red": r, "green": g, "blue": bl, "alpha": al}}
+                for l, a, b, r, g, bl, al in COLOR_AT]})
+        elif method == "textDocument/colorPresentation":
+            color_pres(mid, msg["params"])
+        elif method == "textDocument/documentLink":
+            uri = msg["params"]["textDocument"]["uri"]
+            links = []
+            for l, a, b, target, frag in LINK_AT:
+                lk = {"range": rng(l, a, l, b)}
+                if target and "://" in target:
+                    lk["target"] = target
+                elif target:
+                    lk["target"] = sibling(uri, target) + frag
+                else:
+                    lk["data"] = {"frag": frag, "uri": uri}
+                links.append(lk)
+            send({"jsonrpc": "2.0", "id": mid, "result": links})
+        elif method == "documentLink/resolve":
+            lk = dict(msg["params"])
+            lk["target"] = sibling(lk["data"]["uri"], "renamer/main.c") + lk["data"]["frag"]
+            send({"jsonrpc": "2.0", "id": mid, "result": lk})
+        elif method == "workspace/willRenameFiles":
+            f = msg["params"]["files"][0]
+            new = f["newUri"].rsplit("/", 1)[1]
+            main_c = sibling(f["oldUri"], "main.c")
+            send({"jsonrpc": "2.0", "id": mid, "result": {"changes": {
+                main_c: [{"range": rng(1, 10, 1, 16), "newText": new}]}}})
+        elif method == "workspace/didRenameFiles":
+            f = msg["params"]["files"][0]
+            say("didRenameFiles %s -> %s" % (f["oldUri"].rsplit("/", 1)[1],
+                                             f["newUri"].rsplit("/", 1)[1]))
         elif method == "textDocument/codeLens":
             send({"jsonrpc": "2.0", "id": mid, "result": [
                 {"range": rng(line, 0, line, 1),

@@ -132,7 +132,16 @@ static const char *const names[CMD_N] = {
   "Trigger Inline Suggestion", "Accept Inline Suggestion", "Accept Next Word Of Inline Suggestion",
   "Hide Inline Suggestion", "Show Next Inline Suggestion", "Show Previous Inline Suggestion",
   "GitHub Copilot: Sign In", "GitHub Copilot: Sign Out", "GitHub Copilot: Show Status",
-  "Jump to Next Edit Suggestion", "mme: Toggle Next Edit Suggestions"
+  "Jump to Next Edit Suggestion", "mme: Toggle Next Edit Suggestions",
+  "Show or Focus Standalone Color Picker",
+  "Chat: Open Chat", "Chat: New Chat", "Chat: Clear", "View: Toggle Secondary Side Bar Visibility", "Chat: Cancel",
+  "Chat: Toggle Implicit Context", "Chat: Set API Key...", "Inline Chat: Start", "Inline Chat: Accept Changes",
+  "Inline Chat: Discard",
+  "Search Editor: New Search Editor", "Search Editor: Open Results in Editor", "Search Editor: Rerun Search",
+  "Search Editor: Toggle Context Lines", "Search Editor: Increase Context Lines",
+  "Search Editor: Decrease Context Lines", "Search Editor: Focus Search Editor Input",
+  "Search Editor: Delete File Results",
+  "Vim: Toggle Vim Mode"
 };
 
 static const char *const keys[CMD_N] = {
@@ -190,7 +199,11 @@ static const char *const keys[CMD_N] = {
   "", "", "",
   "Alt+\\", "Tab", "Ctrl+Right", "Escape", "Alt+]", "Alt+[",
   "", "", "",
-  "Tab", ""
+  "Tab", "",
+  "",
+  "Ctrl+Alt+I", "", "", "Ctrl+Alt+B", "", "", "", "Ctrl+I", "Ctrl+Enter", "Escape",
+  "", "Alt+Enter", "Ctrl+Shift+R", "Alt+L", "Alt+=", "Alt+-", "Escape", "Ctrl+Shift+Backspace",
+  ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -338,7 +351,15 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "editor.action.inlineSuggest.acceptNextWord", "editor.action.inlineSuggest.hide",
   "editor.action.inlineSuggest.showNext", "editor.action.inlineSuggest.showPrevious",
   "github.copilot.signIn", "github.copilot.signOut", "github.copilot.status",
-  "editor.action.inlineSuggest.jump", "mme.toggleNextEditSuggestions"
+  "editor.action.inlineSuggest.jump", "mme.toggleNextEditSuggestions",
+  "editor.action.showOrFocusStandaloneColorPicker",
+  "workbench.action.chat.open", "workbench.action.chat.newChat", "workbench.action.chat.clear",
+  "workbench.action.toggleAuxiliaryBar", "workbench.action.chat.cancel", "mme.chat.toggleImplicitContext",
+  "mme.chat.setApiKey", "inlineChat.start", "inlineChat.acceptChanges", "inlineChat.discard",
+  "search.action.openNewEditor", "search.action.openInEditor", "rerunSearchEditorSearch",
+  "toggleSearchEditorContextLines", "increaseSearchEditorContextLines", "decreaseSearchEditorContextLines",
+  "search.searchEditor.action.focusQueryEditorWidget", "search.searchEditor.action.deleteFileResults",
+  "toggleVim"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

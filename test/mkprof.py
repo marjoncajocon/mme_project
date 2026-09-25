@@ -77,7 +77,8 @@ def main():
             shutil.copyfile(src, os.path.join(PTREE, name))
 
     p = os.path.join(PTREE, "mme.c")
-    s = io.open(p, encoding="utf-8", errors="surrogateescape", newline="").read()
+    # a checkout with core.autocrlf has CR LF: the EDITS below are written with LF
+    s = io.open(p, encoding="utf-8", errors="surrogateescape", newline="").read().replace("\r\n", "\n")
     for old, new in EDITS:
         n = s.count(old)
         if n != 1:

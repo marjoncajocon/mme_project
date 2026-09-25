@@ -2,7 +2,7 @@
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
 |      SEARCH                  │
 |      NeedleWord            │
-|        HayStack                │
+|        HayStack               │
 |▎                              │
 |      41 results in 41 files     │
 |      guide.md docs        ▐│

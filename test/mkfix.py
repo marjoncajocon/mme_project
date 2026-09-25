@@ -145,6 +145,17 @@ int main (int argc, char **argv) {
 }
 """
 
+# the Vim mode scenarios' text: words, brackets, quotes, two paragraphs
+VIM_FILE = """The quick brown fox jumps over the lazy dog.
+one two three four five six
+alpha(beta, gamma) and "quoted text" here
+    indented line with foo and foo again
+
+second paragraph starts here
+it has two lines
+last line of the file
+"""
+
 GO_FILE = """// Package demo is the Go colour fixture.
 package demo
 
@@ -406,6 +417,30 @@ def sticky_file():
     return "".join(out)
 
 
+# stublsp.py --colors reports the colors of this file by line and column
+LSP_COLORS_C = """/* colors.c - the colors a language server finds in the text */
+const char *red = "#ff0000";
+const char *green = "#00ff00";
+const char *blue = "rgb(0, 0, 255)";
+const char *faded = "#ff000080";
+"""
+
+# stublsp.py --links links these, by line and column
+LSP_LINKS_C = """/* links.c - what a language server links */
+#include "colors.c"
+/* docs: https://example.com/mme */
+#include "renamer/main.c"
+int linked = 1;
+"""
+
+# stublsp.py --rename answers willRenameFiles with an edit of line 2 here
+LSP_RENAMER_MAIN = """/* main.c - it includes the header the Explorer renames */
+#include "util.h"
+
+int main (void) { return util(); }
+"""
+
+
 def build_tree():
     if os.path.isdir(FIX):
         rmtree(FIX)
@@ -424,6 +459,7 @@ def build_tree():
     w(os.path.join(lang, "fold.c"), FOLD_FILE)
     w(os.path.join(lang, "sticky.c"), sticky_file())
     w(os.path.join(lang, "wrap.js"), WRAP_FILE)
+    w(os.path.join(FIX, "vim", "text.txt"), VIM_FILE)
 
     # a folder for the explorer, tabs, go-to-file and search scenarios
     proj = os.path.join(FIX, "proj")
@@ -441,6 +477,54 @@ def build_tree():
     # enough rows that the explorer tree scrolls and shows a scrollbar
     for i in range(40):
         w(os.path.join(proj, "many", "file%02d.txt" % i), "row %02d NeedleWord\n" % i)
+
+    # the language-server surfaces stublsp.py answers by position: colors,
+    # links, and a folder whose header is renamed (--colors, --links, --rename)
+    lsp = os.path.join(FIX, "lsp")
+    w(os.path.join(lsp, "colors.c"), LSP_COLORS_C)
+    w(os.path.join(lsp, "links.c"), LSP_LINKS_C)
+    w(os.path.join(lsp, "renamer", "main.c"), LSP_RENAMER_MAIN)
+    w(os.path.join(lsp, "renamer", "util.h"), "int util (void);\n")
+
+    # the Search Editor's folder: "total" twice on one line, matches far
+    # enough apart that the context lines around them leave a gap, "Total"
+    # for Match Case, and a .code-search file saved the way VS Code saves one
+    sedit = os.path.join(FIX, "sedit")
+    w(os.path.join(sedit, "src", "count.c"),
+      "/* count.c - the search editor's fixture */\n"
+      "#include <stdio.h>\n"
+      "static int total = 0;\n"
+      "static int add (int a) { total += a; return total; }\n"
+      "\n"
+      "int main (void) {\n"
+      "  add(1);\n"
+      "  add(2);\n"
+      "  printf(\"%d\\n\", total);\n"
+      "  return 0;\n"
+      "}\n")
+    w(os.path.join(sedit, "notes.txt"), "Total is counted in count.c.\nThe total never goes down.\n")
+    w(os.path.join(sedit, ".gitignore"), "*.code-search\n")    # the saved searches are not searched
+    w(os.path.join(sedit, "saved.code-search"),
+      "# Query: total\n"
+      "# Flags: CaseSensitive\n"
+      "# ContextLines: 1\n"
+      "\n"
+      "5 results - 2 files\n"
+      "\n"
+      "notes.txt:\n"
+      "  1  Total is counted in count.c.\n"
+      "  2: The total never goes down.\n"
+      "\n"
+      "src/count.c:\n"
+      "  2  #include <stdio.h>\n"
+      "  3: static int total = 0;\n"
+      "  4: static int add (int a) { total += a; return total; }\n"
+      "  5  \n"
+      "\n"
+      "  8    add(2);\n"
+      "  9:   printf(\"%d\\n\", total);\n"
+      "  10    return 0;\n"
+      "\n")
 
     # The long-line fixtures. What matters is the shape, not the content: a
     # line in the 8000..20000 byte window is where the tokenizer used to
@@ -616,6 +700,39 @@ def build_git():
 
     # one long line of a's: (a+)$ backtracks over it
     w(os.path.join(FIX, "odd", "aaa.txt"), "a" * 60000 + "b\n")
+
+    # .editorconfig: ec/ says indent_size = 7 for everything, ec/proj/ is a
+    # root of its own (so the 7 never reaches it), ec/proj/sub/ says the last
+    # word for its .c files, and ec/open/ is not a root, so the 7 reaches it
+    ec = os.path.join(FIX, "ec")
+    w(os.path.join(ec, ".editorconfig"), "# not a root: ec/open/ takes this\n[*]\nindent_size = 7\n")
+    w(os.path.join(ec, "proj", ".editorconfig"),
+      "root = true\n\n"
+      "[*]\nindent_style = space\nindent_size = 2\nend_of_line = crlf\n"
+      "insert_final_newline = true\ntrim_trailing_whitespace = true\n\n"
+      "; tabs, eight columns wide\n[*.{go,mk}]\nindent_style = tab\ntab_width = 8\n\n"
+      "[lib/**.js]\nindent_size = 3\n\n"
+      "[num{1..3}.txt]\nindent_size = 6\n\n"
+      "[*.latin]\ncharset = latin1\n")
+    w(os.path.join(ec, "proj", "sub", ".editorconfig"), "[*.c]\nindent_size = 4\n")
+    w(os.path.join(ec, "open", ".editorconfig"), "[*.txt]\nindent_style = tab\n")
+    # four.c is indented by 4 (detection says 4), deep.c by 2 (detection says 2)
+    w(os.path.join(ec, "proj", "four.c"),
+      "int main (void) {\n    int a = 1;\n    if (a) {\n        a++;\n    }\n    return a;\n}\n")
+    w(os.path.join(ec, "proj", "sub", "deep.c"),
+      "int deep (void) {\n  int b = 2;\n  if (b) {\n    b--;\n  }\n  return b;\n}\n")
+    w(os.path.join(ec, "proj", "main.go"),
+      "package main\n\nfunc main() {\n\tx := 1\n\tif x > 0 {\n\t\tx--\n\t}\n}\n")
+    w(os.path.join(ec, "proj", "lib", "a", "b", "deep.js"), "function f() {\n   return 1;\n}\n")
+    w(os.path.join(ec, "proj", "num2.txt"), "two\n")
+    w(os.path.join(ec, "proj", "num4.txt"), "four\n")
+    w(os.path.join(ec, "proj", "save.txt"), "hello   \nworld\t\nend")
+    wb(os.path.join(ec, "proj", "cafe.latin"), b"caf\xe9 na\xefve\n")
+    w(os.path.join(ec, "open", "a.txt"), "one\n\ttwo\n")
+
+    # Preserve Case: the same word in every case, and joined by - and _
+    w(os.path.join(FIX, "case", "case.txt"),
+      "foo Foo FOO fOO\nfoo-bar Foo-Bar FOO-BAR\nfoo_bar Foo_Bar FOO_BAR\n")
 
     # a file of no language at all: nothing fills the token buffer for it, so
     # the minimap is where an uninitialised read shows up as stray colours

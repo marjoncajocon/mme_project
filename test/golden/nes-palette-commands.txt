@@ -7,12 +7,12 @@
 |       3  #incl  View: Move Editor into Next Group  Ctrl+Alt+Right                                         ⠿
 |      4  #incl  mme: Toggle Next Edit Suggestions                                                         ⣭⣭⣥⡤⠄
 |       5         View: Join Editor Group with Next Group                                                   ⠟⠛
-|      6  #defi  Accept Next Word Of Inline Suggestion  Ctrl+Right                                         ⣿⡏⠉⠁
-|       7         View: Reopen Editor With Hex Editor                                                       ⣋⣁⣀⡀
-|      8  typed  Terminal: Run Selected Text In Active Terminal                                            ⣿⠿⠗
-|       9  │   i                                                                                            ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
-|      11  } Point;
+|      6  #defi  Search Editor: Toggle Context Lines  Alt+L                                                ⣿⡏⠉⠁
+|       7         Accept Next Word Of Inline Suggestion  Ctrl+Right                                         ⣋⣁⣀⡀
+|      8  typed  Search Editor: Increase Context Lines  Alt+=                                              ⣿⠿⠗
+|       9  │   i  Search Editor: Decrease Context Lines  Alt+-                                              ⡹⠿⠿⠃
+|     10  │   i  View: Reopen Editor With Hex Editor                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Poi  Terminal: Run Selected Text In Active Terminal
 |      12
 |      13  static int total = 0;
 |      14

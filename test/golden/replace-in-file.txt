@@ -3,7 +3,7 @@
 |      edit.c  
 |     edit.c
 |       1  /* edit.c - a small C file the editing scenarios typ  total                         1 of 4         
-|      2  #include <stdio.h>                                     SUM                               
+|      2  #include <stdio.h>                                     SUM                              
 |       3  #include <stdlib.h>                                                                              ⠿
 |      4  #include <string.h>                                                                              ⣭⣭⣥⡤⠄
 |       5                                                                                                   ⠟⠛

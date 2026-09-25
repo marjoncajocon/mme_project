@@ -201,7 +201,7 @@ static int kitty_key (int code, int k) {
   if (code == 9) return K_TAB | k;
   if (code == 127 || code == 8) return K_BS | k;
   if (code >= 'A' && code <= 'Z') code += 32;
-  if (ctrl && !shift && code >= 'a' && code <= 'z' && code != 'm')	/* Ctrl+M is not Enter here (Ctrl+K Ctrl+M) */
+  if (ctrl && !shift && code >= 'a' && code <= 'z' && code != 'm' && code != 'i')	/* Ctrl+M is not Enter here (Ctrl+K Ctrl+M), Ctrl+I not Tab (Inline Chat) */
     return CTRL(code) | (k & KM_ALT);
   if (!ctrl && !(k & KM_ALT)) return (shift && code >= 'a' && code <= 'z') ? code - 32 : code;
   return code | k;

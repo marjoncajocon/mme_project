@@ -32,7 +32,9 @@ Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1
            1, "", 0, 0,	/* command_center, win_title, panel_loc, panel_justify */
            1, 1,	/* markdown.preview.scroll* */
            1,	/* merge_editor */
-           1, 1, 1};	/* inline_suggest, inline_toolbar, next_edit */
+           1, 1, 1,	/* inline_suggest, inline_toolbar, next_edit */
+           1, 1,	/* color_decorators, links */
+           1, 1, 0};	/* search_on_type, se_context, se_reuse */
 
 static Json *g_json;	/* the file as read, for what is looked up later */
 
@@ -72,6 +74,10 @@ static const char default_file[] =
   "  \"editor.inlayHints.enabled\": \"on\",\n"
   "  // the language server's actions over functions (references, run test ...)\n"
   "  \"editor.codeLens\": true,\n"
+  "  // a swatch in its color before each color the language server finds (a click: its formats)\n"
+  "  \"editor.colorDecorators\": true,\n"
+  "  // the language server's links (an #include, a URL) open with Ctrl+Click\n"
+  "  \"editor.links\": true,\n"
   "  // the language server colors names by what they are\n"
   "  \"editor.semanticHighlighting.enabled\": true,\n"
   "  // \"onCode\" or \"off\": the lightbulb when there are code actions\n"
@@ -251,6 +257,14 @@ static const char default_explorer[] =	/* the Explorer's */
   "  // what the Explorer, Go to File and Search leave out\n"
   "  \"files.exclude\": {\"**/.git\": true, \"**/.svn\": true, \"**/.hg\": true, \"**/CVS\": true, \"**/.DS_Store\": true, \"**/Thumbs.db\": true},\n"
   ;
+static const char default_search[] =	/* Search's and the Search Editor's */
+  "  // search as you type, in the Search view and the Search Editor (else Enter)\n"
+  "  \"search.searchOnType\": true,\n"
+  "  // the lines around each match a new Search Editor shows (Alt+L toggles them)\n"
+  "  \"search.searchEditor.defaultNumberOfContextLines\": 1,\n"
+  "  // a new Search Editor takes the toggles, files and context of the last one\n"
+  "  \"search.searchEditor.reusePriorSearchConfiguration\": false,\n"
+  ;
 static const char default_window[] =	/* the window's */
   "  // the search box in the title bar (Go to File); back and forward beside it\n"
   "  \"window.commandCenter\": true,\n"
@@ -260,6 +274,35 @@ static const char default_window[] =	/* the window's */
   "  \"workbench.panel.defaultLocation\": \"bottom\",\n"
   "  // \"center\": under the editors; \"justify\": the whole width\n"
   "  \"workbench.panel.alignment\": \"center\",\n"
+  ;
+static const char default_chat[] =	/* Chat and Inline Chat's (echat.c) */
+  "  // Chat (Ctrl+Alt+I) and Inline Chat (Ctrl+I): Claude, through Anthropic's API.\n"
+  "  // The key; empty: ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) from the environment\n"
+  "  \"mme.chat.apiKey\": \"\",\n"
+  "  // where the API is; empty: ANTHROPIC_BASE_URL, else https://api.anthropic.com\n"
+  "  \"mme.chat.baseUrl\": \"\",\n"
+  "  \"mme.chat.model\": \"claude-opus-5\",\n"
+  "  // a request the model declines is answered by another model (server-side fallback)\n"
+  "  \"mme.chat.fallbacks\": true,\n"
+  ;
+static const char default_vim[] =	/* Vim mode's, by VSCodeVim's names */
+  "  // Vim's keys in the editor: Normal, Insert and Visual modes, : commands (Vim: Toggle Vim Mode)\n"
+  "  \"vim.enable\": false,\n"
+  "  // the unnamed register is the system clipboard: y, d and p use it\n"
+  "  \"vim.useSystemClipboard\": false,\n"
+  "  // Ctrl+D, Ctrl+U, Ctrl+F, Ctrl+V ... are Vim's; false: VS Code's\n"
+  "  \"vim.useCtrlKeys\": true,\n"
+  "  // a key for Vim (true) or for VS Code (false), over vim.useCtrlKeys: {\"<C-f>\": false}\n"
+  "  \"vim.handleKeys\": {\"<C-d>\": true, \"<C-s>\": false, \"<C-z>\": false},\n"
+  "  // a search's matches stay lit after it; while it is typed they are lit\n"
+  "  \"vim.hlsearch\": false,\n"
+  "  \"vim.incsearch\": true,\n"
+  "  // case is ignored in a search, unless the pattern has a capital\n"
+  "  \"vim.ignorecase\": true,\n"
+  "  \"vim.smartcase\": true,\n"
+  "  // :s replaces every match in a line, not only the first (the g flag turns it back)\n"
+  "  \"vim.gdefault\": false,\n"
+  "  \"vim.startInInsertMode\": false,\n"
   ;
 static const char default_file2[] =	/* the rest: one literal may not be longer than 4095 */
   "  // a color of the theme, changed: \"workbench.colorCustomizations\": {\n"
@@ -371,6 +414,9 @@ void settings_create (void) {
       os_write(fd, default_hover, sizeof(default_hover) - 1);
       os_write(fd, default_window, sizeof(default_window) - 1);
       os_write(fd, default_explorer, sizeof(default_explorer) - 1);
+      os_write(fd, default_chat, sizeof(default_chat) - 1);
+      os_write(fd, default_search, sizeof(default_search) - 1);
+      os_write(fd, default_vim, sizeof(default_vim) - 1);
       os_write(fd, default_file2, sizeof(default_file2) - 1);
       os_close(fd);
     }
@@ -571,6 +617,8 @@ int settings_load (void) {
   }
   opt.inlay = strcmp(json_str(json_get(j, "editor\\.inlayHints\\.enabled"), "on"), "off") != 0;
   opt.codelens = json_bool(json_get(j, "editor\\.codeLens"), 1);
+  opt.color_decorators = json_bool(json_get(j, "editor\\.colorDecorators"), 1);
+  opt.links = json_bool(json_get(j, "editor\\.links"), 1);
   opt.semantic = json_bool(json_get(j, "editor\\.semanticHighlighting\\.enabled"), 1);
   opt.textmate = json_bool(json_get(j, "editor\\.textmateGrammars"), 1);
   opt.tm_max_line = clamp((int)json_num(json_get(j, "editor\\.maxTokenizationLineLength"), 20000), 0, 1000000);
@@ -604,8 +652,12 @@ int settings_load (void) {
   opt.inline_suggest = json_bool(json_get(j, "editor\\.inlineSuggest\\.enabled"), 1);
   opt.inline_toolbar = strcmp(json_str(json_get(j, "editor\\.inlineSuggest\\.showToolbar"), "onHover"), "never") != 0;
   opt.next_edit = json_bool(json_get(j, "github\\.copilot\\.nextEditSuggestions\\.enabled"), 1);
+  opt.search_on_type = json_bool(json_get(j, "search\\.searchOnType"), 1);
+  opt.se_context = clamp((int)json_num(json_get(j, "search\\.searchEditor\\.defaultNumberOfContextLines"), 1), 0, 100);
+  opt.se_reuse = json_bool(json_get(j, "search\\.searchEditor\\.reusePriorSearchConfiguration"), 0);
   edit_settings(j);
   view_settings(j);
+  vim_settings(j);
   return 0;
 }
 

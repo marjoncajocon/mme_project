@@ -708,4 +708,74 @@ char *re_expand (const char *repl, const char *s, const size_t *cap, size_t *len
   return buf_take(&b);
 }
 
+
+static size_t count_of (const char *s, size_t n, char c) {
+  size_t i, k = 0;
+  for (i = 0; i < n; i++) k += s[i] == c;
+  return k;
+}
+
+
+/* the match and the text both have c, and as many parts between them */
+static int split_by (const char *r, size_t rn, const char *m, size_t mn, char c) {
+  size_t k = count_of(m, mn, c);
+  return k > 0 && k == count_of(r, rn, c);
+}
+
+
+static void keep_case (Buf *b, const char *r, size_t rn, const char *m, size_t mn) {
+  int hy, un, up = 0, low = 0;
+  size_t i;
+  if (mn == 0) {
+    buf_putn(b, r, rn);
+    return;
+  }
+  hy = split_by(r, rn, m, mn, '-');
+  un = split_by(r, rn, m, mn, '_');
+  if (hy != un) {	/* part by part: foo-bar and new-name, FOO_BAR and new_name */
+    char c = hy ? '-' : '_';
+    size_t i0 = 0, j0 = 0;
+    for (;;) {
+      size_t i1 = i0, j1 = j0;
+      while (i1 < mn && m[i1] != c) i1++;
+      while (j1 < rn && r[j1] != c) j1++;
+      keep_case(b, r + j0, j1 - j0, m + i0, i1 - i0);
+      if (j1 == rn) return;
+      buf_putc(b, c);
+      i0 = i1 + 1;
+      j0 = j1 + 1;
+    }
+  }
+  for (i = 0; i < mn; i++) {
+    up |= m[i] >= 'A' && m[i] <= 'Z';
+    low |= m[i] >= 'a' && m[i] <= 'z';
+  }
+  for (i = 0; i < rn; i++) {
+    char c = r[i];
+    if (!low || (!up && low)) {	/* FOO: all upper (or no letters); foo: all lower */
+      if (!low && c >= 'a' && c <= 'z') c = (char)(c - 32);
+      else if (low && c >= 'A' && c <= 'Z') c = (char)(c + 32);
+    }
+    else if (i == 0 && m[0] >= 'A' && m[0] <= 'Z' && c >= 'a' && c <= 'z') c = (char)(c - 32);	/* Foo: the first */
+    else if (i == 0 && m[0] >= 'a' && m[0] <= 'z' && c >= 'A' && c <= 'Z') c = (char)(c + 32);	/* fOO */
+    buf_putc(b, c);
+  }
+}
+
+
+/*
+** Preserve Case (AB): the replace text in the case of the match, as VS
+** Code's buildReplaceStringWithCasePreserved: all upper when it is, all
+** lower when it is, else its first letter's case. When both have '-' (or
+** '_', not both) in as many places, each part gets its part's case.
+*/
+char *re_keep_case (const char *repl, size_t rn, const char *m, size_t mn, size_t *len) {
+  Buf b;
+  buf_init(&b);
+  keep_case(&b, repl, rn, m, mn);
+  *len = b.len;
+  buf_putc(&b, '\0');
+  return buf_take(&b);
+}
+
 /* }================================================================== */

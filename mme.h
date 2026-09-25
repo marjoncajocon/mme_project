@@ -9,7 +9,7 @@
 **   edraw.c   the screen: cells, colors, only the changed lines are sent
 **   emenu.c   the menu bar, its menus, the quick input box (pickers, dialogs)
 **   eside.c   the activity bar and the sidebar; the Explorer (folder tree)
-**   esearch.c the Search view: find in files
+**   esearch.c the Search view: find in files   esearched.c the Search Editor
 **   egit.c    the Source Control view and the diff editor (git)
 **   egitlog.c the Source Control Graph, branches, the git commands, blame
 **   esyntax.c syntax highlighting
@@ -19,6 +19,8 @@
 **   ekeys.c   keybindings.json          esnip.c   snippets
 **   eext.c    extensions: Open VSX, VS Code's; their themes, snippets, languages
 **   ehistory.c Local History (the Timeline)   emd.c     the Markdown preview
+**   evim.c    Vim mode: VSCodeVim's keys in the editor
+**   echat.c   Chat and Inline Chat: Claude, through curl
 ** mutil.c, mos.c and mpath.c come from the mmc shell (see mmc.h).
 */
 
@@ -30,7 +32,8 @@
 #define MME_NAME	"mme"
 #define MME_VERSION	"0.9.0"	/* also in mme.rc */
 
-#define TABW		(opt.tab_size)	/* columns a tab goes to */
+#define TABW		(tab_cols())	/* columns a tab goes to: the file's, else editor.tabSize */
+int tab_cols (void);	/* mme.c: the tab in front's */
 
 
 /*
@@ -153,6 +156,11 @@ typedef struct Opt {
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
   int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */
+  int color_decorators;	/* editor.colorDecorators */
+  int links;	/* editor.links */
+  int search_on_type;	/* search.searchOnType: the Search view and the Search Editor search as you type */
+  int se_context;	/* search.searchEditor.defaultNumberOfContextLines */
+  int se_reuse;	/* search.searchEditor.reusePriorSearchConfiguration */
 } Opt;
 
 enum { PANEL_BOTTOM, PANEL_RIGHT, PANEL_LEFT };
@@ -255,6 +263,15 @@ typedef struct UndoList {
   size_t n, cap;
 } UndoList;
 
+/* eeditorconfig.c - what .editorconfig says of a file; -1: it says nothing */
+typedef struct EdConf {
+  int tabs, indent, tabw;	/* indent_style (1 tab), indent_size, tab_width */
+  int crlf, enc;	/* end_of_line, charset (ENC_*) */
+  int trim, final_nl;	/* trim_trailing_whitespace, insert_final_newline */
+} EdConf;
+
+#define EC_OR(v, def)	((v) >= 0 ? (v) : (def))	/* .editorconfig's, else the setting's */
+
 typedef struct Doc {
   Row *row;	/* always at least one */
   size_t n, cap;
@@ -262,6 +279,8 @@ typedef struct Doc {
   int crlf;	/* the file had CR LF: it is saved the same way */
   int tabs;	/* indent with tabs, else with 'indent' spaces */
   int indent;
+  int tabw;	/* columns a tab goes to (.editorconfig's tab_width); 0: editor.tabSize */
+  EdConf ec;	/* what .editorconfig says of it */
   UndoList undo, redo;
   long group;
   long changes, saved;	/* dirty when they differ */
@@ -313,6 +332,10 @@ void doc_group (Doc *d);	/* the next change is a new undo step */
 int doc_undo (Doc *d, Pos *cur);	/* 0: nothing to undo */
 int doc_redo (Doc *d, Pos *cur);
 void doc_detect_indent (Doc *d);	/* tabs or spaces, how many: from its lines */
+
+void edconf_none (EdConf *c);	/* it says nothing */
+void edconf_read (EdConf *c, const char *native);	/* the .editorconfig files over the file, read */
+void edconf_apply (Doc *d, int is_new);	/* d->ec's indent; for a new file its end_of_line too */
 
 /* }================================================================== */
 
@@ -589,7 +612,12 @@ enum {
   CMD_MERGE_EDITOR, CMD_MERGE_COMPLETE, CMD_LENS_RUN,
   CMD_INLINE_TRIGGER, CMD_INLINE_ACCEPT, CMD_INLINE_WORD, CMD_INLINE_HIDE, CMD_INLINE_NEXT,
   CMD_INLINE_PREV, CMD_COPILOT_SIGNIN, CMD_COPILOT_SIGNOUT, CMD_COPILOT_STATUS,
-  CMD_NEDIT_JUMP, CMD_NEDIT_TOGGLE,
+  CMD_NEDIT_JUMP, CMD_NEDIT_TOGGLE, CMD_COLOR_PICKER,
+  CMD_CHAT_OPEN, CMD_CHAT_NEW, CMD_CHAT_CLEAR, CMD_CHAT_TOGGLE, CMD_CHAT_STOP, CMD_CHAT_CONTEXT,
+  CMD_CHAT_SET_KEY, CMD_INLINE_CHAT, CMD_INLINE_CHAT_ACCEPT, CMD_INLINE_CHAT_DISCARD,	/* echat.c */
+  CMD_SEARCHED_NEW, CMD_SEARCHED_FROM_VIEW, CMD_SEARCHED_RERUN, CMD_SEARCHED_CONTEXT,	/* esearched.c: these */
+  CMD_SEARCHED_MORE_CONTEXT, CMD_SEARCHED_LESS_CONTEXT, CMD_SEARCHED_FOCUS, CMD_SEARCHED_DELETE_FILE,	/* ... to here */
+  CMD_VIM_TOGGLE,
   CMD_N
 };
 
@@ -663,6 +691,7 @@ int re_at (const Regex *re, const char *s, size_t n, size_t at, size_t *end, siz
 int re_find (const Regex *re, const char *s, size_t n, size_t from, size_t *a, size_t *b);
 int re_groups (const Regex *re);
 char *re_expand (const char *repl, const char *s, const size_t *cap, size_t *len);	/* $1, $& ... */
+char *re_keep_case (const char *repl, size_t rn, const char *m, size_t mn, size_t *len);	/* Preserve Case (AB) */
 
 /* emd.c - the Markdown preview */
 void md_draw (const Doc *d, int x, int y, int w, int h, size_t *top);	/* top: kept inside */
@@ -799,7 +828,7 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
 ** esettings.c, ewelcome.c - the pages that show in an editor tab: the
 ** Settings editor and the Welcome page. They tell mme.c what to do.
 */
-enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE };
+enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE, PAGE_SEARCHED };
 
 typedef struct PageAct {
   int what;	/* PA_* */
@@ -955,6 +984,7 @@ int files_editing (void);	/* the box of a new name has the keys */
 /* efiles.c - files for the Explorer */
 int fs_exists (const char *path);
 int fs_rename (const char *from, const char *to);
+int fs_move (const char *from, const char *to);	/* fs_rename, the language servers told (imports updated) */
 int fs_trash (const char *path);	/* the Recycle Bin / the Trash; -1: could not */
 int fs_remove (const char *path);	/* for good, a folder with all in it */
 int fs_copy (const char *from, const char *to);	/* a folder with all in it */
@@ -977,6 +1007,38 @@ char *search_ignore_list (void);	/* the folder's .gitignore as globs, for a work
 int search_globs (const char *list, const char *rel);	/* rel matches one of the globs (no state: threads) */
 void search_set (const char *text);	/* Find in Files with the selection */
 void search_replace_mode (const char *text);	/* Replace in Files: the replace box open */
+int search_skipped (const char *name, int dir);	/* a folder a search skips (.git ...), a file surely not text */
+size_t search_find (const char *q, int match_case, int word, const Regex *re,	/* where q is in s[from..n), or n; */
+                    const char *s, size_t n, size_t from, size_t *ml);	/* its length in *ml (no state: threads) */
+
+typedef struct SearchQuery {	/* what the Search view looks for, for "Open in editor" */
+  char q[256], inc[256], exc[256];
+  int match_case, word, regex;
+} SearchQuery;
+
+void search_view_query (SearchQuery *sq);
+
+/*
+** esearched.c - the Search Editor: a search in an editor tab, its results
+** in VS Code's .code-search text. A page (PAGE_SEARCHED); mme.c keeps the
+** tab, esearched.c the rest.
+*/
+void *searched_new (const char *query);	/* New Search Editor, seeded with query (NULL: none) */
+void *searched_from_view (void);	/* the Search view's search, in an editor */
+void *searched_load (const char *path);	/* a .code-search file; NULL: unreadable */
+int searched_is_file (const char *path);	/* its name ends in .code-search */
+void searched_close (void *page);
+const char *searched_title (void *page);	/* "Search: query" */
+const char *searched_path (void *page);	/* its .code-search file, NULL: not saved */
+int searched_save (void *page, int as);	/* 0: written (Save As asks the path) */
+void searched_draw (void *page, int x, int y, int w, int h, int focus);
+void searched_key (void *page, int k, SideAct *act);	/* act: a result to go to */
+int searched_takes (int k);	/* a key it takes before the editor's own (F12) */
+void searched_mouse (void *page, const Mouse *m, SideAct *act);
+void searched_command (void *page, int cmd, SideAct *act);	/* a CMD_SEARCHED_* on it */
+int searched_busy (void);	/* a search goes on, or one waits for the typing to stop */
+int searched_idle (void);	/* 1: something changed */
+void searched_stop (void);	/* every search ends (another folder, quitting) */
 
 void git_draw (int x, int y, int w, int h, int focus);
 int git_key (int k, SideAct *act);
@@ -1272,7 +1334,24 @@ typedef struct Sym {	/* a symbol of a file, for the Outline and the breadcrumbs 
 typedef struct InlayHint {	/* a server's hint shown in the text: "a:", ": int" */
   Pos at;	/* before the character there */
   char *label;	/* with its padding */
+  size_t color;	/* editor.colorDecorators: a swatch, 1 + its color's index; 0 a hint */
 } InlayHint;
+
+typedef struct DocColor {	/* textDocument/documentColor: bytes a .. b of the text are a color */
+  Pos a, b;
+  double rgba[4];	/* 0 .. 1, as the server said it */
+} DocColor;
+
+typedef struct ColorPres {	/* textDocument/colorPresentation: one way to write a color */
+  char *label;	/* "#ff0000", "rgb(255, 0, 0)" */
+  struct TextEdit *edit;	/* its textEdit and additionalTextEdits (path NULL); n 0: the label replaces the color */
+  size_t n;
+} ColorPres;
+
+typedef struct DocLink {	/* textDocument/documentLink: bytes a .. b of the text open something */
+  Pos a, b;
+  char *tip;	/* its tooltip, NULL none */
+} DocLink;
 
 typedef struct SemTok {	/* a name the server knows: bytes x0 .. x1 of line y are token tok (T_*) */
   size_t y, x0, x1;
@@ -1370,6 +1449,13 @@ void lsp_lens (Doc *d);	/* to on_lens */
 void lsp_lens_run (size_t i);	/* the command of on_lens's lens i */	/* to on_actions; then lsp_action_run */
 void lsp_action_run (size_t i);
 void lsp_symbols (Doc *d);	/* to on_symbols */
+void lsp_colors (Doc *d);	/* textDocument/documentColor, to on_colors */
+void lsp_color_pres (Doc *d, const DocColor *c);	/* textDocument/colorPresentation, to on_color_pres */
+void lsp_links (Doc *d);	/* textDocument/documentLink, to on_links */
+void lsp_link_open (Doc *d, size_t i);	/* on_links's link i: resolved if it must be, then opened */
+/* a file or folder the Explorer renames or moves: willRenameFiles (its edits made, waited for), didRenameFiles */
+void lsp_will_rename (const char *from, const char *to, int dir);
+void lsp_did_rename (const char *from, const char *to, int dir);
 
 typedef struct Loc {	/* a place the server named */
   char *path;
@@ -1443,6 +1529,9 @@ void on_nedit (Doc *d, unsigned long edits, Pos at, NEditItem *v, size_t n);	/* 
 void on_semantic (Doc *d, unsigned long edits, SemTok *v, size_t n);	/* takes v */
 void on_lens (Doc *d, Lens *v, size_t n);	/* takes v */
 void on_symbols (Doc *d, Sym *v, size_t n);	/* takes v */
+void on_colors (Doc *d, unsigned long edits, DocColor *v, size_t n);	/* takes v */
+void on_color_pres (Doc *d, ColorPres *v, size_t n);	/* takes v */
+void on_links (Doc *d, unsigned long edits, DocLink *v, size_t n);	/* takes v */
 void on_locations (int what, const Loc *v, size_t n);
 void on_workspace_symbols (const WSym *v, size_t n);
 void on_highlights (Doc *d, Pos at, const Pos *v, size_t n);	/* v: n pairs, a and b */
@@ -1509,6 +1598,45 @@ int on_task_terminal (const char *name, const char *cmd, const char *cwd, int id
 
 /* }================================================================== */
 
+
+/*
+** {==================================================================
+** echat.c - Chat: Claude in the secondary side bar, and Inline Chat
+** ===================================================================
+*/
+
+int chat_shown (void);	/* the secondary side bar, with the Chat view, is open */
+int chat_width (int area_w);	/* its columns out of the editor area's; 0: no room */
+void chat_draw (int x, int y, int w, int h, int focus);
+int chat_key (int k);	/* the view's keys; 0: not its (Esc: back to the editor) */
+int chat_mouse (const Mouse *m);	/* a click or the wheel in the view */
+int chat_idle (void);	/* curl's answer as it streams in; 1: draw again */
+int chat_command (int cmd);	/* CMD_CHAT_*, CMD_INLINE_CHAT: 1 the view gets the keys, 2 the editor */
+int chat_editor_key (int k);	/* the editor's key while Inline Chat works (Esc stops it): 1 it was its */
+int chat_inline_at (const Doc *d, Pos *at);	/* Inline Chat works on d: the line its box goes over */
+void chat_inline_draw (int x, int y, int w, int top, int bottom);	/* that box, line at row y */
+void chat_inline_bar (int x, int y, int w);	/* Accept and Discard, under its diff */
+
+typedef struct EdCtx {	/* mme.c: the editor in front, what a question to Claude takes along */
+  const Doc *doc;	/* its text, */
+  unsigned long edits;	/* as it is now */
+  char *path;	/* NULL: not saved yet */
+  const char *lang;	/* its language id: "c" */
+  int sel;	/* a selection: a .. b; else the lines shown */
+  Pos a, b;	/* the selection, or the cursor twice */
+  size_t y0, y1;	/* the lines that go (the selection's, or the ones shown), from 0 */
+  char *text;	/* those lines (the selection itself), when asked for */
+  int x, y, w;	/* where line a.y is on the screen, and the text's columns */
+  int top, bottom;	/* the rows of the text */
+} EdCtx;
+
+int editor_context (EdCtx *c, int text);	/* 0: no text editor in front */
+void editor_ctx_free (EdCtx *c);
+int editor_put (const char *s, size_t n);	/* Insert at Cursor: 0 no text editor */
+int editor_propose (const Doc *d, unsigned long edits, Pos a, Pos b, const char *text);	/* a diff to accept; 0: d changed */
+
+/* }================================================================== */
+
 /*
 ** {==================================================================
 ** etest.c - the Testing view
@@ -1529,6 +1657,50 @@ void test_saved (const char *path);	/* a file was saved: its tests read again */
 void test_command (int cmd);	/* CMD_TEST_* */
 void test_shutdown (void);
 int test_failed (void);	/* the tests that failed: the badge */
+
+/* }================================================================== */
+
+/*
+** {==================================================================
+** evim.c - Vim mode: VSCodeVim's keys in the text editor
+** ===================================================================
+*/
+
+typedef struct VimEd {	/* mme.c: the text editor in front, as Vim mode sees it */
+  Doc *doc;
+  Pos *cur, *anchor;	/* the selection goes from anchor to cur */
+  int *sel;
+  size_t *want;	/* the column Up and Down aim for */
+  size_t *top;	/* the first line shown */
+  int rows;	/* the text's rows */
+  int keys;	/* it has the keys: the focus, no chord or peek waiting */
+  int nmc;	/* the other cursors */
+  const size_t *fold;	/* the folded lines, in order */
+  size_t nfold;
+  const char *path;	/* its file, NULL: untitled */
+} VimEd;
+
+int vim_key (int k);	/* a key for the text editor: 1 when Vim mode took it */
+void vim_status (void);	/* the mode, in the status bar */
+int vim_shape (int shape);	/* the cursor's shape (DECSCUSR): a block in Normal mode */
+int vim_lit (void);	/* a search's matches are lit without the find widget */
+void vim_toggle (void);	/* Vim: Toggle Vim Mode */
+void vim_settings (const Json *j);	/* vim.* from settings.json (settings_load) */
+
+/* mme.c: what Vim mode does with the editor */
+int ved_get (VimEd *v);	/* 0: no text editor in front */
+Pos ved_insert (Pos at, const char *s, size_t n);	/* the other cursors, views and folds follow */
+void ved_delete (Pos a, Pos b);
+size_t ved_col (size_t y, size_t x);	/* the column byte x is at (tabs, wide characters) */
+size_t ved_x (size_t y, size_t col);	/* the byte at a column, or the end of the line */
+size_t ved_line_step (size_t y, int d);	/* the line shown after (d 1) or before y: a fold is one */
+void ved_key (int k);	/* the editor's own key: typing in Insert mode */
+void ved_feed (int k);	/* a key as if pressed (a macro, :tabnext) */
+void ved_command (int cmd);
+void ved_cursors (const Pos *anchor, const Pos *cur, int n);	/* n selections, the first the main one */
+void ved_find (const char *pat, int icase);	/* the regular expression Find looks for */
+int ved_find_next (Pos p, int back, Pos *at, size_t *len);	/* round the end; 0: none */
+int ved_open (const char *path);	/* :edit; 0 opened */
 
 /* }================================================================== */
 

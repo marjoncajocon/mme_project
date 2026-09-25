@@ -42,13 +42,16 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `mme.h` | the one shared header |
 | `mme.c` | `main`, the layout, the editor, the commands, the find widget, the dialogs for files |
 | `ebuf.c` | the text: lines, load and save (LF / CRLF kept), undo and redo, indent detection |
+| `eeditorconfig.c` | `.editorconfig`: a file's indent, line ends, charset and whitespace, as VS Code's EditorConfig extension |
 | `eterm.c` | the terminal: raw mode, keys (kitty protocol too), mouse, bracketed paste |
 | `edraw.c` | the screen: a cell grid, only changed lines are sent; VS Code's Dark+ colors |
 | `emenu.c` | the menu bar and menus, the quick input box, the modal dialog, notifications |
 | `eside.c` | the activity bar, the sidebar, the Explorer (folder tree, file icons, git colors) |
 | `esearch.c` | the Search view: find and replace in files, include / exclude globs |
+| `esearched.c` | the Search Editor: a search in an editor tab, its results as a `.code-search` file |
 | `ehistory.c` | Local History: a copy of a file at each save, for the Timeline |
 | `emd.c` | the Markdown preview |
+| `echat.c` | Chat and Inline Chat: Claude, Anthropic's API, through curl, the answer streamed |
 | `ehex.c` | the hex viewer for binary files (read-only) |
 | `eimage.c` | the picture preview: PNG, BMP, GIF and ICO read here, drawn as sixel |
 | `egit.c` | the Source Control view (stage, unstage, commit) and the diff editor |
@@ -71,6 +74,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `edebug.c` | Run and Debug: a Debug Adapter Protocol client (dlv, debugpy, lldb-dap, gdb), its view, the Debug Console |
 | `etask.c` | tasks: `.vscode/tasks.json`, found tasks (make, go, npm, cargo), problem matchers |
 | `ekeys.c` | keyboard shortcuts: `keybindings.json`, VS Code's format, with when clauses |
+| `evim.c` | Vim mode: VSCodeVim's keys, modes, registers, macros and the `:` line in the text editor |
 | `eworkspace.c` | multi-root workspaces: `.code-workspace` files |
 | `eimport.c` | Preferences: Import VS Code Settings |
 | `evscode.c` | where VS Code is (a portable one's `data` folder too): its settings, its extensions, read only |
@@ -110,7 +114,11 @@ With no file open the editor shows the keys to start with.
   F8 / Shift+F8 go through them. The server must be in the PATH. The text
   goes to the server when the typing stops (a fifth of a second), so a key
   does not send a big file again and again; anything asked for (a suggestion,
-  a hover) sends it at once first.
+  a hover) sends it at once first. A server that has its problems asked for
+  (pull diagnostics, LSP 3.17: rust-analyzer, typescript's ...) is asked when
+  the file opens, after each change it is told, and when it asks for a
+  refresh; "unchanged" keeps the ones shown, and the problems it reports for
+  related files go to PROBLEMS too.
 - **Hover** — the mouse resting on a name (or Ctrl+K Ctrl+I) shows what the
   server knows of it, its code in its language's colors. Resting on a squiggle
   shows its problem first, with a "Quick Fix... (Ctrl+.)" link. Links in it
@@ -136,6 +144,14 @@ With no file open the editor shows the keys to start with.
 - **Inlay hints** — the server's hints in the text, dim and in italics:
   parameter names (`add(a: 1, b: 2)`), the types of `:=` variables ...
   (editor.inlayHints.enabled; gopls gets them turned on). Not with word wrap.
+- **Color decorators** — a ■ in its color before each color the server finds
+  (CSS, a theme's JSON ...), drawn like an inlay hint. A click on it, or Show
+  or Focus Standalone Color Picker at a color, lists the server's ways to
+  write it (`#ff0000`, `rgb(255, 0, 0)`): pick one, or type a hex color and
+  it is written the way the color was (editor.colorDecorators).
+- **Links** — the server's document links (an `#include`, an import, a URL):
+  Ctrl+hover underlines the whole link, Ctrl+Click opens it - a file at the
+  line its `#L10` says, a URL in the browser (editor.links).
 - **VS Code's highlighting** — when VS Code is on the machine (`code` on
   the PATH, a portable install included, or the usual folders), mme reads
   the TextMate grammars of its built-in extensions and of the extensions
@@ -162,6 +178,11 @@ With no file open the editor shows the keys to start with.
   the one the cursor is in brighter.
 - **Rename** — F2 renames the name under the cursor everywhere the server
   finds it; files that were not open open, with the changes.
+- **Update imports on rename** — renaming or moving a file or folder in the
+  Explorer asks the servers that want it first (workspace/willRenameFiles, as
+  VS Code does, waited for up to 5 seconds): their edits (the imports that
+  name it) are made, the files that were not open open with them, then the
+  file moves and the servers are told (didRenameFiles).
 - **Quick Fix** — Ctrl+. (or the lightbulb in the gutter on a line with a
   problem) lists the server's code actions.
 - **Problems** — the panel's PROBLEMS tab (Ctrl+Shift+M, or a click on the
@@ -203,7 +224,17 @@ With no file open the editor shows the keys to start with.
 - **Find and Replace** — Ctrl+F finds, Ctrl+H (or the chevron) opens the
   replace box: Enter replaces one, Ctrl+Alt+Enter all of them, in one undo.
   Alt+C match case, Alt+W whole word, Alt+R regular expression (`$1` in the
-  replace text), Alt+L find in the selection. The Search view has `.*` too.
+  replace text), Alt+L find in the selection. Alt+P (AB in the replace box)
+  preserves case: `foo` replaced with `bar` gives `Bar` for `Foo` and `BAR`
+  for `FOO`, and `Foo-Bar` / `FOO_BAR` go part by part, as in VS Code. The
+  Search view has `.*` and AB too.
+- **EditorConfig** — the `.editorconfig` files from the file's folder up (to
+  the one with `root = true`) are read when it opens, as VS Code's
+  EditorConfig extension does: indent_style, indent_size and tab_width win
+  over the detected indent and the settings (the status bar shows them),
+  charset reads and writes the file (utf-8, utf-8-bom, latin1, utf-16le /
+  be), and on save end_of_line, trim_trailing_whitespace and
+  insert_final_newline are done (a new file gets its end_of_line at once).
 - **References and peek** — Shift+F12 lists every place a name is used in a
   box under the line, like VS Code's peek: the file's text on the left, the
   places by file on the right (Up / Down, Enter goes there, Esc closes). The
@@ -296,6 +327,16 @@ With no file open the editor shows the keys to start with.
   own history, so switching tabs does not lose it).
   editor.multiCursorModifier "ctrlCmd" swaps Alt+Click and Ctrl+Click;
   editor.multiCursorPaste "full" pastes all of it at every cursor.
+- **Vim mode** — vim.enable (or Vim: Toggle Vim Mode), VSCodeVim's keys in
+  the text editor: Normal, Insert, Visual, Visual Line, Visual Block (a cursor
+  per line) and Replace modes, `-- NORMAL --` in the status bar and a block
+  cursor; counts, motions (w b e f t % { } gg G H M L ...), operators with
+  text objects (d c y > < = gu gU gc; iw a" i( it ip ...), `.`, registers
+  (vim.useSystemClipboard), marks, macros, `/` `?` `*` `n` with the matches lit
+  as they are typed, Ctrl+D Ctrl+U zz, za zc zo, gd gh, and the `:` line: :w :q
+  :wq :x :e :s with ranges :noh :set nu :sp :vs :tabn. Ctrl keys stay VS
+  Code's (Ctrl+S, Ctrl+P ...) but for Vim's own (vim.useCtrlKeys,
+  vim.handleKeys).
 - **Auto indent** (editor.autoIndent "full") — Enter after `{`, `(`, `[`, a
   Python `:`, Lua's `then` / `do`, Ruby's `def` ... indents one more; typing
   `}`, `end`, `else:` ... puts the line back to its block's indent. Reindent
@@ -535,6 +576,28 @@ With no file open the editor shows the keys to start with.
   stderr), Extensions (downloads, installs).
 - **Maximized panel** — the ^ in the panel's title row (View: Toggle Maximized
   Panel) gives the panel the whole editor area.
+- **Chat** — Ctrl+Alt+I (Chat: Open Chat) opens VS Code's Chat view in the
+  secondary side bar, at the right of the editors (Ctrl+Alt+B hides it), with
+  Claude behind it: Anthropic's Messages API, asked by curl in the background,
+  so the answer streams in as it is written. The answers are Markdown (code in
+  its language's colors); each code block has Copy, Insert (at the cursor, as
+  a paste) and Apply (in place of the selection, shown as a diff to accept) on
+  its top row. Enter asks, Shift+Enter is a new line, Esc stops the answer,
+  Ctrl+L (or the +) starts a New Chat, Up brings the last question back. The
+  selection goes with the question, else the lines the editor shows, like VS
+  Code's implicit context: the chip in the box names it (`edit.c:16-19`), a
+  click on it leaves it out. The whole talk is sent again with each question.
+  **Inline Chat** — Ctrl+I in the editor: a box over the selection (or the
+  cursor) to say what to change; Claude's code comes back as a diff in the text,
+  the old tinted red, the new under it, with Accept (Ctrl+Enter or Tab) and
+  Discard (Esc). The key: `mme.chat.apiKey` in settings.json (Chat: Set API
+  Key... puts it there), else `ANTHROPIC_API_KEY` (or `ANTHROPIC_AUTH_TOKEN`)
+  from the environment; it goes to curl on its stdin, never on its command
+  line, and never into OUTPUT's "Chat" channel. `mme.chat.model`
+  (`claude-opus-5`), `mme.chat.baseUrl` (or `ANTHROPIC_BASE_URL`), and
+  `mme.chat.fallbacks`: a request the model declines is answered by another
+  (the API's server-side fallback). A refusal, an answer cut at its length, a
+  refused key, a rate limit or an overloaded API are said in the talk in words.
 
 - **Extensions** — Ctrl+Shift+X (View > Extensions): with nothing typed the
   installed ones, else a search of [Open VSX](https://open-vsx.org) (the
@@ -579,6 +642,7 @@ With no file open the editor shows the keys to start with.
   opens to the side; Find in Folder... (Shift+Alt+F) searches a folder.
   OPEN EDITORS is at the top, OUTLINE and TIMELINE under the folder.
 - **Search** — find in files as you type. Alt+C match case, Alt+W whole word,
+  Alt+P preserve case in the replace box,
   Enter or a click opens the match, F4 / Shift+F4 goes through them. The
   chevron (or Ctrl+Shift+H, Replace in Files) opens the replace box: the
   results show the change, Replace All (Ctrl+Alt+Enter, or its icon) asks
@@ -587,11 +651,31 @@ With no file open the editor shows the keys to start with.
   Ctrl+Shift+J) opens "files to include" / "files to exclude" (globs,
   comma separated: `*.c, src, ./lib`); .gitignore, .git and node_modules are
   left out. Files open in the editor are searched and changed there (one undo
-  step). Tab goes from box to box; refresh, clear and collapse are on the title.
+  step). Tab goes from box to box; refresh, clear, Open New Search Editor and
+  collapse are on the title.
   A big folder is walked on worker threads, one for each core: the results and
   "Searching N files" show while it goes on, and typing again starts it over.
   The editor draws and answers keys throughout; the results settle into the
   folder's order once the walk is over.
+- **Search Editor** — "Search Editor: New Search Editor" (the selection is its
+  query), or "Open in editor" under the Search view's count (Alt+Enter there,
+  or the new-file icon in its title), opens a tab "Search: query": the query
+  box with Match Case, Whole Word and `.*` (Alt+C / W / R), the context lines
+  next to it (Alt+L, Alt+= / Alt+-; search.searchEditor.defaultNumberOfContextLines,
+  1), and "..." (Ctrl+Shift+J) for files to include / exclude. It searches as
+  you type (search.searchOnType; else Enter), Ctrl+Shift+R runs it again. The
+  results are VS Code's `.code-search` text: "6 results - 2 files", each file's
+  path, `  12: ` a match and `  13  ` a line around it, an empty line where
+  lines are skipped; paths, line numbers and matches in VS Code's colors.
+  Enter, F12 or a double click on a line opens the file there, the match
+  selected; Ctrl+Shift+Backspace drops a file's results, Esc goes back to the
+  query. Ctrl+S saves it as a `.code-search` file (`# Query:`, `# Flags:`,
+  `# Including:`, `# Excluding:`, `# ContextLines:` on top), which opens in
+  the Search Editor again, from the Explorer or the command line. A new one
+  takes the toggles and files of the last one with
+  search.searchEditor.reusePriorSearchConfiguration. The results are read
+  only here: select them (Shift+arrows, the mouse, Ctrl+A) and copy them, but
+  they are not typed in as VS Code allows.
 - **Quick Open** — Ctrl+P lists the files opened lately first. The folder is
   walked on worker threads as well, so the list shows at once on a big one and
   "Indexing... N files" counts up while the rest arrives. What is typed
@@ -813,6 +897,7 @@ With no file open the editor shows the keys to start with.
 | Ctrl+Shift+O | Go to Symbol in Editor |
 | Ctrl+; A / C / F / L | Test: Run All / at Cursor / Current File / Rerun Last |
 | Ctrl+Shift+X | Extensions |
+| Ctrl+Alt+I, Ctrl+I | Chat: Open Chat, Inline Chat (Ctrl+Enter accepts, Esc discards) |
 | Tab / Shift+Tab in a snippet | the next / previous field |
 | Ctrl+H | Replace |
 | Ctrl+Shift+[ / ], Ctrl+K Ctrl+0 / J | Fold / Unfold, Fold All / Unfold All |

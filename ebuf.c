@@ -153,6 +153,7 @@ void doc_init (Doc *d) {
   d->indent = opt.tab_size;
   d->tabs = !opt.insert_spaces;
   d->enc = opt.encoding;
+  edconf_none(&d->ec);
   d->disk_mtime = d->disk_size = -1;
 }
 
@@ -404,21 +405,27 @@ int doc_load_enc (Doc *d, const char *native, int enc) {
   size_t len;
   OsStat st;
   char *s;
-  int crlf, refs = d->refs;
+  int crlf, refs = d->refs, asked = enc;
   doc_free(d);
   doc_init(d);
   d->refs = refs;	/* the tabs that show it still do */
   d->path = xstrdup(native);
-  d->enc = opt.encoding;
-  if (os_stat(native, &st) != 0 || !st.exists) return 1;
+  edconf_read(&d->ec, native);	/* .editorconfig: its charset reads the file (a BOM still wins) */
+  if (enc < 0) enc = d->ec.enc;
+  d->enc = enc >= 0 ? enc : opt.encoding;
+  if (os_stat(native, &st) != 0 || !st.exists) {
+    edconf_apply(d, 1);
+    return 1;
+  }
   if (st.is_dir) return -1;
   s = load_bytes(native, &enc, &crlf, &len);
   if (s == NULL) return -1;
-  d->enc = enc;
+  d->enc = asked < 0 && d->ec.enc >= 0 ? d->ec.enc : enc;	/* and it is saved in it */
   d->crlf = crlf;
   doc_set_text(d, s, len);
   free(s);
   doc_detect_indent(d);
+  edconf_apply(d, 0);	/* its indent wins over the detected one */
   doc_stamp(d);
   return 0;
 }
@@ -469,6 +476,7 @@ int doc_save (Doc *d) {
   size_t i;
   int fd, ok;
   if (d->path == NULL) return -1;
+  if (d->ec.crlf >= 0) d->crlf = d->ec.crlf;	/* .editorconfig's end_of_line: on save, as its extension does */
   buf_init(&t);
   for (i = 0; i < d->n; i++) {
     if (i > 0) buf_puts(&t, d->crlf ? "\r\n" : "\n");

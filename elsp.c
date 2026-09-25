@@ -21,7 +21,8 @@ enum { RQ_INIT, RQ_COMPLETE, RQ_DEFINE, RQ_HOVER, RQ_SIGNATURE, RQ_RENAME, RQ_AC
        RQ_RESOLVE, RQ_SYMBOLS, RQ_FORMAT, RQ_LOC_REFS, RQ_LOC_IMPL, RQ_LOC_TYPE, RQ_LOC_PEEK,
        RQ_WSYM, RQ_HIGHLIGHT, RQ_BULB, RQ_INLAY, RQ_SEMANTIC, RQ_LENS, RQ_LENS_RESOLVE, RQ_COMP_RESOLVE,
        RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE, RQ_NEDIT,
-       RQ_SIGNIN, RQ_SIGNOUT, RQ_CHECK, RQ_DEVICE,
+       RQ_SIGNIN, RQ_SIGNOUT, RQ_CHECK, RQ_DEVICE, RQ_PULL, RQ_COLOR, RQ_COLOR_PRES, RQ_LINK,
+       RQ_LINK_RESOLVE, RQ_WILL_RENAME,
        RQ_OTHER };
 
 typedef struct Req {
@@ -63,6 +64,10 @@ typedef struct Srv {
   int no_nedit;	/* it answered MethodNotFound to copilotInlineEdit: never asked again */
   char type_chars[16];	/* documentOnTypeFormattingProvider's characters */
   int sync_inc;	/* textDocumentSync 2: it takes the range that changed */
+  int can_pull;	/* diagnosticProvider: its problems are asked for (textDocument/diagnostic) */
+  char pull_id[64];	/* and the identifier it gave them */
+  int can_color, can_link, link_resolve;	/* colorProvider, documentLinkProvider (and its resolve) */
+  char *will_ren, *did_ren;	/* workspace.fileOperations: the filters of the renames it wants, as JSON */
 } Srv;
 
 typedef struct LDoc {
@@ -77,6 +82,9 @@ typedef struct LDoc {
   char *last;	/* the text the server has, to find what changed in it */
   size_t nlast;
   char *langid;	/* the file's language, not the server's: one server sees many */
+  char *result_id;	/* the problems last pulled: the server says "unchanged" against it */
+  int repull;	/* the server cancelled the pull: asked again a little later */
+  long long repull_at;
 } LDoc;
 
 #define SYNC_WAIT	200000	/* us of quiet before the text goes: typing does not send a file a key */
@@ -100,6 +108,7 @@ static size_t g_ndiag, g_capdiag;
 static char g_failed[1024];	/* " lang lang ": servers that could not start, told once */
 static int g_log = -2;	/* $MME_LSPLOG: a file with every message, to see what goes wrong */
 static int g_down;	/* quitting: a server that ends is not restarted */
+static int g_will;	/* willRenameFiles a rename still waits for */
 
 
 /* a server's number in range, else def: casting -1 or 1e300 to size_t or int is undefined in C */
@@ -114,6 +123,17 @@ static int inum (const Json *j, double def) {
   double v = json_num(j, def);
   if (v > -2e9 && v < 2e9) return (int)v;
   return def > -2e9 && def < 2e9 ? (int)def : 0;
+}
+
+
+/* a part of a message as JSON text (malloc'd), NULL when it is not there */
+static char *json_text (const Json *j) {
+  Buf b;
+  if (j == NULL) return NULL;
+  buf_init(&b);
+  json_write(&b, j);
+  buf_putc(&b, '\0');
+  return buf_take(&b);
 }
 
 
@@ -336,6 +356,32 @@ static int cont_byte (const char *t, size_t n, size_t i) {
 }
 
 
+/*
+** textDocument/diagnostic (pull diagnostics): a server that says
+** diagnosticProvider does not send a file's problems, it is asked for
+** them when the file opens and after each change it is told; the last
+** answer's resultId goes with the question, so "unchanged" can come back
+*/
+static void pull (LDoc *l) {
+  Buf b;
+  if (!l->s->can_pull || !l->opened) return;
+  buf_init(&b);
+  buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\"}", l->uri);
+  if (l->s->pull_id[0]) {
+    buf_puts(&b, ",\"identifier\":");
+    json_put_str(&b, l->s->pull_id, strlen(l->s->pull_id));
+  }
+  if (l->result_id) {
+    buf_puts(&b, ",\"previousResultId\":");
+    json_put_str(&b, l->result_id, strlen(l->result_id));
+  }
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/diagnostic", b.s, RQ_PULL, l->d);
+  buf_free(&b);
+  l->repull = 0;
+}
+
+
 static void did_open (LDoc *l) {
   Buf b;
   Pos a;
@@ -356,6 +402,7 @@ static void did_open (LDoc *l) {
   l->nlast = len;
   l->opened = 1;
   l->sent = l->d->edits;
+  pull(l);
 }
 
 
@@ -406,6 +453,7 @@ static void did_change (LDoc *l) {
   l->last = txt;
   l->nlast = len;
   l->sent = l->d->edits;
+  pull(l);	/* the debounce that sent the change is the pull's too */
 }
 
 /* }================================================================== */
@@ -533,7 +581,8 @@ static Srv *start (const char *lang) {
                  "\"resolveSupport\":{\"properties\":[\"documentation\",\"detail\",\"additionalTextEdits\"]}}},"
                  "\"rangeFormatting\":{},\"onTypeFormatting\":{},\"selectionRange\":{},"
                  "\"foldingRange\":{\"lineFoldingOnly\":true},\"callHierarchy\":{},\"typeHierarchy\":{},"
-                 "\"definition\":{},\"publishDiagnostics\":{},"
+                 "\"definition\":{},\"publishDiagnostics\":{},\"diagnostic\":{\"relatedDocumentSupport\":true},"
+                 "\"colorProvider\":{},\"documentLink\":{\"tooltipSupport\":true},"
                  "\"hover\":{\"contentFormat\":[\"plaintext\",\"markdown\"]},"
                  "\"signatureHelp\":{\"signatureInformation\":{\"parameterInformation\":{\"labelOffsetSupport\":true}}},"
                  "\"rename\":{},\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true},"
@@ -552,7 +601,9 @@ static Srv *start (const char *lang) {
                  "[\"quickfix\",\"refactor\",\"source\",\"source.organizeImports\"]}},"
                  "\"resolveSupport\":{\"properties\":[\"edit\"]}}},"
                  "\"workspace\":{\"workspaceFolders\":true,\"configuration\":true,\"symbol\":{},"
-                 "\"applyEdit\":true,\"workspaceEdit\":{\"documentChanges\":true}}}");
+                 "\"applyEdit\":true,\"workspaceEdit\":{\"documentChanges\":true},"
+                 "\"diagnostics\":{\"refreshSupport\":true},"
+                 "\"fileOperations\":{\"willRename\":true,\"didRename\":true}}}");
     /* editorInfo: Copilot's server asks who it is talking to, and a server
     ** that does not know these options ignores them. gopls wants its own at
     ** the top level too, so they join these instead of nesting under them. */
@@ -891,6 +942,7 @@ static void unbind (LDoc *l) {
   free(l->uri);
   free(l->last);
   free(l->langid);
+  free(l->result_id);
   *l = g_doc[--g_ndoc];
 }
 
@@ -923,6 +975,7 @@ void lsp_open (Doc *d, const char *syntax) {
 
 
 static void lens_forget (const Doc *d);	/* a closed file's code lenses, below */
+static void link_forget (const Doc *d);	/* and its document links */
 static void inline_forget (void);	/* the inline suggestions kept, below */
 static void nedit_forget (void);	/* and the next edit, below that */
 static const Doc *nedit_doc (void);
@@ -938,6 +991,7 @@ void lsp_close (Doc *d) {
         g_srv[i]->req[k].d = NULL;
       }
   lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
+  link_forget(d);
   if (inline_doc() == d) inline_forget();	/* and its inline suggestions */
   if (nedit_doc() == d) nedit_forget();	/* and the next edit it was offered */
   for (i = (int)g_ndoc - 1; i >= 0; i--)	/* a document may be on two servers */
@@ -2145,13 +2199,12 @@ static void diag_drop (const char *uri) {
 }
 
 
-static void diagnostics (Srv *s, const Json *params) {
-  const char *uri = json_str(json_get(params, "uri"), NULL);
-  const Json *list = json_get(params, "diagnostics");
+/* the server's problems of uri, pushed or pulled, take the place of its last ones */
+static void diag_set (Srv *s, const char *uri, const Json *list) {
   DFile *f;
   const LDoc *l = NULL;
   size_t i;
-  if (uri == NULL || list == NULL) return;
+  if (uri == NULL || list == NULL || list->type != J_ARR) return;
   f = dfile(uri, 1);
   {	/* the server's go, the task's stay after the new ones */
     Diag *old = f->v;
@@ -2183,6 +2236,45 @@ static void diagnostics (Srv *s, const Json *params) {
   }
   if (f->nt) memmove(f->v + f->n, f->v + list->n, f->nt * sizeof(Diag));	/* the task's, after */
   f->n += f->nt;
+}
+
+
+/* textDocument/publishDiagnostics: the server says them by itself */
+static void diagnostics (Srv *s, const Json *params) {
+  diag_set(s, json_str(json_get(params, "uri"), NULL), json_get(params, "diagnostics"));
+}
+
+
+/* one file's report of a pull: "full" takes the place of its problems, "unchanged" keeps them */
+static void pull_report (Srv *s, const char *uri, const Json *rep) {
+  const char *id = json_str(json_get(rep, "resultId"), NULL);
+  size_t i;
+  if (strcmp(json_str(json_get(rep, "kind"), ""), "full") == 0) diag_set(s, uri, json_get(rep, "items"));
+  for (i = 0; i < g_ndoc; i++)
+    if (g_doc[i].s == s && strcmp(g_doc[i].uri, uri) == 0) {
+      free(g_doc[i].result_id);
+      g_doc[i].result_id = id ? xstrdup(id) : NULL;
+    }
+}
+
+
+/* textDocument/diagnostic's answer: the file's report, and those of the files it affects */
+static void pulled (Srv *s, const Doc *d, const Json *msg) {
+  const Json *res = json_get(msg, "result"), *rel = json_get(res, "relatedDocuments");
+  size_t i;
+  for (i = 0; i < g_ndoc; i++)
+    if (g_doc[i].d == d && g_doc[i].s == s) break;
+  if (i == g_ndoc) return;
+  if (json_get(msg, "error")) {	/* ServerCancelled: asked again in a while, unless it says not to */
+    if (inum(json_get(msg, "error.code"), 0) == -32802 && json_bool(json_get(msg, "error.data.retriggerRequest"), 1)) {
+      g_doc[i].repull = 1;
+      g_doc[i].repull_at = os_now_us();
+    }
+    return;
+  }
+  if (res == NULL || res->type != J_OBJ) return;
+  pull_report(s, g_doc[i].uri, res);
+  for (i = 0; rel && rel->type == J_OBJ && i < rel->n; i++) pull_report(s, rel->kid[i]->key, rel->kid[i]);
 }
 
 
@@ -2271,12 +2363,189 @@ void lsp_counts (int *errors, int *warnings) {
 
 /*
 ** {==================================================================
+** Colors and links: editor.colorDecorators, editor.links
+** ===================================================================
+*/
+
+static void one_edit (Srv *s, const Json *e, TextEdit *v);
+
+/* the document links: kept as the server sent them, for documentLink/resolve */
+static struct {
+  Srv *s;
+  const Doc *d;
+  char **json;
+  size_t n;
+} g_link;
+
+
+void lsp_colors (Doc *d) {
+  LDoc *l = synced(d);
+  char params[1024];
+  if (l == NULL || !l->s->can_color) return;
+  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
+  request(l->s, "textDocument/documentColor", params, RQ_COLOR, d);
+  l->s->req[l->s->nreq - 1].at.x = (size_t)d->edits;
+}
+
+
+/* ColorInformation[]: where each color is, and what it is */
+static void colors (Srv *s, Doc *d, unsigned long edits, const Json *res) {
+  static const char *const ch[] = {"color.red", "color.green", "color.blue", "color.alpha"};
+  DocColor *v = NULL;
+  size_t k, n = 0;
+  int q;
+  if (res && res->type == J_ARR && res->n) v = (DocColor *)xmalloc(res->n * sizeof(DocColor));
+  for (k = 0; v && k < res->n; k++) {
+    v[n].a = pos_in(s, d, json_get(res->kid[k], "range.start"));
+    v[n].b = pos_in(s, d, json_get(res->kid[k], "range.end"));
+    for (q = 0; q < 4; q++) {
+      double c = json_num(json_get(res->kid[k], ch[q]), 1);
+      v[n].rgba[q] = c < 0 ? 0 : c > 1 ? 1 : c;
+    }
+    if (v[n].a.y < d->n) n++;
+  }
+  on_colors(d, edits, v, n);
+}
+
+
+/* the ways the server writes color c, which stands in the text where it says */
+void lsp_color_pres (Doc *d, const DocColor *c) {
+  LDoc *l = synced(d);
+  Buf b;
+  if (l == NULL || !l->s->can_color) return;
+  buf_init(&b);
+  buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\"},\"color\":{\"red\":%.6g,\"green\":%.6g,\"blue\":%.6g,"
+             "\"alpha\":%.6g},\"range\":{\"start\":{\"line\":%lu,\"character\":%lu},"
+             "\"end\":{\"line\":%lu,\"character\":%lu}}}", l->uri, c->rgba[0], c->rgba[1], c->rgba[2], c->rgba[3],
+             (unsigned long)c->a.y, (unsigned long)col_out(l->s, d, c->a.y, c->a.x),
+             (unsigned long)c->b.y, (unsigned long)col_out(l->s, d, c->b.y, c->b.x));
+  request(l->s, "textDocument/colorPresentation", b.s, RQ_COLOR_PRES, d);
+  buf_free(&b);
+}
+
+
+/* ColorPresentation[]: a label, and the edits that write it (its textEdit first) */
+static void color_pres (Srv *s, Doc *d, const Json *res) {
+  ColorPres *v = NULL;
+  size_t k, n = 0;
+  if (res && res->type == J_ARR && res->n) v = (ColorPres *)xmalloc(res->n * sizeof(ColorPres));
+  for (k = 0; v && k < res->n; k++) {
+    const Json *p = res->kid[k], *te = json_get(p, "textEdit"), *more = json_get(p, "additionalTextEdits");
+    size_t q, nm = more && more->type == J_ARR ? more->n : 0;
+    v[n].label = xstrdup(json_str(json_get(p, "label"), "?"));
+    v[n].edit = (TextEdit *)xmalloc((nm + 1) * sizeof(TextEdit));
+    v[n].n = 0;
+    if (te) one_edit(s, te, &v[n].edit[v[n].n++]);
+    for (q = 0; q < nm && te; q++) one_edit(s, more->kid[q], &v[n].edit[v[n].n++]);	/* with no textEdit mme writes the label */
+    n++;
+  }
+  on_color_pres(d, v, n);
+}
+
+
+void lsp_links (Doc *d) {
+  LDoc *l = synced(d);
+  char params[1024];
+  if (l == NULL || !l->s->can_link) return;
+  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
+  request(l->s, "textDocument/documentLink", params, RQ_LINK, d);
+  l->s->req[l->s->nreq - 1].at.x = (size_t)d->edits;
+}
+
+
+/* DocumentLink[]: the ranges to mme, the links kept here to be opened */
+static void links (Srv *s, Doc *d, unsigned long edits, const Json *res) {
+  DocLink *v = NULL;
+  size_t k, n = 0;
+  for (k = 0; k < g_link.n; k++) free(g_link.json[k]);
+  free(g_link.json);
+  g_link.json = NULL;
+  g_link.n = 0;
+  g_link.s = s;
+  g_link.d = d;
+  if (res && res->type == J_ARR && res->n) {
+    v = (DocLink *)xmalloc(res->n * sizeof(DocLink));
+    g_link.json = (char **)xmalloc(res->n * sizeof(char *));
+  }
+  for (k = 0; v && k < res->n; k++) {
+    const char *tip = json_str(json_get(res->kid[k], "tooltip"), NULL);
+    v[n].a = pos_in(s, d, json_get(res->kid[k], "range.start"));
+    v[n].b = pos_in(s, d, json_get(res->kid[k], "range.end"));
+    v[n].tip = tip ? xstrdup(tip) : NULL;
+    g_link.json[n] = json_text(res->kid[k]);
+    n++;
+  }
+  g_link.n = n;
+  on_links(d, edits, v, n);
+}
+
+
+/* a link's target: a file (at the line its fragment says, #L10 or #L10,5) or a URL in the browser */
+static void link_follow (const char *target) {
+  char *uri, *hash, *path;
+  long line = -1, col = -1;
+  if (strncmp(target, "file://", 7) != 0) {
+    on_show_document(NULL, target, -1, -1);
+    return;
+  }
+  uri = xstrdup(target);
+  if ((hash = strchr(uri, '#')) != NULL) {
+    char *e;
+    *hash++ = '\0';
+    if (*hash == 'L') hash++;
+    line = strtol(hash, &e, 10) - 1;
+    if (e != hash && (*e == ',' || *e == ':')) col = strtol(e + 1, NULL, 10) - 1;
+    if (e == hash) line = -1;
+  }
+  path = lsp_path(uri);
+  on_show_document(path, NULL, line, col);
+  free(path);
+  free(uri);
+}
+
+
+void lsp_link_open (Doc *d, size_t i) {
+  Json *lk;
+  const char *target;
+  if (g_link.d != d || i >= g_link.n || g_link.s == NULL || g_link.s->dead) return;
+  lk = json_parse(g_link.json[i], strlen(g_link.json[i]));
+  target = json_str(json_get(lk, "target"), NULL);
+  if (target) link_follow(target);
+  else if (g_link.s->link_resolve) request(g_link.s, "documentLink/resolve", g_link.json[i], RQ_LINK_RESOLVE, d);
+  else toast(0, "Failed to open this link because it has no target");
+  json_free(lk);
+}
+
+
+/* a file that is closing: its links go with it */
+static void link_forget (const Doc *d) {
+  if (g_link.d == d) g_link.d = NULL;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
 ** Answers
 ** ===================================================================
 */
 
 unsigned lsp_comp_gen (void) {
   return g_comp_gen;
+}
+
+
+/* one TextEdit as mme's (no path) */
+static void one_edit (Srv *s, const Json *e, TextEdit *v) {
+  const Json *st = json_get(e, "range.start"), *en = json_get(e, "range.end");
+  v->path = NULL;
+  v->l0 = unum(json_get(st, "line"), 0);
+  v->c0 = unum(json_get(st, "character"), 0);
+  v->l1 = unum(json_get(en, "line"), 0);
+  v->c1 = unum(json_get(en, "character"), 0);
+  v->text = xstrdup(json_str(json_get(e, "newText"), ""));
+  v->utf16 = !s->utf8;
 }
 
 
@@ -2287,17 +2556,7 @@ static TextEdit *text_edits (Srv *s, const Json *res, size_t *n) {
   *n = 0;
   if (res == NULL || res->type != J_ARR || res->n == 0) return NULL;
   v = (TextEdit *)xmalloc(res->n * sizeof(TextEdit));
-  for (j = 0; j < res->n; j++) {
-    const Json *st = json_get(res->kid[j], "range.start"), *en = json_get(res->kid[j], "range.end");
-    v[*n].path = NULL;
-    v[*n].l0 = unum(json_get(st, "line"), 0);
-    v[*n].c0 = unum(json_get(st, "character"), 0);
-    v[*n].l1 = unum(json_get(en, "line"), 0);
-    v[*n].c1 = unum(json_get(en, "character"), 0);
-    v[*n].text = xstrdup(json_str(json_get(res->kid[j], "newText"), ""));
-    v[*n].utf16 = !s->utf8;
-    (*n)++;
-  }
+  for (j = 0; j < res->n; j++) one_edit(s, res->kid[j], &v[(*n)++]);
   return v;
 }
 
@@ -2818,6 +3077,11 @@ static void answer (Srv *s, const Json *msg) {
   else buf_puts(&b, ",\"result\":null}");
   send_msg(s, &b);
   buf_free(&b);
+  if (strcmp(method, "workspace/diagnostic/refresh") == 0) {	/* every file's problems asked for again */
+    size_t k;
+    for (k = 0; k < g_ndoc; k++)
+      if (g_doc[k].s == s) pull(&g_doc[k]);
+  }
 }
 
 
@@ -2887,6 +3151,18 @@ static void handle (Srv *s, const Json *msg) {
         s->can_types = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
         p = json_get(c, "inlineCompletionProvider");
         s->can_inline = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
+        p = json_get(c, "diagnosticProvider");
+        s->can_pull = p && p->type == J_OBJ;
+        snprintf(s->pull_id, sizeof(s->pull_id), "%s", json_str(json_get(p, "identifier"), ""));
+        p = json_get(c, "colorProvider");
+        s->can_color = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
+        p = json_get(c, "documentLinkProvider");
+        s->can_link = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
+        s->link_resolve = json_bool(json_get(p, "resolveProvider"), 0);
+        free(s->will_ren);
+        free(s->did_ren);
+        s->will_ren = json_text(json_get(c, "workspace.fileOperations.willRename.filters"));
+        s->did_ren = json_text(json_get(c, "workspace.fileOperations.didRename.filters"));
         s->type_chars[0] = '\0';
         if ((ot = json_get(c, "documentOnTypeFormattingProvider")) != NULL) {
           const Json *more = json_get(ot, "moreTriggerCharacter");
@@ -2954,6 +3230,7 @@ static void handle (Srv *s, const Json *msg) {
           if (b.s[q] == '\n' || b.s[q] == '\t') b.s[q] = ' ';
         v[n].at = pos_in(s, r.d, json_get(h, "position"));
         v[n].label = buf_take(&b);
+        v[n].color = 0;
         n++;
       }
       on_inlay(r.d, r.at.y, r.at.x, v, n);
@@ -3126,6 +3403,21 @@ static void handle (Srv *s, const Json *msg) {
       add_symbols(json_get(msg, "result"), 0, &v, &n, &cap);
       on_symbols(r.d, v, n);
     }
+    else if (r.kind == RQ_PULL) pulled(s, r.d, msg);
+    else if (r.kind == RQ_COLOR) colors(s, r.d, (unsigned long)r.at.x, json_get(msg, "result"));
+    else if (r.kind == RQ_COLOR_PRES) color_pres(s, r.d, json_get(msg, "result"));
+    else if (r.kind == RQ_LINK) links(s, r.d, (unsigned long)r.at.x, json_get(msg, "result"));
+    else if (r.kind == RQ_LINK_RESOLVE) {
+      const char *target = json_str(json_get(msg, "result.target"), NULL);
+      if (target) link_follow(target);
+      else toast(0, "Failed to open this link because it has no target");	/* VS Code's words */
+    }
+    else if (r.kind == RQ_WILL_RENAME) {	/* only while the rename waits: a late one would edit the old paths */
+      if (g_will > 0) {
+        g_will--;
+        if (json_get(msg, "result") && json_get(msg, "result")->type == J_OBJ) workspace_edit(s, json_get(msg, "result"));
+      }
+    }
     return;
   }
 }
@@ -3183,6 +3475,23 @@ static int messages (Srv *s) {
 }
 
 
+/* what the server wrote, into s->in */
+static void srv_read (Srv *s) {
+  char chunk[65536];
+  while (!s->dead && os_wait_readable(s->from, 0) == 1) {
+    long n = os_read(s->from, chunk, sizeof(chunk));
+    if (n <= 0) {
+      s->dead = 1;
+      break;
+    }
+    trace("-- read ", "", 0);
+    buf_putn(&s->in, chunk, (size_t)n);
+    buf_putc(&s->in, '\0');	/* room for the NUL messages() puts */
+    s->in.len--;
+  }
+}
+
+
 int lsp_poll (void) {
   int i, got = 0;
   size_t k;
@@ -3191,17 +3500,7 @@ int lsp_poll (void) {
     char chunk[65536];
     int status;
     if (s->dead) continue;
-    while (os_wait_readable(s->from, 0) == 1) {
-      long n = os_read(s->from, chunk, sizeof(chunk));
-      if (n <= 0) {
-        s->dead = 1;
-        break;
-      }
-      trace("-- read ", "", 0);
-      buf_putn(&s->in, chunk, (size_t)n);
-      buf_putc(&s->in, '\0');	/* room for the NUL messages() puts */
-      s->in.len--;
-    }
+    srv_read(s);
     while (s->err >= 0 && os_wait_readable(s->err, 0) == 1) {	/* what it says on stderr: its channel */
       long n = os_read(s->err, chunk, sizeof(chunk));
       if (n <= 0) {
@@ -3223,6 +3522,7 @@ int lsp_poll (void) {
   for (k = 0; k < g_ndoc; k++) {	/* edits: the server gets the text when the typing stops */
     LDoc *l = &g_doc[k];
     long long now;
+    if (l->repull && !l->s->dead && os_now_us() - l->repull_at >= SYNC_WAIT) pull(l);	/* it cancelled the last */
     if (!(l->s->ready && !l->s->dead && l->opened && l->sent != l->d->edits)) continue;
     now = os_now_us();
     if (l->seen != l->d->edits) {	/* still typing: wait for a pause */
@@ -3234,6 +3534,167 @@ int lsp_poll (void) {
   }
   auth_idle();	/* a device flow nobody will ever answer is given up on */
   return got;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** File operations: the Explorer renames or moves a file, and the
+** servers that asked for it (workspace.fileOperations) update what
+** points at it - the imports of TypeScript, JavaScript ...
+** ===================================================================
+*/
+
+#define WILL_WAIT	5000000	/* us a rename waits for the servers' edits at most */
+
+static int fold_case (int c) {
+  return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
+
+/* the LSP's glob p against the path s ('/' between folders): * ** ? {a,b} [a-z] [!a] */
+static int glob_match (const char *p, const char *s, int nocase) {
+  while (*p) {
+    if (*p == '*') {
+      int deep = p[1] == '*';
+      p += deep ? 2 : 1;
+      if (deep && *p == '/' && glob_match(p + 1, s, nocase)) return 1;	/* "**" "/": no folder too */
+      for (;; s++) {
+        if (glob_match(p, s, nocase)) return 1;
+        if (*s == '\0' || (!deep && *s == '/')) return 0;
+      }
+    }
+    if (*p == '{') {	/* {a,b}rest: a then rest, b then rest */
+      const char *e = strchr(p, '}'), *a = p + 1;
+      if (e == NULL) return 0;
+      while (a <= e) {
+        const char *c = a;
+        char buf[512];
+        size_t n;
+        while (c < e && *c != ',') c++;
+        n = (size_t)(c - a);
+        if (n + strlen(e + 1) < sizeof(buf)) {
+          memcpy(buf, a, n);
+          strcpy(buf + n, e + 1);
+          if (glob_match(buf, s, nocase)) return 1;
+        }
+        a = c + 1;
+      }
+      return 0;
+    }
+    if (*s == '\0') return 0;
+    if (*p == '[') {	/* a class: [abc], [a-z], [!a] */
+      const char *q = p + 1;
+      int neg = 0, hit = 0, c = nocase ? fold_case((unsigned char)*s) : (unsigned char)*s;
+      if (*q == '!' || *q == '^') neg = 1, q++;
+      for (; *q && *q != ']'; q++) {
+        int lo = nocase ? fold_case((unsigned char)*q) : (unsigned char)*q, hi = lo;
+        if (q[1] == '-' && q[2] && q[2] != ']') {
+          hi = nocase ? fold_case((unsigned char)q[2]) : (unsigned char)q[2];
+          q += 2;
+        }
+        if (c >= lo && c <= hi) hit = 1;
+      }
+      if (*q != ']' || hit == neg || *s == '/') return 0;
+      p = q + 1;
+      s++;
+      continue;
+    }
+    if (*p == '?') {
+      if (*s == '/') return 0;
+    }
+    else if (nocase ? fold_case((unsigned char)*p) != fold_case((unsigned char)*s) : *p != *s) return 0;
+    p++;
+    s++;
+  }
+  return *s == '\0';
+}
+
+
+/* does one of the server's filters (FileOperationFilter[], as JSON) take this file or folder? */
+static int ren_wanted (const char *filters, const char *path, int dir) {
+  Json *f;
+  char *p;
+  size_t i;
+  int yes = 0;
+  if (filters == NULL || (f = json_parse(filters, strlen(filters))) == NULL) return 0;
+  p = xstrdup(path);
+  for (i = 0; p[i]; i++)
+    if (p[i] == '\\' && path_is_sep('\\')) p[i] = '/';
+  for (i = 0; f->type == J_ARR && i < f->n && !yes; i++) {
+    const Json *x = f->kid[i];
+    const char *m = json_str(json_get(x, "pattern.matches"), "");
+    if (strcmp(json_str(json_get(x, "scheme"), "file"), "file") != 0) continue;
+    if ((strcmp(m, "file") == 0 && dir) || (strcmp(m, "folder") == 0 && !dir)) continue;
+    yes = glob_match(json_str(json_get(x, "pattern.glob"), ""), p, json_bool(json_get(x, "pattern.options.ignoreCase"), 0));
+  }
+  free(p);
+  json_free(f);
+  return yes;
+}
+
+
+/* RenameFilesParams: {"files":[{"oldUri":...,"newUri":...}]} */
+static char *rename_params (const char *from, const char *to) {
+  char *a = to_uri(from), *b = to_uri(to);
+  Buf q;
+  buf_init(&q);
+  buf_printf(&q, "{\"files\":[{\"oldUri\":\"%s\",\"newUri\":\"%s\"}]}", a, b);
+  buf_putc(&q, '\0');
+  free(a);
+  free(b);
+  return buf_take(&q);
+}
+
+
+/*
+** workspace/willRenameFiles: VS Code waits for the answers before the
+** file moves, and so does this; the edits they send (the imports of the
+** files that point at it) are made in the editor, the files open with them
+*/
+void lsp_will_rename (const char *from, const char *to, int dir) {
+  char *params = NULL;
+  long long end = os_now_us() + WILL_WAIT;
+  int i;
+  g_will = 0;
+  for (i = 0; i < g_nsrv; i++) {
+    Srv *s = g_srv[i];
+    if (s->gone || s->dead || !s->ready || !ren_wanted(s->will_ren, from, dir)) continue;
+    if (params == NULL) params = rename_params(from, to);
+    request(s, "workspace/willRenameFiles", params, RQ_WILL_RENAME, NULL);
+    g_will++;
+  }
+  free(params);
+  while (g_will > 0 && os_now_us() < end) {
+    int alive = 0;
+    for (i = 0; i < g_nsrv && g_will > 0; i++) {
+      Srv *s = g_srv[i];
+      if (s->dead || s->gone) continue;
+      alive = 1;
+      if (os_wait_readable(s->from, 10) == 1) {
+        srv_read(s);
+        messages(s);
+      }
+    }
+    if (!alive) break;
+  }
+  g_will = 0;	/* what did not answer in time is not waited for: the file moves without its edits */
+}
+
+
+void lsp_did_rename (const char *from, const char *to, int dir) {
+  char *params = NULL;
+  int i;
+  for (i = 0; i < g_nsrv; i++) {
+    Srv *s = g_srv[i];
+    if (s->gone || s->dead || !s->ready || !(ren_wanted(s->did_ren, from, dir) || ren_wanted(s->did_ren, to, dir)))
+      continue;
+    if (params == NULL) params = rename_params(from, to);
+    notify(s, "workspace/didRenameFiles", params);
+  }
+  free(params);
 }
 
 /* }================================================================== */

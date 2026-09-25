@@ -142,7 +142,7 @@ void side_wheel (int view, int d) {
 
 
 int side_idle (int view) {
-  int r = ext_idle() | test_idle();	/* downloads and test runs go on whatever is shown */
+  int r = ext_idle() | test_idle() | chat_idle();	/* downloads, test runs and Claude's answers go on whatever is shown */
   return (view == VIEW_SEARCH || search_busy() ? search_idle() : 0) | r;	/* a search goes on hidden too */
 }
 
@@ -1253,7 +1253,7 @@ static int input_commit (SideAct *act) {
     }
     else toast(1, "Unable to create file '%s'", name);
   }
-  else if (fs_rename(g_in.dir, path) != 0) toast(1, "Unable to rename '%s'", path_basename(g_in.dir));
+  else if (fs_move(g_in.dir, path) != 0) toast(1, "Unable to rename '%s'", path_basename(g_in.dir));
   else act_path(act, SA_RENAMED, g_in.dir, path);
   g_in.on = 0;
   {
@@ -1425,7 +1425,7 @@ static void paste_files (SideAct *act) {
       }
       if (st.is_dir && inside(dir->path, from)) toast(1, "Cannot move '%s' into a subfolder of itself.", path_basename(from));
       else if (fs_exists(to)) toast(1, "A file or folder %s already exists in the destination folder.", path_basename(to));
-      else if (fs_rename(from, to) != 0) toast(1, "Unable to move '%s'", path_basename(from));
+      else if (fs_move(from, to) != 0) toast(1, "Unable to move '%s'", path_basename(from));
       else {
         if (g_fclip.n == 1) act_path(act, SA_RENAMED, from, to);
         else explorer_renamed(from, to);
@@ -1579,7 +1579,7 @@ void files_drop (int row, int copy, SideAct *act) {
         free(to);
         continue;
       }
-      if (fs_rename(from, to) != 0) {
+      if (fs_move(from, to) != 0) {
         toast(1, "Unable to move '%s'", path_basename(from));
         free(to);
         continue;

@@ -1,32 +1,32 @@
 ---- cursor 18,2
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
-|      SEARCH                  │
+|      SEARCH                 │
 |      NeedleWord            │
 |                                │
 |▎    41 results in 41 files     │
-|       guide.md docs        1 ▐│
-|       NeedleWord lives here to▐│
-|       file00.txt many      1 ▐│
-|       row 00 NeedleWord       ▐│
-|       file01.txt many      1 ▐│
-|       row 01 NeedleWord       ▐│                        Command Palette...   Ctrl+Shift+P
-|       file02.txt many      1 ▐│
-|       row 02 NeedleWord        │                             Go to File...   Ctrl+P
-|       file03.txt many      1  │
-|        row 03 NeedleWord        │                              Open File...   Ctrl+O
-|       file04.txt many      1  │
-|        row 04 NeedleWord        │                            Open Folder...
-|       file05.txt many      1  │
-|        row 05 NeedleWord        │                           Open Project...   Ctrl+R
-|       file06.txt many      1  │
-|        row 06 NeedleWord        │                                  New File   Ctrl+N
+|      Open in editor             │
+|      guide.md docs        1 ▐│
+|        NeedleWord lives here to▐│
+|      file00.txt many      1 ▐│
+|        row 00 NeedleWord       ▐│
+|      file01.txt many      1 ▐│                        Command Palette...   Ctrl+Shift+P
+|        row 01 NeedleWord       ▐│
+|      file02.txt many      1  │                             Go to File...   Ctrl+P
+|        row 02 NeedleWord        │
+|       file03.txt many      1  │                              Open File...   Ctrl+O
+|        row 03 NeedleWord        │
+|       file04.txt many      1  │                            Open Folder...
+|        row 04 NeedleWord        │
+|       file05.txt many      1  │                           Open Project...   Ctrl+R
+|        row 05 NeedleWord        │
+|       file06.txt many      1  │                                  New File   Ctrl+N
+|        row 06 NeedleWord        │
 |       file07.txt many      1  │
 |        row 07 NeedleWord        │
 |       file08.txt many      1  │
 |        row 08 NeedleWord        │
 |       file09.txt many      1  │
-|        row 09 NeedleWord        │
-|      file10.txt many      1  │
-|        row 10 NeedleWord        │
+|       row 09 NeedleWord        │
+|       file10.txt many      1  │
 |                                                                                                                     
 exited=0

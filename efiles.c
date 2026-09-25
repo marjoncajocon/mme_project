@@ -189,6 +189,21 @@ void fs_reveal (const char *path) {
 #endif
 
 
+/*
+** A rename or a move of the Explorer's, as VS Code does it: the language
+** servers that asked for it get willRenameFiles first and their edits
+** (the imports of the file) are made, then the file moves, then they get
+** didRenameFiles
+*/
+int fs_move (const char *from, const char *to) {
+  int dir = is_dir(from);
+  lsp_will_rename(from, to, dir);
+  if (fs_rename(from, to) != 0) return -1;
+  lsp_did_rename(from, to, dir);
+  return 0;
+}
+
+
 /* a file or a folder with all that is in it; -1 when something stayed */
 int fs_remove (const char *path) {
   int r = 0;

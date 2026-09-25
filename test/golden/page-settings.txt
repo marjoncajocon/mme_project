@@ -17,14 +17,14 @@
 |        Appearance            │   Editor: Insert Spaces
 |      Features                │    Insert spaces when pressing Tab. This setting is overridden based on the file
 |        Explorer              │     contents when Editor: Detect Indentation is on.
-|        Terminal              │
-|        Source Control        │   Editor: Render Whitespace
-|        Testing               │   Controls how the editor should render whitespace characters.
-|        Debug                 │    selection                              
-|      Extensions              │
-|        Emmet                 │   Editor: Word Wrap
-|        HTML                  │   Controls how lines should wrap.
-|                              │    off                                    
+|        Search                │
+|        Terminal              │   Editor: Render Whitespace
+|        Source Control        │   Controls how the editor should render whitespace characters.
+|        Testing               │    selection                              
+|        Debug                 │
+|      Extensions              │   Editor: Word Wrap
+|        Emmet                 │   Controls how lines should wrap.
+|        HTML                  │    off                                    
 |                              │
 |                             │   Editor: Format On Save
 |                              │     Format a file on save. A formatter must be available and the editor must not be

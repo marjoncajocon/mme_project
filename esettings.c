@@ -26,7 +26,7 @@ enum { ST_BOOL, ST_NUM, ST_STR, ST_ENUM, ST_OBJ };
 
 /* the table of contents; depth 1 is a part of the one above */
 enum { C_COMMON, C_EDITOR, C_FORMAT, C_MINIMAP, C_SUGGEST, C_FILES, C_WORKBENCH, C_LOOK,
-       C_FEATURES, C_EXPLORER, C_TERMINAL, C_SCM, C_TESTING, C_DEBUG, C_EXT, C_EMMET, C_HTML, TOC_N };
+       C_FEATURES, C_EXPLORER, C_SEARCH, C_TERMINAL, C_SCM, C_TESTING, C_DEBUG, C_EXT, C_EMMET, C_HTML, C_VIM, TOC_N };
 
 static const struct {
   const char *name;
@@ -34,7 +34,7 @@ static const struct {
 } toc[TOC_N] = {
   {"Commonly Used", 0}, {"Text Editor", 0}, {"Formatting", 1}, {"Minimap", 1},
   {"Suggestions", 1}, {"Files", 1}, {"Workbench", 0}, {"Appearance", 1},
-  {"Features", 0}, {"Explorer", 1}, {"Terminal", 1}, {"Source Control", 1}, {"Testing", 1}, {"Debug", 1}, {"Extensions", 0}, {"Emmet", 1}, {"HTML", 1}
+  {"Features", 0}, {"Explorer", 1}, {"Search", 1}, {"Terminal", 1}, {"Source Control", 1}, {"Testing", 1}, {"Debug", 1}, {"Extensions", 0}, {"Emmet", 1}, {"HTML", 1}, {"Vim", 1}
 };
 
 typedef struct Setting {
@@ -124,6 +124,12 @@ static const Setting set[] = {
    "Controls whether the Explorer should automatically reveal and select files when opening them."},
   {"files.exclude", C_EXPLORER, ST_OBJ, 1, "{\"**/.git\": true, \"**/.svn\": true, \"**/.hg\": true, \"**/CVS\": true, \"**/.DS_Store\": true, \"**/Thumbs.db\": true}", NULL,
    "Configure glob patterns for excluding files and folders. For example, the file Explorer decides which files and folders to show or hide based on this setting."},
+  {"search.searchOnType", C_SEARCH, ST_BOOL, 0, "true", NULL,
+   "Search all files as you type."},
+  {"search.searchEditor.defaultNumberOfContextLines", C_SEARCH, ST_NUM, 0, "1", NULL,
+   "The default number of surrounding context lines to use when creating new Search Editors."},
+  {"search.searchEditor.reusePriorSearchConfiguration", C_SEARCH, ST_BOOL, 0, "false", NULL,
+   "When enabled, new Search Editors will reuse the includes, excludes, and flags of the previously opened Search Editor."},
   {"workbench.sideBar.visible", C_LOOK, ST_BOOL, 0, "true", NULL,
    "Controls the visibility of the primary side bar at startup."},
   {"terminal.integrated.shell", C_TERMINAL, ST_STR, 0, "\"\"", NULL,
@@ -216,6 +222,10 @@ static const Setting set[] = {
    "Enables the inlay hints in the editor."},
   {"editor.codeLens", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Controls whether the editor shows CodeLens."},
+  {"editor.colorDecorators", C_EDITOR, ST_BOOL, 0, "true", NULL,
+   "Controls whether the editor should render the inline color decorators and color picker."},
+  {"editor.links", C_EDITOR, ST_BOOL, 0, "true", NULL,
+   "Controls whether the editor should detect links and make them clickable."},
   {"editor.inlineSuggest.enabled", C_EDITOR, ST_BOOL, 0, "true", NULL,
    "Controls whether to automatically show inline suggestions in the editor."},
   {"editor.inlineSuggest.showToolbar", C_EDITOR, ST_ENUM, 0, "\"onHover\"", "onHover|always|never",
@@ -282,8 +292,36 @@ static const Setting set[] = {
    "When the Markdown preview is open beside its file, scrolling the file scrolls the preview to the same place."},
   {"markdown.preview.scrollEditorWithPreview", C_FEATURES, ST_BOOL, 0, "true", NULL,
    "And the other way round: scrolling the Markdown preview scrolls the file it was made from."},
+  {"mme.chat.apiKey", C_EXT, ST_STR, 0, "\"\"", NULL,
+   "The Anthropic API key Chat and Inline Chat use to ask Claude. When empty, the ANTHROPIC_API_KEY environment variable is used (or ANTHROPIC_AUTH_TOKEN, sent as a bearer token)."},
+  {"mme.chat.baseUrl", C_EXT, ST_STR, 0, "\"\"", NULL,
+   "The base URL of the Anthropic API, for a proxy or a gateway. When empty, the ANTHROPIC_BASE_URL environment variable is used, else https://api.anthropic.com."},
+  {"mme.chat.model", C_EXT, ST_STR, 0, "\"claude-opus-5\"", NULL,
+   "The Claude model that Chat and Inline Chat ask."},
+  {"mme.chat.fallbacks", C_EXT, ST_BOOL, 0, "true", NULL,
+   "Controls whether a request the model declines is answered by another model instead (the API's server-side fallback)."},
   {"mme.languageServers", C_EXT, ST_OBJ, 0, "{}", NULL,
-   "The language server (IntelliSense) of each language: the command that starts it, by language id (\"c\", \"go\", \"python\" ...)."}
+   "The language server (IntelliSense) of each language: the command that starts it, by language id (\"c\", \"go\", \"python\" ...)."},
+  {"vim.enable", C_VIM, ST_BOOL, 0, "false", NULL,
+   "Enable Vim emulation: Normal, Insert and Visual modes, operators, registers, macros and : commands in the text editor. Vim: Toggle Vim Mode turns it on and off."},
+  {"vim.useSystemClipboard", C_VIM, ST_BOOL, 0, "false", NULL,
+   "Use system clipboard for unnamed register."},
+  {"vim.useCtrlKeys", C_VIM, ST_BOOL, 0, "true", NULL,
+   "Enable some Vim Ctrl key commands that override otherwise common operations, like Ctrl+F."},
+  {"vim.handleKeys", C_VIM, ST_OBJ, 0, "{\"<C-d>\": true, \"<C-s>\": false, \"<C-z>\": false}", NULL,
+   "Delegate certain key combinations back to VS Code to be handled natively."},
+  {"vim.hlsearch", C_VIM, ST_BOOL, 0, "false", NULL,
+   "Show all matches of the most recent search pattern."},
+  {"vim.incsearch", C_VIM, ST_BOOL, 0, "true", NULL,
+   "Show where a / or ? search matches as you type it."},
+  {"vim.ignorecase", C_VIM, ST_BOOL, 0, "true", NULL,
+   "Ignore case in search patterns."},
+  {"vim.smartcase", C_VIM, ST_BOOL, 0, "true", NULL,
+   "Override the 'ignorecase' option if the search pattern contains upper case characters."},
+  {"vim.gdefault", C_VIM, ST_BOOL, 0, "false", NULL,
+   "When on, the :substitute flag g is default on. This means that all matches in a line are substituted instead of one. When a g flag is given to a :substitute command, this will toggle the substitution of all or one match."},
+  {"vim.startInInsertMode", C_VIM, ST_BOOL, 0, "false", NULL,
+   "Start in Insert mode instead of Normal mode."}
 };
 
 #define NSET	((int)(sizeof(set) / sizeof(set[0])))

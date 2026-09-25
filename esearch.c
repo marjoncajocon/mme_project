@@ -9,6 +9,8 @@
 ** "files to include" and "files to exclude" boxes (globs, comma separated:
 ** src, *.c, ./lib, test*).
 ** A file open in the editor is searched and replaced in its text there.
+** "Open in editor" under the count (Alt+Enter) puts the search in a Search
+** Editor (esearched.c), which borrows the globs and the matching from here.
 */
 
 #include "mme.h"
@@ -40,6 +42,7 @@ static int g_in;	/* the box the keys go to */
 static int g_repl;	/* the replace box shows */
 static int g_more;	/* "files to include / exclude" show */
 static int g_case, g_word, g_regex;	/* Aa, ab, .* */
+static int g_pcase;	/* AB: Preserve Case, in the replace box */
 static Regex *g_re;	/* g_ran as a regular expression */
 static int g_pending;	/* typed since the last search */
 static long long g_changed;	/* when */
@@ -61,8 +64,9 @@ static int g_h = 1;
 static struct {
   int w;
   int find, repl, dots, inc, exc, sum, head;	/* rows; -1 not shown */
-  int refresh, clear, collapse;	/* the title's icons */
+  int refresh, clear, neweditor, collapse;	/* the title's icons */
   int chev, box_x, box_w;
+  int link, link_x;	/* "Open in editor": its row (-1 not shown) and column */
 } V;
 
 #define DELAY		300000	/* us after the last key */
@@ -269,6 +273,19 @@ static size_t find_in (const Match *M, const char *s, size_t n, size_t from, siz
 }
 
 
+/* find_in for the Search Editor's worker: the Match is made here, nothing of esearch's is read */
+size_t search_find (const char *q, int match_case, int word, const Regex *re,
+                    const char *s, size_t n, size_t from, size_t *ml) {
+  Match M;
+  M.q = q;
+  M.m = strlen(q);
+  M.icase = !match_case;
+  M.word = word;
+  M.re = (Regex *)re;
+  return find_in(&M, s, n, from, ml);
+}
+
+
 /* the Match the editor's own thread uses (Replace, and the files it has open) */
 static void ui_match (Match *M) {
   M->q = g_ran;
@@ -311,6 +328,12 @@ static int skip_dir (const char *name) {
   for (i = 0; i < sizeof(skip) / sizeof(skip[0]); i++)
     if (m_fncmp(name, skip[i]) == 0) return 1;
   return 0;
+}
+
+
+/* for the Search Editor's worker: a folder never walked, a file never read */
+int search_skipped (const char *name, int dir) {
+  return dir ? skip_dir(name) : binary_name(name);
 }
 
 
@@ -590,6 +613,7 @@ static void wk_stop (void) {
 
 void search_stop (void) {
   wk_stop();
+  searched_stop();	/* the Search Editors' walks too */
 }
 
 
@@ -757,9 +781,9 @@ static void wk_poll (void) {
 }
 
 
-/* a search is going on: the main loop comes back soon */
+/* a search is going on (here or in a Search Editor): the main loop comes back soon */
 int search_busy (void) {
-  return WK.busy;
+  return WK.busy || searched_busy();
 }
 
 /* }================================================================== */
@@ -834,6 +858,7 @@ static void run (void) {
 
 
 int search_idle (void) {
+  int r = searched_idle();	/* the Search Editors' searches go on as well */
   if (WK.busy && !g_pending) {	/* the workers go on; what they found shows */
     size_t sel = g_sel;
     wk_poll();
@@ -841,9 +866,20 @@ int search_idle (void) {
     g_sel = sel < g_nrow ? sel : (g_nrow ? g_nrow - 1 : 0);
     return 1;
   }
-  if (!g_pending || os_now_us() - g_changed < DELAY) return 0;
+  if (!g_pending || !opt.search_on_type || os_now_us() - g_changed < DELAY) return r;	/* search.searchOnType off: Enter */
   run();
   return 1;
+}
+
+
+/* "Open in editor": the query, its toggles and the file boxes as they are */
+void search_view_query (SearchQuery *sq) {
+  snprintf(sq->q, sizeof(sq->q), "%s", Q);
+  snprintf(sq->inc, sizeof(sq->inc), "%s", g_field[FD_INC]);
+  snprintf(sq->exc, sizeof(sq->exc), "%s", g_field[FD_EXC]);
+  sq->match_case = g_case;
+  sq->word = g_word;
+  sq->regex = g_regex;
 }
 
 
@@ -917,6 +953,11 @@ static char *replaced (const char *path, const char *s, size_t n, size_t line1, 
         if (re_at(g_re, s + from, end - from, at, &e, cap)) rep = re_expand(R, s + from, cap, &repl);
         else rep = xstrdup(R);
       }
+      if (g_pcase) {	/* in the match's case */
+        char *k = re_keep_case(rep, repl, s + from + at, ml, &repl);
+        if (rep != R) free(rep);
+        rep = k;
+      }
       buf_putn(&o, s + done, from + at - done);
       buf_putn(&o, rep, repl);
       done = from + at + ml;
@@ -928,7 +969,7 @@ static char *replaced (const char *path, const char *s, size_t n, size_t line1, 
       (*ev)[*nev].l0 = (*ev)[*nev].l1 = line - 1;
       (*ev)[*nev].c0 = at;
       (*ev)[*nev].c1 = at + ml;
-      (*ev)[*nev].text = rep;	/* a regex's: its own, freed by replace_file */
+      (*ev)[*nev].text = rep;	/* a regex's (or AB's): its own, freed by replace_file */
       (*ev)[*nev].utf16 = 0;
       (*nev)++;
       (*count)++;
@@ -961,7 +1002,7 @@ static size_t replace_file (const SFile *f, size_t line, size_t col) {
       count = 0;
     }
   }
-  if (g_re)	/* a regex's replacements were made for each match */
+  if (g_re || g_pcase)	/* a regex's replacements were made for each match, and AB's */
     while (nev > 0) free(ev[--nev].text);
   free(ev);
   free(out);
@@ -1062,10 +1103,13 @@ static void draw_hit (int x, int y, int w, const SHit *h, int st) {
   lim = h->tlen;
   if (from > lim) from = lim;
   if (g_repl && h->col >= from && h->col + h->len <= lim) {	/* old text struck, the new after it */
+    size_t n;
+    char *nw = g_pcase ? re_keep_case(R, strlen(R), h->text + h->col, h->len, &n) : NULL;
     cx += (int)scr_text(cx, y, x1 - cx, h->text + from, h->col - from, 0, st, 0, 0, st);
     cx += (int)scr_text(cx, y, x1 - cx, h->text + h->col, h->len, 0, S_DIFF_DEL, 0, 0, S_DIFF_DEL);
-    if (cx < x1) cx += scr_putsw(cx, y, x1 - cx, R, S_DIFF_ADD);
+    if (cx < x1) cx += scr_putsw(cx, y, x1 - cx, nw ? nw : R, S_DIFF_ADD);
     if (cx < x1) scr_text(cx, y, x1 - cx, h->text + h->col + h->len, lim - h->col - h->len, 0, st, 0, 0, st);
+    free(nw);
     return;
   }
   scr_text(cx, y, x1 - cx, h->text + from, lim - from, 0, st,
@@ -1093,11 +1137,13 @@ void search_draw (int x, int y, int w, int h, int focus) {
   V.w = w;
   if (h < 4) return;
   scr_puts(x + 2, y, "SEARCH", S_SIDE_HEAD);
-  V.collapse = w - 3;	/* the title's icons: refresh, clear, collapse all */
-  V.clear = w - 5;
-  V.refresh = w - 7;
+  V.collapse = w - 3;	/* the title's icons: refresh, clear, open new search editor, collapse all */
+  V.neweditor = w - 5;
+  V.clear = w - 7;
+  V.refresh = w - 9;
   scr_put(x + V.refresh, y, 0xEB37, S_SIDE_HEAD);
   scr_put(x + V.clear, y, 0xEABF, S_SIDE_HEAD);
+  scr_put(x + V.neweditor, y, 0xEA7F, S_SIDE_HEAD);
   scr_put(x + V.collapse, y, 0xEAC5, S_SIDE_HEAD);
   /* the chevron, the search box with its toggles, the replace box */
   V.chev = 1;
@@ -1114,7 +1160,8 @@ void search_draw (int x, int y, int w, int h, int focus) {
   V.repl = -1;
   if (g_repl) {
     V.repl = ry;
-    draw_box(x + V.box_x, y + ry, V.box_w, FD_REPL, "Replace", focus, 3);
+    draw_box(x + V.box_x, y + ry, V.box_w, FD_REPL, "Replace", focus, 5);
+    scr_put(x + V.box_x + V.box_w - 4, y + ry, 0xEB2E, g_pcase ? S_TOGGLE_ON : S_INPUT);	/* preserve-case */
     scr_put(x + V.box_x + V.box_w - 2, y + ry, 0xEB3C, S_INPUT);	/* replace-all */
     ry++;
   }
@@ -1144,7 +1191,22 @@ void search_draw (int x, int y, int w, int h, int focus) {
                   (unsigned long)g_nhit, g_nhit == 1 ? "" : "s",
                   (unsigned long)g_nfile, g_nfile == 1 ? "" : "s", g_cut ? " (more not shown)" : "");
     scr_putsw(x + 2, y + ry, w - 3, sum, S_SIDE_DIM);
+    V.link = -1;
+    if (!WK.busy && g_nhit > 0) {	/* VS Code's "- Open in editor", on the next row when it does not fit */
+      int sw = (int)str_cols(sum);
+      if (2 + sw + 3 + 14 <= w - 1) {
+        scr_puts(x + 2 + sw, y + ry, " - ", S_SIDE_DIM);
+        V.link_x = 2 + sw + 3;
+      }
+      else {
+        ry++;
+        V.link_x = 2;
+      }
+      V.link = ry;
+      scr_putsw(x + V.link_x, y + ry, w - 1 - V.link_x, "Open in editor", S_ICON_BLUE);
+    }
   }
+  else V.link = -1;
   ry++;
   V.head = ry;
   g_h = h - V.head;
@@ -1291,6 +1353,17 @@ int search_key (int k, SideAct *act) {
     typed();
     return 1;
   }
+  if (k == ('p' | KM_ALT)) {	/* Alt+P: AB, Preserve Case (only the replace text changes) */
+    g_pcase = !g_pcase;
+    return 1;
+  }
+  if (code == K_ENTER && (k & KM_ALT) && !(k & KM_CTRL)) {	/* Alt+Enter: Open Results in Editor */
+    if (Q[0]) {
+      act->what = SA_CMD;
+      act->cmd = CMD_SEARCHED_FROM_VIEW;
+    }
+    return 1;
+  }
   if (code == K_ENTER && (k & KM_CTRL) && (k & KM_ALT)) {	/* Ctrl+Alt+Enter: Replace All */
     if (g_repl) replace_all();
     return 1;
@@ -1371,7 +1444,16 @@ void search_click (int row, int col, SideAct *act) {
       clear();
       g_in = FD_FIND;
     }
+    else if (col == V.neweditor) {	/* Open New Search Editor */
+      act->what = SA_CMD;
+      act->cmd = CMD_SEARCHED_NEW;
+    }
     else if (col == V.collapse) collapse_all();
+    return;
+  }
+  if (row == V.link && col >= V.link_x && col < V.link_x + 14) {	/* Open in editor */
+    act->what = SA_CMD;
+    act->cmd = CMD_SEARCHED_FROM_VIEW;
     return;
   }
   if (row == V.find) {
@@ -1388,6 +1470,7 @@ void search_click (int row, int col, SideAct *act) {
   }
   if (row == V.repl) {
     if (col == V.box_x + V.box_w - 2) replace_all();
+    else if (col == V.box_x + V.box_w - 4) g_pcase = !g_pcase;
     else g_in = FD_REPL;
     return;
   }

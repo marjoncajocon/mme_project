@@ -15,7 +15,7 @@
 #include <string.h>
 
 
-enum { F_EDITOR, F_SIDE, F_PANEL };	/* who gets the keys */
+enum { F_EDITOR, F_SIDE, F_PANEL, F_CHAT };	/* who gets the keys (F_CHAT: the Chat view, echat.c) */
 
 /* a cursor, with its selection */
 typedef struct Cur {
@@ -82,6 +82,7 @@ typedef struct Ed {
   int find_open;	/* the find widget shows */
   char find[256];
   int find_case, find_word, find_regex;	/* Alt+C, Alt+W, Alt+R */
+  int find_pcase;	/* Alt+P: Preserve Case (AB) in the replace box */
   int find_insel;	/* Alt+L: only in fsel_a .. fsel_b */
   Pos fsel_a, fsel_b;
   int replacing;	/* the find widget's second row: replace */
@@ -169,6 +170,7 @@ typedef struct Layout {
   int side_h;	/* the sidebar's rows (a justified panel goes under it too) */
   int panel_side;	/* the panel is at the right or the left */
   int area_x, area_w;	/* the editor area: the groups side by side */
+  int aux_x, aux_w;	/* the secondary side bar (Chat), its edge not counted; 0: closed */
   int act_x;	/* the activity bar: on the left, or the right (workbench.sideBar.location) */
   int edge_x;	/* the sidebar's edge that drags */
   int ed_y, ed_h;	/* the group in front: its tab row, its height (with the tab row) */
@@ -323,6 +325,12 @@ static void workspace_symbols (const char *init);
 static Row *row_at (size_t y) {
   if (y >= T->doc->n) y = T->doc->n - 1;	/* a line kept from before the text got shorter: never past the end */
   return &T->doc->row[y];
+}
+
+
+/* columns a tab goes to: the tab in front's file's (.editorconfig's tab_width), else editor.tabSize */
+int tab_cols (void) {
+  return T->doc && T->doc->tabw > 0 ? T->doc->tabw : opt.tab_size;
 }
 
 
@@ -1550,6 +1558,12 @@ static void layout (void) {
     L.area_w = E.cols - L.area_x > 1 ? E.cols - L.area_x : 1;
     L.edge_x = L.area_x - 1;
   }
+  L.aux_w = 0;
+  if (chat_shown() && !E.zen && (L.aux_w = chat_width(L.area_w)) > 0) {	/* the secondary side bar: across from the sidebar */
+    L.aux_x = opt.side_right ? L.area_x : L.area_x + L.area_w - L.aux_w;
+    if (opt.side_right) L.area_x += L.aux_w + 1;
+    L.area_w -= L.aux_w + 1;
+  }
   L.panel_h = L.panel_w = L.panel_side = 0;
   L.panel_y = L.body_y + L.body_h;
   L.panel_x = L.area_x;
@@ -1972,12 +1986,13 @@ static struct {
   int asked, pending;
   long long since;
   int row;	/* the screen row its line was drawn on this frame; -1 not drawn */
+  int chat;	/* it is Inline Chat's answer (or a code block's Apply), not the server's */
 } NE;
 
 
 /* is the next edit on the screen? asked for every row drawn, so it stays cheap */
 static int ne_on (void) {
-  return NE.text != NULL && opt.next_edit && HAS_DOC && NE.d == T->doc &&
+  return NE.text != NULL && (opt.next_edit || NE.chat) && HAS_DOC && NE.d == T->doc &&
          NE.edits == T->doc->edits && NE.a.y < T->doc->n && NE.b.y < T->doc->n &&
          !T->sel && T->nmc == 0 && !G->diff && !T->page && !T->md && !comp_showing() && !gh_on();
 }
@@ -1987,7 +2002,7 @@ static int ne_on (void) {
 static int ne_rows_at (size_t *after, int *rows) {
   if (!ne_on() || NE.nline == 0) return 0;
   *after = NE.b.y;
-  *rows = (int)NE.nline;
+  *rows = (int)NE.nline + (NE.chat ? 1 : 0);	/* Inline Chat's Accept and Discard under it */
   return 1;
 }
 
@@ -2016,9 +2031,122 @@ static struct {
 } IH;
 
 
+/*
+** editor.colorDecorators: the colors the server found in the text
+** (textDocument/documentColor). Each gets a swatch, a ■ in its color,
+** drawn before it the way an inlay hint is: the swatches go into IH
+** with the hints, so the columns, the clicks and the drawing are theirs
+*/
+static struct {
+  const Doc *d;
+  DocColor *v;
+  size_t n;
+  const Doc *ask_d;
+  unsigned long ask_edits, seen;
+  long long since;
+} CD;
+
+
+/* editor.links: the document links of the file shown; Ctrl+hover underlines one, Ctrl+Click opens it */
+static struct {
+  const Doc *d;
+  DocLink *v;
+  size_t n;
+  const Doc *ask_d;
+  unsigned long ask_edits, seen;
+  long long since;
+} LK;
+
+
 static int cmp_hint (const void *a, const void *b) {
   const InlayHint *x = (const InlayHint *)a, *y = (const InlayHint *)b;
-  return pos_cmp(x->at, y->at);
+  int c = pos_cmp(x->at, y->at);
+  if (c == 0 && x->color != y->color) return x->color ? 1 : -1;	/* a swatch right before its color */
+  return c;
+}
+
+
+/* the swatches go in with the hints again (and the hints of a setting turned off go); their widths */
+static void ih_swatches (void) {
+  size_t i, k = 0;
+  for (i = 0; i < IH.n; i++) {
+    if (IH.v[i].color || !opt.inlay) free(IH.v[i].label);
+    else IH.v[k++] = IH.v[i];
+  }
+  IH.n = k;
+  if (opt.color_decorators && CD.d == IH.d && CD.n > 0) {
+    IH.v = (InlayHint *)xrealloc(IH.v, (IH.n + CD.n) * sizeof(InlayHint));
+    for (i = 0; i < CD.n; i++) {
+      IH.v[IH.n].at = CD.v[i].a;
+      IH.v[IH.n].label = xstrdup("\xE2\x96\xA0 ");	/* a square, in the color */
+      IH.v[IH.n].color = i + 1;
+      IH.n++;
+    }
+  }
+  qsort(IH.v, IH.n, sizeof(InlayHint), cmp_hint);
+  free(IH.w);
+  IH.w = (int *)xmalloc((IH.n + 1) * sizeof(int));
+  for (i = 0; i < IH.n; i++) IH.w[i] = (int)str_cols(IH.v[i].label);
+}
+
+
+void on_colors (Doc *d, unsigned long edits, DocColor *v, size_t n) {
+  size_t i;
+  (void)edits;
+  if (d != CD.ask_d) {	/* another file's, late */
+    free(v);
+    return;
+  }
+  free(CD.v);
+  CD.v = v;
+  CD.n = n;
+  CD.d = d;
+  if (IH.d != d) {	/* another file's hints go: these swatches are this one's */
+    for (i = 0; i < IH.n; i++) free(IH.v[i].label);
+    IH.n = 0;
+    IH.d = d;
+  }
+  ih_swatches();
+}
+
+
+/* the swatch of color k: its color over the background, as much as its alpha says */
+static uint32_t swatch_rgb (size_t k, uint32_t bg) {
+  uint32_t out = 0;
+  int q;
+  if (k >= CD.n) return bg;
+  for (q = 0; q < 3; q++) {
+    double a = CD.v[k].rgba[3], b = (double)((bg >> (16 - 8 * q)) & 255) / 255.0;
+    double m = CD.v[k].rgba[q] * a + b * (1 - a);
+    out |= (uint32_t)(m * 255 + 0.5) << (16 - 8 * q);
+  }
+  return out;
+}
+
+
+void on_links (Doc *d, unsigned long edits, DocLink *v, size_t n) {
+  size_t i;
+  (void)edits;
+  if (d != LK.ask_d) {
+    for (i = 0; i < n; i++) free(v[i].tip);
+    free(v);
+    return;
+  }
+  for (i = 0; i < LK.n; i++) free(LK.v[i].tip);
+  free(LK.v);
+  LK.v = v;
+  LK.n = n;
+  LK.d = d;
+}
+
+
+/* the document link at p, -1: none */
+static long link_at (Pos p) {
+  size_t i;
+  if (!opt.links || !HAS_DOC || LK.d != T->doc) return -1;
+  for (i = 0; i < LK.n; i++)
+    if (pos_cmp(LK.v[i].a, p) <= 0 && pos_cmp(p, LK.v[i].b) < 0) return (long)i;
+  return -1;
 }
 
 
@@ -2032,20 +2160,19 @@ void on_inlay (Doc *d, size_t y0, size_t y1, InlayHint *v, size_t n) {
   for (i = 0; i < IH.n; i++) free(IH.v[i].label);
   free(IH.v);
   free(IH.w);
-  qsort(v, n, sizeof(InlayHint), cmp_hint);
   IH.v = v;
   IH.n = n;
-  IH.w = (int *)xmalloc((n + 1) * sizeof(int));
-  for (i = 0; i < n; i++) IH.w[i] = (int)str_cols(v[i].label);
+  IH.w = NULL;
   IH.d = d;
   IH.y0 = y0;
   IH.y1 = y1;
   IH.edits = IH.ask_edits;
+  ih_swatches();	/* editor.colorDecorators: with the swatches, sorted, and their widths */
 }
 
 
 static int ih_on (void) {
-  return opt.inlay && !E.wrap && IH.n > 0 && IH.d == T->doc;
+  return (opt.inlay || opt.color_decorators) && !E.wrap && IH.n > 0 && IH.d == T->doc;
 }
 
 
@@ -2109,12 +2236,19 @@ static void draw_hints (int sy, size_t y, size_t x, size_t *i, size_t col, size_
   for (; *i < IH.n && IH.v[*i].at.y == y && IH.v[*i].at.x <= x; (*i)++) {
     const char *s = IH.v[*i].label;
     size_t n = strlen(s), k = 0, len, c = col + *vs;
+    uint32_t fg = ui_color(C_INLAY_FG), bg = ui_color(C_INLAY_BG);
+    int attr = RGB_ITALIC;
+    if (IH.v[*i].color) {	/* editor.colorDecorators: the swatch in its color, on the line's background */
+      bg = ui_color(y == T->cur.y && !T->sel && eopt.line_hl >= 2 ? C_LINE_BG : C_EDITOR_BG);
+      fg = swatch_rgb(IH.v[*i].color - 1, bg);
+      attr = 0;
+    }
     while (k < n) {
       uint32_t cp = utf8_decode(s + k, n - k, &len);
       int w = uc_width(cp);
       if (w < 1) w = 1;
       if (c >= left && c + (size_t)w <= right)
-        scr_put_rgb(L.ed_x + gw + (int)(c - left), sy, cp, ui_color(C_INLAY_FG), ui_color(C_INLAY_BG), RGB_ITALIC);
+        scr_put_rgb(L.ed_x + gw + (int)(c - left), sy, cp, fg, bg, attr);
       c += (size_t)w;
       k += len;
     }
@@ -2278,8 +2412,17 @@ static int time_to_ask (const Doc **ask_d, unsigned long *ask_edits, unsigned lo
 
 /* when nothing happens: hints for the lines shown, the tokens, the lenses */
 static void extras_idle (void) {
+  static int was_inlay = 1, was_colors = 1;
   size_t y0, y1;
+  if (was_inlay != opt.inlay || was_colors != opt.color_decorators) {	/* a setting went off: its part goes */
+    was_inlay = opt.inlay;
+    was_colors = opt.color_decorators;
+    ih_swatches();
+    IH.ask_d = NULL;	/* the hints are asked for again when they are back on */
+  }
   if (!HAS_DOC || G->diff || T->page || !lsp_active(T->doc)) return;
+  if (opt.color_decorators && time_to_ask(&CD.ask_d, &CD.ask_edits, &CD.seen, &CD.since, 300000)) lsp_colors(T->doc);
+  if (opt.links && time_to_ask(&LK.ask_d, &LK.ask_edits, &LK.seen, &LK.since, 500000)) lsp_links(T->doc);
   if (opt.inlay && !E.wrap) {
     y0 = T->top > 40 ? T->top - 40 : 0;
     y1 = T->top + (size_t)L.text_h + 40;
@@ -2696,7 +2839,7 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
       vs += (size_t)GH.cols;
       gdone = 1;
     }
-    if (E.find_open && n > 0 && x >= hit_end && (m = match_at(y, x)) > 0) hit_end = x + m;
+    if ((E.find_open || vim_lit()) && n > 0 && x >= hit_end && (m = match_at(y, x)) > 0) hit_end = x + m;
     if (x < from) {	/* an earlier row of a wrapped line */
       col += w;
       x += len;
@@ -2838,6 +2981,7 @@ static const char *tab_name (const Tab *t) {
   static char pv[2][300];	/* two at once: the tab bar draws while a list is made */
   static int k;
   if (t->page == PAGE_MERGE) return merge_tab_name();
+  if (t->page == PAGE_SEARCHED) return searched_title(t->pdata);
   if (t->page == PAGE_IMAGE || t->page == PAGE_HEX)	/* a picture or a binary: the file's name */
     return t->ppath ? path_basename(t->ppath) : "Untitled";
   if (t->page) return t->page == PAGE_SETTINGS ? "Settings" : "Welcome";
@@ -2891,7 +3035,8 @@ static int draw_tab (int x, int y, const char *name, int on, int dirty, int prev
                      int page, int gmark) {
   int ist, w = tab_width(name), x1, n;
   uint32_t icon = page == PAGE_SETTINGS ? 0xEAF8 : page == PAGE_WELCOME ? 0xF121
-                : page == PAGE_MERGE ? 0xEAFB : file_icon(name, &ist);	/* a page: gear, </>, merge */
+                : page == PAGE_MERGE ? 0xEAFB : page == PAGE_SEARCHED ? 0xEA6D
+                : file_icon(name, &ist);	/* a page: gear, </>, merge, search */
   int st = on ? S_TAB_ON : S_TAB;
   if (x + w > L.ed_x + L.ed_w) w = L.ed_x + L.ed_w - x;
   if (w <= 0) return x;
@@ -3185,7 +3330,7 @@ static void draw_watermark (void) {
 /* the find widget, top right of the editor, like VS Code's */
 static struct {
   int x, y, w, in_x, in_w, up_x, down_x, close_x, case_x, word_x, re_x, sel_x;
-  int chev_x, one_x, all_x, h;	/* the chevron, Replace, Replace All; rows */
+  int chev_x, one_x, all_x, pcase_x, h;	/* the chevron, Replace, Replace All, Preserve Case; rows */
 } g_fw;
 
 
@@ -3237,11 +3382,13 @@ static void draw_find (void) {
     int ry = y + 1, rcx;
     scr_fill(x, ry, w, S_BOX);
     scr_fill(g_fw.in_x, ry, g_fw.in_w, S_INPUT);
-    if (E.repl[0]) rcx = g_fw.in_x + 1 + scr_putsw(g_fw.in_x + 1, ry, g_fw.in_w - 2, E.repl, S_INPUT_ON);
+    if (E.repl[0]) rcx = g_fw.in_x + 1 + scr_putsw(g_fw.in_x + 1, ry, g_fw.in_w - 5, E.repl, S_INPUT_ON);
     else {
-      scr_putsw(g_fw.in_x + 1, ry, g_fw.in_w - 2, "Replace", S_INPUT_HINT);
+      scr_putsw(g_fw.in_x + 1, ry, g_fw.in_w - 5, "Replace", S_INPUT_HINT);
       rcx = g_fw.in_x + 1;
     }
+    g_fw.pcase_x = g_fw.in_x + g_fw.in_w - 3;
+    scr_put(g_fw.pcase_x, ry, 0xEB2E, E.find_pcase ? S_TOGGLE_ON : S_INPUT);	/* codicon preserve-case */
     g_fw.one_x = g_fw.in_x + g_fw.in_w + 1;
     g_fw.all_x = g_fw.one_x + 2;
     scr_put(g_fw.one_x, ry, 0xEB3D, S_BOX);	/* codicon replace */
@@ -3518,6 +3665,7 @@ static void draw_status (void) {
   scr_fill(0, y, E.cols, S_STATUS);
   g_nsbi = 0;
   status_items();
+  vim_status();	/* -- NORMAL --, the : line */
   status_copilot();	/* after the editor's own, left of the bell: where VS Code puts it */
   status_add("status.notifications", "Notifications", 1, 100, toast_unread() ? "\xEE\xAE\x9A" : "\xEE\xAA\xA2",	/* bell-dot, bell: last, at the right end */
              toast_unread() ? "Notifications" : "No Notifications", CMD_NOTIFICATIONS);
@@ -4234,6 +4382,21 @@ static void draw_nedit_rows (int gw) {
     for (i = 0; i < w; i++) scr_set_bg(L.ed_x + gw + i, sy, ui_color(C_DIFF_ADD));
     put_ghost(sy, gw, 0, NE.line[k], E.wrap ? 0 : T->left, ui_color(C_DIFF_ADD));
   }
+  if (NE.chat && y0 + (int)k < L.text_y + L.text_h) {	/* Inline Chat's buttons, VS Code's */
+    scr_fill(L.ed_x, y0 + (int)k, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+    chat_inline_bar(L.ed_x + gw, y0 + (int)k, text_cols());
+  }
+}
+
+
+/* Inline Chat at work: its box over the line it is for (echat.c draws it) */
+static void draw_inline_chat (int gw) {
+  Pos at;
+  int row;
+  if (!chat_inline_at(T->doc, &at) || at.y >= T->doc->n) return;
+  at.x = 0;
+  if ((row = vis_row(at)) < 0) return;
+  chat_inline_draw(L.ed_x + gw, L.text_y + row, text_cols(), L.text_y, L.text_y + L.text_h);
 }
 
 
@@ -4338,6 +4501,7 @@ static void draw_group (int other) {
     if (!other) draw_exception();
     if (!other) draw_ghost_rows(gw);
     if (!other) draw_nedit_rows(gw);
+    if (!other) draw_inline_chat(gw);
     if (E.find_open && !other) draw_find();
     if (!other) {
       draw_signature(gw);
@@ -4474,6 +4638,11 @@ static void compose (void) {
     if (ex >= 0)	/* a panel at a side: its edge, which drags */
       for (i = 0; i < L.panel_h; i++) scr_put(ex, L.panel_y + i, 0x2502, E.resizing_panel == 2 ? S_TOGGLE_ON : S_BORDER);
     draw_panel();
+  }
+  if (L.aux_w > 0) {	/* the secondary side bar, with its edge on the editors' side */
+    int ex = opt.side_right ? L.aux_x + L.aux_w : L.aux_x - 1, i;
+    for (i = 0; i < L.side_h; i++) scr_put(ex, L.body_y + i, 0x2502, S_BORDER);
+    chat_draw(L.aux_x, L.body_y, L.aux_w, L.side_h, E.focus == F_CHAT);
   }
   if (SHOW_STATUS) draw_status();
   if (dbg_active()) {	/* statusBar.debuggingBackground; the debug toolbar over the editor */
@@ -5357,11 +5526,11 @@ static void set_real (void) {
 }
 
 
-/* files.trimTrailingWhitespace, files.insertFinalNewline: one step of undo (auto: the cursor's line stays) */
+/* files.trimTrailingWhitespace, files.insertFinalNewline (.editorconfig's first): one step of undo (auto: the cursor's line stays) */
 static void before_save (int auto_) {
   size_t y;
   doc_group(T->doc);
-  if (opt.trim_ws)
+  if (EC_OR(T->doc->ec.trim, opt.trim_ws))
     for (y = 0; y < T->doc->n; y++) {
       const Row *r = row_at(y);
       Pos a, b;
@@ -5374,7 +5543,7 @@ static void before_save (int auto_) {
       if (T->cur.y == y && T->cur.x > e) T->cur.x = e;
       ed_delete(a, b);
     }
-  if (opt.final_newline && row_at(T->doc->n - 1)->len > 0) ed_insert(doc_end(T->doc), "\n", 1);
+  if (EC_OR(T->doc->ec.final_nl, opt.final_newline) && row_at(T->doc->n - 1)->len > 0) ed_insert(doc_end(T->doc), "\n", 1);
   T->cur = doc_clamp(T->doc, T->cur);
   doc_group(T->doc);
 }
@@ -5383,7 +5552,7 @@ static void before_save (int auto_) {
 /* editor.cursorStyle, editor.cursorBlinking: DECSCUSR's 1 .. 6 */
 static int editor_shape (void) {
   static const int shape[] = {5, 1, 3, 5, 1, 3};	/* bar, block, underline; the blinking one */
-  return shape[opt.cursor_style] + (opt.cursor_blink ? 0 : 1);
+  return vim_shape(shape[opt.cursor_style] + (opt.cursor_blink ? 0 : 1));
 }
 
 
@@ -5586,6 +5755,7 @@ static void tab_free (int i) {
   cursor_forget(t);	/* its cursor history, Ctrl+U's */
   if (t->page == PAGE_HEX) hex_close(t->pdata);
   else if (t->page == PAGE_IMAGE) img_close(t->pdata);
+  else if (t->page == PAGE_SEARCHED) searched_close(t->pdata);
   free(t->ppath);
   if (--t->doc->refs <= 0) {	/* the last tab that shows it */
     lsp_close(t->doc);
@@ -5744,6 +5914,7 @@ static int open_file (const char *path, int preview) {
   if (!opt.preview_tabs) preview = 0;	/* every file in a tab of its own */
   if (img_is_image(path)) return page_file_open(PAGE_IMAGE, path, preview);	/* its own editor, as VS Code has */
   if (file_is_binary(path)) return page_file_open(PAGE_HEX, path, preview);
+  if (searched_is_file(path)) return page_file_open(PAGE_SEARCHED, path, 0);	/* a .code-search: the Search Editor */
   char *p = xstrdup(path), *real = os_realpath(path);
   for (i = 0; i < G->ntab; i++)	/* it is open: to the front ("main.go" and its full path are one) */
     if (!G->tab[i]->md && G->tab[i]->doc->path && (m_fncmp(G->tab[i]->doc->path, p) == 0 ||
@@ -8016,7 +8187,8 @@ static void ne_rest (int asked) {
 
 /* it is not wanted any more: NE_ACCEPTED, NE_REJECTED or NE_IGNORED tells the server which */
 static void ne_drop (int what) {
-  lsp_nedit_done(what);
+  if (!NE.chat) lsp_nedit_done(what);	/* Inline Chat's is none of the server's business */
+  NE.chat = 0;
   ne_clear();
 }
 
@@ -8024,7 +8196,7 @@ static void ne_drop (int what) {
 void on_nedit (Doc *d, unsigned long edits, Pos at, NEditItem *v, size_t n) {
   size_t i;
   NE.pending = 0;
-  if (d != NE.ask_d || edits != NE.ask_edits) {	/* late: the text moved on */
+  if (d != NE.ask_d || edits != NE.ask_edits || NE.chat) {	/* late: the text moved on; or Inline Chat's shows */
     for (i = 0; i < n; i++) free(v[i].text);
     free(v);
     return;
@@ -8075,6 +8247,10 @@ void on_nedit (Doc *d, unsigned long edits, Pos at, NEditItem *v, size_t n) {
 ** find it still there. Only a change to the text throws it away.
 */
 static void nedit_idle (void) {
+  if (NE.chat) {	/* Inline Chat's: it goes when its text is edited, and nothing is asked meanwhile */
+    if (HAS_DOC && NE.d == T->doc && NE.edits != T->doc->edits) ne_drop(NE_IGNORED);
+    return;
+  }
   if (!opt.next_edit || !HAS_DOC || G->diff || T->page || T->md || T->sel || T->nmc ||
       E.focus != F_EDITOR || comp_showing() || !lsp_nedit_able(T->doc)) return;
   if (NE.ask_d != T->doc || NE.ask_edits != T->doc->edits) {
@@ -8125,7 +8301,7 @@ static void ne_accept (void) {
   T->want = col_of(row_at(e.y), e.x);
   doc_group(T->doc);
   free(text);
-  lsp_nedit_accept();	/* the edit's command, through workspace/executeCommand */
+  if (!NE.chat) lsp_nedit_accept();	/* the edit's command, through workspace/executeCommand */
   ne_drop(NE_ACCEPTED);
   ne_rest(0);	/* an edit may follow this one, as in VS Code */
   scroll_to_cursor();
@@ -8153,6 +8329,12 @@ static void ne_suppress (void) {
 static int ne_key (int k) {
   int code = KEY_CODE(k);
   if (!ne_on()) return 0;
+  if (NE.chat) {	/* Inline Chat's: Ctrl+Enter or Tab accept it, Esc discards it, wherever the cursor is */
+    if ((code == K_TAB && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) || k == (K_ENTER | KM_CTRL)) ne_accept();
+    else if (code == K_ESC && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) ne_dismiss();
+    else return 0;
+    return 1;
+  }
   if (code == K_TAB && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) {
     if (T->cur.y >= NE.a.y && T->cur.y <= NE.b.y) ne_accept();	/* already there: it goes in */
     else ne_jump();
@@ -8765,10 +8947,172 @@ static void quickfix (void) {
 }
 
 
+/*
+** The color picker, simply (VS Code's is a hover with a gradient): a
+** click on a swatch, or Show or Focus Standalone Color Picker at a
+** color, lists the server's ways to write it (textDocument/
+** colorPresentation); a hex color typed instead is asked about again and
+** written the way the color was written
+*/
+static struct {
+  Doc *d;
+  DocColor c;	/* the color, and where it is */
+  char *was;	/* its text: the presentation that writes it so is its format */
+  size_t fmt;	/* that presentation */
+  int typed;	/* the presentations are of a typed color: fmt is applied */
+  ColorPres *v;
+  size_t n;
+  int ready;
+} CPK;
+
+
+static void cp_free (ColorPres *v, size_t n) {
+  size_t i, k;
+  for (i = 0; i < n; i++) {
+    for (k = 0; k < v[i].n; k++) free(v[i].edit[k].text);
+    free(v[i].edit);
+    free(v[i].label);
+  }
+  free(v);
+}
+
+
+void on_color_pres (Doc *d, ColorPres *v, size_t n) {
+  if (d != CPK.d) {
+    cp_free(v, n);
+    return;
+  }
+  cp_free(CPK.v, CPK.n);
+  CPK.v = v;
+  CPK.n = n;
+  CPK.ready = 1;
+}
+
+
+/* color k of the file shown: its presentations are asked for, the picker shows when they come */
+static void color_pick (size_t k) {
+  size_t len;
+  if (!HAS_DOC || CD.d != T->doc || k >= CD.n) return;
+  CPK.d = T->doc;
+  CPK.c = CD.v[k];
+  CPK.typed = 0;
+  free(CPK.was);
+  CPK.was = doc_text(T->doc, CPK.c.a, doc_clamp(T->doc, CPK.c.b), &len);
+  lsp_color_pres(T->doc, &CPK.c);
+}
+
+
+/* Show or Focus Standalone Color Picker: the color at the cursor */
+static void color_pick_cursor (void) {
+  size_t i;
+  if (HAS_DOC && opt.color_decorators && CD.d == T->doc)
+    for (i = 0; i < CD.n; i++)
+      if (CD.v[i].a.y == T->cur.y && CD.v[i].a.x <= T->cur.x && T->cur.x <= CD.v[i].b.x) {
+        color_pick(i);
+        return;
+      }
+  toast(0, "No color at the cursor");
+}
+
+
+/* a click on a color's swatch: its picker; 0 not on one */
+static int swatch_click (const Mouse *m) {
+  size_t y, from, to, left, c, i, vs = 0;
+  int gw = gutter_width(), lens;
+  const Row *r;
+  if (!ih_on() || m->x < L.ed_x + gw || !vis_goto_k(m->y - L.text_y, &y, &from, &to, &left, &lens) || lens ||
+      from != 0)
+    return 0;
+  c = (size_t)(m->x - L.ed_x - gw) + left;
+  r = row_at(y);
+  for (i = ih_first(y); i < IH.n && IH.v[i].at.y == y; i++) {
+    size_t at = col_of(r, IH.v[i].at.x) + vs + gh_shift(y, IH.v[i].at.x);
+    if (IH.v[i].color && c >= at && c < at + (size_t)IH.w[i]) {
+      color_pick(IH.v[i].color - 1);
+      return 1;
+    }
+    vs += (size_t)IH.w[i];
+  }
+  return 0;
+}
+
+
+/* "#rgb", "#rgba", "#rrggbb", "#rrggbbaa" as 0 .. 1; 0: not one */
+static int hex_color (const char *s, double *rgba) {
+  size_t n, i;
+  int v[8];
+  while (*s == ' ') s++;
+  if (*s == '#') s++;
+  n = strlen(s);
+  while (n > 0 && s[n - 1] == ' ') n--;
+  if (n != 3 && n != 4 && n != 6 && n != 8) return 0;
+  for (i = 0; i < n; i++) {
+    int c = s[i];
+    v[i] = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    if (v[i] < 0) return 0;
+  }
+  rgba[3] = 1;
+  for (i = 0; i < (n <= 4 ? n : n / 2); i++)
+    rgba[i] = (n <= 4 ? v[i] * 17 : v[2 * i] * 16 + v[2 * i + 1]) / 255.0;
+  return 1;
+}
+
+
+/* presentation i goes into the text: its edits, or its label in place of the color */
+static void color_apply (size_t i) {
+  const ColorPres *p = &CPK.v[i];
+  if (p->n) on_format(CPK.d, p->edit, p->n, 0);
+  else {
+    TextEdit e;
+    e.path = NULL;
+    e.l0 = CPK.c.a.y;
+    e.c0 = CPK.c.a.x;
+    e.l1 = CPK.c.b.y;
+    e.c1 = CPK.c.b.x;
+    e.text = p->label;
+    e.utf16 = 0;
+    on_format(CPK.d, &e, 1, 0);
+  }
+}
+
+
+/* the presentations came: the picker, or (for a typed color) the one of the color's format */
+static void color_idle (void) {
+  Pick p;
+  size_t i;
+  int r;
+  if (!CPK.ready) return;
+  CPK.ready = 0;
+  if (CPK.n == 0) {
+    toast(0, "No color presentations available");
+    return;
+  }
+  if (CPK.typed) {
+    color_apply(CPK.fmt < CPK.n ? CPK.fmt : 0);
+    return;
+  }
+  for (CPK.fmt = 0; CPK.fmt < CPK.n && (CPK.was == NULL || strcmp(CPK.v[CPK.fmt].label, CPK.was) != 0); CPK.fmt++) ;
+  pick_init(&p, "Pick a color presentation, or type a hex color (#rrggbb)");
+  for (i = 0; i < CPK.n; i++) pick_add(&p, CPK.v[i].label, i == CPK.fmt ? "current" : NULL, 0xEB5C);	/* codicon symbol-color */
+  p.start = CPK.fmt < CPK.n ? (int)CPK.fmt : 0;
+  p.hint = "Press Enter to use this color";
+  r = pick_run(&p);
+  if (CPK.fmt >= CPK.n) CPK.fmt = 0;
+  if (r >= 0) color_apply((size_t)r);
+  else if (r == PICK_TEXT && hex_color(p.text, CPK.c.rgba)) {	/* written as the color was */
+    CPK.typed = 1;
+    lsp_color_pres(CPK.d, &CPK.c);
+  }
+  else if (r == PICK_TEXT) toast(1, "'%s' is not a hex color", p.text);
+  pick_free(&p);
+}
+
+
 static void quickfix_idle (void) {
   Pick p;
   size_t i;
   int r;
+  color_idle();	/* the color picker's presentations came */
   if (!QF.ready) return;
   QF.ready = 0;
   if (QF.n == 0) {
@@ -11817,6 +12161,7 @@ static void indent_using (int tabs) {
   if (r < 0) return;
   T->doc->tabs = tabs;
   T->doc->indent = r + 1;
+  if (tabs) T->doc->tabw = r + 1;	/* the tab size, "Tab Size: N" */
 }
 
 
@@ -11868,6 +12213,7 @@ static void save_as (void) {
   }
   free(T->doc->path);
   T->doc->path = name;
+  edconf_read(&T->doc->ec, name);	/* the .editorconfig over its new place says how it is saved */
   set_real();
 }
 
@@ -12208,7 +12554,7 @@ static int page_file_open (int kind, const char *path, int preview) {
       recent_file_add(path);
       return 0;
     }
-  data = kind == PAGE_HEX ? hex_open(path) : img_open(path);
+  data = kind == PAGE_HEX ? hex_open(path) : kind == PAGE_SEARCHED ? searched_load(path) : img_open(path);
   if (data == NULL) {
     if (kind == PAGE_IMAGE) return page_file_open(PAGE_HEX, path, preview);	/* not a picture after all */
     toast(1, "Unable to open '%s'", path_basename(path));
@@ -12254,6 +12600,8 @@ static void clip_text (const char *s) {
 }
 
 
+static void apply_act (const SideAct *act);
+
 static void page_act (const PageAct *a) {
   switch (a->what) {
     case PA_APPLY: apply_settings(0); break;
@@ -12275,6 +12623,7 @@ static void page_draw (int other) {
   else if (T->page == PAGE_MERGE) merge_draw(L.ed_x, y, L.ed_w, h, focus);
   else if (T->page == PAGE_HEX) hex_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else if (T->page == PAGE_IMAGE) img_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
+  else if (T->page == PAGE_SEARCHED) searched_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else welcome_draw(L.ed_x, y, L.ed_w, h, focus, &g_wrecent);
 }
 
@@ -12287,6 +12636,13 @@ static void page_key (int k) {
   }
   if (T->page == PAGE_IMAGE) {
     img_key(T->pdata, k);
+    return;
+  }
+  if (T->page == PAGE_SEARCHED) {	/* the Search Editor: a result to go to */
+    SideAct sa;
+    memset(&sa, 0, sizeof(sa));
+    searched_key(T->pdata, k, &sa);
+    apply_act(&sa);
     return;
   }
   if (T->page == PAGE_SETTINGS) sui_key(k, &a);
@@ -12303,6 +12659,7 @@ static void page_key (int k) {
 static int page_takes (int k) {
   if (!HAS_DOC || G->diff || E.focus != F_EDITOR) return 0;
   if (T->page == PAGE_HEX) return k == CTRL('f') || k == CTRL('g') || KEY_CODE(k) == K_F3;
+  if (T->page == PAGE_SEARCHED) return searched_takes(k);
   return 0;
 }
 
@@ -12318,10 +12675,48 @@ static void page_mouse (Mouse *m) {
     if (m->wheel && (m->mods & KM_CTRL)) img_zoom(T->pdata, m->wheel < 0 ? 1 : -1);	/* Ctrl+wheel: nearer */
     return;
   }
+  if (T->page == PAGE_SEARCHED) {
+    SideAct sa;
+    memset(&sa, 0, sizeof(sa));
+    searched_mouse(T->pdata, m, &sa);
+    apply_act(&sa);
+    return;
+  }
   if (T->page == PAGE_SETTINGS) sui_mouse(m, &a);
   else if (T->page == PAGE_MERGE) merge_mouse(m, &a);
   else welcome_mouse(m, &g_wrecent, &a);
   page_act(&a);
+}
+
+
+/*
+** The Search Editor's commands: New Search Editor (the selection is its
+** query) and Open Results in Editor make a tab; the rest act on the one in
+** front.
+*/
+static void searched_cmd (int cmd) {
+  SideAct sa;
+  memset(&sa, 0, sizeof(sa));
+  if (cmd == CMD_SEARCHED_NEW || cmd == CMD_SEARCHED_FROM_VIEW) {
+    char *t = NULL;
+    void *se;
+    if (cmd == CMD_SEARCHED_NEW && HAS_DOC && !G->diff && !T->page && T->sel) {
+      Pos a, b;
+      sel_range(&a, &b);
+      if (a.y == b.y) t = doc_text(T->doc, a, b, NULL);
+    }
+    se = cmd == CMD_SEARCHED_NEW ? searched_new(t) : searched_from_view();
+    free(t);
+    tab_new();
+    T->page = PAGE_SEARCHED;
+    T->pdata = se;
+    G->diff = 0;
+    E.focus = F_EDITOR;
+    return;
+  }
+  if (!HAS_DOC || G->diff || T->page != PAGE_SEARCHED) return;
+  searched_command(T->pdata, cmd, &sa);
+  apply_act(&sa);
 }
 
 /* }================================================================== */
@@ -13572,10 +13967,11 @@ static void session_restore (void) {
         page_open(page);
         continue;
       }
-      if ((page == PAGE_IMAGE || page == PAGE_HEX) && path) {
+      if ((page == PAGE_IMAGE || page == PAGE_HEX || page == PAGE_SEARCHED) && path) {
         page_file_open(page, path, 0);
         continue;
       }
+      if (page == PAGE_SEARCHED) continue;	/* a Search Editor never saved: it is not kept */
       if (bk) {
         char *bf = path_join(bd, bk);
         btext = read_file(bf, &blen);
@@ -13950,6 +14346,7 @@ static void view_blocks_update (int other) {
     /* and what a next edit would put there, under the line it replaces */
     if (!ne_rows_at(&after, &rows) || after >= T->doc->n) return;
     view_block_set(after, rows);
+    if (NE.chat) vb_fit();	/* Inline Chat's, asked for right there: it is shown whole */
     return;	/* nor a next edit: VS Code points at it instead of scrolling */
   }
   if (after >= T->doc->n) return;
@@ -15037,6 +15434,14 @@ static void run_command (int cmd) {
     case CMD_IMPORT_VSCODE: import_vscode(); break;
     case CMD_SAVE:
     case CMD_SAVE_AS:
+      if (HAS_DOC && !G->diff && T->page == PAGE_SEARCHED) {	/* a .code-search file */
+        if (searched_save(T->pdata, cmd == CMD_SAVE_AS) == 0) {
+          free(T->ppath);
+          T->ppath = xstrdup(searched_path(T->pdata));
+          files_index_stale();
+        }
+        return;
+      }
       if (!HAS_DOC || T->page) return;
       if (cmd == CMD_SAVE_AS || T->doc->path == NULL) {
         char *was = T->doc->path ? xstrdup(T->doc->path) : NULL;
@@ -15176,15 +15581,29 @@ static void run_command (int cmd) {
     case CMD_INLINE_NEXT: gh_cycle(1); break;
     case CMD_INLINE_PREV: gh_cycle(-1); break;
     case CMD_NEDIT_JUMP: ne_jump_cmd(); break;
+    case CMD_COLOR_PICKER: color_pick_cursor(); break;
     case CMD_NEDIT_TOGGLE:
       opt.next_edit = !opt.next_edit;
       settings_put("github.copilot.nextEditSuggestions.enabled", opt.next_edit ? "true" : "false");
       if (!opt.next_edit && NE.text) ne_drop(NE_IGNORED);
       toast(0, "Next edit suggestions %s", opt.next_edit ? "on" : "off");
       break;
+    case CMD_CHAT_OPEN: case CMD_CHAT_NEW: case CMD_CHAT_CLEAR: case CMD_CHAT_TOGGLE: case CMD_CHAT_STOP:
+    case CMD_CHAT_CONTEXT: case CMD_CHAT_SET_KEY: case CMD_INLINE_CHAT: {
+      int f = chat_command(cmd);
+      if (f == 1) E.focus = F_CHAT;
+      else if (f == 2 || (E.focus == F_CHAT && !chat_shown())) E.focus = F_EDITOR;
+      break;
+    }
+    case CMD_INLINE_CHAT_ACCEPT: case CMD_INLINE_CHAT_DISCARD:
+      if (!NE.chat || !ne_on()) toast(0, "No Inline Chat changes to %s", cmd == CMD_INLINE_CHAT_ACCEPT ? "accept" : "discard");
+      else if (cmd == CMD_INLINE_CHAT_ACCEPT) ne_accept();
+      else ne_dismiss();
+      break;
     case CMD_COPILOT_SIGNIN: lsp_inline_signin(); break;
     case CMD_COPILOT_SIGNOUT: lsp_inline_signout(); break;
     case CMD_COPILOT_STATUS: copilot_status(); break;
+    case CMD_VIM_TOGGLE: vim_toggle(); break;
     case CMD_MANAGE: manage_menu(); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
@@ -15792,6 +16211,10 @@ static void run_command (int cmd) {
       break;
     }
     default:
+      if (cmd >= CMD_SEARCHED_NEW && cmd <= CMD_SEARCHED_DELETE_FILE) {	/* esearched.c */
+        searched_cmd(cmd);
+        break;
+      }
       if (cmd >= CMD_GIT_CHECKOUT && cmd <= CMD_GIT_MORE) {	/* egitlog.c */
         SideAct act;
         memset(&act, 0, sizeof(act));
@@ -15881,7 +16304,9 @@ static int global_key (int k) {
     {K_F12 | KM_SHIFT, CMD_REFERENCES}, {K_F12 | KM_CTRL, CMD_IMPLEMENTATION}, {K_F12 | KM_ALT, CMD_PEEK_DEF},
     {CTRL('t'), CMD_WORKSPACE_SYMBOL}, {' ' | KM_CTRL | KM_SHIFT, CMD_PARAM_HINTS},
     {K_F3 | KM_ALT, CMD_DIRTY_NEXT}, {K_F3 | KM_ALT | KM_SHIFT, CMD_DIRTY_PREV},
-    {K_F5 | KM_ALT, CMD_CHANGE_NEXT}, {K_F5 | KM_ALT | KM_SHIFT, CMD_CHANGE_PREV}
+    {K_F5 | KM_ALT, CMD_CHANGE_NEXT}, {K_F5 | KM_ALT | KM_SHIFT, CMD_CHANGE_PREV},
+    {'i' | KM_CTRL | KM_ALT, CMD_CHAT_OPEN}, {K_TAB | KM_ALT, CMD_CHAT_OPEN},	/* Ctrl+Alt+I, from the kitty keys or not */
+    {'i' | KM_CTRL, CMD_INLINE_CHAT}, {CTRL('b') | KM_ALT, CMD_CHAT_TOGGLE}
   };
   size_t i;
   if (E.chord) {	/* the second key of Ctrl+K ... */
@@ -16102,6 +16527,91 @@ size_t editor_line (void) {
 }
 
 
+/* Chat: the text editor in front, its selection or the lines it shows (echat.c) */
+int editor_context (EdCtx *c, int text) {
+  size_t last;
+  Pos a;
+  int row;
+  memset(c, 0, sizeof(*c));
+  if (!HAS_DOC || G->diff || T->page || T->md) return 0;
+  c->doc = T->doc;
+  c->edits = T->doc->edits;
+  c->path = T->doc->path ? xstrdup(T->doc->path) : NULL;
+  c->lang = doc_lang_id();
+  c->sel = T->sel && pos_cmp(T->anchor, T->cur) != 0;
+  if (c->sel) sel_range(&c->a, &c->b);
+  else c->a = c->b = T->cur;
+  if (c->sel) {
+    c->y0 = c->a.y;
+    c->y1 = (c->b.x == 0 && c->b.y > c->a.y) ? c->b.y - 1 : c->b.y;	/* whole lines end at the next one's start */
+  }
+  else {
+    last = T->top + (size_t)(L.text_h > 0 ? L.text_h : 1) - 1;
+    c->y0 = T->top < T->doc->n ? T->top : 0;
+    c->y1 = last < T->doc->n ? last : T->doc->n - 1;
+  }
+  if (text) {
+    size_t len;
+    Pos p0, p1;
+    p0.y = c->y0;
+    p0.x = 0;
+    p1.y = c->y1;
+    p1.x = row_at(c->y1)->len;
+    c->text = c->sel ? doc_text(T->doc, c->a, c->b, &len) : doc_text(T->doc, p0, p1, &len);
+  }
+  a.y = c->a.y;
+  a.x = 0;
+  row = vis_row(a);
+  c->x = L.ed_x + gutter_width();
+  c->y = L.text_y + (row >= 0 ? row : 0);
+  c->w = text_cols();
+  c->top = L.text_y;
+  c->bottom = L.text_y + L.text_h;
+  return 1;
+}
+
+
+void editor_ctx_free (EdCtx *c) {
+  free(c->path);
+  free(c->text);
+  c->path = c->text = NULL;
+}
+
+
+/* a chat's Insert at Cursor: in place of the selection, as a paste is */
+int editor_put (const char *s, size_t n) {
+  if (!HAS_DOC || G->diff || T->page || T->md) return 0;
+  T->nmc = 0;
+  doc_group(T->doc);
+  paste_text(s, n);
+  doc_group(T->doc);
+  scroll_to_cursor();
+  return 1;
+}
+
+
+/* Inline Chat's answer (or a code block's Apply): text for a .. b of d, drawn as a next edit, to accept */
+int editor_propose (const Doc *d, unsigned long edits, Pos a, Pos b, const char *text) {
+  if (!HAS_DOC || T->doc != d || d->edits != edits || G->diff || T->page || T->md) return 0;
+  if (NE.text) ne_drop(NE_IGNORED);	/* the server's gives way */
+  ne_clear();
+  NE.d = d;
+  NE.edits = edits;
+  NE.at = T->cur;
+  NE.a = a;
+  NE.b = b;
+  NE.text = xstrdup(text);
+  NE.chat = 1;
+  T->sel = 0;
+  T->nmc = 0;
+  T->cur = a;
+  T->want = col_of(row_at(a.y), a.x);
+  ne_build();
+  scroll_to_cursor();
+  return 1;
+}
+
+
 /* testing.saveBeforeTest: every file with changes */
 void editor_save_all (void) {
   int g, i;
@@ -16235,14 +16745,23 @@ static int sel_is_match (void) {
 }
 
 
-/* what a match at a (len bytes) is replaced with: E.repl, with $1 ... for a regex */
+/* what a match at a (len bytes) is replaced with: E.repl, with $1 ... for a regex; in the match's case (AB) */
 static char *repl_text (Pos a, size_t *len) {
   const Row *r = row_at(a.y);
   size_t cap[20], e;
   const Regex *re = E.find_regex ? find_re() : NULL;
-  if (re && re_at(re, r->s, r->len, a.x, &e, cap)) return re_expand(E.repl, r->s, cap, len);
-  *len = strlen(E.repl);
-  return xstrdup(E.repl);
+  char *t;
+  if (re && re_at(re, r->s, r->len, a.x, &e, cap)) t = re_expand(E.repl, r->s, cap, len);
+  else {
+    *len = strlen(E.repl);
+    t = xstrdup(E.repl);
+  }
+  if (E.find_pcase) {
+    char *k = re_keep_case(t, *len, r->s + a.x, match_at(a.y, a.x), len);
+    free(t);
+    t = k;
+  }
+  return t;
 }
 
 
@@ -16377,7 +16896,7 @@ static void find_key (int k) {
     return;
   }
   if (E.replacing && E.in_repl && code != K_UP && code != K_DOWN && code != K_F3 &&
-      k != ('c' | KM_ALT) && k != ('w' | KM_ALT) && k != ('r' | KM_ALT) && k != ('l' | KM_ALT)) {
+      k != ('c' | KM_ALT) && k != ('w' | KM_ALT) && k != ('r' | KM_ALT) && k != ('l' | KM_ALT) && k != ('p' | KM_ALT)) {
     repl_key(k);
     return;
   }
@@ -16387,6 +16906,7 @@ static void find_key (int k) {
   else if (k == ('c' | KM_ALT)) E.find_case = !E.find_case;
   else if (k == ('w' | KM_ALT)) E.find_word = !E.find_word;
   else if (k == ('r' | KM_ALT)) E.find_regex = !E.find_regex;
+  else if (k == ('p' | KM_ALT)) E.find_pcase = !E.find_pcase;
   else if (k == ('l' | KM_ALT)) find_in_selection();
   else if (code == K_BS) {
     while (len > 0 && ((unsigned char)E.find[len - 1] & 0xC0) == 0x80) len--;
@@ -18182,6 +18702,7 @@ static void editor_key (int k) {
     return;
   }
   if (CP.open && comp_key(k)) return;
+  if (chat_editor_key(k)) return;	/* Esc stops Inline Chat's answer */
   if (gh_key(k)) return;	/* editor.inlineSuggest: Tab takes the ghost text, Esc drops it */
   if (ne_key(k)) return;	/* and after it the next edit: Tab jumps to it, Tab again applies it */
   if (k == K_TAB && E.tab_focus) {	/* Toggle Tab Key Moves Focus: out of the editor */
@@ -18344,6 +18865,7 @@ const char *when_ctx (const char *key) {
     return f;
   }
   if (strcmp(key, "isInDiffEditor") == 0) return B(G->diff);
+  if (strcmp(key, "inSearchEditor") == 0) return B(E.focus == F_EDITOR && HAS_DOC && !G->diff && T->page == PAGE_SEARCHED);
   if (strcmp(key, "suggestWidgetVisible") == 0) return B(CP.open);
   if (strcmp(key, "findWidgetVisible") == 0) return B(E.find_open);
   if (strcmp(key, "findInputFocussed") == 0) return B(E.finding && !E.in_repl);
@@ -18498,11 +19020,20 @@ static void on_key (int k) {
     E.follow = 0;
     goto done;
   }
+  if (E.focus == F_CHAT) {	/* the Chat view: its box takes the typing, the rest are the editor's keys */
+    if (L.aux_w == 0) E.focus = F_EDITOR;
+    else {
+      if (!chat_key(k) && !global_key(k) && (KEY_CODE(k) == K_ESC || KEY_CODE(k) == K_TAB)) E.focus = F_EDITOR;
+      E.follow = 0;
+      goto done;
+    }
+  }
   if (page_takes(k)) {	/* the hex viewer's Find and Go to Offset */
     page_key(k);
     E.follow = 0;
     goto done;
   }
+  if (vim_key(k)) goto done;	/* vim.enable: Normal mode's keys, before VS Code's */
   if (global_key(k)) goto done;
   if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus) {	/* a pane under the folders */
     if (E.outline_focus == PANE_OUTLINE && OL.h > 0) outline_key(k);
@@ -18543,6 +19074,103 @@ done:
   fold_reveal();
   if (E.follow && HAS_DOC && !G->diff && !T->md) scroll_to_cursor();
   md_sync();	/* the preview and its file follow each other */
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** Vim mode's hands on the editor (evim.c has the keys)
+** ===================================================================
+*/
+
+int ved_get (VimEd *v) {
+  if (!HAS_DOC || G->diff || T->page || T->md) return 0;
+  v->doc = T->doc;
+  v->cur = &T->cur;
+  v->anchor = &T->anchor;
+  v->sel = &T->sel;
+  v->want = &T->want;
+  v->top = &T->top;
+  v->rows = L.text_h > 0 ? L.text_h : 1;
+  v->keys = E.focus == F_EDITOR && !E.finding && !E.chord && !E.chord_test && !E.uchord && !PK.open && !DP.open;
+  v->nmc = T->nmc;
+  v->fold = T->fold;
+  v->nfold = T->nfold;
+  v->path = T->doc->path;
+  return 1;
+}
+
+
+Pos ved_insert (Pos at, const char *s, size_t n) {
+  return ed_insert(at, s, n);
+}
+
+
+void ved_delete (Pos a, Pos b) {
+  ed_delete(a, b);
+}
+
+
+size_t ved_col (size_t y, size_t x) {
+  return col_of(row_at(y), x);
+}
+
+
+size_t ved_x (size_t y, size_t col) {
+  return x_of_col(row_at(y), col);
+}
+
+
+size_t ved_line_step (size_t y, int d) {
+  return d > 0 ? line_next(y) : line_prev(y);
+}
+
+
+void ved_key (int k) {
+  editor_key(k);
+}
+
+
+void ved_feed (int k) {
+  on_key(k);
+}
+
+
+void ved_command (int cmd) {
+  run_command(cmd);
+}
+
+
+void ved_cursors (const Pos *anchor, const Pos *cur, int n) {
+  int i;
+  T->nmc = 0;
+  if (n < 1) return;
+  T->anchor = anchor[0];
+  T->cur = cur[0];
+  T->sel = pos_cmp(anchor[0], cur[0]) != 0;
+  for (i = 1; i < n; i++) mc_add(anchor[i], cur[i]);
+}
+
+
+void ved_find (const char *pat, int icase) {
+  snprintf(E.find, sizeof(E.find), "%s", pat);
+  E.find_regex = 1;
+  E.find_case = !icase;
+  E.find_word = E.find_insel = 0;
+}
+
+
+int ved_find_next (Pos p, int back, Pos *at, size_t *len) {
+  if (!find_from(p, back, at)) return 0;
+  *len = match_at(at->y, at->x);
+  return 1;
+}
+
+
+int ved_open (const char *path) {
+  return open_file(path, 0);
 }
 
 /* }================================================================== */
@@ -18658,6 +19286,7 @@ static void find_click (Mouse *m) {
   if (m->y == g_fw.y + 1 && E.replacing) {	/* the replace row */
     if (m->x == g_fw.one_x) replace_one();
     else if (m->x == g_fw.all_x) replace_all();
+    else if (m->x == g_fw.pcase_x) E.find_pcase = !E.find_pcase;
     else {
       E.finding = 1;
       E.in_repl = 1;
@@ -18712,6 +19341,12 @@ static void on_mouse (void) {
     panel_mouse(m, 1, &lk);
     return;
   }
+  if (L.aux_w > 0 && (press || m->wheel) && m->x >= L.aux_x && m->x < L.aux_x + L.aux_w && m->y >= L.body_y &&
+      m->y < L.body_y + L.side_h) {	/* the Chat view */
+    if (press) E.focus = F_CHAT;
+    if (chat_mouse(m) == 2 || (!chat_shown() && E.focus == F_CHAT)) E.focus = F_EDITOR;	/* Apply's diff; its x closed it */
+    return;
+  }
   if (m->button == 3 && m->drag && !m->wheel) {	/* it moved, no button down: hover later */
     sb_hover(m->x, m->y);	/* the status bar's tooltips */
     E.link_y = 0;
@@ -18719,7 +19354,12 @@ static void on_mouse (void) {
         m->y >= L.text_y && m->y < L.text_y + L.text_h && m->x >= L.ed_x + gutter_width() &&
         m->x < L.ed_x + gutter_width() + text_cols()) {	/* Ctrl+hover: a link to the definition */
       Pos p = mouse_pos(m), a, b;
-      word_at(p, &a, &b);
+      long lk = link_at(p);
+      if (lk >= 0 && LK.v[lk].a.y == LK.v[lk].b.y) {	/* editor.links: the whole link */
+        a = LK.v[lk].a;
+        b = LK.v[lk].b;
+      }
+      else word_at(p, &a, &b);
       if (a.x < b.x) {
         E.link_y = (int)p.y + 1;
         E.link_x0 = a.x;
@@ -19213,7 +19853,8 @@ static void on_mouse (void) {
     return;
   }
   if (T->page) {
-    if (press || m->wheel || (m->button == 2 && m->press && !m->drag)) {
+    if (press || m->wheel || (m->button == 2 && m->press && !m->drag) ||
+        (T->page == PAGE_SEARCHED && m->button == 0)) {	/* the Search Editor's drag selects */
       if (!m->wheel) E.focus = F_EDITOR;
       page_mouse(m);
     }
@@ -19282,11 +19923,14 @@ static void on_mouse (void) {
     E.focus = F_EDITOR;
     E.finding = 0;
     if ((m->mods & (eopt.mc_ctrl ? KM_ALT : KM_CTRL)) && !(m->mods & KM_SHIFT) && lsp_active(T->doc)) {	/* Ctrl+Click: the definition */
+      long lk;
       text_click(m, 0);
-      lsp_define(T->doc, T->cur);
+      if ((lk = link_at(T->cur)) >= 0) lsp_link_open(T->doc, (size_t)lk);	/* editor.links: a link opens */
+      else lsp_define(T->doc, T->cur);
       return;
     }
     if (sticky_click(m)) return;
+    if (!m->mods && swatch_click(m)) return;	/* editor.colorDecorators: the color's picker */
     if ((m->mods & (KM_SHIFT | KM_ALT)) == (KM_SHIFT | KM_ALT)) {	/* Shift+Alt+drag: a column */
       column_mouse(m, 1);
       E.drag_col = 1;
@@ -19433,8 +20077,9 @@ int main (int argc, char **argv) {
     side_open(dir);
     free(dir);
     free(real);
-    if (img_is_image(argv[1]) || file_is_binary(argv[1])) {	/* a picture or a binary: its own editor */
-      if (page_file_open(img_is_image(argv[1]) ? PAGE_IMAGE : PAGE_HEX, argv[1], 0) != 0) {
+    if (img_is_image(argv[1]) || file_is_binary(argv[1]) || (searched_is_file(argv[1]) && os_access(argv[1], 'r'))) {
+      int kind = img_is_image(argv[1]) ? PAGE_IMAGE : searched_is_file(argv[1]) ? PAGE_SEARCHED : PAGE_HEX;
+      if (page_file_open(kind, argv[1], 0) != 0) {	/* a picture, a binary, a .code-search: its own editor */
         fd_printf(2, MME_NAME ": cannot open %s\n", argv[1]);
         return 1;
       }
