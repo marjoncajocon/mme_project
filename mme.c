@@ -2778,6 +2778,14 @@ static void bulb_idle (void) {
 }
 
 
+static uint32_t tint (uint32_t bg, uint32_t c, int pct);
+
+/* a covered (1) or uncovered (2) line's color over the editor's: the gutter's (strong) or the line's */
+static uint32_t cov_bg (int cov, int gutter) {
+  return tint(ui_color(C_EDITOR_BG), cov == 1 ? 0x9CB953 : 0xF14C4C, gutter ? 45 : 16);
+}
+
+
 static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, size_t to, size_t left) {
   static unsigned char *tok;
   static size_t tokcap;
@@ -2793,6 +2801,7 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
   const uint32_t *tfg = NULL;	/* a TextMate grammar's colors: the theme's own for each scope */
   const unsigned char *tfs = NULL, *tcls = NULL;
   char num[32];
+  int cov;
   mc_row_prep(y);	/* the other cursors this line has, once for the whole row */
   if (r->len + 1 > tokcap) {
     tokcap = r->len + 256;
@@ -2816,6 +2825,12 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     for (i = 0; i < gw; i++) scr_set_bg(x0 + i, sy, ui_color(C_LINE_BG));
   }
   scr_fill(x0 + gw, sy, text_cols(), is_cur ? S_LINE : S_TEXT);
+  cov = test_cov(T->real, y);	/* Test Coverage: the line numbers green or red (testing.coveredGutterBackground) */
+  if (cov) {
+    int i;
+    uint32_t gbg = cov_bg(cov, 1);
+    for (i = 1; i < gw - 1; i++) scr_set_bg(x0 + i, sy, gbg);
+  }
   if (y == T->cur.y && from == 0 && opt.lightbulb && lsp_active(T->doc)) {	/* code actions here: VS Code's lightbulb */
     size_t nd, i;
     const Diag *dv = lsp_diags(T->doc, &nd);
@@ -4475,6 +4490,11 @@ static void draw_group (int other) {
         draw_row(L.text_y + sy, y, gw, sa, sb, from, to, left);
         if (T->sx) color_brackets(L.text_y + sy, y, gw, from, to, left, ba, bb, lit);
         conflict_row(L.text_y + sy, y, gw, from, other);
+        if (test_cov_inline() && test_cov(T->real, y)) {	/* Test: Toggle Inline Coverage: the whole line */
+          int cx;
+          uint32_t lb = cov_bg(test_cov(T->real, y), 0);
+          for (cx = 0; cx < text_cols(); cx++) scr_set_bg(L.ed_x + gw + cx, L.text_y + sy, lb);
+        }
       }
       for (; sy < L.text_h; sy++) draw_rulers(L.text_y + sy, gw, E.wrap ? 0 : T->left);	/* under the end too */
     }
@@ -16224,6 +16244,7 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_TEST_RUN_ALL: case CMD_TEST_RUN_CURSOR: case CMD_TEST_RUN_FILE: case CMD_TEST_RERUN:
+    case CMD_TEST_COV_ALL: case CMD_TEST_COV_FILE: case CMD_TEST_COV_CURSOR: case CMD_TEST_COV_CLOSE: case CMD_TEST_COV_INLINE:
     case CMD_TEST_DEBUG_CURSOR: case CMD_TEST_REFRESH: case CMD_TEST_CANCEL: case CMD_TEST_COLLAPSE:
       test_command(cmd);
       break;

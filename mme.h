@@ -620,6 +620,7 @@ enum {
   CMD_SEARCHED_NEW, CMD_SEARCHED_FROM_VIEW, CMD_SEARCHED_RERUN, CMD_SEARCHED_CONTEXT,	/* esearched.c: these */
   CMD_SEARCHED_MORE_CONTEXT, CMD_SEARCHED_LESS_CONTEXT, CMD_SEARCHED_FOCUS, CMD_SEARCHED_DELETE_FILE,	/* ... to here */
   CMD_VIM_TOGGLE, CMD_SAVE_ALL, CMD_GIT_VIEW_CHANGES, CMD_GIT_VIEW_STAGED,
+  CMD_TEST_COV_ALL, CMD_TEST_COV_FILE, CMD_TEST_COV_CURSOR, CMD_TEST_COV_CLOSE, CMD_TEST_COV_INLINE,	/* etest.c */
   CMD_N
 };
 
@@ -1693,6 +1694,8 @@ void test_wheel (int d);
 int test_idle (void);	/* the runs go on; 1: something changed */
 void test_show (void);	/* the view shows: the tests are looked for */
 int test_mark (const char *path, size_t line);	/* TM_*: the test at that line, for the gutter */
+int test_cov (const char *real, size_t line);	/* the coverage of a file's line (from 0): 0 none, 1 covered, 2 not */
+int test_cov_inline (void);	/* Test: Toggle Inline Coverage: the lines are colored too */
 void test_gutter (const char *path, size_t line);	/* its icon clicked: it runs */
 void test_saved (const char *path);	/* a file was saved: its tests read again */
 void test_command (int cmd);	/* CMD_TEST_* */

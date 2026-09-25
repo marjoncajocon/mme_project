@@ -141,7 +141,9 @@ static const char *const names[CMD_N] = {
   "Search Editor: Toggle Context Lines", "Search Editor: Increase Context Lines",
   "Search Editor: Decrease Context Lines", "Search Editor: Focus Search Editor Input",
   "Search Editor: Delete File Results",
-  "Vim: Toggle Vim Mode", "File: Save All", "Git: View All Changes", "Git: View Staged Changes"
+  "Vim: Toggle Vim Mode", "File: Save All", "Git: View All Changes", "Git: View Staged Changes",
+  "Test: Run All Tests with Coverage", "Test: Run Tests in Current File with Coverage",
+  "Test: Run Test at Cursor with Coverage", "Test: Close Coverage", "Test: Toggle Inline Coverage"
 };
 
 static const char *const keys[CMD_N] = {
@@ -203,7 +205,8 @@ static const char *const keys[CMD_N] = {
   "",
   "Ctrl+Alt+I", "", "", "Ctrl+Alt+B", "", "", "", "Ctrl+I", "Ctrl+Enter", "Escape",
   "", "Alt+Enter", "Ctrl+Shift+R", "Alt+L", "Alt+=", "Alt+-", "Escape", "Ctrl+Shift+Backspace",
-  "", "Ctrl+K S", "", ""
+  "", "Ctrl+K S", "", "",
+  "", "", "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -359,7 +362,9 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "search.action.openNewEditor", "search.action.openInEditor", "rerunSearchEditorSearch",
   "toggleSearchEditorContextLines", "increaseSearchEditorContextLines", "decreaseSearchEditorContextLines",
   "search.searchEditor.action.focusQueryEditorWidget", "search.searchEditor.action.deleteFileResults",
-  "toggleVim", "workbench.action.files.saveAll", "git.viewChanges", "git.viewStagedChanges"
+  "toggleVim", "workbench.action.files.saveAll", "git.viewChanges", "git.viewStagedChanges",
+  "testing.coverageAll", "testing.coverageCurrentFile", "testing.coverageAtCursor",
+  "testing.coverage.close", "testing.toggleInlineCoverage"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

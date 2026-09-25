@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 
 enum { FW_GO, FW_PY, FW_RUST, FW_JS };
@@ -360,6 +361,9 @@ typedef struct Run {
   char *cwd;
   Vec argv;
   Vec keys;	/* "path\n name" of the tests it is for */
+  char *cov;	/* with coverage: the file it is written to (LCOV, Go's profile); NULL: none */
+  char *covdata;	/* coverage.py's data file */
+  long long t0;	/* when it started (npm's coverage/lcov.info must be newer) */
 } Run;
 
 static Run *g_q;	/* waiting */
@@ -399,6 +403,8 @@ static TTest *test_of_key (const char *key, TFile **pf) {
 
 
 static void run_free (Run *r) {
+  free(r->cov);
+  free(r->covdata);
   free(r->cwd);
   vec_free(&r->argv);
   vec_free(&r->keys);
@@ -411,6 +417,8 @@ static void run_copy (Run *to, const Run *from) {
   memset(to, 0, sizeof(*to));
   to->fw = from->fw;
   to->cwd = xstrdup(from->cwd);
+  to->cov = from->cov ? xstrdup(from->cov) : NULL;
+  to->covdata = from->covdata ? xstrdup(from->covdata) : NULL;
   vec_init(&to->argv);
   vec_init(&to->keys);
   for (i = 0; i < from->argv.n; i++) vec_push(&to->argv, xstrdup(from->argv.v[i]));
@@ -466,6 +474,312 @@ static char *py_module (const char *rel) {
     if (*c == '/') *c = '.';
   return m;
 }
+
+
+/*
+** {==================================================================
+** Test coverage, VS Code's: "Test: Run All Tests with Coverage" runs the
+** tests with the tool's own coverage (go test -coverprofile, coverage.py,
+** cargo llvm-cov; npm's script writes coverage/lcov.info), and what they
+** covered is read: the lines of each file, covered or not. The editor
+** colors the line numbers by it (and the lines too, with inline coverage),
+** the view lists each file with the part of its lines covered.
+** ===================================================================
+*/
+
+typedef struct CovFile {
+  char *path;	/* native */
+  char *real;	/* os_realpath's, to find it again from an editor */
+  char *rel;	/* shown */
+  unsigned char *st;	/* each line: 0 no code, 1 covered, 2 not */
+  size_t nst;
+  size_t hit, total;	/* lines covered, lines with code */
+} CovFile;
+
+static CovFile *g_cov;
+static int g_ncov;
+static int g_cov_on;	/* coverage is shown */
+static int g_cov_inline;	/* Test: Toggle Inline Coverage: the lines too */
+static int g_cover;	/* the runs planned now take coverage */
+static unsigned g_cov_seq;
+
+
+static void cov_clear (void) {
+  int i;
+  for (i = 0; i < g_ncov; i++) {
+    free(g_cov[i].path);
+    free(g_cov[i].real);
+    free(g_cov[i].rel);
+    free(g_cov[i].st);
+  }
+  free(g_cov);
+  g_cov = NULL;
+  g_ncov = 0;
+  g_cov_on = 0;
+}
+
+
+/* a path from a tool: absolute? ("C:\x", "/x"); and in the system's separators */
+static int cov_abs (const char *s) {
+  return path_is_sep(s[0]) || s[0] == '/' || (s[0] && s[1] == ':');
+}
+
+
+static void cov_native (char *s) {
+#ifdef _WIN32
+  for (; *s; s++)
+    if (*s == '/') *s = '\\';
+#else
+  (void)s;
+#endif
+}
+
+
+/* the file's entry (native path, or relative to base), made the first time */
+static CovFile *cov_file (const char *name, const char *base) {
+  char *p = cov_abs(name) || base == NULL ? xstrdup(name) : path_join(base, name), *real, *c;
+  CovFile *f;
+  int i;
+  cov_native(p);
+  real = os_realpath(p);
+  if (real == NULL) real = xstrdup(p);
+  for (i = 0; i < g_ncov; i++)
+    if (m_fncmp(g_cov[i].real, real) == 0) {
+      free(p);
+      free(real);
+      return &g_cov[i];
+    }
+  g_cov = (CovFile *)xrealloc(g_cov, (size_t)(g_ncov + 1) * sizeof(CovFile));
+  f = &g_cov[g_ncov++];
+  memset(f, 0, sizeof(*f));
+  f->path = p;
+  f->real = real;
+  f->rel = rel_of(p);
+  for (c = f->rel; *c; c++)
+    if (*c == '\\') *c = '/';
+  return f;
+}
+
+
+/* line (from 1) ran count times; covered once is covered */
+static void cov_line (CovFile *f, size_t line, long count) {
+  if (line == 0 || line > 10000000) return;
+  if (line > f->nst) {
+    f->st = (unsigned char *)xrealloc(f->st, line);
+    memset(f->st + f->nst, 0, line - f->nst);
+    f->nst = line;
+  }
+  if (count > 0) f->st[line - 1] = 1;
+  else if (f->st[line - 1] == 0) f->st[line - 1] = 2;
+}
+
+
+static int cmp_cov (const void *a, const void *b) {
+  return strcmp(((const CovFile *)a)->rel, ((const CovFile *)b)->rel);
+}
+
+
+/* each file's covered lines counted; the files in order */
+static void cov_totals (void) {
+  int i;
+  size_t k;
+  for (i = 0; i < g_ncov; i++) {
+    CovFile *f = &g_cov[i];
+    f->hit = f->total = 0;
+    for (k = 0; k < f->nst; k++) {
+      f->total += f->st[k] != 0;
+      f->hit += f->st[k] == 1;
+    }
+  }
+  qsort(g_cov, (size_t)g_ncov, sizeof(CovFile), cmp_cov);
+}
+
+
+/* an LCOV file (SF: the file, DA:line,count); paths from base; 0 read */
+static int load_lcov (const char *file, const char *base) {
+  size_t len;
+  char *s = read_file(file, &len), *p, *e;
+  CovFile *f = NULL;
+  if (s == NULL) return -1;
+  for (p = s; p < s + len; p = e + 1) {
+    e = strchr(p, '\n');
+    if (e == NULL) e = s + len;
+    *e = '\0';
+    if (e > p && e[-1] == '\r') e[-1] = '\0';
+    if (strncmp(p, "SF:", 3) == 0) f = cov_file(p + 3, base);
+    else if (strncmp(p, "DA:", 3) == 0 && f) {
+      char *q;
+      unsigned long line = strtoul(p + 3, &q, 10);
+      if (*q == ',') cov_line(f, line, strtol(q + 1, NULL, 10));
+    }
+    else if (strcmp(p, "end_of_record") == 0) f = NULL;
+  }
+  free(s);
+  return 0;
+}
+
+
+/* Go's module ("module x" in go.mod) and its folder, from dir up */
+static char *go_module (const char *dir, char **mdir) {
+  char *d = xstrdup(dir);
+  int k;
+  *mdir = NULL;
+  for (k = 0; k < 16; k++) {
+    char *gm = path_join(d, "go.mod"), *s, *up;
+    size_t len;
+    s = read_file(gm, &len);
+    free(gm);
+    if (s) {
+      char *m = strstr(s, "module "), *r = NULL;
+      if (m && (m == s || m[-1] == '\n')) {
+        size_t n = 0;
+        m += 7;
+        while (*m == ' ' || *m == '\t') m++;
+        while (m[n] && m[n] != '\n' && m[n] != '\r' && m[n] != ' ') n++;
+        r = xstrndup(m, n);
+      }
+      free(s);
+      if (r) {
+        *mdir = d;
+        return r;
+      }
+    }
+    up = path_dirname(d);
+    if (up == NULL || strcmp(up, d) == 0) {
+      free(up);
+      break;
+    }
+    free(d);
+    d = up;
+  }
+  free(d);
+  return NULL;
+}
+
+
+/* go test -coverprofile's: "mod/pkg/a.go:3.14,5.2 1 1" (its lines, how many statements, how many times) */
+static int load_goprofile (const char *file, const char *cwd) {
+  size_t len;
+  char *s = read_file(file, &len), *p, *e, *mdir, *mod = go_module(cwd, &mdir);
+  size_t ml = mod ? strlen(mod) : 0;
+  if (s == NULL) {
+    free(mod);
+    free(mdir);
+    return -1;
+  }
+  for (p = s; p < s + len; p = e + 1) {
+    char *sp, *colon, *q, *name;
+    unsigned long l0, l1, l;
+    long count;
+    CovFile *f;
+    e = strchr(p, '\n');
+    if (e == NULL) e = s + len;
+    *e = '\0';
+    if (strncmp(p, "mode:", 5) == 0 || (sp = strchr(p, ' ')) == NULL) continue;
+    *sp = '\0';
+    if ((colon = strrchr(p, ':')) == NULL) continue;
+    *colon = '\0';
+    l0 = strtoul(colon + 1, &q, 10);
+    if ((q = strchr(q, ',')) == NULL) continue;
+    l1 = strtoul(q + 1, NULL, 10);
+    q = strchr(sp + 1, ' ');	/* after the statements: the count */
+    count = q ? strtol(q + 1, NULL, 10) : 0;
+    if (mod && strncmp(p, mod, ml) == 0 && p[ml] == '/') name = path_join(mdir, p + ml + 1);
+    else name = xstrdup(p);
+    f = cov_file(name, cwd);
+    free(name);
+    for (l = l0; l <= l1 && l - l0 < 100000; l++) cov_line(f, l, count);
+  }
+  free(s);
+  free(mod);
+  free(mdir);
+  return 0;
+}
+
+
+/* where a run's coverage goes: in mme-data, not in the project */
+static char *cov_out (const char *ext) {
+  char name[64], *d = data_path("coverage"), *p;
+  mkdir_p(d);
+  snprintf(name, sizeof(name), "run-%u.%s", ++g_cov_seq, ext);
+  p = path_join(d, name);
+  free(d);
+  return p;
+}
+
+
+/* the run that ended had coverage: it is read */
+static void cov_collect (const Run *r) {
+  OsStat st;
+  int ok = -1;
+  if (r->fw == FW_PY) {	/* coverage.py's data, as LCOV */
+    char *py = python(), *argv[8], *here = os_getcwd();
+    Buf b;
+    buf_init(&b);
+    argv[0] = py ? py : (char *)"python";
+    argv[1] = (char *)"-m";
+    argv[2] = (char *)"coverage";
+    argv[3] = (char *)"lcov";
+    argv[4] = (char *)"-o";
+    argv[5] = r->cov;
+    argv[6] = NULL;
+    os_setenv("COVERAGE_FILE", r->covdata);
+    os_chdir(r->cwd);
+    if (run_capture(argv, &b) == 0) ok = load_lcov(r->cov, r->cwd);
+    else out_log(CHAN, "coverage lcov: %.*s", (int)b.len, b.s ? b.s : "");
+    if (here) os_chdir(here);
+    os_setenv("COVERAGE_FILE", NULL);
+    free(here);
+    free(py);
+    buf_free(&b);
+    if (ok != 0) toast(1, "No coverage: coverage.py is needed (pip install coverage)");
+  }
+  else if (r->fw == FW_GO) {
+    ok = load_goprofile(r->cov, r->cwd);
+    if (ok != 0) toast(1, "No coverage: go test wrote no profile");
+  }
+  else if (r->fw == FW_RUST) {
+    ok = load_lcov(r->cov, r->cwd);
+    if (ok != 0) toast(1, "No coverage: cargo-llvm-cov is needed (cargo install cargo-llvm-cov)");
+  }
+  else {	/* npm test: its coverage/lcov.info, when this run wrote it */
+    if (os_stat(r->cov, &st) == 0 && st.exists && (long long)st.mtime + 2 >= r->t0) ok = load_lcov(r->cov, r->cwd);
+    if (ok != 0) toast(0, "No coverage: make the test script write coverage/lcov.info (jest --coverage, c8 --reporter=lcov)");
+  }
+  if (ok == 0) {
+    size_t hit = 0, total = 0;
+    int i;
+    cov_totals();
+    for (i = 0; i < g_ncov; i++) {
+      hit += g_cov[i].hit;
+      total += g_cov[i].total;
+    }
+    g_cov_on = 1;
+    out_log(CHAN, "Coverage: %lu of %lu lines (%.1f%%) in %d file%s", (unsigned long)hit, (unsigned long)total,
+            total ? 100.0 * (double)hit / (double)total : 0.0, g_ncov, g_ncov == 1 ? "" : "s");
+  }
+}
+
+
+/* the coverage of a file's line (from 0): 0 none known, 1 covered, 2 not */
+int test_cov (const char *real, size_t line) {
+  static int last = -1;
+  int i;
+  if (!g_cov_on || real == NULL) return 0;
+  if (!(last >= 0 && last < g_ncov && m_fncmp(g_cov[last].real, real) == 0)) {	/* the same file row after row */
+    for (last = -1, i = 0; i < g_ncov && last < 0; i++)
+      if (m_fncmp(g_cov[i].real, real) == 0) last = i;
+    if (last < 0) return 0;
+  }
+  return line < g_cov[last].nst ? g_cov[last].st[line] : 0;
+}
+
+
+int test_cov_inline (void) {
+  return g_cov_on && g_cov_inline;
+}
+
+/* }================================================================== */
 
 
 /*
@@ -540,6 +854,10 @@ static void plan (const Pick1 *sel, int n) {
       }
       vec_push(&r->argv, go);
       vec_push(&r->argv, xstrdup("test"));
+      if (g_cover) {	/* its coverage profile */
+        r->cov = cov_out("out");
+        vec_push(&r->argv, xstrcat3("-coverprofile=", r->cov, ""));
+      }
       vec_push(&r->argv, xstrdup("-json"));
       buf_init(&re);
       for (j = 0; j < r->keys.n && j < 200; j++) {
@@ -558,7 +876,14 @@ static void plan (const Pick1 *sel, int n) {
     else if (r->fw == FW_RUST) {
       char *cargo = find_program("cargo");
       vec_push(&r->argv, cargo ? cargo : xstrdup("cargo"));
-      vec_push(&r->argv, xstrdup("test"));
+      if (g_cover) {	/* cargo-llvm-cov runs the tests, and writes LCOV */
+        r->cov = cov_out("info");
+        vec_push(&r->argv, xstrdup("llvm-cov"));
+        vec_push(&r->argv, xstrdup("--lcov"));
+        vec_push(&r->argv, xstrdup("--output-path"));
+        vec_push(&r->argv, xstrdup(r->cov));
+      }
+      else vec_push(&r->argv, xstrdup("test"));
       if (r->keys.n == 1) vec_push(&r->argv, xstrdup(strchr(r->keys.v[0], '\n') + 1));
     }
     else if (r->fw == FW_JS) {
@@ -573,10 +898,32 @@ static void plan (const Pick1 *sel, int n) {
       vec_push(&r->argv, npm ? npm : xstrdup("npm"));
 #endif
       vec_push(&r->argv, xstrdup("test"));
+      if (g_cover) {	/* what the script writes, if it does */
+        char *cd = path_join(r->cwd, "coverage");
+        r->cov = path_join(cd, "lcov.info");
+        free(cd);
+      }
     }
     else if (r->fw == FW_PY) {	/* pytest by nodeid, else unittest by dotted name */
+      size_t nbase;
       if (py == NULL) py = python();
-      if (pytest) {
+      if (g_cover) {	/* coverage.py runs it: python -m coverage run -m pytest ... */
+        r->cov = cov_out("info");
+        r->covdata = cov_out("data");
+        vec_push(&r->argv, py ? xstrdup(py) : xstrdup("python"));
+        vec_push(&r->argv, xstrdup("-m"));
+        vec_push(&r->argv, xstrdup("coverage"));
+        vec_push(&r->argv, xstrdup("run"));
+        vec_push(&r->argv, xstrdup("-m"));
+        vec_push(&r->argv, xstrdup(pytest ? "pytest" : "unittest"));
+        if (pytest) {
+          vec_push(&r->argv, xstrdup("-rA"));
+          vec_push(&r->argv, xstrdup("-p"));
+          vec_push(&r->argv, xstrdup("no:cacheprovider"));
+        }
+        else vec_push(&r->argv, xstrdup("-v"));
+      }
+      else if (pytest) {
         vec_push(&r->argv, xstrdup(pytest));
         vec_push(&r->argv, xstrdup("-rA"));
         vec_push(&r->argv, xstrdup("-p"));
@@ -588,6 +935,7 @@ static void plan (const Pick1 *sel, int n) {
         vec_push(&r->argv, xstrdup("unittest"));
         vec_push(&r->argv, xstrdup("-v"));
       }
+      nbase = r->argv.n;
       {
         Vec keep;	/* the tests it can run */
         vec_init(&keep);
@@ -622,7 +970,7 @@ static void plan (const Pick1 *sel, int n) {
         vec_free(&r->keys);
         r->keys = keep;
       }
-      if (!pytest && r->argv.n == 4) {	/* nothing unittest can run */
+      if (!pytest && r->argv.n == nbase) {	/* nothing unittest can run */
         run_free(r);
         memmove(g_q + i, g_q + i + 1, (size_t)(g_nq - i - 1) * sizeof(Run));
         g_nq--;
@@ -637,7 +985,7 @@ static void plan (const Pick1 *sel, int n) {
 
 /* the run in front starts */
 static void start_next (void) {
-  int fds[2], io[3];
+  int fds[2], io[3], r;
   char **argv;
   size_t i;
   char *here;
@@ -671,7 +1019,11 @@ static void start_next (void) {
   io[1] = io[2] = fds[1];
   here = os_getcwd();
   os_chdir(g_run.cwd);
-  if (os_spawn(argv[0], argv, NULL, io, 3, &g_proc, &g_pid) != 0) {
+  g_run.t0 = (long long)time(NULL);
+  if (g_run.covdata) os_setenv("COVERAGE_FILE", g_run.covdata);	/* coverage.py's data: in mme-data */
+  r = os_spawn(argv[0], argv, NULL, io, 3, &g_proc, &g_pid);
+  if (g_run.covdata) os_setenv("COVERAGE_FILE", NULL);
+  if (r != 0) {
     os_close(fds[0]);
     os_close(fds[1]);
     if (here) os_chdir(here);
@@ -1174,6 +1526,7 @@ static void finish (int code) {
   else if (g_run.fw == FW_PY) finish_py(&g_run, code);
   else if (g_run.fw == FW_RUST) finish_rust(&g_run, code);
   else finish_js(&g_run, code);
+  if (g_run.cov) cov_collect(&g_run);	/* what the tests covered */
   for (k = 0; k < g_run.keys.n; k++) {
     TTest *t = test_of_key(g_run.keys.v[k], NULL);
     if (t && t->state == TM_PASS) pass++;
@@ -1221,6 +1574,7 @@ static void run_picks (const Pick1 *sel, int n) {
     return;
   }
   editor_save_all();	/* testing.saveBeforeTest */
+  if (g_cover) cov_clear();	/* a run with coverage: the last one's goes */
   q0 = g_nq;
   plan(sel, n);
   for (i = 0; i < g_nlast; i++) run_free(&g_last[i]);
@@ -1281,7 +1635,7 @@ void test_shutdown (void) {
 
 #define VHEAD	2	/* the title, the summary */
 
-enum { RW_FILE, RW_TEST, RW_MSG };
+enum { RW_FILE, RW_TEST, RW_MSG, RW_COVHEAD, RW_COV };	/* RW_COV: f is the file of g_cov */
 
 typedef struct TRow {
   int kind, f, t;
@@ -1310,6 +1664,18 @@ static void rows (void) {
         g_row[g_nrow].f = f;
         g_row[g_nrow++].t = t;
       }
+    }
+  }
+  if (g_cov_on) {	/* TEST COVERAGE: the files, each with how much of it ran */
+    g_row = (TRow *)xrealloc(g_row, (size_t)(g_nrow + g_ncov + 2) * sizeof(TRow));
+    g_row[g_nrow].kind = RW_COVHEAD;
+    g_row[g_nrow].f = g_row[g_nrow].t = -1;
+    g_nrow++;
+    for (f = 0; f < g_ncov; f++) {
+      if (g_cov[f].total == 0) continue;
+      g_row[g_nrow].kind = RW_COV;
+      g_row[g_nrow].f = f;
+      g_row[g_nrow++].t = -1;
     }
   }
   if (g_sel >= g_nrow) g_sel = g_nrow - 1;
@@ -1346,6 +1712,61 @@ static uint32_t state_icon (int s, uint32_t *rgb) {
   }
   *rgb = 0x848484;
   return 0xEABC;	/* circle-outline */
+}
+
+
+/* the part covered, as VS Code writes it and colors it (testing.coverageBarThresholds: red, yellow, green) */
+static uint32_t pct_text (size_t hit, size_t total, char *t, size_t n) {
+  double p = total ? 100.0 * (double)hit / (double)total : 0.0;
+  snprintf(t, n, "%.1f%%", p);
+  return p < 60 ? 0xF14C4C : p < 90 ? 0xCCA700 : 0x73C991;
+}
+
+
+/* TEST COVERAGE's title (every file together, and its x), or a file's row */
+static void draw_cov_row (const TRow *r, int x, int sy, int w, int st) {
+  char t[64];
+  uint32_t rgb, bg = ui_color(C_SIDE_BG);
+  int cx = x + 1, i, pw;
+  if (r->kind == RW_COVHEAD) {
+    size_t hit = 0, total = 0;
+    for (i = 0; i < g_ncov; i++) {
+      hit += g_cov[i].hit;
+      total += g_cov[i].total;
+    }
+    cx += scr_puts(cx, sy, "TEST COVERAGE", st == S_SIDE ? S_SIDE_TITLE : st) + 1;
+    rgb = pct_text(hit, total, t, sizeof(t));
+    pw = (int)strlen(t);
+    if (cx + pw < x + w - 4) {
+      for (i = 0; t[i]; i++) {
+        if (st == S_SIDE) scr_put_rgb(cx + i, sy, (unsigned char)t[i], rgb, bg, 0);
+        else scr_put(cx + i, sy, (unsigned char)t[i], st);
+      }
+    }
+    if (w > 12) scr_put(x + w - 3, sy, 0xEA76, st);	/* close: Test: Close Coverage */
+    return;
+  }
+  {
+    const CovFile *c = &g_cov[r->f];
+    const char *sl = strrchr(c->rel, '/');
+    int ist;
+    uint32_t icon = file_icon(c->rel, &ist);
+    rgb = pct_text(c->hit, c->total, t, sizeof(t));
+    pw = (int)strlen(t);
+    cx += 2;
+    cx += scr_put(cx, sy, icon, st == S_SIDE ? ist : st) + 1;
+    cx += scr_putsw(cx, sy, x + w - pw - 2 - cx, sl ? sl + 1 : c->rel, st) + 1;
+    if (sl && cx < x + w - pw - 4) {
+      char dir[512];
+      snprintf(dir, sizeof(dir), "%.*s", (int)(sl - c->rel), c->rel);
+      scr_putsw(cx, sy, x + w - pw - 2 - cx, dir, st == S_SIDE ? S_SIDE_DIM : st);
+    }
+    for (i = 0; t[i] && x + w - 1 - pw + i < x + w; i++) {
+      int px = x + w - 1 - pw + i;
+      if (st == S_SIDE) scr_put_rgb(px, sy, (unsigned char)t[i], rgb, bg, 0);
+      else scr_put(px, sy, (unsigned char)t[i], st);
+    }
+  }
 }
 
 
@@ -1404,9 +1825,13 @@ void test_draw (int x, int y, int w, int h, int focus) {
     uint32_t icon, rgb;
     if (k >= g_nrow) break;
     r = &g_row[k];
-    f = &g_f[r->f];
     st = (k == g_sel && focus) ? S_SIDE_SEL : (k == g_sel ? S_SIDE_CUR : S_SIDE);
     scr_fill(x, sy, w, st);
+    if (r->kind == RW_COVHEAD || r->kind == RW_COV) {
+      draw_cov_row(r, x, sy, w, st);
+      continue;
+    }
+    f = &g_f[r->f];
     if (r->kind == RW_FILE) {
       const char *sl = strrchr(f->rel, '/');
       s = file_state(f);
@@ -1451,6 +1876,14 @@ static void open_row (int k, SideAct *act, int go) {
   const TFile *f;
   if (k < 0 || k >= g_nrow) return;
   r = &g_row[k];
+  if (r->kind == RW_COVHEAD) return;
+  if (r->kind == RW_COV) {	/* a file of the coverage: open, its lines colored */
+    act->what = go ? SA_GO : SA_OPEN;
+    act->path = g_cov[r->f].path;
+    act->line = 1;
+    act->col = act->len = 0;
+    return;
+  }
   f = &g_f[r->f];
   act->what = go ? SA_GO : SA_OPEN;
   act->path = f->path;
@@ -1466,7 +1899,7 @@ static void open_row (int k, SideAct *act, int go) {
 
 static void run_row (int k) {
   Pick1 p;
-  if (k < 0 || k >= g_nrow) return;
+  if (k < 0 || k >= g_nrow || g_row[k].kind >= RW_COVHEAD) return;
   p.f = g_row[k].f;
   p.t = g_row[k].kind == RW_FILE ? -1 : g_row[k].t;
   run_picks(&p, 1);
@@ -1485,7 +1918,7 @@ int test_key (int k, SideAct *act) {
     case K_HOME: g_sel = 0; return 1;
     case K_END: g_sel = g_nrow - 1; return 1;
     case K_LEFT:
-      if (g_nrow == 0) return 1;
+      if (g_nrow == 0 || g_row[g_sel].kind >= RW_COVHEAD) return 1;
       if (g_row[g_sel].kind == RW_FILE) g_f[g_row[g_sel].f].open = 0;
       else {	/* to its file */
         while (g_sel > 0 && g_row[g_sel].kind != RW_FILE) g_sel--;
@@ -1523,7 +1956,11 @@ void test_click (int row, int col, SideAct *act) {
   k = g_top + row - VHEAD;
   if (k >= g_nrow) return;
   g_sel = k;
-  if (col >= w - 4 && g_row[k].kind != RW_MSG) {	/* ▷ */
+  if (g_row[k].kind == RW_COVHEAD) {	/* its x: the coverage goes */
+    if (col >= w - 4) test_command(CMD_TEST_COV_CLOSE);
+    return;
+  }
+  if (col >= w - 4 && g_row[k].kind != RW_MSG && g_row[k].kind != RW_COV) {	/* ▷ */
     run_row(k);
     return;
   }
@@ -1705,6 +2142,19 @@ void test_command (int cmd) {
       test_idle();
       break;
     case CMD_TEST_DEBUG_CURSOR: debug_at_cursor(); break;
+    case CMD_TEST_COV_ALL: case CMD_TEST_COV_FILE: case CMD_TEST_COV_CURSOR:	/* the same, with coverage */
+      g_cover = 1;
+      test_command(cmd == CMD_TEST_COV_ALL ? CMD_TEST_RUN_ALL : cmd == CMD_TEST_COV_FILE ? CMD_TEST_RUN_FILE : CMD_TEST_RUN_CURSOR);
+      g_cover = 0;
+      break;
+    case CMD_TEST_COV_CLOSE:
+      if (!g_cov_on) toast(0, "No coverage is shown.");
+      cov_clear();
+      break;
+    case CMD_TEST_COV_INLINE:
+      g_cov_inline = !g_cov_inline;
+      if (!g_cov_on) toast(0, "Run tests with coverage first (Test: Run All Tests with Coverage).");
+      break;
   }
 }
 

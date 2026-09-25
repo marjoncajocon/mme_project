@@ -288,6 +288,15 @@ With no file open the editor shows the keys to start with.
   the file's, Ctrl+; L the last run again, Ctrl+; Ctrl+C debug the test at the
   cursor (Go's dlv, Python's debugpy), Ctrl+; Ctrl+O the output, Ctrl+; Ctrl+X
   cancel. Files are saved before a run.
+- **Test coverage** — "Test: Run All Tests with Coverage" (or in Current File,
+  at Cursor) runs them with the tool's own coverage: `go test -coverprofile`,
+  coverage.py (`pip install coverage`), `cargo llvm-cov`; an npm script is
+  read from the `coverage/lcov.info` it writes (jest --coverage, c8). The line
+  numbers turn green where the tests ran and red where they did not, as VS
+  Code's gutter; "Test: Toggle Inline Coverage" colors the lines too. TESTING
+  gets a TEST COVERAGE part: every file with the part of its lines covered
+  (red under 60%, yellow under 90%, green), a click opens it, its x (or "Test:
+  Close Coverage") clears it. What the runs write stays in mme-data.
 - **Snippets** — typing `for`, `if`, `main`, `#ifndef` ... offers the
   language's snippets with the other suggestions; Enter puts one in, Tab and
   Shift+Tab go from field to field (a field used twice changes in both
@@ -956,8 +965,8 @@ Alt+1 and Ctrl+PgDn there.
 
 ## What comes next
 
-Test coverage (Run with Coverage, the gutter's marks), profiles, git
-worktrees, data breakpoints, workspace trust and screencast mode.
+Profiles, git worktrees, data breakpoints, workspace trust and screencast
+mode.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and
