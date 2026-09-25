@@ -2909,11 +2909,11 @@ static void prompt_key (int k) {
     while (n > 0 && V.line[n - 1] != ' ') n--;
     V.line[n] = '\0';
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && n + 1 < sizeof(V.line); i++) V.line[n++] = b.s[i];
     V.line[n] = '\0';
     buf_free(&b);

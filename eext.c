@@ -1761,11 +1761,11 @@ int ext_key (int k, SideAct *act) {
       if (len > 0) g_q[len - 1] = '\0';
       typed();
       return 1;
-    case K_PASTE: {
+    case K_PASTE: case CTRL('v'): {
       Buf b;
       size_t i;
       buf_init(&b);
-      term_paste(&b);
+      paste_take(k, &b);
       for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(g_q); i++) g_q[len++] = b.s[i];
       g_q[len] = '\0';
       buf_free(&b);

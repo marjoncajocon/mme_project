@@ -833,10 +833,10 @@ int git_key (int k, SideAct *act) {
       while (len > 0 && ((unsigned char)g_msg[len - 1] & 0xC0) == 0x80) len--;
       if (len > 0) g_msg[len - 1] = '\0';
     }
-    else if (code == K_PASTE) {
+    else if (IS_PASTE(k)) {
       Buf b;
       buf_init(&b);
-      term_paste(&b);
+      paste_take(k, &b);
       if (b.s && len + b.len + 1 < sizeof(g_msg)) strcat(g_msg, b.s);
       buf_free(&b);
     }

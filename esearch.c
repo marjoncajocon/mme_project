@@ -1317,11 +1317,11 @@ static int box_key (int k) {
     while (len > 0 && ((unsigned char)s[len - 1] & 0xC0) == 0x80) len--;
     if (len > 0) s[len - 1] = '\0';
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(g_field[0]); i++) s[len++] = b.s[i];
     s[len] = '\0';
     buf_free(&b);
@@ -1426,7 +1426,7 @@ int search_key (int k, SideAct *act) {
       open_row(g_sel, 0, act);
       return 1;
   }
-  if (g_in < 0 && (IS_TEXT(k) || code == K_BS || code == K_PASTE)) {	/* typing in the list: to the box */
+  if (g_in < 0 && (IS_TEXT(k) || code == K_BS || IS_PASTE(k))) {	/* typing in the list: to the box */
     g_in = FD_FIND;
     return box_key(k);
   }

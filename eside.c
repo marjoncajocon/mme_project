@@ -1272,7 +1272,7 @@ static int input_commit (SideAct *act) {
 static int input_key (int k, SideAct *act) {
   int code = KEY_CODE(k);
   size_t len = strlen(g_in.text);
-  if (g_in.sel > 0 && (IS_TEXT(k) || code == K_BS || code == K_DEL || code == K_PASTE)) {	/* it replaces the selection */
+  if (g_in.sel > 0 && (IS_TEXT(k) || code == K_BS || code == K_DEL || IS_PASTE(k))) {	/* it replaces the selection */
     memmove(g_in.text, g_in.text + g_in.sel, len - g_in.sel + 1);
     len -= g_in.sel;
     g_in.cur = 0;
@@ -1302,11 +1302,11 @@ static int input_key (int k, SideAct *act) {
     while (b < len && ((unsigned char)g_in.text[b] & 0xC0) == 0x80) b++;
     memmove(g_in.text + g_in.cur, g_in.text + b, len - b + 1);
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(g_in.text); i++, len++) {
       memmove(g_in.text + g_in.cur + 1, g_in.text + g_in.cur, len - g_in.cur + 1);
       g_in.text[g_in.cur++] = b.s[i];

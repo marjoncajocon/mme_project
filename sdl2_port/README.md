@@ -86,15 +86,23 @@ make
 
 The keys come as the same codes `eterm.c` makes of a terminal's, with the kitty
 keyboard's modifiers, so every shortcut is VS Code's and Ctrl+Shift+P is not
-Ctrl+P. Ctrl+V and Shift+Insert paste the system's clipboard; what mme copies
-goes to it too. The window's x is File > Exit (Ctrl+Q): mme asks about files
-not saved. Zoom In / Out / Reset change the font; `editor.fontFamily` and
-`editor.fontSize` are VS Code's settings.
+Ctrl+P. mme's clipboard is the system's: text copied in another program is
+what Ctrl+V, Shift+Insert, the terminal's paste, vim's `"+` and the Chat box
+paste, and what mme copies goes there too. Ctrl+V reaches mme as a key, so
+vim's visual block and Ctrl+K Ctrl+V work. AltGr's characters (@ { [ on a
+German keyboard) are typed, not taken for Ctrl+Alt shortcuts; the right Alt
+is Alt. The window's x is File > Exit (Ctrl+Q), after closing a question or a
+list that is open: mme asks about files not saved.
+
+Ctrl+= / Ctrl+- (the keypad's too) and Ctrl+NumPad0 zoom, as in VS Code;
+`editor.fontFamily` and `editor.fontSize` are VS Code's settings, and a change
+to them shows at once. Moved to a screen with another DPI, the font keeps its
+size. The wheel scrolls a line per notch step (a touchpad's small steps add
+up), sideways too. A file dropped on the window pastes its path, as a
+terminal does. The image preview shows the picture itself.
 
 ## Not yet
 
-- Pictures (the image preview): mme sends them to a terminal as sixel; the
-  window does not show them yet.
 - Windows XP on a real XP machine: `build xp` is built for it and checked
   (its header, its runtime, every call it makes), but it was run on Windows 11
   only. The terminal panel has no ConPTY on XP.

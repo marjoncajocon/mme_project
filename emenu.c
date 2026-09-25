@@ -1304,11 +1304,11 @@ int pick_run (Pick *p) {
       p->text[len] = '\0';
       changed = 1;
     }
-    else if (code == K_PASTE) {
+    else if (IS_PASTE(k)) {
       Buf b;
       size_t i;
       buf_init(&b);
-      term_paste(&b);
+      paste_take(k, &b);
       for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(p->text); i++)
         p->text[len++] = b.s[i];
       p->text[len] = '\0';

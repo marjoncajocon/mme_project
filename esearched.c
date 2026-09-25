@@ -1184,11 +1184,11 @@ static int box_key (SEd *e, int k) {
     while (len > 0 && ((unsigned char)s[len - 1] & 0xC0) == 0x80) len--;
     if (len > 0) s[len - 1] = '\0';
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len < max; i++)
       if (e->in != SE_CTX || (b.s[i] >= '0' && b.s[i] <= '9')) s[len++] = b.s[i];
     s[len] = '\0';

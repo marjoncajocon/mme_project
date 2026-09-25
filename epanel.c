@@ -1394,11 +1394,11 @@ int panel_find_key (int k) {
     find_count();
     find_step(-1);
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(FD.text); i++) FD.text[len++] = b.s[i];
     FD.text[len] = '\0';
     buf_free(&b);
@@ -2043,7 +2043,12 @@ void panel_paste (const char *s, size_t n) {
 static void paste_clip (void) {
   size_t n;
   const char *s = clip_get(&n);
-  if (s && n) panel_paste(s, n);
+  char *own;
+  if (s == NULL || n == 0) return;
+  own = (char *)xmalloc(n);	/* its own copy: the clipboard may change while panel_paste asks */
+  memcpy(own, s, n);
+  panel_paste(own, n);
+  free(own);
 }
 
 

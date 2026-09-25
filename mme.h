@@ -1344,6 +1344,8 @@ int panel_cursor_shape (void);	/* DECSCUSR */
 int panel_confirm_kill (void);	/* terminal.integrated.confirmOnKill: 1 go on */
 int panel_confirm_exit (void);	/* terminal.integrated.confirmOnExit: 1 go on */
 void clip_set (const char *s, size_t n);	/* mme.c: the clipboard, and the system's (OSC 52) */
+#define IS_PASTE(k)	(KEY_CODE(k) == K_PASTE || (k) == CTRL('v'))	/* a box's paste: the terminal's, or Ctrl+V */
+void paste_take (int k, Buf *b);	/* mme.c: the text IS_PASTE(k) brings (Ctrl+V: the clipboard) */
 const char *clip_get (size_t *n);
 
 /* eout.c - the OUTPUT view: a channel for each thing that runs */

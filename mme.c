@@ -5507,6 +5507,13 @@ const char *clip_get (size_t *n) {
 }
 
 
+/* a box's paste: what the terminal pasted (K_PASTE), or the clipboard (Ctrl+V, as in VS Code's boxes) */
+void paste_take (int k, Buf *b) {
+  if (KEY_CODE(k) == K_PASTE) term_paste(b);
+  else if (E.clip) buf_putn(b, E.clip, E.cliplen);
+}
+
+
 /* the system clipboard, through the terminal (OSC 52) */
 static void osc52 (const char *s, size_t n) {
   static const char b64[] =
@@ -17943,11 +17950,11 @@ static void repl_key (int k) {
     while (len > 0 && ((unsigned char)E.repl[len - 1] & 0xC0) == 0x80) len--;
     if (len > 0) E.repl[len - 1] = '\0';
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(E.repl); i++) E.repl[len++] = b.s[i];
     E.repl[len] = '\0';
     buf_free(&b);
@@ -18007,11 +18014,11 @@ static void find_key (int k) {
     while (len > 0 && ((unsigned char)E.find[len - 1] & 0xC0) == 0x80) len--;
     if (len > 0) E.find[len - 1] = '\0';
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < sizeof(E.find); i++) E.find[len++] = b.s[i];
     E.find[len] = '\0';
     buf_free(&b);
@@ -19920,6 +19927,7 @@ static void editor_key_one (int k) {
 static int panel_passes (int k) {
   int code = KEY_CODE(k);
   if (code == K_F1 || code == K_F10) return 1;
+  if (k == CTRL('q')) return 1;	/* Quit (VS Code's commandsToSkipShell has it; the window's x in mme-sdl) */
   if ((k & (KM_CTRL | KM_SHIFT)) == (KM_CTRL | KM_SHIFT) && code < 128) return 1;
   if (k == ('1' | KM_ALT) || k == ('2' | KM_ALT) || k == ('3' | KM_ALT)) return 1;
   if (code == K_F5 || code == K_F9 || ((code == K_F6 || code == K_F11) && dbg_active())) return 1;	/* debugging */

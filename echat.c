@@ -1166,11 +1166,11 @@ static char *inline_ask (const EdCtx *c) {
       if (len > 0) len--;
       text[len] = '\0';
     }
-    else if (code == K_PASTE) {
+    else if (IS_PASTE(k)) {
       Buf b;
       size_t i;
       buf_init(&b);
-      term_paste(&b);
+      paste_take(k, &b);
       for (i = 0; i < b.len && len + 1 < sizeof(text); i++) text[len++] = b.s[i] == '\n' ? ' ' : b.s[i];
       text[len] = '\0';
       buf_free(&b);

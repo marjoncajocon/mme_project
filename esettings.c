@@ -1278,11 +1278,11 @@ static int edit_key (int k, char *buf, size_t n, size_t *cur) {
     while (b < len && ((unsigned char)buf[b] & 0xC0) == 0x80) b++;
     memmove(buf + *cur, buf + b, len - b + 1);
   }
-  else if (code == K_PASTE) {
+  else if (IS_PASTE(k)) {
     Buf b;
     size_t i;
     buf_init(&b);
-    term_paste(&b);
+    paste_take(k, &b);
     for (i = 0; i < b.len && b.s[i] != '\n' && len + 1 < n; i++, len++) {
       memmove(buf + *cur + 1, buf + *cur, len - *cur + 1);
       buf[(*cur)++] = b.s[i];
@@ -1367,7 +1367,7 @@ void sui_key (int k, PageAct *a) {
     if (code == K_ENTER || code == K_TAB) edit_done(a);
     else if (code == K_ESC) S.editing = 0;
     else {
-      if (S.fresh && (IS_TEXT(k) || code == K_BS || code == K_DEL || code == K_PASTE)) {	/* it replaces */
+      if (S.fresh && (IS_TEXT(k) || code == K_BS || code == K_DEL || IS_PASTE(k))) {	/* it replaces */
         S.text[0] = '\0';
         S.cur = 0;
         if (code == K_BS || code == K_DEL) k = 0;

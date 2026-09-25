@@ -9,8 +9,9 @@
 ** file of mme is compiled as it is.
 **
 ** The painting is mmc-term's (tdraw.c: its blending, its box drawing, its
-** underlines), the fonts are mmc-term's tfont.c (stb_truetype, and GDI's
-** ClearType on Windows), so the window looks like mme in mmc-term.
+** underlines, its powerline shapes), the fonts are mmc-term's tfont.c
+** (stb_truetype, and GDI's ClearType on Windows), so the window looks like
+** mme in mmc-term. The image preview's sixel is decoded and painted too.
 */
 
 #define SDL_MAIN_HANDLED	/* mme.c has main(): SDL must not take it */
@@ -54,11 +55,29 @@ static struct {
   int dirty;	/* the window must be shown again (moved, exposed) */
   long long blink_at;	/* when the caret blinked last */
   int blink_on;
-  int ccx, ccy, cshape, cvis;	/* the caret drawn last */
+  int focused;	/* the window has the keyboard: else the caret is a hollow box */
+  int ccx, ccy;	/* where the caret was last flush (it moved: shown at once) */
+  int car_on, car_x, car_y, car_shape, car_focus;	/* the caret painted into the picture now */
+  int up0, up1;	/* the rows of the picture painted since it was last copied to the texture */
   char title[512];
   SDL_Cursor *ptr[3];
   int ptr_now;
+  char font_fam[128];	/* editor.fontFamily and editor.fontSize, as the font was made from them */
+  double font_size;
+  long long font_seen;	/* when the settings were looked at last */
+  float wheel_x, wheel_y;	/* a touchpad's scrolling, less than a line so far */
+  int ime_x, ime_y;	/* where the IME's window was told the caret is */
 } W;
+
+
+/* the picture of the image preview (sixel from eimage.c), decoded, where it is */
+static struct {
+  char *src;	/* the sixel it was decoded from */
+  size_t n;
+  uint32_t *px;	/* 0xAARRGGBB, alpha 0: not painted */
+  int w, h;
+  int on, x, y, cols, rows;	/* shown, in cells */
+} IM;
 
 
 static uint32_t mix (uint32_t bg, uint32_t fg, int a) {
@@ -125,7 +144,9 @@ static int brightness (uint32_t c) {
 }
 
 
-static void blit_glyph (Frame *f, const Glyph *g, int x, int y, uint32_t fg, uint32_t bg, int clip0, int clip1) {
+/* a glyph at pen (x, y), only its pixels inside clip0 .. clip1 across and top .. bottom down */
+static void blit_glyph (Frame *f, const Glyph *g, int x, int y, uint32_t fg, uint32_t bg, int clip0, int clip1,
+                        int top, int bottom) {
   const unsigned char *lut;
   int i, j;
   if (g == NULL || g->bm == NULL) return;
@@ -133,9 +154,11 @@ static void blit_glyph (Frame *f, const Glyph *g, int x, int y, uint32_t fg, uin
   lut = brightness(fg) > brightness(bg) ? lut_light : lut_dark;
   if (clip0 < 0) clip0 = 0;
   if (clip1 > f->w) clip1 = f->w;
+  if (top < 0) top = 0;
+  if (bottom > f->h) bottom = f->h;
   for (j = 0; j < g->h; j++) {
     int py = y + g->yoff + j;
-    if (py < 0 || py >= f->h) continue;
+    if (py < top || py >= bottom) continue;
     for (i = 0; i < g->w; i++) {
       int px = x + g->xoff + i;
       size_t at = (size_t)j * (size_t)g->w + (size_t)i;
@@ -177,11 +200,48 @@ static const char *const box_arms[128] = {
 };
 
 
+/*
+** The round corners (U+256D..2570, the Chat box's, the git graph's): a
+** quarter of a circle from the middle of one side to the middle of the
+** other, its edge smoothed, and the straight rest of the two arms
+*/
+static void draw_arc (Frame *f, uint32_t cp, int x, int y, int w, int h, int t, uint32_t fg) {
+  int sx = cp == 0x256D || cp == 0x2570 ? 1 : -1;	/* the arms go right (1) or left */
+  int sy = cp == 0x256D || cp == 0x256E ? 1 : -1;	/* down (1) or up */
+  int o = t / 2, i, j;
+  double lx = x + w / 2 - o + t / 2.0, ly = y + h / 2 - o + t / 2.0;	/* the middle of the lines */
+  double r = (w < h ? w : h) / 2.0, ax = lx + sx * r, ay = ly + sy * r;	/* the circle's middle */
+  for (j = 0; j < h; j++)
+    for (i = 0; i < w; i++) {
+      double px = x + i + 0.5, py = y + j + 0.5, d, a;
+      if ((px - ax) * sx > 0.5 || (py - ay) * sy > 0.5) continue;	/* the quarter toward the corner */
+      d = sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
+      a = t / 2.0 + 0.5 - fabs(d - r);
+      if (a <= 0.0 || x + i < 0 || x + i >= f->w || y + j < 0 || y + j >= f->h) continue;
+      {
+        uint32_t *p = &f->px[(size_t)(y + j) * (size_t)f->w + (size_t)(x + i)];
+        *p = mix(*p, fg, a >= 1.0 ? 255 : (int)(a * 255.0));
+      }
+    }
+  {	/* the straight parts, from where the circle ends to the cell's edge */
+    int ex = (int)(ax + 0.5), ey = (int)(ay + 0.5);
+    if (sx > 0) fill(f, ex, y + h / 2 - o, x + w - ex, t, fg);
+    else fill(f, x, y + h / 2 - o, ex - x, t, fg);
+    if (sy > 0) fill(f, x + w / 2 - o, ey, t, y + h - ey, fg);
+    else fill(f, x + w / 2 - o, y, t, ey - y, fg);
+  }
+}
+
+
 static int draw_box (Frame *f, uint32_t cp, int x, int y, int w, int h, uint32_t fg) {
   const char *arms = box_arms[cp - 0x2500];
   int a[4], i, t1 = (w + 4) / 8, t2, d, cx = x + w / 2, cy = y + h / 2, dbl_h, dbl_v, active;
   if (arms[0] == '-') return 0;	/* diagonals: the font's */
   if (t1 < 1) t1 = 1;
+  if (cp >= 0x256D && cp <= 0x2570) {
+    draw_arc(f, cp, x, y, w, h, t1, fg);
+    return 1;
+  }
   t2 = t1 * 2 + (t1 == 1 ? 1 : 0);
   d = t1 + 1;
   for (i = 0; i < 4; i++) a[i] = arms[i] - '0';
@@ -245,6 +305,74 @@ static int draw_block (Frame *f, uint32_t cp, int x, int y, int w, int h, uint32
 }
 
 
+/*
+** Powerline separators (U+E0B0..E0BF), a shell prompt's, as geometry: they
+** fill their cell exactly, so the colored parts join without seams (tdraw.c)
+*/
+static double seg_dist (double px, double py, double ax, double ay, double bx, double by) {
+  double dx = bx - ax, dy = by - ay;
+  double t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy);
+  if (t < 0.0) t = 0.0;
+  else if (t > 1.0) t = 1.0;
+  dx = ax + t * dx - px;
+  dy = ay + t * dy - py;
+  return sqrt(dx * dx + dy * dy);
+}
+
+
+static int in_ellipse (double x, double y, double cx, double m, double rx, double ry) {
+  double a, b;
+  if (rx <= 0.0 || ry <= 0.0) return 0;
+  a = (x - cx) / rx;
+  b = (y - m) / ry;
+  return a * a + b * b <= 1.0;
+}
+
+
+static int pl_inside (uint32_t cp, double x, double y, double w, double h, double t) {
+  double m = h / 2.0, u = x / w, v = y / h, r = t / 2.0;
+  switch (cp) {
+    case 0xE0B0: return u <= 1.0 - fabs(2.0 * v - 1.0);
+    case 0xE0B2: return u >= fabs(2.0 * v - 1.0);
+    case 0xE0B1: return seg_dist(x, y, 0, 0, w, m) <= r || seg_dist(x, y, w, m, 0, h) <= r;
+    case 0xE0B3: return seg_dist(x, y, w, 0, 0, m) <= r || seg_dist(x, y, 0, m, w, h) <= r;
+    case 0xE0B4: return in_ellipse(x, y, 0, m, w, m);
+    case 0xE0B6: return in_ellipse(x, y, w, m, w, m);
+    case 0xE0B5: return in_ellipse(x, y, 0, m, w, m) && !in_ellipse(x, y, 0, m, w - t, m - t);
+    case 0xE0B7: return in_ellipse(x, y, w, m, w, m) && !in_ellipse(x, y, w, m, w - t, m - t);
+    case 0xE0B8: return u <= v;
+    case 0xE0BA: return u >= 1.0 - v;
+    case 0xE0BC: return u <= 1.0 - v;
+    case 0xE0BE: return u >= v;
+    case 0xE0B9: case 0xE0BF: return seg_dist(x, y, 0, 0, w, h) <= r;
+    case 0xE0BB: case 0xE0BD: return seg_dist(x, y, w, 0, 0, h) <= r;
+  }
+  return 0;
+}
+
+
+static int draw_powerline (Frame *f, uint32_t cp, int x, int y, int w, int h, uint32_t fg) {
+  double t = (double)h / 14.0;
+  int i, j, si, sj;
+  if (t < 1.0) t = 1.0;
+  for (j = 0; j < h; j++) {
+    if (y + j < 0 || y + j >= f->h) continue;
+    for (i = 0; i < w; i++) {
+      int n = 0;
+      uint32_t *p;
+      if (x + i < 0 || x + i >= f->w) continue;
+      for (sj = 0; sj < 4; sj++)	/* 4 x 4 samples a pixel: smooth edges */
+        for (si = 0; si < 4; si++)
+          n += pl_inside(cp, (double)i + (si + 0.5) / 4.0, (double)j + (sj + 0.5) / 4.0, (double)w, (double)h, t);
+      if (n == 0) continue;
+      p = &f->px[(size_t)(y + j) * (size_t)f->w + (size_t)(x + i)];
+      *p = mix(*p, fg, n * 255 / 16);
+    }
+  }
+  return 1;
+}
+
+
 /* a style's colors and attributes, from the theme's escape sequence ("\033[0;1;38;2;r;g;b;48;2;r;g;bm") */
 typedef struct SColor {
   uint32_t fg, bg, at;
@@ -293,50 +421,84 @@ static void style_of (int st, uint32_t *fg, uint32_t *bg, uint32_t *at) {
 }
 
 
-/* one cell painted: its background, its character (a glyph, or box drawing), its lines */
-static void paint_cell (const ECell *c, int col, int row, int wide) {
-  Frame *f = &W.fr;
-  int px = col * W.cw, py = row * W.ch, w = W.cw * (wide ? 2 : 1), line = (W.ch + 8) / 16;
-  uint32_t fg, bg, at, ch = c->ch, ul;
+/* a cell's colors and attributes */
+static void cell_colors (const ECell *c, uint32_t *fg, uint32_t *bg, uint32_t *at, uint32_t *ul) {
   if (c->st == S_RGB) {
-    fg = c->fg;
-    bg = c->bg;
-    at = c->at;
+    *fg = c->fg;
+    *bg = c->bg;
+    *at = c->at;
   }
-  else style_of(c->st, &fg, &bg, &at);
-  ul = (at & RGB_CURLY) ? c->ul : fg;
-  if (at & RGB_DIM) fg = mix(bg, fg, 150);
+  else style_of(c->st, fg, bg, at);
+  *ul = (*at & RGB_CURLY) ? c->ul : *fg;
+  if (*at & RGB_DIM) *fg = mix(*bg, *fg, 150);
+}
+
+
+/*
+** A cell's character (a glyph, box drawing, a block, a powerline shape)
+** and its lines, over the background already there. A glyph may reach
+** half a cell past its own on either side (italics, ClearType's edges),
+** as in a terminal (over: 1), but never above or below its row.
+*/
+static void fill_row (Frame *f, int x, int y, int w, int h, uint32_t color, int top) {	/* inside the row at top */
+  if (y + h > top + W.ch) h = top + W.ch - y;
+  if (y < top) {
+    h -= top - y;
+    y = top;
+  }
+  if (h > 0) fill(f, x, y, w, h, color);
+}
+
+
+static void paint_fg (const ECell *c, int col, int row, int wide, uint32_t fg, uint32_t bg, uint32_t at, uint32_t ul,
+                      int over) {
+  Frame *f = &W.fr;
+  int px = col * W.cw, py = row * W.ch, w = W.cw * (wide ? 2 : 1), line = (W.ch + 8) / 16, o = over ? W.cw / 2 : 0;
+  uint32_t ch = c->ch;
   if (line < 1) line = 1;
-  fill(f, px, py, w, W.ch, bg);
   if (ch > ' ') {
     int drawn = 0;
     if (ch >= 0x2500 && ch <= 0x257F) drawn = draw_box(f, ch, px, py, w, W.ch, fg);
     else if (ch >= 0x2580 && ch <= 0x259F) drawn = draw_block(f, ch, px, py, w, W.ch, fg);
+    else if (ch >= 0xE0B0 && ch <= 0xE0BF) drawn = draw_powerline(f, ch, px, py, w, W.ch, fg);
     if (!drawn)
       blit_glyph(f, font_glyph(ch, (at & RGB_BOLD) != 0, (at & RGB_ITALIC) != 0, brightness(fg) < brightness(bg)),
-                 px, py + W.ascent, fg, bg, px, px + w);
+                 px, py + W.ascent, fg, bg, px - o, px + w + o, py, py + W.ch);
   }
   if (at & RGB_CURLY) {	/* a squiggle: a wave from cell to cell (tdraw.c) */
     int amp = line + 1, period = W.cw > 4 ? W.cw : 4, x, y = py + W.ascent + line + 1;
     for (x = 0; x < w; x++) {
       double t = (double)((px + x) % period) / (double)period;
       int dy = (int)((double)amp * (1.0 - cos(t * 6.283185307179586)) / 2.0 + 0.5);
-      fill(f, px + x, y - 1 + dy, 1, line, ul);
+      fill_row(f, px + x, y - 1 + dy, 1, line, ul, py);
     }
   }
-  else if (at & RGB_UNDER) fill(f, px, py + W.ascent + line + 1, w, line, ul);
-  if (at & RGB_STRIKE) fill(f, px, py + (W.ascent * 2) / 3, w, line, fg);
+  else if (at & RGB_UNDER) fill_row(f, px, py + W.ascent + line + 1, w, line, ul, py);
+  if (at & RGB_STRIKE) fill_row(f, px, py + (W.ascent * 2) / 3, w, line, fg, py);
 }
 
 
-/* row y of the grid, into the picture */
-static void paint_row (int y) {
-  const ECell *b = &S.back[(size_t)y * (size_t)S.cols];
-  int x;
-  for (x = 0; x < S.cols; x++) {
-    if (b[x].ch == 0 && x > 0 && b[x - 1].w == 2) continue;	/* the right half of a wide one: painted with it */
-    paint_cell(&b[x], x, y, b[x].w == 2 && x + 1 < S.cols);
-  }
+static void mark (int y) {
+  if (y < W.up0) W.up0 = y;
+  if (y > W.up1) W.up1 = y;
+}
+
+
+/* row y of a grid (S.back, or S.front: what is shown) into the picture: every background, then the characters */
+static void paint_row (int y, const ECell *grid) {
+  const ECell *b = &grid[(size_t)y * (size_t)S.cols];
+  int x, pass;
+  for (pass = 0; pass < 2; pass++)
+    for (x = 0; x < S.cols; x++) {
+      uint32_t fg, bg, at, ul;
+      int wide = b[x].w == 2 && x + 1 < S.cols;
+      if (b[x].ch == 0 && x > 0 && b[x - 1].w == 2) continue;	/* the right half of a wide one: painted with it */
+      cell_colors(&b[x], &fg, &bg, &at, &ul);
+      if (pass == 0) fill(&W.fr, x * W.cw, y * W.ch, W.cw * (wide ? 2 : 1), W.ch, bg);
+      else paint_fg(&b[x], x, y, wide, fg, bg, at, ul, 1);
+    }
+  if (W.car_on && W.car_y == y) W.car_on = 0;	/* painted over */
+  mark(y);
 }
 
 
@@ -358,61 +520,340 @@ static void picture_size (void) {
 }
 
 
-static int caret_color (void) {
-  return (int)ui_color(C_MCURSOR);
+/*
+** {==================================================================
+** The image preview's picture: eimage.c sends it as sixel, as it would to
+** a terminal; here it is decoded once and painted over its cells
+** ===================================================================
+*/
+
+static int sixel_num (const char **p, const char *end) {
+  int v = 0;
+  while (*p < end && **p >= '0' && **p <= '9') v = v * 10 + (*(*p)++ - '0');
+  return v;
 }
 
 
+/* a sixel string as pixels (its size from the raster attributes, "1;1;w;h); NULL: not one */
+static uint32_t *sixel_decode (const char *s, size_t n, int *ow, int *oh) {
+  const char *p = s, *end = s + n;
+  uint32_t pal[256], *px = NULL, color = 0xFF000000u;
+  int w = 0, h = 0, x = 0, band = 0, i;
+  for (i = 0; i < 256; i++) pal[i] = 0xFF000000u | (uint32_t)(i * 0x010101);
+  while (p < end && *p != 'q') p++;	/* ESC P ... q */
+  if (p >= end) return NULL;
+  p++;
+  while (p < end) {
+    int c = (unsigned char)*p;
+    if (c == '"') {	/* "pan;pad;w;h */
+      int v[4] = {0, 0, 0, 0}, k = 0;
+      p++;
+      while (k < 4) {
+        v[k++] = sixel_num(&p, end);
+        if (p < end && *p == ';') p++;
+        else break;
+      }
+      if (px == NULL && v[2] > 0 && v[3] > 0 && v[2] <= 16384 && v[3] <= 16384) {
+        w = v[2];
+        h = v[3];
+        px = (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t));
+      }
+    }
+    else if (c == '#') {	/* #n selects a color, #n;2;r;g;b (0 .. 100) sets it */
+      int v[5] = {0, 0, 0, 0, 0}, k = 0;
+      p++;
+      while (k < 5) {
+        v[k++] = sixel_num(&p, end);
+        if (p < end && *p == ';') p++;
+        else break;
+      }
+      v[0] &= 255;
+      if (k == 5 && v[1] == 2)
+        pal[v[0]] = 0xFF000000u | ((uint32_t)(v[2] * 255 / 100) << 16) | ((uint32_t)(v[3] * 255 / 100) << 8) |
+                    (uint32_t)(v[4] * 255 / 100);
+      color = pal[v[0]];
+    }
+    else if (c == '$') {
+      x = 0;
+      p++;
+    }
+    else if (c == '-') {
+      x = 0;
+      band += 6;
+      p++;
+    }
+    else if (c == '!' || (c >= '?' && c <= '~')) {	/* !count<sixel>, or one sixel */
+      int count = 1, bits, r;
+      if (c == '!') {
+        p++;
+        count = sixel_num(&p, end);
+        if (p >= end) break;
+        c = (unsigned char)*p;
+        if (c < '?' || c > '~') continue;
+      }
+      p++;
+      bits = c - '?';
+      if (px == NULL) return NULL;	/* no size given: not eimage.c's */
+      for (; count > 0 && x < w; count--, x++)
+        for (r = 0; r < 6; r++)
+          if ((bits & (1 << r)) && band + r < h) px[(size_t)(band + r) * (size_t)w + (size_t)x] = color;
+    }
+    else if (c == 27) break;	/* ESC \ */
+    else p++;
+  }
+  *ow = w;
+  *oh = h;
+  return px;
+}
+
+
+static void caret_off (void);
+
+
+/* the picture, over rows y0 .. y1 of it (only those) */
+static void image_paint (int y0, int y1) {
+  int top = IM.y * W.ch, left = IM.x * W.cw, maxw = IM.cols * W.cw, maxh = IM.rows * W.ch, i, j;
+  int from = y0 * W.ch, to = (y1 + 1) * W.ch;
+  if (IM.px == NULL) return;
+  if (W.car_on && W.car_y >= y0 && W.car_y <= y1) caret_off();	/* painted again after it, where it is then */
+  for (j = 0; j < IM.h && j < maxh; j++) {
+    int py = top + j;
+    if (py < from || py >= to || py < 0 || py >= W.fr.h) continue;
+    for (i = 0; i < IM.w && i < maxw; i++) {
+      uint32_t c = IM.px[(size_t)j * (size_t)IM.w + (size_t)i];
+      int x = left + i;
+      if ((c >> 24) == 0 || x < 0 || x >= W.fr.w) continue;
+      W.fr.px[(size_t)py * (size_t)W.fr.w + (size_t)x] = c & 0xFFFFFF;
+    }
+  }
+  for (j = y0; j <= y1; j++) mark(j);
+}
+
+
+/* the picture of this flush (IMG, from scr_image) or none: shown, moved, taken away */
+static void image_flush (int y_first, int y_last) {
+  int k;
+  if (IMG.data && (IM.src == NULL || IM.n != IMG.n || memcmp(IM.src, IMG.data, IMG.n) != 0)) {	/* a new one */
+    free(IM.px);
+    free(IM.src);
+    IM.src = (char *)xmalloc(IMG.n + 1);
+    memcpy(IM.src, IMG.data, IMG.n);
+    IM.n = IMG.n;
+    IM.px = sixel_decode(IMG.data, IMG.n, &IM.w, &IM.h);
+    if (IM.on) {	/* the old one goes first: the new one may be smaller */
+      for (k = IM.y; k < IM.y + IM.rows && k < S.rows; k++) paint_row(k, S.front);
+      IM.on = 0;
+    }
+    y_first = 0;	/* painted again, all of it */
+    y_last = S.rows - 1;
+  }
+  if (IM.on && (IMG.data == NULL || IM.x != IMG.x || IM.y != IMG.y || IM.cols != IMG.w || IM.rows != IMG.h)) {
+    for (k = IM.y; k < IM.y + IM.rows && k < S.rows; k++) paint_row(k, S.front);	/* gone from there */
+    IM.on = 0;
+  }
+  if (IMG.data && IM.px) {
+    int a = IMG.y, b = IMG.y + IMG.h - 1;
+    if (b >= S.rows) b = S.rows - 1;
+    if (!IM.on) {
+      y_first = 0;
+      y_last = S.rows - 1;
+    }
+    IM.x = IMG.x;
+    IM.y = IMG.y;
+    IM.cols = IMG.w;
+    IM.rows = IMG.h;
+    IM.on = 1;
+    if (y_first < a) y_first = a;	/* the rows under it that were painted again */
+    if (y_last > b) y_last = b;
+    if (y_first <= y_last) image_paint(y_first, y_last);
+  }
+  free(IMG.data);
+  IMG.data = NULL;
+  IMG.n = 0;
+}
+
+/* }================================================================== */
+
+
 /*
-** The picture shown: the rows that changed painted into the frame and
-** copied into the texture, the caret over it (it blinks, as the settings
-** say), the title, the mouse pointer. Nothing changed: nothing is shown.
+** {==================================================================
+** The caret, painted into the picture over its cell (a block shows the
+** character under it in the background's color), taken away by painting
+** its row again from what is shown (S.front)
+** ===================================================================
+*/
+
+static int caret_shape (void) {	/* 1 block, 2 underline, 3 bar (DECSCUSR 0 .. 6) */
+  int s = (g_shape + 1) / 2;
+  return s < 1 || s > 3 ? 1 : s;
+}
+
+
+static void caret_off (void) {
+  if (!W.car_on) return;
+  W.car_on = 0;
+  if (W.car_y < 0 || W.car_y >= S.rows) return;
+  paint_row(W.car_y, S.front);
+  if (IM.on && W.car_y >= IM.y && W.car_y < IM.y + IM.rows) image_paint(W.car_y, W.car_y);
+}
+
+
+static void caret_on (void) {
+  const ECell *row = &S.front[(size_t)S.cy * (size_t)S.cols];
+  int x = S.cx, wide, px, py, w, thin;
+  uint32_t cc = ui_color(C_MCURSOR), fg, bg, at, ul;
+  Frame *f = &W.fr;
+  if (row[x].ch == 0 && x > 0 && row[x - 1].w == 2) x--;	/* on the right half of a wide one */
+  wide = row[x].w == 2 && x + 1 < S.cols;
+  px = x * W.cw;
+  py = S.cy * W.ch;
+  w = W.cw * (wide ? 2 : 1);
+  thin = (int)(2.0f * W.scale * (W.px0 > 0 ? W.px / W.px0 : 1.0f) + 0.5f);	/* VS Code's 2 pixels, zoomed */
+  if (thin < 1) thin = 1;
+  if (!W.focused) {	/* a hollow box, not blinking: the window has not got the keys */
+    fill(f, px, py, w, 1, cc);
+    fill(f, px, py + W.ch - 1, w, 1, cc);
+    fill(f, px, py, 1, W.ch, cc);
+    fill(f, px + w - 1, py, 1, W.ch, cc);
+  }
+  else if (caret_shape() == 2) fill(f, px, py + W.ch - thin, w, thin, cc);
+  else if (caret_shape() == 3) fill(f, px, py, thin, W.ch, cc);
+  else {	/* a block: the character in it in the background's color */
+    cell_colors(&row[x], &fg, &bg, &at, &ul);
+    fill(f, px, py, w, W.ch, cc);
+    paint_fg(&row[x], x, S.cy, wide, bg, cc, at & ~(uint32_t)(RGB_UNDER | RGB_CURLY | RGB_STRIKE), bg, 0);
+  }
+  W.car_on = 1;
+  W.car_x = S.cx;
+  W.car_y = S.cy;
+  W.car_shape = caret_shape();
+  W.car_focus = W.focused;
+  mark(S.cy);
+}
+
+
+/* the caret as it should be now: where, what shape, on or off in its blink */
+static void caret_sync (void) {
+  int want = S.cy >= 0 && S.cy < S.rows && S.cx >= 0 && S.cx < S.cols && (W.blink_on || !W.focused);
+  if (W.car_on && (!want || W.car_x != S.cx || W.car_y != S.cy || W.car_shape != caret_shape() ||
+                   W.car_focus != W.focused)) caret_off();
+  if (want && !W.car_on) caret_on();
+  if (want && (W.ime_x != S.cx || W.ime_y != S.cy)) {	/* the IME's window goes under the caret */
+    SDL_Rect r;
+    int ww = 0, wh = 0, pw = 0, ph = 0;
+    SDL_GetWindowSize(W.win, &ww, &wh);
+    SDL_GetRendererOutputSize(W.ren, &pw, &ph);
+    r.x = S.cx * W.cw;
+    r.y = S.cy * W.ch;
+    r.w = W.cw;
+    r.h = W.ch;
+    if (pw > 0 && ph > 0 && pw != ww) {	/* macOS's Retina: in points */
+      r.x = r.x * ww / pw;
+      r.y = r.y * wh / ph;
+      r.w = r.w * ww / pw;
+      r.h = r.h * wh / ph;
+    }
+    SDL_SetTextInputRect(&r);
+    W.ime_x = S.cx;
+    W.ime_y = S.cy;
+  }
+}
+
+
+/* the rows painted since last time into the texture, and the window shown */
+static void present (void) {
+  if (W.up1 >= W.up0) {
+    SDL_Rect r;
+    r.x = 0;
+    r.y = W.up0 * W.ch;
+    r.w = W.tw;
+    r.h = (W.up1 - W.up0 + 1) * W.ch;
+    if (r.y + r.h > W.th) r.h = W.th - r.y;
+    if (r.h > 0) SDL_UpdateTexture(W.tex, &r, W.fr.px + (size_t)r.y * (size_t)W.fr.w, W.fr.w * 4);
+  }
+  W.up0 = S.rows;
+  W.up1 = -1;
+  W.dirty = 0;
+  W.shown = 1;
+  {
+    uint32_t bgc = ui_color(C_EDITOR_BG);
+    SDL_Rect d;
+    SDL_SetRenderDrawColor(W.ren, (Uint8)(bgc >> 16), (Uint8)(bgc >> 8), (Uint8)bgc, 255);
+    SDL_RenderClear(W.ren);	/* the strip past the last cell, when the window is not a whole number of them */
+    d.x = d.y = 0;
+    d.w = W.tw;
+    d.h = W.th;
+    SDL_RenderCopy(W.ren, W.tex, NULL, &d);
+  }
+  SDL_RenderPresent(W.ren);
+}
+
+
+static int caret_blinks (void) {
+  return W.focused && (g_shape == 0 || (g_shape & 1) != 0) && S.cy >= 0 && S.cy < S.rows && S.cx >= 0 && S.cx < S.cols;
+}
+
+
+/* while no key comes: the caret blinks on its own (term_key waits no longer than this) */
+static int blink_wait (void) {
+  long long left;
+  if (!W.shown || !caret_blinks()) return -1;
+  left = W.blink_at + 530 - (long long)SDL_GetTicks();
+  return left < 0 ? 0 : (int)left;
+}
+
+
+static void blink_tick (void) {
+  long long now = (long long)SDL_GetTicks();
+  if (!W.shown || S.full || !caret_blinks() || now - W.blink_at < 530) return;	/* S.full: new metrics, not painted yet */
+  W.blink_on = !W.blink_on;
+  W.blink_at = now;
+  caret_sync();
+  present();
+}
+
+
+static void font_settings (void);
+
+
+/*
+** The picture shown: the rows that changed painted into the frame, the
+** image preview's picture over its cells, the caret (it blinks, as the
+** settings say), then the rows painted copied into the texture; the
+** title, the mouse pointer. Nothing changed: nothing is shown.
 */
 void scr_flush (void) {
-  int y, changed = 0, y0 = S.rows, y1 = -1, cvis, blink;
+  int y, painted0 = S.rows, painted1 = -1, caret_row = 0;
   size_t row = (size_t)S.cols * sizeof(ECell);
   long long now = (long long)SDL_GetTicks();
   if (scr_overlay_hook) scr_overlay_hook();
   if (W.ren == NULL || S.back == NULL) return;
+  if (S.full || now - W.font_seen >= 1000) font_settings();	/* editor.fontSize changed: the font too */
   if (S.full) memset(g_style, 0, sizeof(g_style));	/* the theme may have changed */
   picture_size();
+  if (W.up0 > S.rows) W.up0 = S.rows;
   for (y = 0; y < S.rows; y++) {
     ECell *b = &S.back[(size_t)y * (size_t)S.cols];
     if (!S.full && memcmp(b, &S.front[(size_t)y * (size_t)S.cols], row) == 0) continue;
-    paint_row(y);
-    if (y < y0) y0 = y;
-    y1 = y;
+    paint_row(y, S.back);
+    if (y == S.cy) caret_row = 1;
+    if (y < painted0) painted0 = y;
+    painted1 = y;
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
   S.full = 0;
-  if (y1 >= y0) {
-    SDL_Rect r;
-    r.x = 0;
-    r.y = y0 * W.ch;
-    r.w = W.tw;
-    r.h = (y1 - y0 + 1) * W.ch;
-    SDL_UpdateTexture(W.tex, &r, W.fr.px + (size_t)r.y * (size_t)W.fr.w, W.fr.w * 4);
-    changed = 1;
-  }
-  free(IMG.data);	/* pictures (sixel) are the terminal's: not shown in the window yet */
-  IMG.data = NULL;
-  IMG.n = 0;
-  cvis = S.cy >= 0 && S.cy < S.rows && S.cx >= 0 && S.cx < S.cols;
-  blink = (g_shape & 1) != 0;	/* DECSCUSR 1, 3, 5: blinking */
-  if (!blink || W.ccx != S.cx || W.ccy != S.cy || changed) {	/* it moved, or typing: shown at once */
+  image_flush(painted0, painted1);
+  if (!caret_blinks() || W.ccx != S.cx || W.ccy != S.cy || caret_row) {	/* it moved, or typing: shown at once */
     W.blink_on = 1;
     W.blink_at = now;
   }
   else if (now - W.blink_at >= 530) {
     W.blink_on = !W.blink_on;
     W.blink_at = now;
-    changed = 1;
   }
-  if (cvis != W.cvis || S.cx != W.ccx || S.cy != W.ccy || g_shape != W.cshape) changed = 1;
-  W.cvis = cvis;
   W.ccx = S.cx;
   W.ccy = S.cy;
-  W.cshape = g_shape;
+  caret_sync();
   if (strcmp(ui_title, W.title) != 0) {	/* the title bar says what mme's does */
     snprintf(W.title, sizeof(W.title), "%s", ui_title);
     SDL_SetWindowTitle(W.win, W.title[0] ? W.title : "mme");
@@ -421,44 +862,8 @@ void scr_flush (void) {
     SDL_SetCursor(W.ptr[g_ptr]);
     W.ptr_now = g_ptr;
   }
-  if (!changed && !W.dirty && W.shown) return;
-  W.dirty = 0;
-  W.shown = 1;
-  {
-    uint32_t bgc = ui_color(C_EDITOR_BG);
-    SDL_SetRenderDrawColor(W.ren, (Uint8)(bgc >> 16), (Uint8)(bgc >> 8), (Uint8)bgc, 255);
-  }
-  SDL_RenderClear(W.ren);	/* the strip past the last cell, when the window is not a whole number of them */
-  {
-    SDL_Rect d;
-    d.x = d.y = 0;
-    d.w = W.tw;
-    d.h = W.th;
-    SDL_RenderCopy(W.ren, W.tex, NULL, &d);
-  }
-  if (cvis && W.blink_on) {	/* the caret: a bar, a block or a line, like editor.cursorStyle */
-    SDL_Rect c;
-    int cc = caret_color(), shape = (g_shape + 1) / 2;	/* 1 block, 2 underline, 3 bar */
-    c.x = S.cx * W.cw;
-    c.y = S.cy * W.ch;
-    if (shape == 1) {
-      c.w = W.cw;
-      c.h = W.ch;
-    }
-    else if (shape == 2) {
-      c.w = W.cw;
-      c.h = W.scale >= 1.5f ? 3 : 2;
-      c.y += W.ch - c.h;
-    }
-    else {
-      c.w = W.scale >= 1.5f ? 3 : 2;
-      c.h = W.ch;
-    }
-    SDL_SetRenderDrawBlendMode(W.ren, shape == 1 ? SDL_BLENDMODE_BLEND : SDL_BLENDMODE_NONE);
-    SDL_SetRenderDrawColor(W.ren, (Uint8)(cc >> 16), (Uint8)(cc >> 8), (Uint8)cc, shape == 1 ? 140 : 255);
-    SDL_RenderFillRect(W.ren, &c);
-  }
-  SDL_RenderPresent(W.ren);
+  if (W.up1 < W.up0 && !W.dirty && W.shown) return;
+  present();
 }
 
 /* }================================================================== */
@@ -472,6 +877,7 @@ void scr_flush (void) {
 */
 
 static void font_metrics (void) {
+  W.ime_x = -1;	/* the IME's window is placed again */
   W.cw = font_cell_w();
   W.ch = font_cell_h();
   W.ascent = font_ascent();
@@ -505,25 +911,57 @@ static void font_dirs (void) {
 }
 
 
-static int font_setup (void) {
+static int font_make (const char *fam, double size) {
   Config c;
-  const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
-  double size = json_num(settings_get("editor\\.fontSize"), 14);
   size_t n = 0;
   memset(&c, 0, sizeof(c));
   c.smoothing = SMOOTH_CLEARTYPE;	/* Windows: GDI's ClearType, like every other Windows program */
   c.ligatures = 0;	/* one character a cell: mme places each itself */
+  snprintf(W.font_fam, sizeof(W.font_fam), "%s", fam);
+  W.font_size = size;
   while (*fam == ' ' || *fam == '\'' || *fam == '"') fam++;	/* VS Code's list: its first family */
   while (fam[n] && fam[n] != ',' && fam[n] != '\'' && fam[n] != '"' && n + 1 < sizeof(c.font)) n++;
   memcpy(c.font, fam, n);
   c.font[n] = '\0';
-  font_dirs();
   if (font_init(&c) != 0) return -1;
   if (size < 6 || size > 100) size = 14;
   W.px0 = W.px = (float)size * W.scale;	/* VS Code's pixels at 96 DPI, as many more as the screen's DPI */
   font_set_px(W.px);
   font_metrics();
   return 0;
+}
+
+
+static int font_setup (void) {
+  font_dirs();
+  return font_make(json_str(settings_get("editor\\.fontFamily"), ""), json_num(settings_get("editor\\.fontSize"), 14));
+}
+
+
+/* editor.fontFamily or editor.fontSize changed in the settings: the font is made again (the zoom goes) */
+static void font_settings (void) {
+  const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
+  double size = json_num(settings_get("editor\\.fontSize"), 14);
+  W.font_seen = (long long)SDL_GetTicks();
+  if (size == W.font_size && strcmp(fam, W.font_fam) == 0) return;
+  if (font_make(fam, size) != 0) return;
+  S.full = 1;
+}
+
+
+/* the window went to a screen with another DPI: the font keeps its size to the eye */
+static void font_dpi (void) {
+  float ddpi, hdpi, vdpi, s;
+  int i = SDL_GetWindowDisplayIndex(W.win);
+  if (i < 0 || SDL_GetDisplayDPI(i, &ddpi, &hdpi, &vdpi) != 0 || hdpi < 48.0f) return;
+  s = hdpi / 96.0f;
+  if (s - W.scale < 0.01f && W.scale - s < 0.01f) return;
+  W.px *= s / W.scale;
+  W.px0 *= s / W.scale;
+  W.scale = s;
+  font_set_px(W.px);
+  font_metrics();
+  S.full = 1;
 }
 
 
@@ -559,6 +997,10 @@ static int b64 (int c) {
 }
 
 
+static char *g_clip_ours;	/* what mme put on the system's clipboard last, LF ends */
+static int g_clip_quiet;	/* clip_sync is giving mme the system's: not put back there */
+
+
 void term_write (const char *s, size_t n) {
   const char *p = s, *end = s + n;
   if (n > 7 && memcmp(s, "\033]52;", 5) == 0) {	/* ESC ] 52 ; c ; <base64> BEL */
@@ -579,9 +1021,34 @@ void term_write (const char *s, size_t n) {
       }
     }
     buf_putc(&out, '\0');
-    SDL_SetClipboardText(out.s);
+    free(g_clip_ours);
+    g_clip_ours = xstrdup(out.s);
+    if (!g_clip_quiet) SDL_SetClipboardText(out.s);
     buf_free(&out);
   }
+}
+
+
+/*
+** mme's clipboard is the system's: text copied in another program is what
+** Ctrl+V, the terminal's paste, vim's "+ and the Chat box paste. It is
+** taken when the clipboard changes, the window gets the keys again, or a
+** paste key comes.
+*/
+static void clip_sync (void) {
+  char *t, *r, *w;
+  if (!SDL_HasClipboardText()) return;
+  t = SDL_GetClipboardText();
+  if (t == NULL) return;
+  for (r = w = t; *r; r++)	/* CR LF: one newline, as mme keeps text */
+    if (!(*r == '\r' && r[1] == '\n')) *w++ = *r;
+  *w = '\0';
+  if (*t && (g_clip_ours == NULL || strcmp(t, g_clip_ours) != 0)) {
+    g_clip_quiet = 1;	/* the system has it: only mme's copy changes (its other formats stay) */
+    clip_set(t, strlen(t));
+    g_clip_quiet = 0;
+  }
+  SDL_free(t);
 }
 
 
@@ -589,10 +1056,11 @@ void term_ask_pixels (void) {
 }
 
 
-int term_cell_px (int *w, int *h) {	/* pictures are not shown in the window yet: none */
-  (void)w;
-  (void)h;
-  return 0;
+int term_cell_px (int *w, int *h) {	/* the image preview's pictures: a cell's pixels */
+  if (W.cw < 2 || W.ch < 2) return 0;
+  *w = W.cw;
+  *h = W.ch;
+  return 1;
 }
 
 
@@ -714,6 +1182,11 @@ int term_open (void) {
   W.ptr[PTR_POINTER] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
   W.ptr_now = -1;
   W.ccx = W.ccy = -1;
+  W.ime_x = W.ime_y = -1;
+  W.focused = 1;
+  W.up0 = 1 << 30;
+  W.up1 = -1;
+  SDL_EventState(SDL_DROPFILE, SDL_ENABLE);	/* a file dropped on the window */
   SDL_StartTextInput();
   return 0;
 }
@@ -765,10 +1238,7 @@ static int km_of (Uint16 m) {
   int k = 0;
   if (m & KMOD_SHIFT) k |= KM_SHIFT;
   if (m & KMOD_CTRL) k |= KM_CTRL;
-  if (m & KMOD_LALT) k |= KM_ALT;	/* right Alt is AltGr: its characters come as text */
-#ifndef _WIN32
-  if (m & KMOD_RALT) k |= KM_ALT;
-#endif
+  if (m & KMOD_ALT) k |= KM_ALT;	/* right Alt too: AltGr's characters are told apart by their text (on_keydown) */
   return k;
 }
 
@@ -783,18 +1253,83 @@ static int kitty_key (int code, int k) {
 }
 
 
-static void paste_clipboard (void) {
-  char *t = SDL_GetClipboardText();
+static void paste_text (const char *t) {
   free(g_paste);
   g_paste = xstrdup(t ? t : "");
-  SDL_free(t);
   push(K_PASTE);
+}
+
+
+static void paste_clipboard (void) {
+  char *t = SDL_GetClipboardText();
+  paste_text(t);
+  SDL_free(t);
+}
+
+
+/*
+** The key typed a character though Ctrl or Alt is down: AltGr (Windows
+** sends a left Ctrl with it) on a German keyboard, Option on a Mac. SDL has
+** its text waiting behind the key: the character goes, not the shortcut.
+*/
+static int text_queued (void) {
+  SDL_Event e;
+  return SDL_PeepEvents(&e, 1, SDL_PEEKEVENT, SDL_TEXTINPUT, SDL_TEXTINPUT) > 0 && (unsigned char)e.text.text[0] >= 32;
+}
+
+
+static int text_follows (int k) {
+  if (text_queued()) return 1;
+  if ((k & (KM_CTRL | KM_ALT)) != (KM_CTRL | KM_ALT)) return 0;
+  SDL_PumpEvents();	/* AltGr: its character may still be in the window's queue */
+  return text_queued();
+}
+
+
+/* the keypad's character with Ctrl or Alt (without them it comes as text); 0: none */
+static int keypad_char (SDL_Keycode sym, Uint16 mod) {
+  int num = (mod & KMOD_NUM) != 0;
+  switch (sym) {
+    case SDLK_KP_DIVIDE: return '/';
+    case SDLK_KP_MULTIPLY: return '*';
+    case SDLK_KP_MINUS: return '-';
+    case SDLK_KP_PLUS: return '+';
+    case SDLK_KP_EQUALS: return '=';
+    case SDLK_KP_PERIOD: return num ? '.' : 0;
+    case SDLK_KP_0: return num ? '0' : 0;
+    case SDLK_KP_5: return num ? '5' : 0;
+    default:
+      if (sym >= SDLK_KP_1 && sym <= SDLK_KP_9 && num) return '1' + (int)(sym - SDLK_KP_1);
+      return 0;
+  }
+}
+
+
+/*
+** VS Code's zoom keys: Ctrl+= and Ctrl+- (Shift or not, the keypad's too),
+** Ctrl+NumPad0. A terminal zooms by itself; the window is the font's
+** here. 2: not one (or keybindings.json gives the key to something else).
+*/
+static int zoom_of (SDL_Keycode sym, int key, int k) {
+  int z = 2, c;
+  if ((k & ~KM_SHIFT) != KM_CTRL) return 2;
+  if (sym == '=' || sym == '+' || sym == SDLK_KP_PLUS) z = 1;
+  else if (sym == '-' || sym == '_' || sym == SDLK_KP_MINUS) z = -1;
+  else if (sym == SDLK_KP_0 && !(k & KM_SHIFT)) z = 0;
+  if (z == 2) return 2;
+  for (c = keys_count() - 1; c >= 0; c--) {	/* keybindings.json has the key: it is the user's (keys_find would drop a running command's args) */
+    int cmd, k1, k2;
+    const char *when;
+    keys_entry(c, &cmd, &k1, &k2, &when);
+    if (k1 == key && k2 == 0) return 2;
+  }
+  return z;
 }
 
 
 static void on_keydown (const SDL_KeyboardEvent *e) {
   SDL_Keycode sym = e->keysym.sym;
-  int k = km_of(e->keysym.mod), code = -1;
+  int k = km_of(e->keysym.mod), code = -1, ch, key;
   g_skip_text = 0;
   switch (sym) {
     case SDLK_UP: case SDLK_KP_8: if (sym == SDLK_UP || !(e->keysym.mod & KMOD_NUM)) code = K_UP; break;
@@ -824,7 +1359,8 @@ static void on_keydown (const SDL_KeyboardEvent *e) {
     case SDLK_BACKSPACE: code = K_BS; break;
     case SDLK_ESCAPE: code = K_ESC; break;
   }
-  if (code == K_INS && (k & KM_SHIFT) && !(k & (KM_CTRL | KM_ALT))) {	/* Shift+Insert: paste */
+  if (code == K_INS && (k & KM_SHIFT) && !(k & (KM_CTRL | KM_ALT))) {	/* Shift+Insert: paste, as a terminal does */
+    clip_sync();
     paste_clipboard();
     g_skip_text = 1;
     return;
@@ -834,9 +1370,23 @@ static void on_keydown (const SDL_KeyboardEvent *e) {
     g_skip_text = 1;
     return;
   }
-  if (sym < 32 || sym >= 127 || !(k & (KM_CTRL | KM_ALT))) return;	/* a character: it comes as text */
-  if (sym == 'v' && k == KM_CTRL) paste_clipboard();	/* Ctrl+V: the system's clipboard, as a terminal pastes it */
-  else push(kitty_key((int)sym, k));
+  if (!(k & (KM_CTRL | KM_ALT))) return;	/* a character: it comes as text */
+  if (sym >= 32 && sym < 127) ch = (int)sym;
+  else if (e->keysym.scancode >= SDL_SCANCODE_A && e->keysym.scancode <= SDL_SCANCODE_Z)	/* Ctrl+C on a Russian keyboard */
+    ch = 'a' + (int)(e->keysym.scancode - SDL_SCANCODE_A);
+  else if (e->keysym.scancode >= SDL_SCANCODE_1 && e->keysym.scancode <= SDL_SCANCODE_0)
+    ch = e->keysym.scancode == SDL_SCANCODE_0 ? '0' : '1' + (int)(e->keysym.scancode - SDL_SCANCODE_1);
+  else ch = (k & KM_CTRL) ? keypad_char(sym, e->keysym.mod) : 0;	/* Alt+NumPad digits: Windows' Alt codes (Alt+0169) */
+  if (ch == 0) return;
+  if (text_follows(k)) return;	/* AltGr+Q: @ */
+  key = kitty_key(ch, k);
+  switch (zoom_of(sym, key, k)) {
+    case 1: term_font(1); g_skip_text = 1; return;
+    case -1: term_font(-1); g_skip_text = 1; return;
+    case 0: term_font(0); g_skip_text = 1; return;
+  }
+  if (ch == 'v' && (k & KM_CTRL)) clip_sync();	/* Ctrl+V, Ctrl+Shift+V: what was copied anywhere */
+  push(key);
   g_skip_text = 1;
 }
 
@@ -865,6 +1415,8 @@ static void mouse_at (int x, int y) {
     x = x * pw / ww;
     y = y * ph / wh;
   }
+  if (x < 0) x = 0;	/* dragged out of the window: its edge, as a terminal says */
+  if (y < 0) y = 0;
   term_mouse.x = x / (W.cw > 0 ? W.cw : 1);
   term_mouse.y = y / (W.ch > 0 ? W.ch : 1);
   if (term_mouse.x >= S.cols) term_mouse.x = S.cols - 1;
@@ -872,23 +1424,78 @@ static void mouse_at (int x, int y) {
 }
 
 
-/* an SDL event as keys in the queue; 1: the window must be shown again */
+/* n wheel steps where the mouse is; mods: Shift for across */
+static void wheel_push (int d, int n, int mods) {
+  int mx, my;
+  if (n > 20) n = 20;
+  SDL_GetMouseState(&mx, &my);
+  while (n-- > 0) {
+    memset(&term_mouse, 0, sizeof(term_mouse));
+    mouse_at(mx, my);
+    term_mouse.wheel = d;
+    term_mouse.button = 3;
+    term_mouse.mods = mods;
+    push(K_MOUSE);
+  }
+}
+
+
+static int g_drops;	/* the files of this drop pasted so far */
+
+
+/* an SDL event as keys in the queue */
 static void on_event (const SDL_Event *e) {
   switch (e->type) {
-    case SDL_QUIT:
-      push(CTRL('q'));	/* the window's x: File > Exit, which asks about unsaved files */
+    case SDL_QUIT:	/* the window's x: File > Exit, which asks about unsaved files */
+      if (when_ctx("terminalFocus") == NULL) push(K_ESC);	/* a question, a list open: it goes first (the shell keeps its line) */
+      push(CTRL('q'));
       break;
     case SDL_WINDOWEVENT:
-      if (e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e->window.event == SDL_WINDOWEVENT_RESIZED) S.full = 1;
+      switch (e->window.event) {
+        case SDL_WINDOWEVENT_SIZE_CHANGED: case SDL_WINDOWEVENT_RESIZED: case SDL_WINDOWEVENT_DISPLAY_CHANGED:
+          font_dpi();	/* another screen may have another DPI */
+          S.full = 1;
+          break;
+        case SDL_WINDOWEVENT_FOCUS_GAINED:
+          W.focused = 1;
+          W.blink_on = 1;
+          W.blink_at = (long long)SDL_GetTicks();
+          clip_sync();
+          break;
+        case SDL_WINDOWEVENT_FOCUS_LOST:
+          W.focused = 0;
+          break;
+      }
       W.dirty = 1;
       break;
+    case SDL_CLIPBOARDUPDATE: clip_sync(); break;
+    case SDL_RENDER_TARGETS_RESET: case SDL_RENDER_DEVICE_RESET:	/* the texture's pixels are gone: made again */
+      W.tw = -1;
+      S.full = 1;
+      break;
     case SDL_KEYDOWN: on_keydown(&e->key); break;
+    case SDL_KEYUP: g_skip_text = 0; break;	/* the text a shortcut key made comes before its release */
     case SDL_TEXTINPUT: on_text(e->text.text); break;
+    case SDL_DROPBEGIN: g_drops = 0; break;
+    case SDL_DROPFILE: {	/* its path pasted, quoted when it has a space, as a terminal does */
+      const char *f = e->drop.file ? e->drop.file : "";
+      Buf b;
+      buf_init(&b);
+      if (g_drops++ > 0) buf_putc(&b, ' ');
+      if (strchr(f, ' ')) buf_printf(&b, "\"%s\"", f);
+      else buf_puts(&b, f);
+      buf_putc(&b, '\0');
+      paste_text(b.s);
+      buf_free(&b);
+      SDL_free(e->drop.file);
+      break;
+    }
     case SDL_MOUSEBUTTONDOWN:
     case SDL_MOUSEBUTTONUP: {
       int b = e->button.button == SDL_BUTTON_LEFT ? 0 : e->button.button == SDL_BUTTON_MIDDLE ? 1 :
               e->button.button == SDL_BUTTON_RIGHT ? 2 : -1;
       if (b < 0) break;
+      if (b == 2 && e->type == SDL_MOUSEBUTTONDOWN) clip_sync();	/* a right-click menu may paste */
       memset(&term_mouse, 0, sizeof(term_mouse));
       mouse_at(e->button.x, e->button.y);
       term_mouse.button = b;
@@ -912,16 +1519,25 @@ static void on_event (const SDL_Event *e) {
       term_mouse.mods = km_of(SDL_GetModState());
       push(K_MOUSE);
       break;
-    case SDL_MOUSEWHEEL: {
-      int mx, my;
-      if (e->wheel.y == 0) break;
-      SDL_GetMouseState(&mx, &my);
-      memset(&term_mouse, 0, sizeof(term_mouse));
-      mouse_at(mx, my);
-      term_mouse.wheel = e->wheel.y > 0 ? -1 : 1;	/* away from you: up */
-      term_mouse.button = 3;
-      term_mouse.mods = km_of(SDL_GetModState());
-      push(K_MOUSE);
+    case SDL_MOUSEWHEEL: {	/* a notch is a step; a touchpad's bits add up to steps; across: Shift+wheel */
+      float dx = e->wheel.preciseX, dy = e->wheel.preciseY;
+      int mods = km_of(SDL_GetModState());
+      if (e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
+        dx = -dx;
+        dy = -dy;
+      }
+      W.wheel_y += dy;
+      W.wheel_x += dx;
+      if (W.wheel_y >= 1.0f || W.wheel_y <= -1.0f) {
+        int n = (int)(W.wheel_y > 0 ? W.wheel_y : -W.wheel_y);
+        wheel_push(W.wheel_y > 0 ? -1 : 1, n, mods);	/* away from you: up */
+        W.wheel_y += W.wheel_y > 0 ? -(float)n : (float)n;
+      }
+      if (W.wheel_x >= 1.0f || W.wheel_x <= -1.0f) {
+        int n = (int)(W.wheel_x > 0 ? W.wheel_x : -W.wheel_x);
+        wheel_push(W.wheel_x > 0 ? 1 : -1, n, mods | KM_SHIFT);	/* to the right */
+        W.wheel_x += W.wheel_x > 0 ? -(float)n : (float)n;
+      }
       break;
     }
   }
@@ -952,14 +1568,22 @@ int term_key (int ms) {
       if ((int)gone >= ms) return K_NONE;
       wait = ms - (int)gone;
     }
+    {	/* the caret blinks while nothing comes, whoever waits (a dialog, the Chat box) */
+      int b = blink_wait();
+      if (b >= 0 && (wait < 0 || b < wait)) wait = b;
+    }
     got = wait < 0 ? SDL_WaitEvent(&e) : SDL_WaitEventTimeout(&e, wait);
     if (!got) {
-      if (ms >= 0) return K_NONE;
+      blink_tick();
       continue;
     }
     on_event(&e);
-    if (W.dirty || S.full) {	/* resized, uncovered: the editor draws again before the next key */
+    if (S.full) {	/* resized, zoomed: the editor draws again before the next key */
       if (g_qn == 0) return K_NONE;
+    }
+    else if (W.dirty && W.shown) {	/* uncovered, the keys came or went (the caret's shape): shown again */
+      caret_sync();
+      present();
     }
   }
 }
