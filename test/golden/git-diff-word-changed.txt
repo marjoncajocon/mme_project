@@ -1,6 +1,6 @@
 ---- cursor 82,4
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         wordrepo
-|      SOURCE CONTROL          │  pair.c (Working Tree)                                                   ¶   
+|      SOURCE CONTROL         │  pair.c (Working Tree)                                                   ¶   
 |      main                     │  pair.c
 |      Message (Ctrl+Enter to co  │ 1   int total (int a, int b) {           │ 1   int total (int a, int b) {
 |     Changes                1  │▎2 -     return added(a, b);              → 2 +     counted(a);                      ▌

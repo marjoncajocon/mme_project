@@ -487,8 +487,25 @@ static void overlay_workspace (Json *j) {
 ** (or "[javascript][typescript]": ...) wins over the plain key for the files
 ** of that language. What can be set so is what VS Code lets a language
 ** override: the text editor's settings and the files' ones.
+**
+** Each language's opt, eopt and vopt are read once and kept (the editor
+** groups switch between them every time they are drawn). What a command
+** changed since they were read (Auto Save, :set nu) stays as it is.
 */
-static Json *g_eff;	/* g_json with the language's block over it; NULL: g_json as it is */
+typedef struct LangOpts {
+  char lang[64];
+  Json *eff;	/* g_json with the language's block over it; NULL: g_json as it is */
+  Opt o;
+  EdOpt e;
+  VOpt v;
+} LangOpts;
+
+#define NLANG	8
+
+static LangOpts g_lo[NLANG];
+static int g_nlo, g_next;	/* the kept ones; the one to go next */
+static LangOpts g_read;	/* what the options were read as: a change since was a command's */
+static Json *g_eff;	/* the language in front's; NULL: g_json */
 static char g_lang[64];	/* the language opt is read for; "": none */
 
 static void read_opts (const Json *j);
@@ -513,13 +530,19 @@ int settings_overridable (const char *key) {
 }
 
 
-int settings_lang (const char *lang) {
+/* the kept languages go: g_json changed */
+static void lang_forget (void) {
+  int i;
+  for (i = 0; i < g_nlo; i++) json_free(g_lo[i].eff);
+  g_nlo = g_next = 0;
+  g_eff = NULL;
+}
+
+
+/* g_json with lang's blocks over it; NULL: it has none */
+static Json *lang_json (const char *lang) {
   Json *e = NULL;
   size_t i, k;
-  int had = g_eff != NULL;
-  if (lang == NULL) lang = "";
-  if (strcmp(lang, g_lang) == 0 || g_json == NULL) return 0;
-  snprintf(g_lang, sizeof(g_lang), "%s", lang);
   for (i = 0; *lang && i < g_json->n; i++) {
     const Json *b = g_json->kid[i];
     if (b->key[0] != '[' || b->type != J_OBJ || !block_for(b->key, lang)) continue;
@@ -543,10 +566,60 @@ int settings_lang (const char *lang) {
       overlay(e, &one);
     }
   }
-  json_free(g_eff);
-  g_eff = e;
-  if (!had && e == NULL) return 0;	/* no block then, none now: opt stays */
-  read_opts(e ? e : g_json);
+  return e;
+}
+
+
+/* now (what is in effect), was (what it was read as), to (what it is read as now): now keeps what changed since */
+static void keep_changes (void *now, const void *was, const void *to, size_t n) {
+  unsigned char *p = (unsigned char *)now;
+  const unsigned char *w = (const unsigned char *)was, *t = (const unsigned char *)to;
+  size_t i, c;
+  for (i = 0; i < n; i += c) {	/* an int at a time: a field is never half one, half the other */
+    c = n - i < sizeof(int) ? n - i : sizeof(int);
+    if (memcmp(p + i, w + i, c) == 0) memcpy(p + i, t + i, c);
+  }
+}
+
+
+int settings_lang (const char *lang) {
+  LangOpts *l = NULL;
+  int i;
+  if (lang == NULL) lang = "";
+  if (strcmp(lang, g_lang) == 0 || g_json == NULL) return 0;
+  snprintf(g_lang, sizeof(g_lang), "%s", lang);
+  for (i = 0; i < g_nlo && l == NULL; i++)
+    if (strcmp(g_lo[i].lang, lang) == 0) l = &g_lo[i];
+  if (l == NULL) {	/* read once */
+    Opt o = opt;
+    EdOpt e = eopt;
+    VOpt v = vopt;
+    if (g_nlo < NLANG) l = &g_lo[g_nlo++];
+    else {
+      l = &g_lo[g_next];
+      g_next = (g_next + 1) % NLANG;
+      json_free(l->eff);
+    }
+    snprintf(l->lang, sizeof(l->lang), "%s", lang);
+    l->eff = lang_json(lang);
+    read_opts(l->eff ? l->eff : g_json);
+    l->o = opt;
+    l->e = eopt;
+    l->v = vopt;
+    opt = o;
+    eopt = e;
+    vopt = v;
+  }
+  g_eff = l->eff;
+  if (memcmp(&l->o, &g_read.o, sizeof(Opt)) == 0 && memcmp(&l->e, &g_read.e, sizeof(EdOpt)) == 0 &&
+      memcmp(&l->v, &g_read.v, sizeof(VOpt)) == 0)
+    return 0;	/* the same options */
+  keep_changes(&opt, &g_read.o, &l->o, sizeof(Opt));
+  keep_changes(&eopt, &g_read.e, &l->e, sizeof(EdOpt));
+  keep_changes(&vopt, &g_read.v, &l->v, sizeof(VOpt));
+  g_read.o = l->o;
+  g_read.e = l->e;
+  g_read.v = l->v;
   return 1;
 }
 
@@ -570,11 +643,13 @@ int settings_load (void) {
     return -1;
   }
   overlay_workspace(j);
-  json_free(g_eff);
-  g_eff = NULL;
+  lang_forget();
   json_free(g_json);
   g_json = j;
   read_opts(j);
+  g_read.o = opt;
+  g_read.e = eopt;
+  g_read.v = vopt;
   vim_settings(j);
   if (g_lang[0]) {	/* the language in front: its block again */
     char was[64];
@@ -583,6 +658,58 @@ int settings_load (void) {
     settings_lang(was);
   }
   return 0;
+}
+
+
+/* a setting written into the file: the same in g_json, and the languages read again (opt is the caller's) */
+static void json_changed (const char *key, const char *value) {
+  char was[64];
+  size_t k;
+  if (g_json == NULL) return;
+  if (value) {
+    Json one, *kid[1], *v = json_parse(value, strlen(value));
+    if (v == NULL) return;
+    v->key = xstrdup(key);
+    memset(&one, 0, sizeof(one));
+    one.type = J_OBJ;
+    kid[0] = v;
+    one.kid = kid;
+    one.n = one.cap = 1;
+    overlay(g_json, &one);
+    json_free(v);
+  }
+  else
+    for (k = 0; k < g_json->n; k++)
+      if (strcmp(g_json->kid[k]->key, key) == 0) {
+        json_free(g_json->kid[k]);
+        memmove(g_json->kid + k, g_json->kid + k + 1, (g_json->n - k - 1) * sizeof(Json *));
+        g_json->n--;
+        break;
+      }
+  lang_forget();
+  snprintf(was, sizeof(was), "%s", g_lang);
+  g_lang[0] = '\0';
+  {	/* the plain file's, as g_read: a language's block is read over it */
+    Opt o = opt;
+    EdOpt e = eopt;
+    VOpt v = vopt;
+    read_opts(g_json);
+    g_read.o = opt;
+    g_read.e = eopt;
+    g_read.v = vopt;
+    opt = o;
+    eopt = e;
+    vopt = v;
+  }
+  if (was[0]) settings_lang(was);
+}
+
+
+/* true / false, or VS Code's newer words for it: "off" is false ("currentDocument", "always" ... true) */
+static int bool_or_word (const Json *v, int def) {
+  if (v && v->type == J_BOOL) return v->b;
+  if (v && v->type == J_STR) return strcmp(v->str, "off") != 0;
+  return def;
 }
 
 
@@ -608,11 +735,11 @@ static void read_opts (const Json *j) {
   opt.format_on_save = json_bool(json_get(j, "editor\\.formatOnSave"), 0);
   opt.blame_line = json_bool(json_get(j, "git\\.blame\\.editorDecoration\\.enabled"), 1);
   opt.blame_status = json_bool(json_get(j, "git\\.blame\\.statusBarItem\\.enabled"), 1);
-  opt.word_suggest = json_bool(json_get(j, "editor\\.wordBasedSuggestions"), 1);
+  opt.word_suggest = bool_or_word(json_get(j, "editor\\.wordBasedSuggestions"), 1);
   opt.snippet_suggest = strcmp(json_str(json_get(j, "editor\\.snippetSuggestions"), "inline"), "none") != 0;
   opt.vscode_ext = json_bool(json_get(j, "mme\\.extensions\\.useVSCodeExtensions"), 1);
   opt.sticky = json_bool(json_get(j, "editor\\.stickyScroll\\.enabled"), 1);
-  opt.word_hl = json_bool(json_get(j, "editor\\.occurrencesHighlight"), 1);
+  opt.word_hl = bool_or_word(json_get(j, "editor\\.occurrencesHighlight"), 1);
   opt.emmet_tab = json_bool(json_get(j, "emmet\\.triggerExpansionOnTab"), 1);
   opt.emmet_suggest = strcmp(json_str(json_get(j, "emmet\\.showExpandedAbbreviation"), "always"), "never") != 0;
   opt.close_tags = json_bool(json_get(j, "html\\.autoClosingTags"), 1);
@@ -700,7 +827,7 @@ static void read_opts (const Json *j) {
   opt.suggest_smart_commit = json_bool(json_get(j, "git\\.suggestSmartCommit"), 1);
   opt.scm_decor = strcmp(json_str(json_get(j, "scm\\.diffDecorations"), "all"), "none") != 0;
   opt.guides = json_bool(json_get(j, "editor\\.guides\\.indentation"), 1);
-  opt.guides_active = json_bool(json_get(j, "editor\\.guides\\.highlightActiveIndentation"), 1);
+  opt.guides_active = bool_or_word(json_get(j, "editor\\.guides\\.highlightActiveIndentation"), 1);
   {	/* [80, 120], or [{"column": 80}] */
     const Json *ru = json_get(j, "editor\\.rulers");
     size_t i;
@@ -844,6 +971,7 @@ void settings_reset (const char *key) {
   }
   free(s);
   free(f);
+  json_changed(key, NULL);
 }
 
 
@@ -907,6 +1035,7 @@ void settings_put_raw (const char *key, const char *value) {
   buf_free(&q);
   free(s);
   free(f);
+  json_changed(key, value);
 }
 
 

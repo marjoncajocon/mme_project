@@ -652,6 +652,51 @@ char *settings_hover (const char *key) {
 ** warning), a setting a "[lang]" block cannot hold (2). jtype: the
 ** value's J_*; str: a string's text. 0: nothing to say.
 */
+/*
+** Values VS Code takes that mme's lists do not have: no problem is said of
+** them in settings.json (mme reads them as its nearest, or its default). A
+** boolean's words are the strings it also takes.
+*/
+static const struct {
+  const char *key, *values;
+} vs_values[] = {
+  {"editor.wordWrap", "wordWrapColumn|bounded"},
+  {"editor.inlayHints.enabled", "onUnlessPressed|offUnlessPressed"},
+  {"editor.lightbulb.enabled", "on"},
+  {"workbench.startupEditor", "readme|newUntitledFile|welcomePageInEmptyWorkbench|terminal"},
+  {"explorer.sortOrder", "foldersNestsFiles"},
+  {"explorer.autoReveal", "focusNoScroll"},
+  {"terminal.integrated.shellIntegration.decorationsEnabled", "overviewRuler"},
+  {"scm.diffDecorations", "overview|minimap"},
+  {"workbench.panel.defaultLocation", "top"},
+  {"editor.wordBasedSuggestions", "off|currentDocument|matchingDocuments|allDocuments"},
+  {"editor.occurrencesHighlight", "off|singleFile|multiFile"},
+  {"editor.guides.highlightActiveIndentation", "always"},
+  {"files.encoding",
+   "iso88593|iso885915|macroman|cp437|windows1256|iso88596|windows1257|iso88594|iso885914|windows1250|"
+   "iso88592|cp852|windows1251|cp866|cp1125|iso88595|koi8r|koi8u|iso885913|windows1253|iso88597|"
+   "windows1255|iso88598|iso885910|iso885916|windows1254|iso88599|windows1258|gbk|gb18030|cp950|"
+   "big5hkscs|shiftjis|eucjp|euckr|windows874|iso885911|koi8ru|koi8t|gb2312|cp865|cp850"}
+};
+
+
+static int vs_takes (const char *key, const char *v) {
+  size_t i, n = strlen(v);
+  for (i = 0; i < sizeof(vs_values) / sizeof(vs_values[0]); i++)
+    if (strcmp(vs_values[i].key, key) == 0) {
+      const char *p = vs_values[i].values;
+      while (*p) {
+        const char *e = strchr(p, '|');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len == n && strncmp(p, v, n) == 0) return 1;
+        p += len;
+        if (*p) p++;
+      }
+    }
+  return 0;
+}
+
+
 int settings_check (const char *key, int jtype, const char *str, int in_lang, char *msg, size_t n) {
   const Setting *s = find_set(key);
   char e[256];
@@ -664,8 +709,9 @@ int settings_check (const char *key, int jtype, const char *str, int in_lang, ch
     snprintf(msg, n, "This setting cannot be applied in this language.");
     return 2;
   }
+  if (jtype == J_STR && vs_takes(key, str)) return 0;
+  if (s->type == ST_ENUM && s->values == NULL) return 0;	/* a theme: VS Code's may be one mme does not have */
   if (s->type == ST_BOOL && jtype != J_BOOL) {
-    if (strcmp(key, "explorer.autoReveal") == 0 && jtype == J_STR) return 0;	/* or "focusNoScroll" */
     snprintf(msg, n, "Incorrect type. Expected \"boolean\".");
     return 2;
   }

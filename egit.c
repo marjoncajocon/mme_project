@@ -421,6 +421,9 @@ static int cmp_change (const void *a, const void *b) {
 }
 
 
+static unsigned g_status_gen;	/* counts git_refresh: the multi-diff editor reads the changes again */
+
+
 void git_refresh (void) {
   Buf b;
   size_t i;
@@ -435,6 +438,7 @@ void git_refresh (void) {
     buf_free(&b);
     graph_load();
     build_rows();
+    g_status_gen++;
     return;
   }
   chomp(b.s);
@@ -470,6 +474,7 @@ void git_refresh (void) {
   buf_free(&b);
   graph_load();
   build_rows();
+  g_status_gen++;
 }
 
 
@@ -539,6 +544,7 @@ void git_draw (int x, int y, int w, int h, int focus) {
   if (h <= HEAD) return;
   scr_puts(x + 2, y, "SOURCE CONTROL", S_SIDE_HEAD);
   if (g_top && w > 24) {	/* VS Code's title actions: Commit, Refresh, More Actions */
+    scr_put(x + w - 9, y, 0xEAE1, S_SIDE_HEAD);	/* diff: View All Changes */
     scr_put(x + w - 7, y, 0xEAB2, S_SIDE_HEAD);	/* codicon check */
     scr_put(x + w - 5, y, 0xEB37, S_SIDE_HEAD);	/* refresh */
     scr_put(x + w - 3, y, 0xEA7C, S_SIDE_HEAD);	/* ellipsis */
@@ -897,7 +903,11 @@ void git_click (int row, int col, SideAct *act) {
   }
   if (row == 0 && g_top) {	/* the title's actions */
     int w = side_width();
-    if (col == w - 7) {
+    if (col == w - 9) {
+      act->what = SA_CMD;
+      act->cmd = CMD_GIT_VIEW_CHANGES;
+    }
+    else if (col == w - 7) {
       act->what = SA_CMD;
       act->cmd = CMD_GIT_COMMIT;
     }
@@ -961,7 +971,7 @@ typedef struct SRow {
   long l, r;	/* DLine on the left / right, -1: nothing there */
 } SRow;
 
-static struct {
+typedef struct DState {
   int open;
   char *path, *title;
   DLine *line;
@@ -1000,7 +1010,10 @@ static struct {
   size_t lastrow, lastcol;	/* the caret when last drawn: the view follows it when it moves */
   size_t *sri, *srs;	/* each screen row drawn: its view row, and which row of it (word wrap) */
   int nsr, capsr;
-} D;
+  int embed;	/* a file of the multi-diff editor: its changes only, nothing but the rows */
+} DState;
+
+static DState D;
 
 #define CTX	3	/* hideUnchangedRegions: the lines kept around a change */
 #define MIN_HIDE	3	/* and the fewest lines worth a fold */
@@ -1494,7 +1507,7 @@ static TLine *text_lines (const char *s, size_t len, size_t *n) {
     unsigned long h = 5381;
     size_t k;
     if (i < len && s[i] != '\n') continue;
-    if (i == len && i == from && *n > 0) break;	/* the newline at the end ends the last line */
+    if (i == len && i == from && (*n > 0 || len == 0)) break;	/* the newline at the end ends the last line; nothing: no line */
     if (*n == cap) v = (TLine *)xrealloc(v, (cap *= 2) * sizeof(TLine));
     for (k = from; k < i; k++) h = h * 33 + (unsigned char)s[k];
     v[*n].s = s + from;
@@ -1982,13 +1995,13 @@ static void vis_build (void) {
   int any = 0;
   D.nvis = 0;
   D.vis_split = D.split_now;
-  D.vis_hide = vopt.diff_hide;
+  D.vis_hide = D.embed || vopt.diff_hide;
   if (D.nexp != n) {	/* other rows (side by side, inline): the folds opened are forgotten */
     free(D.exp);
     D.exp = (unsigned char *)calloc(n + 1, 1);
     D.nexp = n;
   }
-  if (!vopt.diff_hide) return;
+  if (!D.vis_hide) return;
   for (k = 0; k < n && !any; k++) any = is_change(k);
   if (!any) return;
   k = 0;
@@ -2559,8 +2572,8 @@ void diff_draw (int x, int y, int w, int h, int wrap) {
   D.y = y;
   D.w = w;
   D.nw = nw;
-  D.mmw = (opt.minimap && w >= 100) ? DMM_W : 0;	/* its minimap, when there is room */
-  D.sbw = (w >= 30 && h >= 2) ? 1 : 0;	/* its scrollbar, at the right edge like the editor's */
+  D.mmw = (opt.minimap && w >= 100 && !D.embed) ? DMM_W : 0;	/* its minimap, when there is room */
+  D.sbw = (w >= 30 && h >= 2 && !D.embed) ? 1 : 0;	/* its scrollbar, at the right edge like the editor's */
   w -= D.mmw + D.sbw;
   D.hw = (w - 1) / 2;
   D.arrow_x = 2 * nw - 1;
@@ -2569,8 +2582,8 @@ void diff_draw (int x, int y, int w, int h, int wrap) {
     D.tcr = w - D.hw - 1 - nw - 2;
   }
   else D.tcl = D.tcr = w - 2 * nw - 2;
-  if (D.vis_split != D.split_now || D.vis_hide != vopt.diff_hide) vis_build();
-  D.hsb = !wrap && h > 3 && diff_wide() + 1 > text_cols();	/* a line wider than the text: a scrollbar under it */
+  if (D.vis_split != D.split_now || D.vis_hide != (D.embed || vopt.diff_hide)) vis_build();
+  D.hsb = !D.embed && !wrap && h > 3 && diff_wide() + 1 > text_cols();	/* a line wider than the text: a scrollbar under it */
   if (D.hsb) h--;
   D.h = h;
   if (wrap) D.left = 0;
@@ -3031,6 +3044,142 @@ void diff_wheel (int d, int mods) {
   if (d < 0) i = i > st ? i - st : 0;
   else i = i + st < lt ? i + st : lt;
   D.top = n ? vk(i) : 0;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The multi-diff editor's side of it (emdiff.c): the changes, and the
+** diff of each file kept aside, put in D to be drawn
+** ===================================================================
+*/
+
+unsigned git_status_gen (void) {
+  return g_status_gen;
+}
+
+
+/* the changes of a group: Staged Changes (staged) or Changes */
+size_t git_changes (int staged) {
+  size_t i, n = 0;
+  for (i = 0; i < g_nch; i++) n += staged ? is_staged(&g_ch[i]) : is_changed(&g_ch[i]);
+  return n;
+}
+
+
+/* the i-th of them: its path (native), and the letter the view shows for it */
+const char *git_change (int staged, size_t i, char *letter) {
+  size_t k;
+  for (k = 0; k < g_nch; k++) {
+    const Change *c = &g_ch[k];
+    char l;
+    if (!(staged ? is_staged(c) : is_changed(c))) continue;
+    if (i-- > 0) continue;
+    l = staged ? c->x : c->y;
+    *letter = l == '?' ? 'U' : l;	/* untracked: VS Code's U */
+    return c->path;
+  }
+  return NULL;
+}
+
+
+/* the diff in D set aside, D left empty */
+void *diff_take (void) {
+  DState *s = (DState *)xmalloc(sizeof(DState));
+  *s = D;
+  memset(&D, 0, sizeof(D));
+  return s;
+}
+
+
+/* what diff_take set aside is D again; the diff that was in D goes */
+void diff_put_back (void *s) {
+  diff_close();
+  D = *(DState *)s;
+  free(s);
+}
+
+
+void diff_swap (void *s) {
+  DState t = D;
+  D = *(DState *)s;
+  *(DState *)s = t;
+}
+
+
+/* a diff set aside goes */
+void diff_drop (void *s) {
+  DState t = D;
+  D = *(DState *)s;
+  diff_close();
+  D = t;
+  free(s);
+}
+
+
+/* the diff in D becomes a file of the multi-diff editor: read only, its changes only */
+void diff_embed (void) {
+  D.embed = 1;
+  D.edit = 0;
+  D.kind = DK_OTHER;	/* no revert arrows, no current change */
+  D.top = D.left = 0;
+  D.crow = (size_t)-1;
+  D.wrap = 0;
+  D.vis_split = -1;
+}
+
+
+/* its rows at width w, the unchanged ones folded */
+size_t diff_embed_rows (int w) {
+  D.split_now = !D.inline_mode && w >= 80;
+  if (D.vis_split != D.split_now || D.vis_hide != 1) vis_build();
+  return vcount();
+}
+
+
+/* its rows skip .. skip + h - 1 at x, y; sel: the row with the cursor, -1 none */
+void diff_embed_draw (int x, int y, int w, size_t skip, int h, long sel) {
+  size_t n = diff_embed_rows(w);
+  D.crow = sel >= 0 && (size_t)sel < n && !(D.nvis && D.vis[sel].hidden) ? vk((size_t)sel) : (size_t)-1;
+  D.top = skip < n ? vk(skip) : 0;
+  D.left = 0;
+  diff_draw(x, y, w, h, 0);
+}
+
+
+/* row i: the file's line there, from 1 (a line only gone: the next one's); 0 and *fold: a fold of unchanged lines */
+size_t diff_embed_line (size_t i, int *fold) {
+  size_t k, n = 0;
+  *fold = 0;
+  if (i >= vcount()) return 0;
+  if (D.nvis && D.vis[i].hidden) {
+    *fold = 1;
+    return 0;
+  }
+  for (k = vk(i); k < nrows() && n == 0; k++) n = new_line_of(k);
+  return n ? n : 1;
+}
+
+
+/* the fold at row i opens */
+void diff_embed_expand (size_t i) {
+  if (i < vcount() && D.nvis && D.vis[i].hidden && D.exp && D.vis[i].k < D.nexp) {
+    D.exp[D.vis[i].k] = 1;
+    D.vis_split = -1;
+  }
+}
+
+
+/* the lines that came and went */
+void diff_embed_stats (size_t *add, size_t *del) {
+  size_t i;
+  *add = *del = 0;
+  for (i = 0; i < D.nline; i++) {
+    *add += D.line[i].kind == '+';
+    *del += D.line[i].kind == '-';
+  }
 }
 
 /* }================================================================== */

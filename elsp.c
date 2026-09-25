@@ -2298,8 +2298,17 @@ void lsp_task_diags (const char *path, const Diag *v, size_t n) {
 }
 
 
+static unsigned g_task_gen;
+
+
+unsigned lsp_task_gen (void) {
+  return g_task_gen;
+}
+
+
 void lsp_task_clear (void) {
   size_t k, i;
+  g_task_gen++;
   for (k = 0; k < g_ndiag; k++) {
     DFile *f = &g_diag[k];
     for (i = f->n - f->nt; i < f->n; i++) free(f->v[i].msg);

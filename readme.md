@@ -840,6 +840,13 @@ With no file open the editor shows the keys to start with.
   side (diffEditor.renderSideBySide), and open the file. A → by a change of
   the working tree reverts that block.
 
+- **View All Changes** — the diff icon in Source Control's title, or "Git:
+  View All Changes" / "Git: View Staged Changes", opens VS Code's multi-diff
+  editor: every changed file in one tab, a header (name, folder, +added
+  -removed, its letter) over its diff, side by side when there is room, the
+  unchanged lines folded. Enter or a click on a header folds the file (Left
+  / Right too); Enter or a double click on a line opens the file there, on a
+  fold opens it. The tab follows git: a save shows at once.
 - **Title bar** — the command center in the middle (window.commandCenter): the
   folder's name in a box that opens Go to File, with Go Back and Go Forward
   beside it. `window.title` takes VS Code's variables (`${activeEditorShort}`,
@@ -867,6 +874,7 @@ With no file open the editor shows the keys to start with.
 | Help > Keyboard Shortcuts Reference | this table, made from your keys |
 | Ctrl+N / Ctrl+O / Ctrl+R | New File / Open File / Open Project (recent folders) |
 | Ctrl+S / Ctrl+Shift+S | Save / Save As |
+| Ctrl+K S | Save All (each file by its language's settings) |
 | Ctrl+W / Ctrl+Q | Close Editor / Exit (asks when not saved) |
 | Ctrl+PgDn / Ctrl+PgUp | next / previous tab |
 | Ctrl+Tab | the editors by use |

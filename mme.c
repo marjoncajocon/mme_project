@@ -249,6 +249,7 @@ static void fold_shift (int ins, Pos a, Pos b);
 static void editor_key (int k);
 static int indent_more (const char *s, size_t n);
 static void cursor_forget (Tab *t);	/* Ctrl+U: the tab is closing */
+static const char *tab_lang (const Tab *t);	/* its language, for its settings ("[python]") */
 static const char *doc_lang_id (void);	/* the language of the file in front ("python") */
 static void doc_comment (const char **line, const char **open, const char **close);
 static void outdent_typed (void);
@@ -2982,6 +2983,7 @@ static const char *tab_name (const Tab *t) {
   static int k;
   if (t->page == PAGE_MERGE) return merge_tab_name();
   if (t->page == PAGE_SEARCHED) return searched_title(t->pdata);
+  if (t->page == PAGE_MDIFF) return mdiff_title(t->pdata);
   if (t->page == PAGE_IMAGE || t->page == PAGE_HEX)	/* a picture or a binary: the file's name */
     return t->ppath ? path_basename(t->ppath) : "Untitled";
   if (t->page) return t->page == PAGE_SETTINGS ? "Settings" : "Welcome";
@@ -3035,7 +3037,7 @@ static int draw_tab (int x, int y, const char *name, int on, int dirty, int prev
                      int page, int gmark) {
   int ist, w = tab_width(name), x1, n;
   uint32_t icon = page == PAGE_SETTINGS ? 0xEAF8 : page == PAGE_WELCOME ? 0xF121
-                : page == PAGE_MERGE ? 0xEAFB : page == PAGE_SEARCHED ? 0xEA6D
+                : page == PAGE_MERGE ? 0xEAFB : page == PAGE_SEARCHED ? 0xEA6D : page == PAGE_MDIFF ? 0xEAE1
                 : file_icon(name, &ist);	/* a page: gear, </>, merge, search */
   int st = on ? S_TAB_ON : S_TAB;
   if (x + w > L.ed_x + L.ed_w) w = L.ed_x + L.ed_w - x;
@@ -4622,6 +4624,7 @@ static void compose (void) {
       other = (g != cur);
       G = &g_grp[g];
       T = G->ntab ? G->tab[G->active] : &g_none;
+      settings_lang(tab_lang(T));	/* each group by its file's language */
       use_group(g);
       group_layout();
       clamp_view();
@@ -4631,6 +4634,7 @@ static void compose (void) {
     if (E.tdrag == 2) draw_drop();
     G = &g_grp[cur];
     T = G->ntab ? G->tab[G->active] : &g_none;
+    settings_lang(tab_lang(T));
     layout();
   }
   if (L.panel_h > 0) {
@@ -4677,16 +4681,20 @@ static void background (void) {
 
 static void json_lint (void);
 
+/* the language of tab t, for its settings ("[python]"); "": no file */
+static const char *tab_lang (const Tab *t) {
+  const char *id;
+  if (t == &g_none || t->doc == NULL) return "";
+  id = t->sx ? syntax_lang(t->sx) : t->doc->path ? ext_lang_for(t->doc->path) : NULL;
+  return id ? id : "plaintext";
+}
+
+
 /* the settings of the language in front ("[markdown]": {"editor.wordWrap": "on"}): what they change shows */
 static void lang_settings (void) {
-  const char *id = NULL;
   int wrap = opt.word_wrap, mm = opt.minimap;
-  if (HAS_DOC) {
-    id = T->sx ? syntax_lang(T->sx) : T->doc->path ? ext_lang_for(T->doc->path) : NULL;
-    if (id == NULL) id = "plaintext";
-  }
   json_lint();	/* settings.json's problems */
-  if (!settings_lang(id ? id : "")) return;
+  if (!settings_lang(HAS_DOC ? tab_lang(T) : "")) return;
   if (opt.word_wrap != wrap) E.wrap = opt.word_wrap;
   if (opt.minimap != mm) E.minimap = opt.minimap;
 }
@@ -5774,6 +5782,7 @@ static void tab_free (int i) {
   if (t->page == PAGE_HEX) hex_close(t->pdata);
   else if (t->page == PAGE_IMAGE) img_close(t->pdata);
   else if (t->page == PAGE_SEARCHED) searched_close(t->pdata);
+  else if (t->page == PAGE_MDIFF) mdiff_close(t->pdata);
   free(t->ppath);
   if (--t->doc->refs <= 0) {	/* the last tab that shows it */
     lsp_close(t->doc);
@@ -7578,12 +7587,31 @@ static char *with_json_hover (char *dg, Pos p) {
 static void json_lint (void) {
   static const Doc *last;
   static unsigned long edits;
+  static unsigned gen;
+  static char *path;	/* the file they are said of */
   JScan s;
   Diag *v;
   size_t i, n = 0;
-  if (json_file() != JF_SETTINGS || (T->doc == last && T->doc->edits == edits)) return;
+  if (json_file() != JF_SETTINGS) {
+    int g, open = 0;
+    for (g = 0; path && g < g_ngrp && !open; g++)	/* closed: its problems go */
+      for (i = 0; i < (size_t)g_grp[g].ntab && !open; i++)
+        open = g_grp[g].tab[i]->doc->path && m_fncmp(g_grp[g].tab[i]->doc->path, path) == 0;
+    if (path && !open) {
+      lsp_task_diags(path, NULL, 0);
+      free(path);
+      path = NULL;
+      last = NULL;
+    }
+    return;
+  }
+  if (T->doc == last && T->doc->edits == edits && lsp_task_gen() == gen && m_fncmp(T->doc->path, path) == 0) return;
   last = T->doc;
   edits = T->doc->edits;
+  gen = lsp_task_gen();
+  if (path && m_fncmp(path, T->doc->path) != 0) lsp_task_diags(path, NULL, 0);	/* another settings.json */
+  free(path);
+  path = xstrdup(T->doc->path);
   s.p.y = T->doc->n;
   s.p.x = 0;
   json_scan(&s, 1);
@@ -13199,6 +13227,7 @@ static void page_draw (int other) {
   else if (T->page == PAGE_HEX) hex_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else if (T->page == PAGE_IMAGE) img_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else if (T->page == PAGE_SEARCHED) searched_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
+  else if (T->page == PAGE_MDIFF) mdiff_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else welcome_draw(L.ed_x, y, L.ed_w, h, focus, &g_wrecent);
 }
 
@@ -13213,10 +13242,11 @@ static void page_key (int k) {
     img_key(T->pdata, k);
     return;
   }
-  if (T->page == PAGE_SEARCHED) {	/* the Search Editor: a result to go to */
+  if (T->page == PAGE_SEARCHED || T->page == PAGE_MDIFF) {	/* the Search Editor, the multi-diff: a file to go to */
     SideAct sa;
     memset(&sa, 0, sizeof(sa));
-    searched_key(T->pdata, k, &sa);
+    if (T->page == PAGE_SEARCHED) searched_key(T->pdata, k, &sa);
+    else mdiff_key(T->pdata, k, &sa);
     apply_act(&sa);
     return;
   }
@@ -13250,10 +13280,11 @@ static void page_mouse (Mouse *m) {
     if (m->wheel && (m->mods & KM_CTRL)) img_zoom(T->pdata, m->wheel < 0 ? 1 : -1);	/* Ctrl+wheel: nearer */
     return;
   }
-  if (T->page == PAGE_SEARCHED) {
+  if (T->page == PAGE_SEARCHED || T->page == PAGE_MDIFF) {
     SideAct sa;
     memset(&sa, 0, sizeof(sa));
-    searched_mouse(T->pdata, m, &sa);
+    if (T->page == PAGE_SEARCHED) searched_mouse(T->pdata, m, &sa);
+    else mdiff_mouse(T->pdata, m, &sa);
     apply_act(&sa);
     return;
   }
@@ -14244,7 +14275,20 @@ static void after_save (void) {
 
 
 /* the tab in front saved (its path known): format, trim, write, and what follows; 0 saved */
-static int save_front (int reason) {
+static int save_front_lang (int reason);
+
+static int save_front (int reason) {	/* by the settings of its language (Save All saves the others too) */
+  char was[64];
+  int r;
+  snprintf(was, sizeof(was), "%s", settings_lang_now());
+  settings_lang(tab_lang(T));
+  r = save_front_lang(reason);
+  settings_lang(was);
+  return r;
+}
+
+
+static int save_front_lang (int reason) {
   Doc *d = T->doc;
   doc_disk_check(d);
   if (d->disk_state == DISK_NEWER) {
@@ -14260,6 +14304,22 @@ static int save_front (int reason) {
   }
   after_save();
   return 0;
+}
+
+
+static void save_tab (Tab *t, int reason);
+
+/* File: Save All (Ctrl+K S): every file with changes, each by its language's settings; not the untitled ones */
+static void save_all (void) {
+  int g, i, n = 0;
+  for (g = 0; g < g_ngrp; g++)
+    for (i = 0; i < g_grp[g].ntab; i++) {
+      Tab *t = g_grp[g].tab[i];
+      if (t->page || t->md || t->doc->path == NULL || !doc_dirty(t->doc)) continue;
+      save_tab(t, SAVE_EXPLICIT);
+      n++;
+    }
+  if (n == 0) toast(0, "No files with changes to save.");
 }
 
 
@@ -14546,7 +14606,7 @@ static void session_restore (void) {
         page_file_open(page, path, 0);
         continue;
       }
-      if (page == PAGE_SEARCHED) continue;	/* a Search Editor never saved: it is not kept */
+      if (page == PAGE_SEARCHED || page == PAGE_MDIFF) continue;	/* a Search Editor never saved, a multi-diff: not kept */
       if (bk) {
         char *bf = path_join(bd, bk);
         btext = read_file(bf, &blen);
@@ -16179,6 +16239,17 @@ static void run_command (int cmd) {
     case CMD_COPILOT_SIGNOUT: lsp_inline_signout(); break;
     case CMD_COPILOT_STATUS: copilot_status(); break;
     case CMD_VIM_TOGGLE: vim_toggle(); break;
+    case CMD_SAVE_ALL: save_all(); break;
+    case CMD_GIT_VIEW_CHANGES: case CMD_GIT_VIEW_STAGED: {	/* the multi-diff editor */
+      void *md = mdiff_new(cmd == CMD_GIT_VIEW_STAGED);
+      if (md == NULL) break;
+      tab_new();
+      T->page = PAGE_MDIFF;
+      T->pdata = md;
+      G->diff = 0;
+      E.focus = F_EDITOR;
+      break;
+    }
     case CMD_MANAGE: manage_menu(); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
@@ -16907,7 +16978,8 @@ static int global_key (int k) {
     else if (k == '/' || k == ('/' | KM_CTRL) || k == 0x1F) run_command(CMD_FOLD_COMMENTS);
     else if ((KEY_CODE(k) >= '1' && KEY_CODE(k) <= '7') && (k & ~KM_CTRL) == KEY_CODE(k)) run_command(CMD_FOLD_L1 + (KEY_CODE(k) - '1'));
     else if (k == ('c' | KM_CTRL | KM_SHIFT) || k == ('C' | KM_CTRL | KM_SHIFT)) run_command(CMD_COPY_REL_PATH);
-    else if (k == 's' || k == CTRL('s')) run_command(CMD_KEYS);
+    else if (k == 's') run_command(CMD_SAVE_ALL);	/* VS Code's: Ctrl+K S saves all, Ctrl+K Ctrl+S the shortcuts */
+    else if (k == CTRL('s')) run_command(CMD_KEYS);
     else if (k == 'm' || k == 'M') run_command(CMD_LANGUAGE);
     else if (k == 'x' || k == CTRL('x')) run_command(CMD_TRIM);
     else if (k == (CTRL('s') | KM_ALT) || k == ('s' | KM_CTRL | KM_ALT)) run_command(CMD_STAGE_RANGES);

@@ -1,6 +1,6 @@
 ---- cursor 6,3
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
-|      SOURCE CONTROL          │
+|      SOURCE CONTROL         │
 |      main                     │
 |      Message (Ctrl+Enter to co  │
 |     Changes                2  │

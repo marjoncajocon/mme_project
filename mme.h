@@ -619,7 +619,7 @@ enum {
   CMD_CHAT_SET_KEY, CMD_INLINE_CHAT, CMD_INLINE_CHAT_ACCEPT, CMD_INLINE_CHAT_DISCARD,	/* echat.c */
   CMD_SEARCHED_NEW, CMD_SEARCHED_FROM_VIEW, CMD_SEARCHED_RERUN, CMD_SEARCHED_CONTEXT,	/* esearched.c: these */
   CMD_SEARCHED_MORE_CONTEXT, CMD_SEARCHED_LESS_CONTEXT, CMD_SEARCHED_FOCUS, CMD_SEARCHED_DELETE_FILE,	/* ... to here */
-  CMD_VIM_TOGGLE,
+  CMD_VIM_TOGGLE, CMD_SAVE_ALL, CMD_GIT_VIEW_CHANGES, CMD_GIT_VIEW_STAGED,
   CMD_N
 };
 
@@ -830,7 +830,7 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
 ** esettings.c, ewelcome.c - the pages that show in an editor tab: the
 ** Settings editor and the Welcome page. They tell mme.c what to do.
 */
-enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE, PAGE_SEARCHED };
+enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE, PAGE_SEARCHED, PAGE_MDIFF };
 
 typedef struct PageAct {
   int what;	/* PA_* */
@@ -1062,6 +1062,28 @@ int git_commit (int amend);	/* the message box's text; 0: it must be typed first
 int diff_open_rev (const char *path, const char *rel, const char *old_rel,
                    const char *old, const char *new_, const char *title);
 int diff_open_files (const char *path, const char *old_file, const char *new_file, const char *title);
+unsigned git_status_gen (void);	/* counts the times git's status was read */
+size_t git_changes (int staged);	/* the files of Staged Changes (staged) or Changes */
+const char *git_change (int staged, size_t i, char *letter);	/* the i-th: its path, and its letter */
+void *diff_take (void);	/* the diff editor's diff set aside, the editor left empty */
+void diff_put_back (void *s);	/* and back in it (the diff there now goes) */
+void diff_swap (void *s);	/* the one set aside and the one in the editor change places */
+void diff_drop (void *s);	/* one set aside goes */
+void diff_embed (void);	/* the diff in the editor becomes a file of the multi-diff editor */
+size_t diff_embed_rows (int w);	/* its rows at width w, the unchanged lines folded */
+void diff_embed_draw (int x, int y, int w, size_t skip, int h, long sel);	/* rows skip.. at x, y; sel: the cursor's */
+size_t diff_embed_line (size_t i, int *fold);	/* row i: the file's line, from 1; *fold: a fold there */
+void diff_embed_expand (size_t i);	/* the fold at row i opens */
+void diff_embed_stats (size_t *add, size_t *del);	/* the lines that came and went */
+
+/* emdiff.c - the multi-diff editor: every changed file's diff in one tab (PAGE_MDIFF) */
+void *mdiff_new (int staged);	/* Changes, or Staged Changes */
+void mdiff_close (void *page);
+const char *mdiff_title (void *page);	/* "Git: Changes" */
+void mdiff_draw (void *page, int x, int y, int w, int h, int focus);
+void mdiff_key (void *page, int k, SideAct *act);	/* act: a file to open at a line */
+void mdiff_mouse (void *page, const Mouse *m, SideAct *act);
+void mdiff_fold_all (void *page, int fold);	/* Collapse All, Expand All */
 
 /* egitlog.c - the Source Control Graph, branches, the git commands, blame */
 void graph_load (void);
@@ -1512,6 +1534,7 @@ int lsp_progress_count (void);	/* $/progress running now */
 int lsp_progress_text (int i, char *buf, size_t n);	/* its text; its percentage, -1 none */
 void lsp_task_diags (const char *path, const Diag *v, size_t n);	/* a task's problems in a file */
 void lsp_task_clear (void);
+unsigned lsp_task_gen (void);	/* counts lsp_task_clear: what was put in since went */
 
 /* mme.c: where the answers go */
 void on_completion (Doc *d, CompItem *v, size_t n);	/* takes v */

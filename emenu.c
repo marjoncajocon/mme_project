@@ -141,7 +141,7 @@ static const char *const names[CMD_N] = {
   "Search Editor: Toggle Context Lines", "Search Editor: Increase Context Lines",
   "Search Editor: Decrease Context Lines", "Search Editor: Focus Search Editor Input",
   "Search Editor: Delete File Results",
-  "Vim: Toggle Vim Mode"
+  "Vim: Toggle Vim Mode", "File: Save All", "Git: View All Changes", "Git: View Staged Changes"
 };
 
 static const char *const keys[CMD_N] = {
@@ -203,7 +203,7 @@ static const char *const keys[CMD_N] = {
   "",
   "Ctrl+Alt+I", "", "", "Ctrl+Alt+B", "", "", "", "Ctrl+I", "Ctrl+Enter", "Escape",
   "", "Alt+Enter", "Ctrl+Shift+R", "Alt+L", "Alt+=", "Alt+-", "Escape", "Ctrl+Shift+Backspace",
-  ""
+  "", "Ctrl+K S", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -359,7 +359,7 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "search.action.openNewEditor", "search.action.openInEditor", "rerunSearchEditorSearch",
   "toggleSearchEditorContextLines", "increaseSearchEditorContextLines", "decreaseSearchEditorContextLines",
   "search.searchEditor.action.focusQueryEditorWidget", "search.searchEditor.action.deleteFileResults",
-  "toggleVim"
+  "toggleVim", "workbench.action.files.saveAll", "git.viewChanges", "git.viewStagedChanges"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -411,7 +411,7 @@ int cmd_by_id (const char *id) {
 
 /* 0 is a line between groups, -1 the end */
 static const int m_file[] = {CMD_NEW, 0, CMD_OPEN_FILE, CMD_OPEN_FOLDER, CMD_OPEN_WORKSPACE, CMD_OPEN_PROJECT,
-                             0, CMD_ADD_FOLDER, CMD_SAVE_WORKSPACE, 0, CMD_SAVE, CMD_SAVE_AS, 0, CMD_AUTO_SAVE, CMD_REVERT, 0, CMD_SETTINGS, CMD_SETTINGS_JSON, CMD_KEYS, CMD_SNIPPETS, CMD_IMPORT_VSCODE, 0, CMD_CLOSE, CMD_CLOSE_WORKSPACE, 0, CMD_QUIT, -1};
+                             0, CMD_ADD_FOLDER, CMD_SAVE_WORKSPACE, 0, CMD_SAVE, CMD_SAVE_AS, CMD_SAVE_ALL, 0, CMD_AUTO_SAVE, CMD_REVERT, 0, CMD_SETTINGS, CMD_SETTINGS_JSON, CMD_KEYS, CMD_SNIPPETS, CMD_IMPORT_VSCODE, 0, CMD_CLOSE, CMD_CLOSE_WORKSPACE, 0, CMD_QUIT, -1};
 static const int m_edit[] = {CMD_UNDO, CMD_REDO, 0, CMD_CUT, CMD_COPY, CMD_PASTE,
                              0, CMD_FIND, CMD_REPLACE, CMD_FIND_FILES, 0, CMD_COMMENT, CMD_BLOCK_COMMENT, 0, CMD_UPPER, CMD_LOWER, CMD_SORT_ASC, CMD_JOIN, CMD_TRIM,
                              0, CMD_FORMAT, CMD_FORMAT_SEL, CMD_ORGANIZE_IMPORTS, CMD_SOURCE_ACTION, CMD_INSERT_SNIPPET, 0, CMD_SUGGEST, CMD_QUICKFIX, CMD_RENAME, -1};

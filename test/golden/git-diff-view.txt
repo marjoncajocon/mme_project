@@ -1,6 +1,6 @@
 ---- cursor 83,13
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
-|      SOURCE CONTROL          │  tracked.c (Working Tree)                                                ¶   
+|      SOURCE CONTROL         │  tracked.c (Working Tree)                                                ¶   
 |      main                     │  tracked.c
 |      Message (Ctrl+Enter to co  │  2                                       │  2
 |     Changes                2  │  3   int keep_one (void) {               │  3   int keep_one (void) {

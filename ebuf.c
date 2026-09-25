@@ -402,7 +402,24 @@ int doc_load (Doc *d, const char *native) {
 }
 
 
+static int load_enc (Doc *d, const char *native, int enc);
+
+
+/* by the settings of its language ("[python]": {"editor.tabSize": 2}, files.encoding ...) */
 int doc_load_enc (Doc *d, const char *native, int enc) {
+  const Syntax *sx = syntax_detect(native, NULL);
+  const char *id = sx ? syntax_lang(sx) : ext_lang_for(native);
+  char was[64];
+  int r;
+  snprintf(was, sizeof(was), "%s", settings_lang_now());
+  settings_lang(id ? id : "plaintext");
+  r = load_enc(d, native, enc);
+  settings_lang(was);
+  return r;
+}
+
+
+static int load_enc (Doc *d, const char *native, int enc) {
   size_t len;
   OsStat st;
   char *s;
@@ -425,15 +442,12 @@ int doc_load_enc (Doc *d, const char *native, int enc) {
   d->crlf = crlf;
   doc_set_text(d, s, len);
   free(s);
-  {	/* its indentation by its language's settings ("[python]": {"editor.tabSize": 2}) */
+  {	/* a first line (#!) may say another language */
     const Syntax *sx = syntax_detect(native, d);
     const char *id = sx ? syntax_lang(sx) : ext_lang_for(native);
-    char was[64];
-    snprintf(was, sizeof(was), "%s", settings_lang_now());
     settings_lang(id ? id : "plaintext");
-    doc_detect_indent(d);
-    settings_lang(was);
   }
+  doc_detect_indent(d);
   edconf_apply(d, 0);	/* its indent wins over the detected one */
   doc_stamp(d);
   return 0;
