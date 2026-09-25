@@ -9,6 +9,7 @@
 
 #include "mme.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -424,7 +425,15 @@ int doc_load_enc (Doc *d, const char *native, int enc) {
   d->crlf = crlf;
   doc_set_text(d, s, len);
   free(s);
-  doc_detect_indent(d);
+  {	/* its indentation by its language's settings ("[python]": {"editor.tabSize": 2}) */
+    const Syntax *sx = syntax_detect(native, d);
+    const char *id = sx ? syntax_lang(sx) : ext_lang_for(native);
+    char was[64];
+    snprintf(was, sizeof(was), "%s", settings_lang_now());
+    settings_lang(id ? id : "plaintext");
+    doc_detect_indent(d);
+    settings_lang(was);
+  }
   edconf_apply(d, 0);	/* its indent wins over the detected one */
   doc_stamp(d);
   return 0;

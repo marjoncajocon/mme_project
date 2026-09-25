@@ -472,6 +472,21 @@ With no file open the editor shows the keys to start with.
   JSON. The icon at the top right, or "Preferences: Open User Settings
   (JSON)", opens settings.json itself (made the first time with every
   setting and its default); saving it applies it too.
+- **settings.json and keybindings.json** — as in VS Code, typing a key's
+  quote or its first letters suggests the settings not yet in the file
+  (`"editor.ta` finds editor.tabSize); taking one puts in `"key": value`
+  with the value to pick, and a comma when another key follows. After
+  `"key": ` the values it takes are suggested, the default first; `"[`
+  suggests the language blocks. The mouse on a key (or Ctrl+K Ctrl+I) shows
+  its description and default. A key mme does not have is a hint ("Unknown
+  Configuration Setting"), a value of the wrong kind or not in the list a
+  warning. In keybindings.json an entry's key, command, when and args are
+  suggested, and every command id after `"command": `.
+- **Language-specific settings** — `"[python]": { "editor.tabSize": 2 }`
+  (or `"[javascript][typescript]": ...`) applies to that language's files
+  only: the text editor's settings and the files' ones (editor.*, files.*,
+  diffEditor.*, emmet.*, html.*), as VS Code lets a language override. A
+  workspace's block goes over the user's key by key.
 - **Welcome** — at startup when no file is opened (workbench.startupEditor),
   and from Help > Welcome: Start (New File, Open File, Open Folder, Open
   Project), the recent folders, a walkthrough of the keys worth knowing, and

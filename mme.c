@@ -4675,7 +4675,25 @@ static void background (void) {
 }
 
 
+static void json_lint (void);
+
+/* the settings of the language in front ("[markdown]": {"editor.wordWrap": "on"}): what they change shows */
+static void lang_settings (void) {
+  const char *id = NULL;
+  int wrap = opt.word_wrap, mm = opt.minimap;
+  if (HAS_DOC) {
+    id = T->sx ? syntax_lang(T->sx) : T->doc->path ? ext_lang_for(T->doc->path) : NULL;
+    if (id == NULL) id = "plaintext";
+  }
+  json_lint();	/* settings.json's problems */
+  if (!settings_lang(id ? id : "")) return;
+  if (opt.word_wrap != wrap) E.wrap = opt.word_wrap;
+  if (opt.minimap != mm) E.minimap = opt.minimap;
+}
+
+
 static void draw (void) {
+  lang_settings();
   background();
   scr_cursor_shape(E.focus == F_PANEL && E.panel && E.panel_view == 0 && panel_alive() ? panel_cursor_shape()
                                                                                           : editor_shape());
@@ -6804,7 +6822,7 @@ static struct {
   int forced;	/* Ctrl+Space: say so when there is nothing */
   unsigned gen;	/* the server's answer it is (lsp_comp_gen) */
   int choice;	/* a snippet's choices: not filtered by what is typed */
-  int skey;	/* settings.json's keys: the word is the key, dots and all */
+  int json;	/* settings.json's, keybindings.json's: the word is a key or a value, dots and all */
 } CP;
 
 static int g_comp_details = 1;	/* the documentation beside the list (Ctrl+Space: Read Less / More) */
@@ -7070,31 +7088,88 @@ static void comp_local (int forced) {
 
 
 /*
-** settings.json: the keys suggested where a key goes, as VS Code does
-** from its schema. A key is typed in its quotes ("editor.ta|) or bare.
+** settings.json and keybindings.json, as VS Code knows them from their
+** schemas: the keys suggested where a key goes ("editor.ta| or bare), the
+** values where a value goes, a "[python]" block's own keys, the hover of
+** a setting, and settings.json's problems (an unknown key, a wrong value).
 */
-static int is_settings_doc (void) {
-  return HAS_DOC && T->doc->path && m_stricmp(path_basename(T->doc->path), "settings.json") == 0;
+static void snippet_insert (Pos a, Pos b, const char *body);
+
+enum { JF_NONE, JF_SETTINGS, JF_KEYS };
+
+static int json_file (void) {
+  const char *b;
+  if (!HAS_DOC || T->page || G->diff || T->doc->path == NULL) return JF_NONE;
+  b = path_basename(T->doc->path);
+  if (m_stricmp(b, "settings.json") == 0) return JF_SETTINGS;
+  if (m_stricmp(b, "keybindings.json") == 0) return JF_KEYS;
+  return JF_NONE;
 }
 
 
 static int is_key_char (int c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' ||
+         c == '-' || c == '[' || c == ']';
 }
 
 
-/* the file up to p: how deep in braces p is; the keys of the top object into *keys (when keys) */
-static int skey_scan (Pos p, char ***keys, size_t *nk) {
+static int is_value_char (int c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+';
+}
+
+
+typedef struct JKey {	/* a key of the file */
+  char *key;
+  long obj;	/* the object it is in: its number */
+  int depth;	/* how deep that object is: 1 the top one */
+  int in_lang;	/* the object is a "[python]" block of the top one */
+  Pos a, b;	/* the key, its quotes too */
+  int vtype;	/* its value's J_*; -1: not on its line */
+  char *vstr;	/* a string value's text */
+} JKey;
+
+#define JDEEP	16
+
+typedef struct JScan {
+  Pos p;	/* asked about */
+  int depth;	/* the braces and brackets p is in */
+  long obj;	/* the object (or array) p is in: its number */
+  int arr;	/* p is right in an array */
+  char parent[64];	/* the key of the object p is in; "": none */
+  JKey *k;	/* every key (when asked for) */
+  size_t nk;
+} JScan;
+
+
+/* the file read up to its end: where s->p is, and every key when keys */
+static void json_scan (JScan *s, int keys) {
+  long id[JDEEP] = {0}, count = 0;
+  char name[JDEEP][64], last[64] = "";
+  int isarr[JDEEP] = {0}, depth = 0, at = 0, com = 0;
   size_t y, x, cap = 0;
-  int depth = 0, at = -1, com = 0;	/* com: in a comment */
+  name[0][0] = '\0';
+  s->k = NULL;
+  s->nk = 0;
+  s->depth = 0;
+  s->obj = 0;
+  s->arr = 0;
+  s->parent[0] = '\0';
+#define JD	(depth < JDEEP ? depth : JDEEP - 1)
+#define JAT()	do { \
+    if (!at && (y > s->p.y || (y == s->p.y && x >= s->p.x))) { \
+      at = 1; \
+      s->depth = depth; \
+      s->obj = id[JD]; \
+      s->arr = isarr[JD]; \
+      snprintf(s->parent, sizeof(s->parent), "%s", name[JD]); \
+      if (!keys) return; \
+    } \
+  } while (0)
   for (y = 0; y < T->doc->n; y++) {
     const Row *r = row_at(y);
     for (x = 0; x < r->len; x++) {
       char c = r->s[x];
-      if (at < 0 && (y > p.y || (y == p.y && x >= p.x))) {
-        at = depth;
-        if (keys == NULL) return at;
-      }
+      JAT();
       if (com) {
         if (c == '*' && x + 1 < r->len && r->s[x + 1] == '/') {
           com = 0;
@@ -7106,70 +7181,440 @@ static int skey_scan (Pos p, char ***keys, size_t *nk) {
         com = 1;
         x++;
       }
-      else if (c == '{' || c == '[') depth++;
-      else if (c == '}' || c == ']') depth--;
+      else if (c == '{' || c == '[') {
+        depth++;
+        id[JD] = ++count;
+        isarr[JD] = c == '[';
+        snprintf(name[JD], sizeof(name[0]), "%s", last);
+        last[0] = '\0';
+      }
+      else if (c == '}' || c == ']') {
+        if (depth > 0) depth--;
+        last[0] = '\0';
+      }
+      else if (c == ',') last[0] = '\0';
       else if (c == '"') {
         size_t b = ++x, k;
         while (x < r->len && r->s[x] != '"') x += r->s[x] == '\\' ? 2 : 1;
         if (x > r->len) x = r->len;
         for (k = x + 1; k < r->len && (r->s[k] == ' ' || r->s[k] == '\t'); k++) {}
-        if (keys && depth == 1 && x < r->len && k < r->len && r->s[k] == ':' && !(y == p.y && b == p.x)) {
-          if (*nk == cap) *keys = (char **)xrealloc(*keys, (cap = cap ? cap * 2 : 64) * sizeof(char *));
-          (*keys)[(*nk)++] = xstrndup(r->s + b, x - b);
+        if (x < r->len && k < r->len && r->s[k] == ':') {	/* a key */
+          snprintf(last, sizeof(last), "%.*s", (int)(x - b), r->s + b);
+          if (keys && !(y == s->p.y && b == s->p.x)) {	/* not the one being typed */
+            JKey *e;
+            size_t v = k + 1;
+            if (s->nk == cap) s->k = (JKey *)xrealloc(s->k, (cap = cap ? cap * 2 : 64) * sizeof(JKey));
+            e = &s->k[s->nk++];
+            e->key = xstrndup(r->s + b, x - b);
+            e->obj = id[JD];
+            e->depth = depth;
+            e->in_lang = depth == 2 && name[JD][0] == '[';
+            e->a.y = e->b.y = y;
+            e->a.x = b - 1;
+            e->b.x = x + 1;
+            e->vstr = NULL;
+            while (v < r->len && (r->s[v] == ' ' || r->s[v] == '\t')) v++;
+            e->vtype = v >= r->len ? -1 : r->s[v] == '"' ? J_STR : r->s[v] == '{' ? J_OBJ : r->s[v] == '[' ? J_ARR :
+                       r->s[v] == 't' || r->s[v] == 'f' ? J_BOOL : r->s[v] == 'n' ? J_NULL : J_NUM;
+            if (e->vtype == J_STR) {
+              size_t z = v + 1;
+              while (z < r->len && r->s[z] != '"') z += r->s[z] == '\\' ? 2 : 1;
+              if (z > r->len) z = r->len;
+              e->vstr = xstrndup(r->s + v + 1, z - v - 1);
+            }
+          }
         }
       }
     }
-    if (at < 0 && y == p.y) at = depth;	/* p at the row's end */
+    JAT();	/* p at the row's end */
   }
-  return at < 0 ? depth : at;
+#undef JAT
+#undef JD
+  if (!at) {
+    s->depth = depth;
+    s->obj = id[depth < JDEEP ? depth : JDEEP - 1];
+  }
 }
 
 
-/* the cursor is where a key of the top object goes: *q where it starts (its quote), *k its text */
-static int skey_at (Pos *q, Pos *k) {
+static void json_scan_free (JScan *s) {
+  size_t i;
+  for (i = 0; i < s->nk; i++) {
+    free(s->k[i].key);
+    free(s->k[i].vstr);
+  }
+  free(s->k);
+  s->k = NULL;
+  s->nk = 0;
+}
+
+
+/* x of row r is in a string: *open is its quote */
+static int in_string (const Row *r, size_t x, size_t *open) {
+  size_t i;
+  int in = 0;
+  for (i = 0; i < x && i < r->len; i++) {
+    if (in && r->s[i] == '\\') {
+      i++;
+      continue;
+    }
+    if (!in && r->s[i] == '/' && i + 1 < r->len && r->s[i + 1] == '/') return 0;
+    if (r->s[i] == '"') {
+      in = !in;
+      *open = i;
+    }
+  }
+  return in;
+}
+
+
+typedef struct JWhere {
+  int what;	/* 1 a key goes here, 2 a value */
+  Pos q, k;	/* where what is replaced starts (a quote), where the text typed starts */
+  char key[128];	/* a value's key */
+  int depth, in_lang;	/* the object it is in: how deep, a "[lang]" block */
+  long obj;
+} JWhere;
+
+
+/* the cursor is where a key or a value goes (forced, Ctrl+Space: also with nothing typed) */
+static int json_where (JWhere *w, int forced) {
   const Row *r;
-  size_t x, i;
-  if (!is_settings_doc() || T->nmc) return 0;
+  size_t x, open, i;
+  int str;
+  JScan s;
+  if (json_file() == JF_NONE || T->nmc) return 0;
   r = row_at(T->cur.y);
   x = T->cur.x;
-  while (x > 0 && is_key_char((unsigned char)r->s[x - 1])) x--;
-  k->y = q->y = T->cur.y;
-  k->x = q->x = x;
-  if (x > 0 && r->s[x - 1] == '"') q->x = --x;
-  else if (x == T->cur.x) return 0;	/* nothing typed, no quote */
-  for (i = 0; i < x; i++)
-    if (r->s[i] != ' ' && r->s[i] != '\t' && r->s[i] != '{' && r->s[i] != ',') return 0;
-  return skey_scan(*q, NULL, NULL) == 1;
+  memset(w, 0, sizeof(*w));
+  w->q.y = w->k.y = T->cur.y;
+  str = in_string(r, x, &open);
+  if (str) {
+    w->q.x = open;
+    w->k.x = open + 1;
+  }
+  else {
+    while (x > 0 && is_value_char((unsigned char)r->s[x - 1])) x--;
+    w->q.x = w->k.x = x;
+  }
+  i = w->q.x;	/* a value: after "key": */
+  while (i > 0 && (r->s[i - 1] == ' ' || r->s[i - 1] == '\t')) i--;
+  if (i > 0 && r->s[i - 1] == ':') {
+    size_t e;
+    i--;
+    while (i > 0 && (r->s[i - 1] == ' ' || r->s[i - 1] == '\t')) i--;
+    if (i == 0 || r->s[i - 1] != '"') return 0;
+    e = --i;
+    while (i > 0 && r->s[i - 1] != '"') i--;
+    if (i == 0) return 0;
+    snprintf(w->key, sizeof(w->key), "%.*s", (int)(e - i), r->s + i);
+    w->what = 2;
+  }
+  else {	/* a key: at the line's start, after '{' or ',' */
+    if (!str) {
+      x = T->cur.x;
+      while (x > 0 && is_key_char((unsigned char)r->s[x - 1])) x--;
+      w->q.x = w->k.x = x;
+      if (x == T->cur.x && !forced) return 0;	/* nothing typed, no quote */
+    }
+    for (i = 0; i < w->q.x; i++)
+      if (r->s[i] != ' ' && r->s[i] != '\t' && r->s[i] != '{' && r->s[i] != ',') return 0;
+    w->what = 1;
+  }
+  s.p = w->q;
+  json_scan(&s, 0);
+  w->depth = s.depth;
+  w->obj = s.obj;
+  w->in_lang = s.depth == 2 && s.parent[0] == '[';
+  if (s.arr) return 0;
+  if (json_file() == JF_SETTINGS) return s.depth == 1 || w->in_lang;
+  return s.depth == 2;	/* keybindings.json: an entry of the list */
 }
 
 
-/* the settings not yet in the file, as suggestions */
-static void comp_settings (int forced) {
-  Pos q, k;
-  char **have = NULL;
-  size_t nh = 0, n;
-  CompItem *v;
-  if (!skey_at(&q, &k)) return;
-  skey_scan(k, &have, &nh);
-  v = settings_suggest((const char *const *)have, nh, &n);
-  while (nh > 0) free(have[--nh]);
-  free(have);
+/* the languages, as "[python]": { } blocks */
+static void add_lang_blocks (CompItem **v, size_t *n, size_t *cap) {
+  int i, k, ns = syntax_count();
+  for (i = 0; i < ns; i++) {
+    const Syntax *sx = syntax_nth(i);
+    const char *id = syntax_lang(sx);
+    char lab[80];
+    CompItem *c;
+    Buf b;
+    if (id == NULL || *id == '\0') continue;
+    for (k = 0; k < i && !(syntax_lang(syntax_nth(k)) && strcmp(syntax_lang(syntax_nth(k)), id) == 0); k++) {}
+    if (k < i) continue;	/* two of mme's for one id */
+    snprintf(lab, sizeof(lab), "[%s]", id);
+    comp_grow(v, n, cap);
+    c = &(*v)[(*n)++];
+    memset(c, 0, sizeof(*c));
+    c->label = xstrdup(lab);
+    c->detail = xstrdup(syntax_name(sx));
+    buf_init(&b);
+    buf_printf(&b, "\"%s\": {\n\t$0\n}", lab);
+    c->insert = buf_take(&b);
+    c->filter = xstrdup(lab);
+    c->sort = xstrdup(lab);
+    c->kind = 9;	/* module */
+    c->snippet = 1;
+    c->doc = xstrdup("Settings that apply to this language's files only.");
+  }
+}
+
+
+/* one suggestion: label, what goes in (a snippet or not), its detail */
+static void add_item (CompItem **v, size_t *n, size_t *cap, const char *label, const char *insert, int snippet,
+                      const char *detail, int kind) {
+  CompItem *c;
+  comp_grow(v, n, cap);
+  c = &(*v)[(*n)++];
+  memset(c, 0, sizeof(*c));
+  c->label = xstrdup(label);
+  c->detail = xstrdup(detail ? detail : "");
+  c->insert = xstrdup(insert);
+  c->filter = xstrdup(label);
+  c->sort = xstrdup(label);
+  c->kind = kind;
+  c->snippet = snippet;
+}
+
+
+/* keybindings.json: an entry's properties, a command's ids */
+static void add_keys_items (const JWhere *w, const JScan *s, CompItem **v, size_t *n, size_t *cap) {
+  static const char *const prop[] = {"key", "command", "when", "args"};
+  static const char *const body[] = {"\"key\": \"$1\"", "\"command\": \"$1\"", "\"when\": \"$1\"", "\"args\": $1"};
+  static const char *const what[] = {"the keys: \"ctrl+shift+k\", \"ctrl+k ctrl+t\"",
+                                     "the command's id; \"-id\" takes away its default key",
+                                     "the condition the key works under", "the arguments the command gets"};
+  size_t i, h;
+  int c;
+  if (w->what == 1)
+    for (i = 0; i < 4; i++) {
+      for (h = 0; h < s->nk && !(s->k[h].obj == w->obj && strcmp(s->k[h].key, prop[i]) == 0); h++) {}
+      if (h == s->nk) add_item(v, n, cap, prop[i], body[i], 1, what[i], 10);
+    }
+  else if (strcmp(w->key, "command") == 0)
+    for (c = 1; c < CMD_N; c++) {
+      const char *id = cmd_id(c);
+      char q[160];
+      if (id == NULL || *id == '\0') continue;
+      snprintf(q, sizeof(q), "\"%s\"", id);
+      add_item(v, n, cap, id, q, 0, cmd_name(c), 1);
+    }
+}
+
+
+/* the suggestions of settings.json or keybindings.json at the cursor */
+static void comp_json (int forced) {
+  JWhere w;
+  JScan s;
+  CompItem *v = NULL;
+  size_t n = 0, cap = 0, i;
+  if (!json_where(&w, forced)) return;
+  s.p = w.k;
+  json_scan(&s, 1);
+  if (json_file() == JF_KEYS) add_keys_items(&w, &s, &v, &n, &cap);
+  else if (w.what == 2) {
+    v = settings_values(w.key, &n);
+    cap = n;
+  }
+  else {
+    const Row *r = row_at(T->cur.y);
+    if (w.depth == 1 && w.k.x < r->len && r->s[w.k.x] == '[') add_lang_blocks(&v, &n, &cap);
+    else {
+      const char **have = (const char **)xmalloc((s.nk + 1) * sizeof(char *));
+      size_t nh = 0;
+      for (i = 0; i < s.nk; i++)
+        if (s.k[i].obj == w.obj) have[nh++] = s.k[i].key;
+      v = settings_suggest(have, nh, w.in_lang, &n);
+      cap = n;
+      free(have);
+      if (w.depth == 1 && forced) add_lang_blocks(&v, &n, &cap);
+    }
+  }
+  json_scan_free(&s);
   comp_free();
   CP.v = v;
   CP.n = n;
-  CP.skey = 1;
+  CP.json = 1;
   CP.vis = (size_t *)xmalloc((n + 1) * sizeof(size_t));
   comp_filter();
   if (!CP.open && forced) toast(0, "No suggestions.");
 }
 
 
+/*
+** A suggestion of comp_json goes in: a key from its quote to its closing
+** one, with its value unless it has one; a value in place of the one there.
+** Another key after it: a comma.
+*/
+static void json_accept (const CompItem *c) {
+  JWhere w;
+  const Row *r = row_at(T->cur.y);
+  Pos a, b;
+  size_t e, y;
+  int more = 0, snippet = c->snippet;
+  Buf o;
+  char *ins;
+  if (!json_where(&w, 1)) {
+    comp_free();
+    return;
+  }
+  a = w.q;
+  b = T->cur;
+  buf_init(&o);
+  if (w.what == 1) {
+    e = b.x;
+    while (e < r->len && is_key_char((unsigned char)r->s[e])) e++;
+    if (e < r->len && r->s[e] == '"') b.x = e + 1;
+    for (e = b.x; e < r->len && (r->s[e] == ' ' || r->s[e] == '\t'); e++) {}
+    if (e < r->len && r->s[e] == ':') {	/* only the key changes */
+      buf_printf(&o, "\"%s\"", c->label);
+      snippet = 0;
+    }
+  }
+  else {
+    int quoted = a.x < r->len && r->s[a.x] == '"';
+    e = b.x;
+    if (quoted) {
+      while (e < r->len && r->s[e] != '"') e++;
+      if (e < r->len) b.x = e + 1;
+    }
+    else {
+      while (e < r->len && is_value_char((unsigned char)r->s[e])) e++;
+      b.x = e;
+    }
+    if (a.x > 0 && r->s[a.x - 1] == ':') buf_putc(&o, ' ');
+  }
+  if (o.len == 0 || o.s[0] == ' ') {	/* the whole of it: a comma when another key follows */
+    for (e = b.x; e < r->len && (r->s[e] == ' ' || r->s[e] == '\t'); e++) {}
+    if (e == r->len)
+      for (y = b.y + 1; y < T->doc->n && !more; y++) {
+        const Row *q = row_at(y);
+        size_t x = 0;
+        while (x < q->len && (q->s[x] == ' ' || q->s[x] == '\t')) x++;
+        if (x == q->len) continue;
+        more = q->s[x] == '"' || q->s[x] == '{';
+        break;
+      }
+    buf_puts(&o, c->insert);
+    if (more) buf_putc(&o, ',');
+  }
+  ins = buf_take(&o);
+  comp_free();
+  if (snippet) snippet_insert(a, b, ins);
+  else {
+    doc_group(T->doc);
+    T->sel = 0;
+    ed_delete(a, b);
+    T->cur = ed_insert(a, ins, strlen(ins));
+    T->want = col_of(row_at(T->cur.y), T->cur.x);
+    doc_group(T->doc);
+  }
+  free(ins);
+}
+
+
+/* what the hover says at p in settings.json (a setting) or keybindings.json (a command); NULL: nothing */
+static char *json_hover (Pos p) {
+  const Row *r;
+  size_t x, open, e, i;
+  int f = json_file();
+  if (f == JF_NONE || p.y >= T->doc->n) return NULL;
+  r = row_at(p.y);
+  x = p.x;
+  if (x < r->len && r->s[x] == '"') x++;	/* on the opening quote */
+  if (!in_string(r, x, &open)) return NULL;
+  for (e = open + 1; e < r->len && r->s[e] != '"'; e++) {}
+  for (i = e + 1; i < r->len && (r->s[i] == ' ' || r->s[i] == '\t'); i++) {}
+  if (i < r->len && r->s[i] == ':') {	/* a key */
+    JScan s;
+    char key[128];
+    if (f != JF_SETTINGS) return NULL;
+    s.p.y = p.y;
+    s.p.x = open;
+    json_scan(&s, 0);
+    if (s.arr || !(s.depth == 1 || (s.depth == 2 && s.parent[0] == '['))) return NULL;
+    snprintf(key, sizeof(key), "%.*s", (int)(e - open - 1), r->s + open + 1);
+    return settings_hover(key);
+  }
+  if (f == JF_KEYS) {	/* "command": "id" */
+    char id[128];
+    int cmd;
+    const char *keys;
+    Buf b;
+    for (i = open; i > 0 && (r->s[i - 1] == ' ' || r->s[i - 1] == '\t'); i--) {}
+    if (i < 11 || r->s[i - 1] != ':') return NULL;
+    for (i--; i > 0 && (r->s[i - 1] == ' ' || r->s[i - 1] == '\t'); i--) {}
+    if (i < 9 || memcmp(r->s + i - 9, "\"command\"", 9) != 0) return NULL;
+    snprintf(id, sizeof(id), "%.*s", (int)(e - open - 1), r->s + open + 1);
+    cmd = cmd_by_id(id[0] == '-' ? id + 1 : id);
+    if (cmd == CMD_NONE) return NULL;
+    keys = cmd_default_keys(cmd);
+    buf_init(&b);
+    buf_printf(&b, "**%s**\n\n`%s`", cmd_name(cmd), id[0] == '-' ? id + 1 : id);
+    if (keys && *keys) buf_printf(&b, "\n\nDefault: %s", keys);
+    return buf_take(&b);
+  }
+  return NULL;
+}
+
+
+/* the problem text and the hover of json_hover, together; NULL: neither */
+static char *with_json_hover (char *dg, Pos p) {
+  char *jh = json_hover(p);
+  Buf b;
+  if (jh == NULL) return dg;
+  if (dg == NULL) return jh;
+  buf_init(&b);
+  buf_printf(&b, "%s\n---\n%s", dg, jh);
+  free(dg);
+  free(jh);
+  return buf_take(&b);
+}
+
+
+/* settings.json's problems: an unknown key, a value of the wrong kind (when it changed) */
+static void json_lint (void) {
+  static const Doc *last;
+  static unsigned long edits;
+  JScan s;
+  Diag *v;
+  size_t i, n = 0;
+  if (json_file() != JF_SETTINGS || (T->doc == last && T->doc->edits == edits)) return;
+  last = T->doc;
+  edits = T->doc->edits;
+  s.p.y = T->doc->n;
+  s.p.x = 0;
+  json_scan(&s, 1);
+  v = (Diag *)xmalloc((s.nk + 1) * sizeof(Diag));
+  for (i = 0; i < s.nk; i++) {
+    const JKey *k = &s.k[i];
+    char msg[512];
+    int code;
+    if (!((k->depth == 1 && k->key[0] != '[') || k->in_lang)) continue;
+    if (k->vtype < 0) continue;	/* its value on the next line: not looked at */
+    code = settings_check(k->key, k->vtype, k->vstr ? k->vstr : "", k->in_lang, msg, sizeof(msg));
+    if (code == 0) continue;
+    v[n].a = k->a;
+    v[n].b = k->b;
+    v[n].sev = code == 1 ? 4 : 2;	/* unknown: a hint, as VS Code fades it */
+    v[n].msg = xstrdup(msg);
+    n++;
+  }
+  lsp_task_diags(T->doc->path, v, n);
+  while (n > 0) free(v[--n].msg);
+  free(v);
+  json_scan_free(&s);
+}
+
+
 /* ask the server what fits here (the answer comes to on_completion) */
 static void comp_ask (int forced) {
-  Pos q, k;
+  JWhere w;
   if (!HAS_DOC) return;
-  if (skey_at(&q, &k)) {
-    comp_settings(forced);
+  if (json_where(&w, forced)) {
+    comp_json(forced);
     return;
   }
   if (!lsp_active(T->doc)) {
@@ -7213,12 +7658,13 @@ static void comp_filter (void) {
   int *score;
   if (CP.choice) return;	/* a snippet's choices: all of them */
   CP.start = word_start();
-  if (CP.skey) {
-    Pos q;
-    if (!skey_at(&q, &CP.start)) {
+  if (CP.json) {
+    JWhere w;
+    if (!json_where(&w, 1)) {
       CP.open = 0;
       return;
     }
+    CP.start = w.k;
   }
   r = row_at(T->cur.y);
   n = T->cur.x - CP.start.x;
@@ -7351,6 +7797,10 @@ static void comp_accept (void) {
   size_t nextra;
   if (T->cur.y == CP.start.y && T->cur.x >= CP.start.x)
     comp_recent_add(c->label, row_at(T->cur.y)->s + CP.start.x, T->cur.x - CP.start.x);
+  if (CP.json) {	/* settings.json's, keybindings.json's */
+    json_accept(c);
+    return;
+  }
   if (c->json && c->resolved != 1 && c->nextra == 0) {	/* its imports may come with resolve: waited for, a little */
     unsigned gen = CP.gen;
     long long end = os_now_us() + 800000;
@@ -7372,46 +7822,8 @@ static void comp_accept (void) {
     a = c->a;
     if (c->b.y == b.y && pos_cmp(c->b, b) > 0) b = c->b;
   }
-  if (CP.skey) {	/* the key from its quote, the closing one too; its value when it has none */
-    const Row *r = row_at(T->cur.y);
-    size_t e = b.x, y;
-    Buf o;
-    int more = 0;
-    if (a.x > 0 && r->s[a.x - 1] == '"') a.x--;
-    while (e < r->len && is_key_char((unsigned char)r->s[e])) e++;
-    if (e < r->len && r->s[e] == '"') b.x = e + 1;
-    for (e = b.x; e < r->len && (r->s[e] == ' ' || r->s[e] == '\t'); e++) {}
-    buf_init(&o);
-    if (e < r->len && r->s[e] == ':') {	/* only the key changes */
-      buf_printf(&o, "\"%s\"", c->label);
-      free(ins);
-      ins = buf_take(&o);
-      comp_free();
-      doc_group(T->doc);
-      T->sel = 0;
-      ed_delete(a, b);
-      T->cur = ed_insert(a, ins, strlen(ins));
-      T->want = col_of(row_at(T->cur.y), T->cur.x);
-      doc_group(T->doc);
-      free(ins);
-      free(extra);
-      return;
-    }
-    for (y = b.y; y < T->doc->n && !more; y++) {	/* another key after it: a comma */
-      const Row *q = row_at(y);
-      size_t x = y == b.y ? e : 0;
-      while (x < q->len && (q->s[x] == ' ' || q->s[x] == '\t')) x++;
-      if (x == q->len) continue;
-      more = q->s[x] == '"';
-      break;
-    }
-    buf_puts(&o, ins);
-    if (more) buf_putc(&o, ',');
-    free(ins);
-    ins = buf_take(&o);
-  }
   int snippet = c->snippet;
-  if (snippet && !c->has_range && !CP.skey) {	/* "#ifn" for "#ifndef": the '#' typed before the word goes too */
+  if (snippet && !c->has_range) {	/* "#ifn" for "#ifndef": the '#' typed before the word goes too */
     const Row *r = row_at(a.y);
     size_t typed = b.x - a.x, k, ll = strlen(c->label), took = 0;
     for (k = ll > typed ? ll - typed : 0; k > 0; k--)
@@ -7632,7 +8044,8 @@ static void comp_after_key (int k) {
   }
   if (CP.open || CP.n) {
     if ((IS_TEXT(k) && (code == '_' || code >= 0x80 || (code >= '0' && code <= '9') ||
-                        (lower(code) >= 'a' && lower(code) <= 'z') || (CP.skey && (code == '.' || code == '-')))) ||
+                        (lower(code) >= 'a' && lower(code) <= 'z') ||
+                        (CP.json && code != '"' && code != ',' && code != ':' && code != '{' && code != '}'))) ||
         code == K_BS) {
       comp_filter();
       comp_resolve_sel();
@@ -7642,10 +8055,10 @@ static void comp_after_key (int k) {
   }
   if (SG.label && (code == ')' || code == K_ESC || T->cur.y != SG.y)) sig_close();
   if (!IS_TEXT(k) || T->nmc) return;
-  if (is_settings_doc()) {	/* a key's quote or its first letter: the settings */
-    Pos q, kp;
-    if (skey_at(&q, &kp)) {
-      if (code == '"' || T->cur.x - kp.x == 1) comp_settings(0);
+  if (json_file() != JF_NONE) {	/* settings.json: a quote, a colon or a first letter asks */
+    JWhere w;
+    if (json_where(&w, 0)) {
+      if (code == '"' || code == ':' || T->cur.x - w.k.x == 1) comp_json(0);
       return;
     }
   }
@@ -7980,6 +8393,14 @@ static void hover_idle (void) {
     if ((dg = diag_text(q)) == NULL) return;
     hover_close();
     HV.at = q;
+    HV.from_mouse = 1;
+    HV.text = dg;
+    return;
+  }
+  if (json_file() != JF_NONE && !dbg_stopped()) {	/* settings.json: the setting's description */
+    if ((dg = with_json_hover(diag_text(p), p)) == NULL) return;
+    hover_close();
+    HV.at = p;
     HV.from_mouse = 1;
     HV.text = dg;
     return;
@@ -16233,12 +16654,12 @@ static void run_command (int cmd) {
     case CMD_QUICKFIX: quickfix(); break;
     case CMD_HOVER:
       if (HAS_DOC && !G->diff && !T->page) {
-        char *dg = diag_text(T->cur);
+        char *dg = with_json_hover(diag_text(T->cur), T->cur);
         hover_close();
         HV.at = T->cur;
         HV.from_mouse = 0;
         HV.focus = 1;	/* Up/Down/PgUp/PgDn scroll it, Esc closes it */
-        if (lsp_active(T->doc)) {
+        if (lsp_active(T->doc) && json_file() == JF_NONE) {
           HV.diag = dg;
           lsp_hover(T->doc, T->cur);
         }

@@ -327,12 +327,45 @@ static const Setting set[] = {
 #define NSET	((int)(sizeof(set) / sizeof(set[0])))
 
 
-/* a setting mme has (for Import VS Code Settings) */
-int settings_known (const char *key) {
+/* the ones mme reads that the page does not show: suggested and known in settings.json */
+static const Setting more[] = {
+  {"workbench.colorCustomizations", C_LOOK, ST_OBJ, 0, "{}", NULL,
+   "Overrides colors from the currently selected color theme. A block named for one theme, \"[Dark+]\": { ... }, is only for it."},
+  {"editor.tokenColorCustomizations", C_LOOK, ST_OBJ, 0, "{}", NULL,
+   "Overrides editor syntax colors and font style from the currently selected color theme: \"comments\", \"strings\" ... or \"textMateRules\"."},
+  {"workbench.editor.decorations.colors", C_LOOK, ST_BOOL, 0, "true", NULL,
+   "Controls whether editor file decorations should use colors."},
+  {"workbench.editor.decorations.badges", C_LOOK, ST_BOOL, 0, "true", NULL,
+   "Controls whether editor file decorations should use badges."},
+  {"terminal.integrated.defaultProfile.windows", C_TERMINAL, ST_STR, 0, "\"\"", NULL,
+   "The default terminal profile on Windows."},
+  {"terminal.integrated.defaultProfile.linux", C_TERMINAL, ST_STR, 0, "\"\"", NULL,
+   "The default terminal profile on Linux."},
+  {"terminal.integrated.defaultProfile.osx", C_TERMINAL, ST_STR, 0, "\"\"", NULL,
+   "The default terminal profile on macOS."},
+  {"mme.inlineCompletionServer", C_EXT, ST_STR, 0, "\"\"", NULL,
+   "The command of a language server that gives inline suggestions (ghost text) in every language, a GitHub Copilot language server say."},
+  {"mme.debugAdapters", C_EXT, ST_OBJ, 0, "{}", NULL,
+   "The debug adapters, by debug type: the command that starts each one."}
+};
+
+#define NMORE	((int)(sizeof(more) / sizeof(more[0])))
+
+
+/* the setting named key, of the page's or the others; NULL: none */
+static const Setting *find_set (const char *key) {
   int i;
   for (i = 0; i < NSET; i++)
-    if (strcmp(set[i].key, key) == 0) return 1;
-  return 0;
+    if (strcmp(set[i].key, key) == 0) return &set[i];
+  for (i = 0; i < NMORE; i++)
+    if (strcmp(more[i].key, key) == 0) return &more[i];
+  return NULL;
+}
+
+
+/* a setting mme has (for Import VS Code Settings, and settings.json's problems) */
+int settings_known (const char *key) {
+  return find_set(key) != NULL;
 }
 
 
@@ -478,49 +511,72 @@ static void snip_esc (Buf *b, const char *v, int choice) {
 }
 
 
+/* the setting's value to type, as a snippet: the default first */
+static void value_snippet (Buf *b, const Setting *s) {
+  char d[256], e[256];
+  int k;
+  def_of(s, d, sizeof(d));
+  if (s->type == ST_BOOL) buf_puts(b, strcmp(d, "true") == 0 ? "${1|true,false|}" : "${1|false,true|}");
+  else if (s->type == ST_ENUM) {
+    buf_puts(b, "\"${1|");
+    snip_esc(b, d, 1);
+    for (k = 0; k < enum_count(s); k++) {
+      enum_at(s, k, e, sizeof(e));
+      if (strcmp(e, d) == 0) continue;
+      buf_putc(b, ',');
+      snip_esc(b, e, 1);
+    }
+    buf_puts(b, "|}\"");
+  }
+  else if (s->type == ST_STR) {
+    buf_puts(b, "\"${1:");
+    snip_esc(b, d, 0);
+    buf_puts(b, "}\"");
+  }
+  else {	/* a number, an object */
+    buf_puts(b, "${1:");
+    snip_esc(b, s->def, 0);
+    buf_putc(b, '}');
+  }
+}
+
+
+/* its description, and its default: the suggestion's and the hover's */
+static char *doc_md (const Setting *s, int title) {
+  char text[2048], cat[128], name[96];
+  Buf b;
+  desc_of(s, text, sizeof(text));
+  buf_init(&b);
+  if (title) {
+    title_of(s->key, cat, sizeof(cat), name, sizeof(name));
+    buf_printf(&b, "**%s%s**\n\n", cat, name);
+  }
+  buf_printf(&b, "%s\n\nDefault: `%s`", text, s->def);
+  return buf_take(&b);
+}
+
+
 /*
 ** The settings as suggestions in settings.json, VS Code's: the key, and
 ** what goes in is "key": value with the value to pick or type (the
-** default first). The ones in have[] (keys, nhave of them) are left out.
+** default first). The ones in have[] (keys, nhave of them) are left out;
+** lang: in a "[python]" block, only the ones a language can override.
 */
-CompItem *settings_suggest (const char *const *have, size_t nhave, size_t *n) {
-  CompItem *v = (CompItem *)xmalloc((NSET + 1) * sizeof(CompItem));
-  int i, k;
+CompItem *settings_suggest (const char *const *have, size_t nhave, int lang, size_t *n) {
+  CompItem *v = (CompItem *)xmalloc((NSET + NMORE + 1) * sizeof(CompItem));
+  int i;
   size_t o = 0, h;
-  for (i = 0; i < NSET; i++) {
-    const Setting *s = &set[i];
+  for (i = 0; i < NSET + NMORE; i++) {
+    const Setting *s = i < NSET ? &set[i] : &more[i - NSET];
     CompItem *c;
     Buf b;
-    char d[256], e[256], text[2048];
     for (h = 0; h < nhave && strcmp(have[h], s->key) != 0; h++) {}
-    if (h < nhave) continue;
+    if (h < nhave || (lang && !settings_overridable(s->key))) continue;
     c = &v[o++];
     memset(c, 0, sizeof(*c));
-    def_of(s, d, sizeof(d));
     buf_init(&b);
     buf_printf(&b, "\"%s\": ", s->key);
-    if (s->type == ST_BOOL) buf_puts(&b, strcmp(d, "true") == 0 ? "${1|true,false|}" : "${1|false,true|}");
-    else if (s->type == ST_ENUM) {
-      buf_puts(&b, "\"${1|");
-      snip_esc(&b, d, 1);
-      for (k = 0; k < enum_count(s); k++) {
-        enum_at(s, k, e, sizeof(e));
-        if (strcmp(e, d) == 0) continue;
-        buf_putc(&b, ',');
-        snip_esc(&b, e, 1);
-      }
-      buf_puts(&b, "|}\"");
-    }
-    else if (s->type == ST_STR) {
-      buf_puts(&b, "\"${1:");
-      snip_esc(&b, d, 0);
-      buf_puts(&b, "}\"");
-    }
-    else {	/* a number, an object */
-      buf_puts(&b, "${1:");
-      snip_esc(&b, s->def, 0);
-      buf_putc(&b, '}');
-    }
+    value_snippet(&b, s);
     c->label = xstrdup(s->key);
     c->detail = xstrdup("");
     c->insert = buf_take(&b);
@@ -528,13 +584,116 @@ CompItem *settings_suggest (const char *const *have, size_t nhave, size_t *n) {
     c->sort = xstrdup(s->key);
     c->kind = 10;	/* property */
     c->snippet = 1;
-    desc_of(s, text, sizeof(text));
-    buf_init(&b);
-    buf_printf(&b, "%s\n\nDefault: `%s`", text, s->def);
-    c->doc = buf_take(&b);
+    c->doc = doc_md(s, 0);
   }
   *n = o;
   return v;
+}
+
+
+/* a suggestion of a value: what it shows, what goes in */
+static void value_item (CompItem *c, const char *label, const char *insert, int is_def, int kind) {
+  char sort[16];
+  static int order;
+  memset(c, 0, sizeof(*c));
+  c->label = xstrdup(label);
+  c->detail = xstrdup(is_def ? "default" : "");
+  c->insert = xstrdup(insert);
+  c->filter = xstrdup(label);
+  snprintf(sort, sizeof(sort), "%c%04d", is_def ? '0' : '1', order++ % 10000);
+  c->sort = xstrdup(sort);
+  c->kind = kind;
+}
+
+
+/* the values key can take, the default first; NULL (n 0): nothing to offer */
+CompItem *settings_values (const char *key, size_t *n) {
+  const Setting *s = find_set(key);
+  CompItem *v;
+  char d[256], e[256], q[300];
+  int k, ne;
+  size_t o = 0;
+  *n = 0;
+  if (s == NULL || s->type == ST_OBJ) return NULL;
+  def_of(s, d, sizeof(d));
+  ne = s->type == ST_ENUM ? enum_count(s) : 2;
+  v = (CompItem *)xmalloc((size_t)(ne + 2) * sizeof(CompItem));
+  if (s->type == ST_BOOL) {
+    value_item(&v[o++], "true", "true", strcmp(d, "true") == 0, 12);
+    value_item(&v[o++], "false", "false", strcmp(d, "false") == 0, 12);
+  }
+  else if (s->type == ST_ENUM)
+    for (k = 0; k < ne; k++) {
+      Buf b;
+      enum_at(s, k, e, sizeof(e));
+      buf_init(&b);
+      json_put_str(&b, e, strlen(e));
+      buf_putc(&b, '\0');
+      snprintf(q, sizeof(q), "%s", b.s);
+      buf_free(&b);
+      value_item(&v[o++], e, q, strcmp(e, d) == 0, 12);
+    }
+  else value_item(&v[o++], d, s->def, 1, 12);	/* a number, a string: its default */
+  *n = o;
+  return v;
+}
+
+
+/* what the hover says of a setting (Markdown); NULL: not one of mme's */
+char *settings_hover (const char *key) {
+  const Setting *s = find_set(key);
+  return s ? doc_md(s, 1) : NULL;
+}
+
+
+/*
+** settings.json's problems, VS Code's words: a key mme does not have (1,
+** a hint), a value of the wrong kind or not one of the list (2, a
+** warning), a setting a "[lang]" block cannot hold (2). jtype: the
+** value's J_*; str: a string's text. 0: nothing to say.
+*/
+int settings_check (const char *key, int jtype, const char *str, int in_lang, char *msg, size_t n) {
+  const Setting *s = find_set(key);
+  char e[256];
+  int k, ne;
+  if (s == NULL) {
+    snprintf(msg, n, "Unknown Configuration Setting");
+    return 1;
+  }
+  if (in_lang && !settings_overridable(key)) {
+    snprintf(msg, n, "This setting cannot be applied in this language.");
+    return 2;
+  }
+  if (s->type == ST_BOOL && jtype != J_BOOL) {
+    if (strcmp(key, "explorer.autoReveal") == 0 && jtype == J_STR) return 0;	/* or "focusNoScroll" */
+    snprintf(msg, n, "Incorrect type. Expected \"boolean\".");
+    return 2;
+  }
+  if (s->type == ST_NUM && jtype != J_NUM) {
+    snprintf(msg, n, "Incorrect type. Expected \"number\".");
+    return 2;
+  }
+  if (s->type == ST_STR && jtype != J_STR) {
+    snprintf(msg, n, "Incorrect type. Expected \"string\".");
+    return 2;
+  }
+  if (s->type == ST_ENUM && jtype == J_STR) {
+    size_t o;
+    ne = enum_count(s);
+    for (k = 0; k < ne; k++) {
+      enum_at(s, k, e, sizeof(e));
+      if (strcmp(e, str) == 0) return 0;
+    }
+    o = (size_t)snprintf(msg, n, "Value is not accepted. Valid values: ");
+    for (k = 0; k < ne && o + 1 < n; k++) {
+      enum_at(s, k, e, sizeof(e));
+      o += (size_t)snprintf(msg + o, n - o, "%s\"%s\"", k ? ", " : "", e);
+      if (o >= n) o = n - 1;
+    }
+    if (o + 1 < n) snprintf(msg + o, n - o, ".");
+    return 2;
+  }
+  return 0;
 }
 
 /* }================================================================== */

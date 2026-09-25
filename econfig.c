@@ -444,6 +444,11 @@ static void overlay (Json *dst, const Json *src) {
     if (c == NULL) continue;
     c->key = xstrdup(src->kid[i]->key);
     for (k = 0; k < dst->n && strcmp(dst->kid[k]->key, c->key) != 0; k++) ;
+    if (k < dst->n && c->key[0] == '[' && c->type == J_OBJ && dst->kid[k]->type == J_OBJ) {	/* "[python]": key by key */
+      overlay(dst->kid[k], c);
+      json_free(c);
+      continue;
+    }
     if (k < dst->n) {
       json_free(dst->kid[k]);
       dst->kid[k] = c;
@@ -477,11 +482,84 @@ static void overlay_workspace (Json *j) {
 }
 
 
+/*
+** Language-specific settings, VS Code's: "[python]": { "editor.tabSize": 2 }
+** (or "[javascript][typescript]": ...) wins over the plain key for the files
+** of that language. What can be set so is what VS Code lets a language
+** override: the text editor's settings and the files' ones.
+*/
+static Json *g_eff;	/* g_json with the language's block over it; NULL: g_json as it is */
+static char g_lang[64];	/* the language opt is read for; "": none */
+
+static void read_opts (const Json *j);
+
+
+/* "[python]", "[javascript][typescript]": a block for lang */
+static int block_for (const char *key, const char *lang) {
+  size_t n = strlen(lang);
+  while (*key == '[') {
+    const char *e = strchr(key, ']');
+    if (e == NULL) return 0;
+    if ((size_t)(e - key - 1) == n && strncmp(key + 1, lang, n) == 0) return 1;
+    key = e + 1;
+  }
+  return 0;
+}
+
+
+int settings_overridable (const char *key) {
+  return strncmp(key, "editor.", 7) == 0 || strncmp(key, "files.", 6) == 0 || strncmp(key, "diffEditor.", 11) == 0 ||
+         strncmp(key, "emmet.", 6) == 0 || strncmp(key, "html.", 5) == 0;
+}
+
+
+int settings_lang (const char *lang) {
+  Json *e = NULL;
+  size_t i, k;
+  int had = g_eff != NULL;
+  if (lang == NULL) lang = "";
+  if (strcmp(lang, g_lang) == 0 || g_json == NULL) return 0;
+  snprintf(g_lang, sizeof(g_lang), "%s", lang);
+  for (i = 0; *lang && i < g_json->n; i++) {
+    const Json *b = g_json->kid[i];
+    if (b->key[0] != '[' || b->type != J_OBJ || !block_for(b->key, lang)) continue;
+    if (e == NULL) {	/* a copy of the whole, the block's keys over it */
+      Buf w;
+      buf_init(&w);
+      json_write(&w, g_json);
+      e = json_parse(w.s, w.len);
+      buf_free(&w);
+      if (e == NULL) break;
+    }
+    for (k = 0; k < b->n; k++) {
+      Json one;
+      Json *kid[1];
+      if (!settings_overridable(b->kid[k]->key)) continue;
+      memset(&one, 0, sizeof(one));
+      one.type = J_OBJ;
+      kid[0] = b->kid[k];
+      one.kid = kid;
+      one.n = one.cap = 1;
+      overlay(e, &one);
+    }
+  }
+  json_free(g_eff);
+  g_eff = e;
+  if (!had && e == NULL) return 0;	/* no block then, none now: opt stays */
+  read_opts(e ? e : g_json);
+  return 1;
+}
+
+
+const char *settings_lang_now (void) {
+  return g_lang;
+}
+
+
 int settings_load (void) {
   char *f = settings_path(), *s;
   size_t len;
   Json *j;
-  const char *ws;
   if (f == NULL) return 0;
   s = read_file(f, &len);
   free(f);
@@ -492,8 +570,25 @@ int settings_load (void) {
     return -1;
   }
   overlay_workspace(j);
+  json_free(g_eff);
+  g_eff = NULL;
   json_free(g_json);
   g_json = j;
+  read_opts(j);
+  vim_settings(j);
+  if (g_lang[0]) {	/* the language in front: its block again */
+    char was[64];
+    snprintf(was, sizeof(was), "%s", g_lang);
+    g_lang[0] = '\0';
+    settings_lang(was);
+  }
+  return 0;
+}
+
+
+/* opt, eopt and vopt from j */
+static void read_opts (const Json *j) {
+  const char *ws;
   opt.tab_size = clamp((int)json_num(json_get(j, "editor\\.tabSize"), 4), 1, 16);
   opt.insert_spaces = json_bool(json_get(j, "editor\\.insertSpaces"), 1);
   opt.detect_indent = json_bool(json_get(j, "editor\\.detectIndentation"), 1);
@@ -657,8 +752,6 @@ int settings_load (void) {
   opt.se_reuse = json_bool(json_get(j, "search\\.searchEditor\\.reusePriorSearchConfiguration"), 0);
   edit_settings(j);
   view_settings(j);
-  vim_settings(j);
-  return 0;
 }
 
 
@@ -819,7 +912,7 @@ void settings_put_raw (const char *key, const char *value) {
 
 /* the command of the language server for a language ("c", "go" ...), or NULL */
 const Json *settings_get (const char *key) {
-  return json_get(g_json, key);
+  return json_get(g_eff ? g_eff : g_json, key);
 }
 
 

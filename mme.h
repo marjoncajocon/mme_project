@@ -222,6 +222,8 @@ char *data_path (const char *name);	/* a file in it */
 char *settings_path (void);
 void settings_create (void);
 int settings_load (void);	/* -1: the file is not good JSON */
+int settings_lang (const char *lang);	/* opt, eopt, vopt for a language's files ("[python]": {...}); 1 when they changed */
+const char *settings_lang_now (void);	/* the language they are read for; "": none */
 const Json *settings_get (const char *key);	/* "mme\\.debugAdapters"; NULL */
 #define INLINE_LANG	"*inline"	/* the reserved key of the inline-completion server */
 const char *settings_server (const char *lang);	/* the language server's command */
@@ -946,7 +948,11 @@ char *import_preview (const char *dir);	/* what would be taken, as text */
 void import_run (const char *dir, int *settings, int *keys, int *snippets);
 int import_offered (void);	/* a VS Code folder is there and it was not imported yet */
 int settings_known (const char *key);	/* esettings.c: a setting mme has */
-struct CompItem *settings_suggest (const char *const *have, size_t nhave, size_t *n);	/* esettings.c: the keys to suggest in settings.json, not the ones in have */
+struct CompItem *settings_suggest (const char *const *have, size_t nhave, int lang, size_t *n);	/* esettings.c: the keys to suggest in settings.json, not the ones in have; lang: a "[lang]" block's */
+struct CompItem *settings_values (const char *key, size_t *n);	/* the values to suggest for key */
+char *settings_hover (const char *key);	/* its description (Markdown); NULL: not a setting */
+int settings_check (const char *key, int jtype, const char *str, int in_lang, char *msg, size_t n);	/* settings.json's problem with it: 0 none, 1 unknown, 2 bad value */
+int settings_overridable (const char *key);	/* econfig.c: a "[lang]" block can hold it */
 void side_reveal (const char *real);
 void side_follow (const char *real);	/* side_reveal when explorer.autoReveal */
 void files_gap (int rows);	/* rows under "EXPLORER" left for OPEN EDITORS */
