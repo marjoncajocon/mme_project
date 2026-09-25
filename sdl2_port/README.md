@@ -12,17 +12,18 @@ includes `edraw.c` itself (so its grid of cells and its drawing calls are the
 same) and paints that grid in the window instead of sending it; the keys, the
 mouse, the clipboard and the window's size come from SDL.
 
-It is a program of its own, apart from mme in the mmc shell: `bin\` has
-`mme-sdl.exe`, `SDL2.dll` and its fonts, and `mme-sdl.exe` keeps its settings
-in its own `mme-data` next to it (portable, like `mme.exe`'s). Copy `bin\`
-anywhere; nothing of it goes into the shell's folder.
+It is a program of its own: `bin\` has `mme-sdl.exe`, `SDL2.dll` and its
+`mme-fonts`, and `mme-sdl.exe` keeps its settings in the `mme-data` next to it
+(portable, like `mme.exe`'s). Copy `bin\` anywhere. A 64 bit build is also
+copied into the mmc shell's `usr\bin` (`SDL_DEST`), so `mme-sdl .` opens the
+folder you are in; there it shares `mme.exe`'s `mme-data`, its settings too.
 
 The painting is mmc-term's: `tfont.c`, `tshape.c` and `stb_truetype.h` are
 copied from mmc as they are (the fonts: stb_truetype, and GDI's ClearType on
 Windows; fallback fonts for missing glyphs), and `esdl.c` has `tdraw.c`'s
 blending, box drawing, block elements and underlines. So it looks like mme in
 mmc-term, with JetBrains Mono Nerd Font from mmc's `usr/share/fonts` (or the
-`fonts` folder next to the program, or the system's).
+`mme-fonts` folder next to the program, or the system's).
 
 | | mme in mmc-term | mme-sdl |
 | --- | --- | --- |
@@ -43,7 +44,7 @@ build [compiler] [32 | 64]      64 when not said
 
 build zig        zig cc (the default)     Windows 7 and later (x64, or x86 with 32)
 build gcc        MinGW-w64 gcc            64: gcc on the PATH; 32: a 32 bit MinGW-w64
-                                          (i686-w64-mingw32-gcc, or GCC32=path	o\gcc.exe)
+                                          (i686-w64-mingw32-gcc, or GCC32=path\to\gcc.exe)
 build tcc        Tiny C Compiler 0.9.27   64: tcc.exe; 32: i386-win32-tcc.exe
 build xp         the same as "tcc 32"     Windows XP and later
 build msvc       Visual C++               from a "Native Tools" prompt, or found with vswhere
@@ -51,9 +52,10 @@ build clean
 ```
 
 64 bit goes into `bin\`, 32 bit into `bin32\`. Each is the program on its
-own: `mme-sdl.exe` with its `SDL2.dll` (SDL's 64 or 32 bit one), `fonts\`
+own: `mme-sdl.exe` with its `SDL2.dll` (SDL's 64 or 32 bit one), `mme-fonts\`
 (JetBrains Mono Nerd Font, taken from the mmc checkout beside this one, or
-from the shell's `usr\shareonts`) and, once it runs, `mme-data\`. The
+from the shell's `usr\share\fonts`) and, once it runs, `mme-data\`. The 64 bit
+one is copied into `D:\mmc-shell\usr\bin` too (`set SDL_DEST=` to not copy). The
 import definitions tcc needs go in `obj\`.
 
 **Windows XP and 7.** A program runs on XP when its C runtime is `msvcrt.dll`

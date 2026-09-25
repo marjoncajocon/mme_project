@@ -887,15 +887,15 @@ static void font_metrics (void) {
 
 
 /*
-** The folder the fonts come with (tfont.c keeps one): fonts\ next to the
-** program, else usr\shareonts when it is in an mmc shell's usrin
+** The folder the fonts come with (tfont.c keeps one): mme-fonts next to
+** the program, else usr/share/fonts when it is in an mmc shell's usr/bin
 */
 static void font_dirs (void) {
   char *exe = os_exe_path(NULL), *dir, *up, *share, *fonts;
   OsStat st;
   if (exe == NULL) return;
   dir = path_dirname(exe);
-  fonts = path_join(dir, "fonts");
+  fonts = path_join(dir, "mme-fonts");
   if (os_stat(fonts, &st) != 0 || !st.exists || !st.is_dir) {
     free(fonts);
     up = path_dirname(dir);

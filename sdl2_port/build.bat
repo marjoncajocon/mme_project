@@ -16,8 +16,10 @@ rem   msvc       Visual C++ (cl): from a "Native Tools" prompt, or found with vs
 rem   clean
 rem
 rem 64 bit goes into bin\, 32 bit into bin32\: each is the program on its own,
-rem mme-sdl.exe with its SDL2.dll, its fonts (JetBrains Mono Nerd Font, from mmc)
-rem and, once it runs, its own mme-data. Nothing goes into the mmc shell's folder.
+rem mme-sdl.exe with its SDL2.dll, its mme-fonts (JetBrains Mono Nerd Font, from
+rem mmc) and, once it runs, its own mme-data. A 64 bit build is copied into
+rem %SDL_DEST% too (the mmc shell's usr\bin: "mme-sdl ." there; it shares mme's
+rem mme-data); set SDL_DEST= to not copy.
 rem
 rem Every .c file of mme is compiled as it is, but eterm.c and edraw.c: esdl.c
 rem stands in for them (it includes edraw.c itself). mos.c comes in through
@@ -33,6 +35,7 @@ if not exist "%SDL%\include\SDL.h" (
   echo SDL2 is not in %SDL%: see README.md
   exit /b 1
 )
+if not defined SDL_DEST set SDL_DEST=D:\mmc-shell\usr\bin
 set FONTS=..\..\mmc
 if not exist "%FONTS%\JetBrainsMonoNerdFontMono-Regular.ttf" set FONTS=D:\mmc-shell\usr\share\fonts
 
@@ -171,11 +174,33 @@ if exist %OUT%\mme-sdl.exe ren %OUT%\mme-sdl.exe mme-sdl.exe.old%RANDOM%
 exit /b 0
 
 :done
-if not exist %OUT%\fonts mkdir %OUT%\fonts
+if exist %OUT%\fonts if not exist %OUT%\mme-fonts ren %OUT%\fonts mme-fonts
+if not exist %OUT%\mme-fonts mkdir %OUT%\mme-fonts
 for %%F in ("%FONTS%\JetBrainsMonoNerdFontMono-*.ttf" "%FONTS%\JetBrainsMonoNerdFont-OFL.txt") do (
-  if not exist "%OUT%\fonts\%%~nxF" copy /y "%%F" %OUT%\fonts\ >nul
+  if not exist "%OUT%\mme-fonts\%%~nxF" copy /y "%%F" %OUT%\mme-fonts\ >nul
 )
 echo built sdl2_port\%OUT%\mme-sdl.exe (%CC%, %ARCH% bit)
+if not "%ARCH%"=="64" exit /b 0
+if "%SDL_DEST%"=="" exit /b 0
+if not exist "%SDL_DEST%" exit /b 0
+for %%F in ("%SDL_DEST%\mme-sdl.exe.old*") do del "%%F" >nul 2>nul
+call :put %OUT%\mme-sdl.exe "%SDL_DEST%\mme-sdl.exe" || exit /b 1
+if not exist "%SDL_DEST%\SDL2.dll" copy /y %OUT%\SDL2.dll "%SDL_DEST%\" >nul
+if exist %OUT%\mme.ico copy /y %OUT%\mme.ico "%SDL_DEST%\" >nul
+if not exist "%SDL_DEST%\mme-fonts" mkdir "%SDL_DEST%\mme-fonts"
+for %%F in (%OUT%\mme-fonts\*) do (
+  if not exist "%SDL_DEST%\mme-fonts\%%~nxF" copy /y "%%F" "%SDL_DEST%\mme-fonts\" >nul
+)
+echo copied to %SDL_DEST%\mme-sdl.exe (with SDL2.dll and mme-fonts)
+exit /b 0
+
+rem copies %1 to %2; a program that is running can't be overwritten on
+rem Windows, but it can be renamed: it keeps the old one until it restarts
+:put
+copy /y %1 %2 >nul 2>nul && exit /b 0
+ren %2 "%~nx2.old%RANDOM%" || exit /b 1
+copy /y %1 %2 >nul || exit /b 1
+echo   (%~nx2 is running: it keeps the old version until you restart it)
 exit /b 0
 
 :clean
