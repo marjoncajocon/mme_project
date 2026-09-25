@@ -336,7 +336,7 @@ SCENARIOS = [
          "typing filters the palette and highlights what matched"),
     Scen("gotofile", "proj",
          ["w:1800", "k:" + CTRL_P, "w:700", "d", "k:beta", "w:800", "d"],
-         "Go to File lists the folder's files and filters them"),
+         "Go to File: nothing typed lists only the files opened lately (none here); typing filters the folder's files"),
     Scen("gotofile-symbol", "lang/edit.c",
          ["w:900", "k:" + CTRL_P, "w:400", "k:@", "w:800", "d"],
          "@ in Go to File switches it to the file's symbols"),

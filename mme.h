@@ -772,6 +772,7 @@ typedef struct PickItem {
   char *label;	/* what is shown and filtered on */
   char *detail;	/* dim text after it, or NULL */
   int icon;	/* a code point before the label, 0 none */
+  int group;	/* its group (p->group_label): a lower one comes first, whatever the scores */
 } PickItem;
 
 typedef struct Pick {
@@ -788,6 +789,11 @@ typedef struct Pick {
   const char *modes;	/* Go to File: one of these typed first switches (PICK_MODE) */
   int match_detail;	/* the detail is a path: what is typed matches "detail/label" too */
   const char *status;	/* dim, at the input's right end ("Indexing... 1200 files"), or NULL */
+  const char *group_label[2];	/* dim at the right of each group's first item ("recently opened"), or NULL */
+  int group;	/* pick_add gives the items this group */
+  int line_suffix;	/* Go to File: ":12" or ":12:5" at the end is where to go, not matched */
+  int typed_group;	/* Go to File: the items of this group and after show once something is typed; 0: always */
+  int side;	/* set by pick_run: Ctrl+Enter took the item (to the side) */
   char text[512];	/* what is typed */
 } Pick;
 
@@ -802,6 +808,7 @@ void pick_add (Pick *p, const char *label, const char *detail, int icon);
 void pick_clear (Pick *p);	/* items only */
 void pick_free (Pick *p);
 int pick_run (Pick *p);	/* the item's index, or PICK_* */
+size_t pick_text_len (const Pick *p, long *line, long *col);	/* the text matched (line_suffix: without ":12:5"), and those; 0: none */
 char *ask_text (const char *title, const char *init);	/* NULL: Esc */
 
 /* a modal dialog in the middle: the button pressed, -1 for Esc */

@@ -840,6 +840,7 @@ void pick_add (Pick *p, const char *label, const char *detail, int icon) {
   it->label = xstrdup(label);
   it->detail = detail ? xstrdup(detail) : NULL;
   it->icon = icon;
+  it->group = p->group;
 }
 
 
@@ -969,6 +970,38 @@ static int fz_score (const char *s, size_t n, const char *pat, size_t m, char *h
 
 
 /*
+** What is typed that items are matched with: with p->line_suffix, VS Code's
+** "main.c:12" or "main.c:12:5" is main.c, to be opened at line 12 (column
+** 5). line, col (or NULL): those, 0 when not said.
+*/
+size_t pick_text_len (const Pick *p, long *line, long *col) {
+  size_t n = strlen(p->text), i = n, c1, c2 = 0;
+  long a = 0, b = 0;
+  if (line) *line = 0;
+  if (col) *col = 0;
+  if (!p->line_suffix) return n;
+  while (i > 0 && p->text[i - 1] >= '0' && p->text[i - 1] <= '9') i--;
+  if (i == 0 || p->text[i - 1] != ':') return n;
+  c1 = i - 1;	/* the ':' before the last number */
+  if (c1 > 0) {	/* ":12:5": a line and a column */
+    size_t j = c1;
+    while (j > 0 && p->text[j - 1] >= '0' && p->text[j - 1] <= '9') j--;
+    if (j < c1 && j > 0 && p->text[j - 1] == ':') c2 = j - 1;
+  }
+  if (c2 > 0) {
+    a = strtol(p->text + c2 + 1, NULL, 10);
+    b = strtol(p->text + c1 + 1, NULL, 10);
+    c1 = c2;
+  }
+  else a = strtol(p->text + c1 + 1, NULL, 10);
+  if (c1 == 0) return n;	/* ":12" alone is Go to Line's */
+  if (line) *line = a;
+  if (col) *col = b;
+  return c1;
+}
+
+
+/*
 ** How well item matches what is typed: each word typed (split by spaces)
 ** must match. A word matches the label, better, or (items with a path,
 ** p->match_detail) the whole "detail/label"; a '/' in a word matches the
@@ -976,13 +1009,15 @@ static int fz_score (const char *s, size_t n, const char *pat, size_t m, char *h
 ** matched bytes of the label and of the detail.
 */
 static int item_score (const Pick *p, const PickItem *it, char *hl, char *hd) {
-  const char *t = p->text;
+  char typed[sizeof(p->text)];
+  const char *t = typed;
   size_t ln = strlen(it->label), dn = it->detail ? strlen(it->detail) : 0;
   char full[FZ_MAXN + 1], fh[FZ_MAXN];
   size_t fn = 0;
   int total = 0, have_full = 0;
   if (hl) memset(hl, 0, ln + 1);
   if (hd) memset(hd, 0, dn + 1);
+  snprintf(typed, sizeof(typed), "%.*s", (int)pick_text_len(p, NULL, NULL), p->text);
   while (*t == ' ') t++;
   if (*t == '\0') return 0;
   if (p->match_detail && it->detail && dn + ln + 1 <= FZ_MAXN) {
@@ -1040,26 +1075,41 @@ typedef struct Vis {
 } Vis;
 
 static const int *g_scores;
+static const PickItem *g_items;
+static int g_by_name;	/* a tie goes by name (Go to File: the order files were found in is the threads') */
 
 static int cmp_vis (const void *a, const void *b) {
   size_t x = *(const size_t *)a, y = *(const size_t *)b;
-  int d = g_scores[x] < g_scores[y] ? 1 : g_scores[x] > g_scores[y] ? -1 : 0;	/* higher first */
+  int d = g_items[x].group - g_items[y].group;	/* recently opened, then the folder's files */
   if (d) return d;
+  d = g_scores[x] < g_scores[y] ? 1 : g_scores[x] > g_scores[y] ? -1 : 0;	/* higher first */
+  if (d) return d;
+  if (g_by_name && (d = strcmp(g_items[x].label, g_items[y].label)) != 0) return d;	/* a tie: by name, then path */
+  if (g_by_name && g_items[x].detail && g_items[y].detail && (d = strcmp(g_items[x].detail, g_items[y].detail)) != 0) return d;
   return x < y ? -1 : x > y;
 }
 
 
-static void filter (const Pick *p, Vis *vis) {
-  size_t i;
-  vis->n = 0;
-  for (i = 0; i < p->n; i++) {
-    int sc = p->text[0] ? item_score(p, &p->item[i], NULL, NULL) : 0;
-    if (sc == FZ_NONE) continue;
-    vis->score[i] = sc;
-    vis->v[vis->n++] = i;
+/*
+** The items that match, best first. narrow: what is typed only grew, so
+** only the ones that matched before can match now (VS Code's quick open
+** does the same: a big folder does not score every file at each key).
+*/
+static void filter (const Pick *p, Vis *vis, int narrow) {
+  size_t i, n = narrow ? vis->n : p->n, k = 0;
+  int typed = pick_text_len(p, NULL, NULL) > 0;
+  for (i = 0; i < n; i++) {
+    size_t it = narrow ? vis->v[i] : i;
+    int sc = typed ? item_score(p, &p->item[it], NULL, NULL) : 0;
+    if (sc == FZ_NONE || (!typed && p->typed_group > 0 && p->item[it].group >= p->typed_group)) continue;
+    vis->score[it] = sc;
+    vis->v[k++] = it;
   }
-  if (!p->keep_order && p->text[0]) {
+  vis->n = k;
+  if (!p->keep_order && typed) {
     g_scores = vis->score;
+    g_items = p->item;
+    g_by_name = p->typed_group > 0;
     qsort(vis->v, vis->n, sizeof(size_t), cmp_vis);
   }
 }
@@ -1116,7 +1166,7 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
   for (i = 0; i < g_box.rows && vis->n > 0; i++) {
     size_t k = top + (size_t)i;
     const PickItem *it;
-    int y = g_box.y + 3 + i, on, st, hst, sc, lx;
+    int y = g_box.y + 3 + i, on, st, hst, sc, lx, right = g_box.x + g_box.w - 2;
     size_t b, n, dn;
     if (k >= vis->n) break;
     it = &p->item[vis->v[k]];
@@ -1137,14 +1187,24 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
     }
     sc = p->text[0] ? item_score(p, it, hit, hit + n + 1) : 0;
     if (sc == FZ_NONE) memset(hit, 0, n + dn + 2);
-    for (b = 0; b < n && lx < g_box.x + g_box.w - 2;) {	/* the matched letters in blue */
+    {	/* its group's name, at the right of the group's first item: "recently opened" */
+      const char *gl = it->group >= 0 && it->group < 2 ? p->group_label[it->group] : NULL;
+      if (gl && (k == 0 || p->item[vis->v[k - 1]].group != it->group)) {
+        int gw = (int)str_cols(gl);
+        if (gw + 20 < g_box.w) {
+          scr_puts(g_box.x + g_box.w - 2 - gw, y, gl, on ? S_MENU_KEY_SEL : S_BOX_DIM);
+          right = g_box.x + g_box.w - 4 - gw;
+        }
+      }
+    }
+    for (b = 0; b < n && lx < right;) {	/* the matched letters in blue */
       size_t len;
       uint32_t cp = utf8_decode(it->label + b, n - b, &len);
       lx += scr_put(lx, y, cp, (p->text[0] && hit[b]) ? hst : st);
       b += len;
     }
-    if (it->detail && lx + 2 < g_box.x + g_box.w - 2) {	/* the path, its matched letters in blue too */
-      int dst = on ? S_MENU_KEY_SEL : S_BOX_DIM, dx = lx + 2, end = g_box.x + g_box.w - 3;
+    if (it->detail && lx + 2 < right) {	/* the path, its matched letters in blue too */
+      int dst = on ? S_MENU_KEY_SEL : S_BOX_DIM, dx = lx + 2, end = right - 1;
       const char *d = it->detail;
       for (b = 0; b < dn && dx < end;) {
         size_t len;
@@ -1160,12 +1220,15 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
 
 int pick_run (Pick *p) {
   Vis vis;
+  char matched[sizeof(p->text)];	/* what the items in vis were matched with */
   size_t sel = 0, top = 0;
   int r;
   int shown = -1;
   vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
   vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
-  filter(p, &vis);
+  filter(p, &vis, 0);
+  snprintf(matched, sizeof(matched), "%.*s", (int)pick_text_len(p, NULL, NULL), p->text);
+  p->side = 0;
   if (p->start > 0 && (size_t)p->start < vis.n) sel = (size_t)p->start;
   for (;;) {
     int k, code, changed = 0;
@@ -1195,7 +1258,8 @@ int pick_run (Pick *p) {
         free(vis.score);
         vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
         vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
-        filter(p, &vis);
+        filter(p, &vis, 0);
+        matched[0] = '\0';
       }
       continue;
     }
@@ -1207,6 +1271,7 @@ int pick_run (Pick *p) {
     if (p->fresh && !IS_TEXT(k) && code != K_ENTER) p->fresh = 0;
     if (code == K_ENTER) {
       r = vis.n ? (int)vis.v[sel] : PICK_TEXT;
+      p->side = (k & KM_CTRL) != 0;	/* Ctrl+Enter: to the side, where the caller can */
       break;
     }
     if (code == K_UP || (code == K_TAB && (k & KM_CTRL) && (k & KM_SHIFT)))
@@ -1279,6 +1344,7 @@ int pick_run (Pick *p) {
         vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
         vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
         changed = 1;
+        matched[0] = '\0';	/* other items: every one is looked at */
       }
     }
     if (changed && p->modes && p->text[0] && strchr(p->modes, p->text[0])) {
@@ -1286,8 +1352,10 @@ int pick_run (Pick *p) {
       break;
     }
     if (changed) {
+      size_t ml = pick_text_len(p, NULL, NULL), ol = strlen(matched);
       p->fresh = 0;
-      filter(p, &vis);
+      filter(p, &vis, ol > 0 && ml >= ol && strncmp(p->text, matched, ol) == 0);	/* it only grew: the ones left */
+      snprintf(matched, sizeof(matched), "%.*s", (int)ml, p->text);
       sel = top = 0;
     }
   }

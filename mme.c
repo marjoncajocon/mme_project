@@ -6673,6 +6673,10 @@ static void quick_open (void) {
   int r;
   pick_init(&p, "Search files by name (append : to go to line, @ to go to symbol, # for the workspace's)");
   p.match_detail = 1;
+  p.line_suffix = 1;	/* "main.c:12": main.c, at line 12 */
+  p.group_label[0] = "recently opened";	/* VS Code's two groups: the files opened lately stay first */
+  p.group_label[1] = "file results";
+  p.typed_group = 1;	/* nothing typed: only the files opened lately, as VS Code */
   vec_init(&paths);
   recent_files(&recent);
   for (i = 0; i < recent.n; i++) {	/* recently opened, first */
@@ -6685,6 +6689,7 @@ static void quick_open (void) {
     vec_push(&paths, xstrdup(recent.v[i]));
     free(d);
   }
+  p.group = 1;
   fi_begin();
   QO.added = 0;
   QO.paths = &paths;
@@ -6702,7 +6707,21 @@ static void quick_open (void) {
       default: if (HAS_DOC && !G->diff) goto_line(text); break;
     }
   }
-  else if (r >= 0 && open_file(paths.v[r], 0) == 0) E.focus = F_EDITOR;
+  else if (r >= 0) {
+    SideAct sa;
+    long line, col;
+    pick_text_len(&p, &line, &col);
+    memset(&sa, 0, sizeof(sa));
+    sa.path = paths.v[r];
+    if (p.side) {	/* Ctrl+Enter: in the group beside */
+      sa.what = SA_OPEN_SIDE;
+      apply_act(&sa);
+    }
+    sa.what = SA_GO;	/* the file (the one just opened beside: its tab), at the line asked */
+    sa.line = line > 0 ? (size_t)line : 0;
+    sa.col = col > 0 ? (size_t)col - 1 : 0;
+    apply_act(&sa);
+  }
   pick_free(&p);
   vec_free(&paths);
   vec_free(&recent);

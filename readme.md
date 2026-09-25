@@ -691,7 +691,9 @@ With no file open the editor shows the keys to start with.
   search.searchEditor.reusePriorSearchConfiguration. The results are read
   only here: select them (Shift+arrows, the mouse, Ctrl+A) and copy them, but
   they are not typed in as VS Code allows.
-- **Quick Open** — Ctrl+P lists the files opened lately first. The folder is
+- **Quick Open** — Ctrl+P lists the files opened lately; typing searches the
+  folder's files too, the ones opened lately still first ("recently opened",
+  then "file results", as VS Code labels them). The folder is
   walked on worker threads as well, so the list shows at once on a big one and
   "Indexing... N files" counts up while the rest arrives. What is typed
   first switches it, like VS Code: `>` commands, `@` the file's symbols, `:`
@@ -703,7 +705,10 @@ With no file open the editor shows the keys to start with.
   and the letters that matched are lit blue. The folder's files are found once
   and kept: a big one shows "Indexing... N files" and fills while you type
   (100,000 files in about 15 s here), and it is walked again when a file is
-  made, renamed or deleted.
+  made, renamed or deleted. Each letter typed only looks again at what
+  matched before, so a big folder keeps up. `main.c:12` (or `main.c:12:5`)
+  finds main.c and opens it at that line; Ctrl+Enter opens the file in the
+  group beside.
 - **Tabs** — right-click a tab: Close, Close Others, Close to the Right, Close
   Saved, Close All, Copy Path, Reveal in Explorer View, Keep Open, Pin, Split
   Right. Pinned tabs stay first with a pin and survive Close Others / All; the
@@ -948,10 +953,9 @@ Alt+1 and Ctrl+PgDn there.
 
 ## What comes next
 
-VS Code's own quick open ranking (matched letters lit, and the file list kept
-between searches for folders with tens of thousands of files), the language
-server's progress in the status bar, notifications with buttons, the minimap's
-slider dragged with the mouse, and editing in the diff editor.
+The language server's progress in the status bar, notifications with
+buttons, the minimap's slider dragged with the mouse, and editing in the diff
+editor.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and
