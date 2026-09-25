@@ -1026,12 +1026,220 @@ static void file_history (const char *path, SideAct *act) {
 }
 
 
+/*
+** {==================================================================
+** Worktrees, VS Code's: Create Worktree (a branch checked out in a
+** folder of its own, <repo>.worktrees/<branch> by default), Open Worktree
+** (the folder is opened here), Delete Worktree
+** ===================================================================
+*/
+
+typedef struct Wt {
+  char *path;	/* native */
+  char *branch;	/* "main"; NULL: detached */
+  char head[12];
+} Wt;
+
+
+/* git worktree list --porcelain: the first one is the main worktree */
+static Wt *wt_load (size_t *n) {
+  Buf b;
+  Wt *v = NULL;
+  const char *p;
+  size_t cap = 0;
+  *n = 0;
+  buf_init(&b);
+  if (gitv(&b, 0, "worktree", "list", "--porcelain", NULL) != 0 || b.s == NULL) {
+    buf_free(&b);
+    return NULL;
+  }
+  for (p = b.s; *p;) {
+    const char *e = strchr(p, '\n');
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    if (len > 0 && p[len - 1] == '\r') len--;
+    if (len > 9 && strncmp(p, "worktree ", 9) == 0) {
+      char *c;
+      if (*n == cap) v = (Wt *)xrealloc(v, (cap = cap ? cap * 2 : 8) * sizeof(Wt));
+      memset(&v[*n], 0, sizeof(Wt));
+      v[*n].path = xstrndup(p + 9, len - 9);
+#ifdef _WIN32
+      for (c = v[*n].path; *c; c++)
+        if (*c == '/') *c = '\\';
+#else
+      (void)c;
+#endif
+      (*n)++;
+    }
+    else if (*n && len > 5 && strncmp(p, "HEAD ", 5) == 0) snprintf(v[*n - 1].head, sizeof(v[0].head), "%.7s", p + 5);
+    else if (*n && len > 18 && strncmp(p, "branch refs/heads/", 18) == 0) v[*n - 1].branch = xstrndup(p + 18, len - 18);
+    p += len;
+    while (*p == '\r' || *p == '\n') p++;
+  }
+  buf_free(&b);
+  return v;
+}
+
+
+static void wt_free (Wt *v, size_t n) {
+  size_t i;
+  for (i = 0; i < n; i++) {
+    free(v[i].path);
+    free(v[i].branch);
+  }
+  free(v);
+}
+
+
+/* a worktree picked (skip: the main one, and the one open, are not offered); NULL: Esc */
+static char *wt_pick (const char *title, int skip) {
+  size_t n, i, *map, m = 0;
+  Wt *v = wt_load(&n);
+  const char *top = git_root();
+  Pick p;
+  int r;
+  char *out = NULL;
+  if (v == NULL) {
+    toast(1, "Git: could not list the worktrees");
+    return NULL;
+  }
+  map = (size_t *)xmalloc((n + 1) * sizeof(size_t));
+  pick_init(&p, title);
+  for (i = 0; i < n; i++) {
+    char d[400];
+    int here = top && m_fncmp(v[i].path, top) == 0;
+    if (skip && (i == 0 || here)) continue;
+    snprintf(d, sizeof(d), "%s%s  %s", v[i].branch ? v[i].branch : v[i].head, here ? " (current)" : i == 0 ? " (main)" : "",
+             v[i].path);
+    pick_add(&p, path_basename(v[i].path), d, 0xF0E7);	/* list-tree */
+    map[m++] = i;
+  }
+  if (m == 0) toast(0, skip ? "There are no other worktrees." : "There are no worktrees.");
+  else if ((r = pick_run(&p)) >= 0) out = xstrdup(v[map[r]].path);
+  pick_free(&p);
+  free(map);
+  wt_free(v, n);
+  return out;
+}
+
+
+static char *g_wt_open;	/* the folder SA_OPEN_FOLDER opens */
+
+/* the folder is opened, here: VS Code's "Open Worktree in Current Window" */
+static void wt_open (const char *path, SideAct *act) {
+  free(g_wt_open);
+  g_wt_open = xstrdup(path);
+  act->what = SA_OPEN_FOLDER;
+  act->path = g_wt_open;
+}
+
+
+/* Git: Create Worktree...: a branch (or a new one) checked out in a new folder */
+static void wt_create (SideAct *act) {
+  size_t n, i;
+  Ref *v = refs_load(3, &n);	/* the branches, local and remote */
+  Pick p;
+  int r;
+  char *branch = NULL, *path, *def, *parent, *wts, *leaf, *c, msg[600];
+  const char *top = git_root();
+  int fresh = 0, remote = 0;
+  Buf b;
+  pick_init(&p, "Select a branch to create the new worktree from");
+  pick_add(&p, "Create new branch...", "from HEAD", 0xEA60);	/* codicon add */
+  for (i = 0; i < n; i++) pick_add(&p, v[i].name, v[i].detail, (int)ref_icon(v[i].kind));
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r == 0) {
+    branch = ask_branch("Please provide a new branch name for the worktree (Press 'Enter' to confirm or 'Escape' to cancel)", "");
+    fresh = 1;
+  }
+  else if (r > 0) {
+    branch = xstrdup(v[r - 1].name);
+    remote = v[r - 1].kind == 1;
+  }
+  refs_free(v, n);
+  if (branch == NULL || !branch[0]) {
+    free(branch);
+    return;
+  }
+  parent = path_dirname(top);	/* VS Code's default: next to the repository, <repo>.worktrees/<branch> */
+  leaf = xstrcat3(path_basename(top), ".worktrees", "");
+  wts = path_join(parent, leaf);
+  def = xstrdup(branch);
+  for (c = def; *c; c++)
+    if (*c == '/' || *c == '\\' || *c == ':') *c = '-';
+  {
+    char *d = path_join(wts, def);
+    free(def);
+    def = d;
+  }
+  path = ask_text("Worktree location (Press 'Enter' to confirm or 'Escape' to cancel)", def);
+  free(def);
+  free(wts);
+  free(leaf);
+  free(parent);
+  if (path == NULL || !path[0]) {
+    free(path);
+    free(branch);
+    return;
+  }
+  buf_init(&b);
+  if (fresh) r = gitv(&b, 1, "worktree", "add", "-b", branch, path, NULL);
+  else {
+    const char *local = remote && strchr(branch, '/') ? strchr(branch, '/') + 1 : branch;	/* origin/x: a local x tracking it */
+    if (local != branch) r = gitv(&b, 1, "worktree", "add", "--track", "-b", local, path, branch, NULL);
+    else r = gitv(&b, 1, "worktree", "add", path, branch, NULL);
+  }
+  if (r != 0) {
+    git_error(&b, "Could not create the worktree");
+    buf_free(&b);
+  }
+  else {
+    static const char *const bt[] = {"Open", "Not Now"};
+    buf_free(&b);
+    changed();
+    snprintf(msg, sizeof(msg), "The worktree for '%s' was created in %s.", branch, path);
+    if (dialog(msg, "Open it in this window?", bt, 2) == 0) wt_open(path, act);
+  }
+  free(path);
+  free(branch);
+}
+
+
+/* Git: Delete Worktree...: git worktree remove, and --force when it has changes and that is asked */
+static void wt_delete (void) {
+  static const char *const bt[] = {"Delete", "Cancel"}, *const force[] = {"Force Delete", "Cancel"};
+  char *path = wt_pick("Select a worktree to delete", 1), msg[600];
+  Buf b;
+  if (path == NULL) return;
+  snprintf(msg, sizeof(msg), "Are you sure you want to delete the worktree %s?", path);
+  if (dialog(msg, "Its folder is deleted; its branch stays.", bt, 2) != 0) {
+    free(path);
+    return;
+  }
+  buf_init(&b);
+  if (gitv(&b, 1, "worktree", "remove", path, NULL) != 0) {
+    if (b.s && (strstr(b.s, "modified or untracked") || strstr(b.s, "--force")) &&
+        dialog("The worktree has changes that are not committed.", "Delete it with them?", force, 2) == 0) {
+      buf_free(&b);
+      buf_init(&b);
+      report(gitv(&b, 1, "worktree", "remove", "--force", path, NULL), &b, "Could not delete the worktree", "Deleted the worktree");
+    }
+    else report(1, &b, "Could not delete the worktree", NULL);
+  }
+  else report(0, &b, NULL, "Deleted the worktree");
+  free(path);
+}
+
+/* }================================================================== */
+
+
 /* the "..." of the Source Control view: VS Code's More Actions */
 static void more_actions (SideAct *act) {
   static const int cmds[] = {
     CMD_GIT_PULL, CMD_GIT_PUSH, CMD_GIT_SYNC, CMD_GIT_FETCH, CMD_GIT_COMMIT, CMD_GIT_AMEND,
     CMD_GIT_UNDO_COMMIT, CMD_GIT_CHECKOUT, CMD_GIT_BRANCH, CMD_GIT_BRANCH_FROM, CMD_GIT_RENAME_BRANCH,
     CMD_GIT_DELETE_BRANCH, CMD_GIT_MERGE, CMD_GIT_STASH, CMD_GIT_STASH_POP, CMD_GIT_STASH_APPLY,
+    CMD_GIT_WT_CREATE, CMD_GIT_WT_OPEN, CMD_GIT_WT_DELETE,
     CMD_GIT_FILE_HISTORY, CMD_GIT_BLAME, CMD_GIT_REFRESH, CMD_GIT_PUBLISH, CMD_GIT_CLONE,
     CMD_STAGE_RANGES, CMD_UNSTAGE_RANGES, CMD_REVERT_RANGES
   };
@@ -1207,6 +1415,14 @@ void git_command (int cmd, const char *path, SideAct *act) {
     case CMD_GIT_AMEND: git_commit(1); on_disk_changed(); break;
     case CMD_GIT_FILE_HISTORY: file_history(path, act); break;
     case CMD_GIT_MORE: more_actions(act); break;
+    case CMD_GIT_WT_CREATE: wt_create(act); break;
+    case CMD_GIT_WT_OPEN: {
+      char *w = wt_pick("Select a worktree to open", 0);
+      if (w) wt_open(w, act);
+      free(w);
+      break;
+    }
+    case CMD_GIT_WT_DELETE: wt_delete(); break;
   }
   buf_free(&b);
 }

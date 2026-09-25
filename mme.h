@@ -632,6 +632,7 @@ enum {
   CMD_VIM_TOGGLE, CMD_SAVE_ALL, CMD_GIT_VIEW_CHANGES, CMD_GIT_VIEW_STAGED,
   CMD_TEST_COV_ALL, CMD_TEST_COV_FILE, CMD_TEST_COV_CURSOR, CMD_TEST_COV_CLOSE, CMD_TEST_COV_INLINE,	/* etest.c */
   CMD_PROFILE_SWITCH, CMD_PROFILE_NEW, CMD_PROFILE_RENAME, CMD_PROFILE_DELETE,
+  CMD_GIT_WT_CREATE, CMD_GIT_WT_OPEN, CMD_GIT_WT_DELETE,	/* egitlog.c: git_command too */
   CMD_N
 };
 
@@ -916,7 +917,7 @@ typedef struct SideAct {
 enum { SA_NONE, SA_OPEN, SA_GO, SA_DIFF, SA_SHOW_DIFF, SA_CMD, SA_FOCUS_SCM,
        SA_RENAMED, SA_DELETED,	/* path (to path2) was renamed / deleted: its tabs follow */
        SA_TERMINAL, SA_CLIP,	/* a terminal in folder path; path to the clipboard */
-       SA_OPEN_SIDE, SA_FIND_FOLDER };	/* path opened in the group beside; Search in folder path (from the root) */
+       SA_OPEN_SIDE, SA_FIND_FOLDER, SA_OPEN_FOLDER };	/* path opened in the group beside; Search in folder path (from the root) */
 
 void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t shown);	/* a pane's scrollbar */
 int files_bar_y (void);	/* the tree's scrollbar: the row it starts at */

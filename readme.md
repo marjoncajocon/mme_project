@@ -790,6 +790,14 @@ With no file open the editor shows the keys to start with.
   (publishes a branch without an upstream), Fetch, Sync, Stash, Pop Latest
   Stash, Apply Stash..., Undo Last Commit, Commit Staged (Amend). Files git
   changes on disk (checkout, pull, stash) are read again when not edited.
+- **Worktrees** — "Git: Create Worktree..." checks a branch out (an existing
+  one, a remote one as a local branch tracking it, or a new one from HEAD) in
+  a folder of its own, `<repo>.worktrees/<branch>` next to the repository as
+  VS Code proposes, and offers to open it here. "Git: Open Worktree..." lists
+  them (the main one and the one open marked) and opens the one picked;
+  "Git: Delete Worktree..." removes one, asking first (and again, to force
+  it, when it has changes not committed). All three are in Source Control's
+  "..." too.
 - **Blame** — the cursor's line ends with who changed it last and when, dim
   (`Ana Cruz, 3 days ago • subject`), and the status bar says it too.
   git.blame.editorDecoration.enabled and git.blame.statusBarItem.enabled turn
@@ -973,7 +981,7 @@ Alt+1 and Ctrl+PgDn there.
 
 ## What comes next
 
-Git worktrees, data breakpoints, workspace trust and screencast mode.
+Data breakpoints, workspace trust and screencast mode.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and

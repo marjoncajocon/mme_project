@@ -144,7 +144,8 @@ static const char *const names[CMD_N] = {
   "Vim: Toggle Vim Mode", "File: Save All", "Git: View All Changes", "Git: View Staged Changes",
   "Test: Run All Tests with Coverage", "Test: Run Tests in Current File with Coverage",
   "Test: Run Test at Cursor with Coverage", "Test: Close Coverage", "Test: Toggle Inline Coverage",
-  "Profiles: Switch Profile...", "Profiles: New Profile...", "Profiles: Rename Profile...", "Profiles: Delete Profile..."
+  "Profiles: Switch Profile...", "Profiles: New Profile...", "Profiles: Rename Profile...", "Profiles: Delete Profile...",
+  "Git: Create Worktree...", "Git: Open Worktree...", "Git: Delete Worktree..."
 };
 
 static const char *const keys[CMD_N] = {
@@ -208,7 +209,8 @@ static const char *const keys[CMD_N] = {
   "", "Alt+Enter", "Ctrl+Shift+R", "Alt+L", "Alt+=", "Alt+-", "Escape", "Ctrl+Shift+Backspace",
   "", "Ctrl+K S", "", "",
   "", "", "", "", "",
-  "", "", "", ""
+  "", "", "", "",
+  "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -368,7 +370,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "testing.coverageAll", "testing.coverageCurrentFile", "testing.coverageAtCursor",
   "testing.coverage.close", "testing.toggleInlineCoverage",
   "workbench.profiles.actions.switchProfile", "workbench.profiles.actions.createProfile",
-  "workbench.profiles.actions.renameProfile", "workbench.profiles.actions.deleteProfile"
+  "workbench.profiles.actions.renameProfile", "workbench.profiles.actions.deleteProfile",
+  "git.createWorktree", "git.openWorktree", "git.deleteWorktree"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

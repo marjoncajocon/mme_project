@@ -17084,7 +17084,8 @@ static void run_command (int cmd) {
         searched_cmd(cmd);
         break;
       }
-      if (cmd >= CMD_GIT_CHECKOUT && cmd <= CMD_GIT_MORE) {	/* egitlog.c */
+      if ((cmd >= CMD_GIT_CHECKOUT && cmd <= CMD_GIT_MORE) || cmd == CMD_GIT_WT_CREATE || cmd == CMD_GIT_WT_OPEN ||
+          cmd == CMD_GIT_WT_DELETE) {	/* egitlog.c */
         SideAct act;
         memset(&act, 0, sizeof(act));
         git_command(cmd, G->diff ? diff_path() : (HAS_DOC ? T->real : NULL), &act);
@@ -17578,6 +17579,7 @@ static void apply_act (const SideAct *act) {
       if (act->what == SA_GO) E.focus = F_EDITOR;
       break;
     case SA_CMD: run_command(act->cmd); break;
+    case SA_OPEN_FOLDER: open_folder(act->path); break;	/* a worktree */
     case SA_FOCUS_SCM: show_view(VIEW_GIT); break;
     case SA_OPEN_SIDE: {	/* Open to the Side: the group on the right (a new one when there is none) */
       int ng = g_gcur + 1 < g_ngrp ? g_gcur + 1 : group_add(g_gcur, DROP_RIGHT);
