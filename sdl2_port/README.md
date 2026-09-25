@@ -39,23 +39,42 @@ SDL2 2.32.10 is not in the repository: unpack its development packages from
 `deps\SDL2-2.32.10\include\SDL.h` is there.
 
 ```
-build            zig cc (the default)
-build gcc        MinGW-w64 gcc
-build tcc        Tiny C Compiler 0.9.27
-build msvc       Visual C++ (from a "x64 Native Tools" prompt, or found with vswhere)
+build [compiler] [32 | 64]      64 when not said
+
+build zig        zig cc (the default)     Windows 7 and later (x64, or x86 with 32)
+build gcc        MinGW-w64 gcc            64: gcc on the PATH; 32: a 32 bit MinGW-w64
+                                          (i686-w64-mingw32-gcc, or GCC32=path	o\gcc.exe)
+build tcc        Tiny C Compiler 0.9.27   64: tcc.exe; 32: i386-win32-tcc.exe
+build xp         the same as "tcc 32"     Windows XP and later
+build msvc       Visual C++               from a "Native Tools" prompt, or found with vswhere
 build clean
 ```
 
-`bin\mme-sdl.exe` is made with `SDL2.dll` and `fonts\` (JetBrains Mono Nerd
-Font, taken from the mmc checkout beside this one, or from the shell's
-`usr\share\fonts`) beside it. tcc's `.def` files go in `obj\`.
+64 bit goes into `bin\`, 32 bit into `bin32\`. Each is the program on its
+own: `mme-sdl.exe` with its `SDL2.dll` (SDL's 64 or 32 bit one), `fonts\`
+(JetBrains Mono Nerd Font, taken from the mmc checkout beside this one, or
+from the shell's `usr\shareonts`) and, once it runs, `mme-data\`. The
+import definitions tcc needs go in `obj\`.
+
+**Windows XP and 7.** A program runs on XP when its C runtime is `msvcrt.dll`
+(XP has it; the Universal CRT that zig and MinGW-w64 use by default is Vista
+and later) and it calls nothing XP lacks. `build xp` makes such a program:
+32 bit, `msvcrt.dll`, marked for Windows 4.0 and later, with no call newer
+than XP (SDL2 2.32.10's own 32 bit dll is the same). Two of mme's files are
+compiled through small wrappers for that, without a change to them: `mos.c`
+through `emos.c` (console programs started without a window) and `tpty.c`
+through `etpty.c` (Vista's calls, looked up when the terminal panel starts,
+so on XP only the panel is missing: ConPTY is Windows 10's). C11 is only the
+language: nothing in it needs a newer Windows.
 
 tcc 0.9.27 has only some of Windows' headers and import libraries, so its build
 uses `tcc\`: the headers mme needs that tcc lacks (Winsock's TCP calls,
 `shellapi.h`, `tlhelp32.h`, winnls's UTF-8 conversions, the pseudo console's
 start-up info), C99's `snprintf` (msvcrt.dll's leaves a cut text
-unterminated) and `strtoll`; the `.def` files of the system's dlls are made
-with `tcc -impdef`. The tcc build has no icon (tcc does not compile `.rc`).
+unterminated, and XP's does not know `%lld`: it becomes `%I64d`) and
+`strtoll`; the `.def` files of the system's dlls are made with `tcc -impdef`
+(from `SysWOW64` for 32 bit). The tcc builds get their icon from `mme.ico`
+next to the program (tcc does not compile `.rc`).
 
 On Linux and macOS, with SDL2 installed (`libsdl2-dev`, `brew install sdl2`):
 
@@ -76,8 +95,8 @@ not saved. Zoom In / Out / Reset change the font; `editor.fontFamily` and
 
 - Pictures (the image preview): mme sends them to a terminal as sixel; the
   window does not show them yet.
-- Windows XP: SDL2 lists XP; the build needs a 32 bit MinGW-w64 with msvcrt
-  (zig and the MinGW here link the Universal CRT, which XP does not have), and
-  the terminal panel (ConPTY, Windows 10 1809) needs another way on XP.
+- Windows XP on a real XP machine: `build xp` is built for it and checked
+  (its header, its runtime, every call it makes), but it was run on Windows 11
+  only. The terminal panel has no ConPTY on XP.
 - Visual C++: the script is there, but no Visual C++ was on the machine it was
   written on to try it.

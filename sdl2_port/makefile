@@ -15,7 +15,7 @@ LDFLAGS= -s
 PREFIX= /usr/local
 SDL2_CONFIG= sdl2-config
 
-SRC= $(filter-out ../eterm.c ../edraw.c ../mos.c, $(wildcard ../*.c)) esdl.c emos.c tfont.c tshape.c
+SRC= $(filter-out ../eterm.c ../edraw.c ../mos.c ../tpty.c, $(wildcard ../*.c)) esdl.c emos.c etpty.c tfont.c tshape.c
 
 all: mme-sdl
 

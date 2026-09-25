@@ -1,19 +1,29 @@
 @echo off
 rem build.bat - mme in a window of its own (SDL2): sdl2_port\bin\mme-sdl.exe
 rem
-rem   build [zig]      zig cc (the default), 64 bit
-rem   build gcc        MinGW-w64 gcc, 64 bit
-rem   build tcc        Tiny C Compiler, 64 bit
-rem   build msvc       Visual C++ (cl), 64 bit: run it from a "x64 Native Tools" prompt,
-rem                    or let it find Visual Studio with vswhere
-rem   build clean
+rem   build [compiler] [32 | 64]
+rem
+rem   zig        zig cc (the default)           64: Windows 7 and later (x64)
+rem                                             32: Windows 7 and later (x86)
+rem   gcc        MinGW-w64 gcc                  64: gcc on the PATH
+rem                                             32: a 32 bit MinGW-w64: i686-w64-mingw32-gcc
+rem                                                 on the PATH, or GCC32=path\to\gcc.exe
+rem   tcc        Tiny C Compiler 0.9.27         64: tcc.exe
+rem                                             32: i386-win32-tcc.exe, msvcrt.dll:
+rem                                                 Windows XP and later
+rem   xp         the same as "tcc 32"
+rem   msvc       Visual C++ (cl): from a "Native Tools" prompt, or found with vswhere
+rem   clean
+rem
+rem 64 bit goes into bin\, 32 bit into bin32\: each is the program on its own,
+rem mme-sdl.exe with its SDL2.dll, its fonts (JetBrains Mono Nerd Font, from mmc)
+rem and, once it runs, its own mme-data. Nothing goes into the mmc shell's folder.
 rem
 rem Every .c file of mme is compiled as it is, but eterm.c and edraw.c: esdl.c
-rem stands in for them (it includes edraw.c itself), and mos.c comes in through
-rem emos.c (console programs started without a console window). SDL2 comes from deps\ (see
-rem README.md). bin\ is the program, on its own: mme-sdl.exe, SDL2.dll, the
-rem fonts (JetBrains Mono Nerd Font, from mmc) and, once it runs, its own
-rem mme-data. It is not put in the mmc shell's folder with mme.exe.
+rem stands in for them (it includes edraw.c itself). mos.c comes in through
+rem emos.c (console programs started without a console window) and tpty.c
+rem through etpty.c (Vista's calls looked up at run time, so XP starts it).
+rem SDL2 2.32.10 comes from deps\ (see README.md).
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -26,80 +36,123 @@ if not exist "%SDL%\include\SDL.h" (
 set FONTS=..\..\mmc
 if not exist "%FONTS%\JetBrainsMonoNerdFontMono-Regular.ttf" set FONTS=D:\mmc-shell\usr\share\fonts
 
-set SRC=
-for %%F in (..\*.c) do (
-  if /i not "%%~nxF"=="eterm.c" if /i not "%%~nxF"=="edraw.c" if /i not "%%~nxF"=="mos.c" set SRC=!SRC! %%F
-)
-set SRC=%SRC% esdl.c emos.c tfont.c tshape.c
-if not exist bin mkdir bin
-rem a mme-sdl.exe that is running cannot be written over, but it can be renamed
-for %%F in (bin\mme-sdl.exe.old*) do del "%%F" >nul 2>nul
-if exist bin\mme-sdl.exe del bin\mme-sdl.exe >nul 2>nul
-if exist bin\mme-sdl.exe ren bin\mme-sdl.exe mme-sdl.exe.old%RANDOM%
-if not exist obj mkdir obj
-
 set CC=%1
+set ARCH=%2
 if "%CC%"=="" set CC=zig
 if "%CC%"=="clean" goto clean
+if "%CC%"=="xp" (
+  set CC=tcc
+  set ARCH=32
+)
+if "%ARCH%"=="" set ARCH=64
+if not "%ARCH%"=="32" if not "%ARCH%"=="64" (
+  echo the second word is 32 or 64, not %ARCH%
+  exit /b 2
+)
+if "%ARCH%"=="64" (
+  set OUT=bin
+  set SDLARCH=x86_64-w64-mingw32
+  set SDLVC=x64
+  set OBJ=obj\64
+) else (
+  set OUT=bin32
+  set SDLARCH=i686-w64-mingw32
+  set SDLVC=x86
+  set OBJ=obj\32
+)
+
+set SRC=
+for %%F in (..\*.c) do (
+  set F=%%~nxF
+  if /i not "!F!"=="eterm.c" if /i not "!F!"=="edraw.c" if /i not "!F!"=="mos.c" if /i not "!F!"=="tpty.c" set SRC=!SRC! %%F
+)
+set SRC=%SRC% esdl.c emos.c etpty.c tfont.c tshape.c
+if not exist %OUT% mkdir %OUT%
+if not exist %OBJ% mkdir %OBJ%
+
 if "%CC%"=="zig" goto zig
 if "%CC%"=="gcc" goto gcc
 if "%CC%"=="tcc" goto tcc
 if "%CC%"=="msvc" goto msvc
-echo usage: build [zig ^| gcc ^| tcc ^| msvc ^| clean]
+echo usage: build [zig ^| gcc ^| tcc ^| xp ^| msvc ^| clean] [32 ^| 64]
 exit /b 2
 
 :zig
 set ZIG=zig
 where zig >nul 2>nul || set ZIG=D:\env\zig\zig.exe
-%ZIG% cc -std=c11 -O2 -s -Wall -Wextra -pedantic -target x86_64-windows-gnu -I.. -I%SDL%\include ^
-  -o bin\mme-sdl.exe %SRC% ..\mme.rc %SDL%\x86_64-w64-mingw32\lib\libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 ^
+set TARGET=x86_64-windows-gnu
+if "%ARCH%"=="32" set TARGET=x86-windows-gnu
+call :make_room
+%ZIG% cc -std=c11 -O2 -s -Wall -Wextra -pedantic -target %TARGET% -I.. -I%SDL%\include ^
+  -o %OUT%\mme-sdl.exe %SRC% ..\mme.rc %SDL%\%SDLARCH%\lib\libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 ^
   -Wl,--subsystem,windows || exit /b 1
-if exist bin\mme-sdl.pdb del bin\mme-sdl.pdb
-copy /y %SDL%\x86_64-w64-mingw32\bin\SDL2.dll bin\ >nul
+if exist %OUT%\mme-sdl.pdb del %OUT%\mme-sdl.pdb
+copy /y %SDL%\%SDLARCH%\bin\SDL2.dll %OUT%\ >nul
 goto done
 
 :gcc
-set GCC=gcc
-where gcc >nul 2>nul || set GCC=D:\env\mingw\MinGW\bin\gcc.exe
-set WINDRES=windres
-where windres >nul 2>nul || set WINDRES=D:\env\mingw\MinGW\bin\windres.exe
+if "%ARCH%"=="64" (
+  set GCC=gcc
+  where gcc >nul 2>nul || set GCC=D:\env\mingw\MinGW\bin\gcc.exe
+  set WINDRES=windres
+  where windres >nul 2>nul || set WINDRES=D:\env\mingw\MinGW\bin\windres.exe
+) else (
+  if defined GCC32 (set GCC=%GCC32%) else set GCC=i686-w64-mingw32-gcc
+  for %%G in ("!GCC!") do set WINDRES=%%~dpGwindres.exe
+  if not exist "!WINDRES!" set WINDRES=i686-w64-mingw32-windres
+  where !GCC! >nul 2>nul || if not exist "!GCC!" (
+    echo 32 bit gcc: no i686-w64-mingw32-gcc on the PATH. Install a 32 bit MinGW-w64
+    echo ^(msvcrt for Windows XP^) and put it on the PATH, or set GCC32=path\to\gcc.exe
+    exit /b 1
+  )
+)
 pushd ..
-"%WINDRES%" mme.rc -O coff -o sdl2_port\bin\mme.res.o || (popd & exit /b 1)
+"%WINDRES%" mme.rc -O coff -o sdl2_port\%OBJ%\mme.res.o || (popd & exit /b 1)
 popd
-"%GCC%" -std=c11 -O2 -s -Wall -Wextra -pedantic -I.. -I%SDL%\include -o bin\mme-sdl.exe %SRC% bin\mme.res.o ^
-  %SDL%\x86_64-w64-mingw32\lib\libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 -lm -mwindows || exit /b 1
-del bin\mme.res.o
-copy /y %SDL%\x86_64-w64-mingw32\bin\SDL2.dll bin\ >nul
+call :make_room
+"%GCC%" -std=c11 -O2 -s -Wall -Wextra -pedantic -I.. -I%SDL%\include -o %OUT%\mme-sdl.exe %SRC% %OBJ%\mme.res.o ^
+  %SDL%\%SDLARCH%\lib\libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 -lm -mwindows || exit /b 1
+copy /y %SDL%\%SDLARCH%\bin\SDL2.dll %OUT%\ >nul
 goto done
 
 :tcc
-set TCC=tcc
-where tcc >nul 2>nul || set TCC=D:\env\tcc\tcc.exe
 rem tcc 0.9.27 lacks some Windows headers and import libraries: tcc\ has the
-rem headers mme needs, and the .def files are made from the dlls (tcc -impdef)
-if not exist obj\SDL2.def "%TCC%" -impdef %SDL%\x86_64-w64-mingw32\bin\SDL2.dll -o obj\SDL2.def || exit /b 1
-for %%D in (kernel32 user32 gdi32 shell32 ws2_32 advapi32) do (
-  if not exist obj\%%D.def "%TCC%" -impdef %SystemRoot%\System32\%%D.dll -o obj\%%D.def || exit /b 1
+rem headers mme needs, and the .def files are made from the dlls (tcc -impdef),
+rem from the 32 bit ones (SysWOW64 on a 64 bit Windows) for a 32 bit build
+if "%ARCH%"=="64" (
+  set TCC=tcc
+  where tcc >nul 2>nul || set TCC=D:\env\tcc\tcc.exe
+  set SYSDLL=%SystemRoot%\System32
+) else (
+  set TCC=i386-win32-tcc
+  where i386-win32-tcc >nul 2>nul || set TCC=D:\env\tcc\i386-win32-tcc.exe
+  set SYSDLL=%SystemRoot%\SysWOW64
+  if not exist "%SystemRoot%\SysWOW64\kernel32.dll" set SYSDLL=%SystemRoot%\System32
 )
-"%TCC%" -O2 -Itcc -I.. -I%SDL%\include -DSDLCALL= -o bin\mme-sdl.exe %SRC% ^
-  obj\SDL2.def obj\kernel32.def obj\user32.def obj\gdi32.def obj\shell32.def obj\ws2_32.def obj\advapi32.def ^
-  -Wl,-subsystem=gui || exit /b 1
-copy /y %SDL%\x86_64-w64-mingw32\bin\SDL2.dll bin\ >nul
-copy /y ..\mme.ico bin\ >nul
+if not exist %OBJ%\SDL2.def "%TCC%" -impdef %SDL%\%SDLARCH%\bin\SDL2.dll -o %OBJ%\SDL2.def || exit /b 1
+for %%D in (kernel32 user32 gdi32 shell32 ws2_32 advapi32) do (
+  if not exist %OBJ%\%%D.def "%TCC%" -impdef %SYSDLL%\%%D.dll -o %OBJ%\%%D.def || exit /b 1
+)
+call :make_room
+"%TCC%" -O2 -Itcc -I.. -I%SDL%\include -DSDLCALL= -o %OUT%\mme-sdl.exe %SRC% ^
+  %OBJ%\SDL2.def %OBJ%\kernel32.def %OBJ%\user32.def %OBJ%\gdi32.def %OBJ%\shell32.def %OBJ%\ws2_32.def ^
+  %OBJ%\advapi32.def -Wl,-subsystem=gui || exit /b 1
+copy /y %SDL%\%SDLARCH%\bin\SDL2.dll %OUT%\ >nul
+copy /y ..\mme.ico %OUT%\ >nul
 goto done
 
 :msvc
 where cl >nul 2>nul || call :vcvars
 where cl >nul 2>nul || (
-  echo cl was not found: run this from a "x64 Native Tools Command Prompt for VS", or install Visual Studio
+  echo cl was not found: run this from a "Native Tools Command Prompt for VS", or install Visual Studio
   exit /b 1
 )
-rc /nologo /fo bin\mme.res ..\mme.rc || exit /b 1
-cl /nologo /std:c11 /O2 /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I.. /I%SDL%\include /Fobin\ /Febin\mme-sdl.exe ^
-  %SRC% bin\mme.res /link /LIBPATH:%SDL%\lib\x64 SDL2.lib shell32.lib ws2_32.lib gdi32.lib user32.lib ^
+rc /nologo /fo %OBJ%\mme.res ..\mme.rc || exit /b 1
+call :make_room
+cl /nologo /std:c11 /O2 /W3 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I.. /I%SDL%\include /Fo%OBJ%\ /Fe%OUT%\mme-sdl.exe ^
+  %SRC% %OBJ%\mme.res /link /LIBPATH:%SDL%\lib\%SDLVC% SDL2.lib shell32.lib ws2_32.lib gdi32.lib user32.lib ^
   /SUBSYSTEM:WINDOWS || exit /b 1
-del bin\*.obj bin\mme.res >nul 2>nul
-copy /y %SDL%\lib\x64\SDL2.dll bin\ >nul
+copy /y %SDL%\lib\%SDLVC%\SDL2.dll %OUT%\ >nul
 goto done
 
 :vcvars
@@ -107,18 +160,26 @@ set VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe
 if not exist "%VSWHERE%" exit /b 0
 for /f "usebackq tokens=*" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSDIR=%%I
 if not defined VSDIR exit /b 0
-call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
+if "%ARCH%"=="64" (call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul) else call "%VSDIR%\VC\Auxiliary\Build\vcvars32.bat" >nul
+exit /b 0
+
+:make_room
+rem a mme-sdl.exe that is running cannot be written over, but it can be renamed
+for %%F in (%OUT%\mme-sdl.exe.old*) do del "%%F" >nul 2>nul
+if exist %OUT%\mme-sdl.exe del %OUT%\mme-sdl.exe >nul 2>nul
+if exist %OUT%\mme-sdl.exe ren %OUT%\mme-sdl.exe mme-sdl.exe.old%RANDOM%
 exit /b 0
 
 :done
-if not exist bin\fonts mkdir bin\fonts
+if not exist %OUT%\fonts mkdir %OUT%\fonts
 for %%F in ("%FONTS%\JetBrainsMonoNerdFontMono-*.ttf" "%FONTS%\JetBrainsMonoNerdFont-OFL.txt") do (
-  if not exist "bin\fonts\%%~nxF" copy /y "%%F" bin\fonts\ >nul
+  if not exist "%OUT%\fonts\%%~nxF" copy /y "%%F" %OUT%\fonts\ >nul
 )
-echo built sdl2_port\bin\mme-sdl.exe (%CC%)
+echo built sdl2_port\%OUT%\mme-sdl.exe (%CC%, %ARCH% bit)
 exit /b 0
 
 :clean
 if exist bin rmdir /s /q bin
+if exist bin32 rmdir /s /q bin32
 if exist obj rmdir /s /q obj
 exit /b 0
