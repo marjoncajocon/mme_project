@@ -14761,12 +14761,27 @@ static int diff_types (int k) {
 }
 
 
+/* a key that selects, copies or moves by words: the editor's too (Shift+arrows, Ctrl+Left, Ctrl+A, Ctrl+C ...) */
+static int diff_selects (int k) {
+  int code = KEY_CODE(k), nav = code == K_UP || code == K_DOWN || code == K_LEFT || code == K_RIGHT ||
+                                code == K_HOME || code == K_END || code == K_PGUP || code == K_PGDN;
+  if (k == CTRL('a') || k == CTRL('c') || k == CTRL('x')) return 1;
+  if (k & KM_ALT) return 0;
+  if ((k & KM_SHIFT) && nav) return 1;
+  if ((k & KM_CTRL) && (code == K_LEFT || code == K_RIGHT || code == K_HOME || code == K_END || code == K_BS || code == K_DEL))
+    return 1;
+  return 0;
+}
+
+
 /* k typed in the modified side: the file takes it; 0: it is not for the text */
 static int diff_edit (int k) {
-  size_t line, col = 0;
+  size_t line, col = 0, al, ac;
+  unsigned long edits;
+  int had;
   char *path;
   Pos p;
-  if (!diff_editable() || !diff_types(k)) return 0;
+  if (!diff_editable() || !(diff_types(k) || diff_selects(k))) return 0;
   if ((line = diff_caret(&col)) == 0) return 0;
   path = xstrdup(diff_path());
   if (open_file(path, 0) != 0) {
@@ -14778,12 +14793,26 @@ static int diff_edit (int k) {
   E.focus = F_EDITOR;
   p.y = line - 1;
   p.x = col;
-  move_h(doc_clamp(T->doc, p), 0);
+  had = diff_sel_get(&al, &ac);
+  T->nmc = 0;
+  if (had) {	/* the diff's selection is the file's: Shift+Right grows it, typing replaces it */
+    Pos a;
+    a.y = al - 1;
+    a.x = ac;
+    T->anchor = doc_clamp(T->doc, a);
+    T->cur = doc_clamp(T->doc, p);
+    T->sel = pos_cmp(T->anchor, T->cur) != 0;
+    T->want = col_of(row_at(T->cur.y), T->cur.x);
+  }
+  else move_h(doc_clamp(T->doc, p), 0);
+  edits = T->doc->edits;
   editor_key(k);
   DE.line = T->cur.y + 1;
   DE.col = T->cur.x;
-  DE.at = os_now_us();
+  if (T->doc->edits != edits) DE.at = os_now_us();	/* changed: the diff again when the typing stops */
   diff_set_caret(DE.line, DE.col);	/* it follows at once; the lines follow when it is quiet */
+  if (T->sel && pos_cmp(T->anchor, T->cur) != 0) diff_sel_set(T->anchor.y + 1, T->anchor.x);
+  else diff_sel_clear();
   return 1;
 }
 
@@ -20510,7 +20539,11 @@ static void on_mouse (void) {
     else if (press || (m->button == 0 && m->drag)) {
       if (press) E.focus = F_EDITOR;
       if (press && diff_bar_press(m->x, m->y)) ;	/* its scrollbars */
-      else if (diff_click(m->x, m->y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
+      else {
+        if (!press || (m->mods & KM_SHIFT)) diff_sel_start();	/* a drag, a Shift+click: the selection from the caret */
+        else diff_sel_clear();
+        if (diff_click(m->x, m->y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
+      }
     }
     return;
   }

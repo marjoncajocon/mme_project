@@ -1146,6 +1146,10 @@ size_t diff_line (void);	/* the line of the file at the cursor, from 1 */
 int diff_editable (void);	/* the modified side is the working tree's file: it is typed in */
 size_t diff_caret (size_t *col);	/* the caret's line (from 1) and byte, 0: nowhere */
 void diff_set_caret (size_t line, size_t col);
+int diff_sel_get (size_t *line, size_t *col);	/* the modified side's selection: its anchor; 0 none */
+void diff_sel_set (size_t line, size_t col);	/* the anchor (the caret is the other end) */
+void diff_sel_clear (void);
+void diff_sel_start (void);	/* a drag: the selection starts at the caret */
 void diff_new_text (const char *s, size_t n);	/* the modified side's text again: the lines are made from it */
 void diff_draw (int x, int y, int w, int h, int wrap);	/* wrap: editor.wordWrap */
 int diff_key (int k);	/* DIFF_* */

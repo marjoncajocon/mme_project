@@ -1011,6 +1011,8 @@ typedef struct DState {
   size_t *sri, *srs;	/* each screen row drawn: its view row, and which row of it (word wrap) */
   int nsr, capsr;
   int embed;	/* a file of the multi-diff editor: its changes only, nothing but the rows */
+  int dsel;	/* a selection on the modified side: from the anchor to the caret */
+  size_t sel_line, sel_col;	/* the anchor: the new side's line (from 1) and its byte */
 } DState;
 
 static DState D;
@@ -2354,6 +2356,50 @@ static int caret_x (int x, const char *s, size_t n, int tw, size_t seg, size_t c
 }
 
 
+/* the selection's bytes in the new side's line `line` (n bytes): [*a, *b), *b n + 1 with its newline; 0: none */
+static int sel_bytes (size_t line, size_t n, size_t *a, size_t *b) {
+  size_t cl, cc, l0, c0, l1, c1;
+  if (!D.dsel || line == 0 || (cl = diff_caret(&cc)) == 0) return 0;
+  if (D.sel_line < cl || (D.sel_line == cl && D.sel_col <= cc)) {
+    l0 = D.sel_line;
+    c0 = D.sel_col;
+    l1 = cl;
+    c1 = cc;
+  }
+  else {
+    l0 = cl;
+    c0 = cc;
+    l1 = D.sel_line;
+    c1 = D.sel_col;
+  }
+  if (line < l0 || line > l1) return 0;
+  *a = line == l0 ? (c0 < n ? c0 : n) : 0;
+  *b = line == l1 ? (c1 < n ? c1 : n) : n + 1;
+  return *b > *a;
+}
+
+
+/* the selection's background over line l's text (drawn at x, w columns) on row seg */
+static void paint_sel (int x, int y, int w, const DLine *l, const char *s, size_t n, size_t seg) {
+  size_t a, b, st[DSEG], ns, c0, c1, ca, cb, c;
+  if (w <= 0 || l->kind == '-' || !sel_bytes(l->n, n, &a, &b)) return;
+  ns = dsegs(s, n, w, st);
+  if (seg >= ns) return;
+  if (D.wrap) {
+    c0 = dcol(s, n, st[seg]);
+    c1 = seg + 1 < ns ? dcol(s, n, st[seg + 1]) : dcol(s, n, n) + 1;
+  }
+  else {
+    c0 = D.left;
+    c1 = D.left + (size_t)w;
+  }
+  ca = dcol(s, n, a);
+  cb = b > n ? dcol(s, n, n) + 1 : dcol(s, n, b);	/* the newline: one cell */
+  for (c = ca > c0 ? ca : c0; c < cb && c < c1 && c - c0 < (size_t)w; c++)
+    scr_set_bg(x + (int)(c - c0), y, ui_color(C_SEL_BG));
+}
+
+
 static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, int cur, size_t seg) {
   char num[32];
   int st;
@@ -2373,6 +2419,7 @@ static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, in
   scr_fill(x + nw, y, w - nw, st);
   if (seg == 0 && l->kind != ' ') scr_put(x + nw, y, l->kind == '+' ? '+' : '-', st);
   draw_text(x + nw + 2, y, w - nw - 2, l, s, len, tok, seg, cur);
+  if (!left) paint_sel(x + nw + 2, y, w - nw - 2, l, s, len, seg);
 }
 
 
@@ -2656,6 +2703,7 @@ void diff_draw (int x, int y, int w, int h, int wrap) {
         scr_fill(x + 2 * nw, sy, w - 2 * nw, st);
         if (seg == 0 && l->kind != ' ') scr_put(x + 2 * nw, sy, (uint32_t)l->kind, st);
         draw_text(x + 2 * nw + 2, sy, w - 2 * nw - 2, l, l->s, l->len, l->tok, seg, cur);
+        paint_sel(x + 2 * nw + 2, sy, w - 2 * nw - 2, l, l->s, l->len, seg);
         if (in_current(k)) scr_put(x, sy, 0x258E, S_TOGGLE_ON);
         if (seg == 0 && D.kind == DK_TREE && block_start(k)) scr_put(x + D.arrow_x, sy, 0x2192, S_TOGGLE_ON);	/* → Revert Block */
         if (cur && diff_editable() && l->kind != '-') {	/* the caret */
@@ -2873,6 +2921,9 @@ int diff_click (int mx, int my) {
 int diff_key (int k) {
   int code = KEY_CODE(k);
   size_t h = D.h > 0 ? (size_t)D.h : 1;
+  if (code == K_UP || code == K_DOWN || code == K_PGUP || code == K_PGDN || code == K_HOME || code == K_END ||
+      code == K_LEFT || code == K_RIGHT || code == K_ESC)
+    D.dsel = 0;	/* a move without Shift: the selection goes */
   switch (code) {
     case K_UP:
       crow_move(-1);
@@ -3180,6 +3231,43 @@ void diff_embed_stats (size_t *add, size_t *del) {
     *add += D.line[i].kind == '+';
     *del += D.line[i].kind == '-';
   }
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The selection on the modified side (the keys that make it are the
+** editor's: mme.c gives them to the file under the diff)
+** ===================================================================
+*/
+
+/* the anchor, 1: there is a selection */
+int diff_sel_get (size_t *line, size_t *col) {
+  *line = D.sel_line;
+  *col = D.sel_col;
+  return D.dsel && diff_editable();
+}
+
+
+void diff_sel_set (size_t line, size_t col) {
+  D.dsel = 1;
+  D.sel_line = line;
+  D.sel_col = col;
+}
+
+
+void diff_sel_clear (void) {
+  D.dsel = 0;
+}
+
+
+/* a drag goes on: the selection starts at the caret, when there is none yet */
+void diff_sel_start (void) {
+  size_t col, line;
+  if (D.dsel || !diff_editable() || (line = diff_caret(&col)) == 0) return;
+  diff_sel_set(line, col);
 }
 
 /* }================================================================== */

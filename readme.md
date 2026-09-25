@@ -834,7 +834,10 @@ With no file open the editor shows the keys to start with.
   in, like VS Code's: the keys, undo, the tab's dirty dot and Ctrl+S are the
   editor's own, and the diff is made again a moment after the typing stops.
   There `i` and `o` go into the text, so Alt+I toggles inline and Alt+O opens
-  the file; Enter on a "⋯ N hidden lines" row still opens it.
+  the file; Enter on a "⋯ N hidden lines" row still opens it. It selects as
+  the editor does: Shift+arrows, Ctrl+Shift+Left / Right by words, Shift+Home
+  / End, Ctrl+A, a drag or a Shift+click; Ctrl+C, Ctrl+X, typing and Delete
+  take the selection.
   It has a minimap of its own, green where lines came and red where they
   went; a click in it goes there. The tab bar carries its actions, like VS
   Code's editor title: previous and next change, ¶ (**Diff: Toggle Ignore
@@ -953,9 +956,8 @@ Alt+1 and Ctrl+PgDn there.
 
 ## What comes next
 
-The language server's progress in the status bar, notifications with
-buttons, the minimap's slider dragged with the mouse, and editing in the diff
-editor.
+Test coverage (Run with Coverage, the gutter's marks), profiles, git
+worktrees, data breakpoints, workspace trust and screencast mode.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and
