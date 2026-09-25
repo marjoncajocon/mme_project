@@ -47,7 +47,7 @@ void act_draw (int x, int y, int h, int view, int shown) {
         char b[8];
         int k;
         snprintf(b, sizeof(b), n > 99 ? "99" : "%d", n);
-        for (k = 0; b[k]; k++) scr_put_rgb(x + 2 + k, row + 1, (unsigned char)b[k], 0xFFFFFF, 0x0078D4, RGB_BOLD);
+        for (k = 0; b[k]; k++) scr_put_rgb(x + 2 + k, row + 1, (unsigned char)b[k], 0xFFFFFF, 0x0078D4, RGB_BOLD | RGB_BADGE);
       }
       else if (dot) {
         scr_put(x + 2, row + 1, 0x25CF, S_ACT);	/* ● */

@@ -320,8 +320,8 @@ static int draw_block (Frame *f, uint32_t cp, int x, int y, int w, int h, uint32
 ** fill their cell exactly, so the colored parts join without seams (tdraw.c)
 */
 static double seg_dist (double px, double py, double ax, double ay, double bx, double by) {
-  double dx = bx - ax, dy = by - ay;
-  double t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy);
+  double dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+  double t = len2 > 0.0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0.0;	/* a point (a circle's middle): 0 */
   if (t < 0.0) t = 0.0;
   else if (t > 1.0) t = 1.0;
   dx = ax + t * dx - px;
@@ -594,6 +594,75 @@ static void tb_paint (const ECell *row0) {
 /* }================================================================== */
 
 
+/*
+** {==================================================================
+** Badges (RGB_BADGE: the activity bar's counts): a terminal can only give
+** them whole cells; here they are VS Code's - a small round pill under the
+** icon's corner, its number smaller than the text, not bold
+** ===================================================================
+*/
+
+static int is_badge (const ECell *c) {
+  return c->st == S_RGB && (c->at & RGB_BADGE) != 0;
+}
+
+
+/* a glyph drawn smaller (s < 1), 3 x 3 samples a pixel; (x, y): its pen, on the baseline */
+static void blit_glyph_small (Frame *f, const Glyph *g, double x, double y, double s, uint32_t fg) {
+  int i, j, x0, x1, y0, y1;
+  if (g == NULL || g->bm == NULL || g->lcd == 3) return;
+  x0 = (int)floor(x + g->xoff * s);
+  x1 = (int)ceil(x + (g->xoff + g->w) * s);
+  y0 = (int)floor(y + g->yoff * s);
+  y1 = (int)ceil(y + (g->yoff + g->h) * s);
+  for (j = y0; j < y1; j++)
+    for (i = x0; i < x1; i++) {
+      int u, v, sum = 0;
+      if (i < 0 || j < 0 || i >= f->w || j >= f->h) continue;
+      for (v = 0; v < 3; v++)
+        for (u = 0; u < 3; u++) {
+          int sx = (int)floor((i + (u + 0.5) / 3.0 - x) / s) - g->xoff;
+          int sy = (int)floor((j + (v + 0.5) / 3.0 - y) / s) - g->yoff;
+          size_t at;
+          if (sx < 0 || sy < 0 || sx >= g->w || sy >= g->h) continue;
+          at = (size_t)sy * (size_t)g->w + (size_t)sx;
+          sum += g->lcd == 1 ? (g->bm[at * 3] + g->bm[at * 3 + 1] + g->bm[at * 3 + 2]) / 3 : g->bm[at];
+        }
+      if (sum > 0) {
+        uint32_t *p = &f->px[(size_t)j * (size_t)f->w + (size_t)i];
+        *p = mix(*p, fg, sum / 9);
+      }
+    }
+}
+
+
+/* the badge of cells x .. e-1 of row y: the pill, its number in it */
+static void paint_badge (const ECell *b, int x, int e, int y) {
+  Frame *f = &W.fr;
+  double sc = 0.72, adv = W.cw * sc, ph = W.ch * 0.78, r = ph / 2.0, tw = adv * (e - x), pw = tw + ph * 0.6;
+  double left = x * W.cw - W.cw * 0.5, top = y * W.ch + 1, cy = top + r, base;
+  uint32_t fg, bg, at, ul;
+  int i, j, k;
+  const Glyph *g0;
+  cell_colors(&b[x], &fg, &bg, &at, &ul);
+  if (pw < ph) pw = ph;	/* one digit: a circle */
+  for (j = (int)top; j <= (int)(top + ph) + 1; j++)	/* the pill, its ends round and smooth */
+    for (i = (int)left - 1; i <= (int)(left + pw) + 1; i++) {
+      double d = seg_dist(i + 0.5, j + 0.5, left + r, cy, left + pw - r, cy), a = r + 0.5 - d;
+      uint32_t *p;
+      if (a <= 0.0 || i < 0 || j < 0 || i >= f->w || j >= f->h) continue;
+      p = &f->px[(size_t)j * (size_t)f->w + (size_t)i];
+      *p = mix(*p, bg, a >= 1.0 ? 255 : (int)(a * 255.0));
+    }
+  g0 = font_glyph('0', 0, 0, 0);	/* the digits' height: the number in the pill's middle */
+  base = g0 && g0->bm ? cy - (g0->yoff + g0->h / 2.0) * sc : cy + W.ascent * sc / 2.0;
+  for (k = x; k < e; k++)
+    blit_glyph_small(f, font_glyph(b[k].ch, 0, 0, 0), left + (pw - tw) / 2.0 + (k - x) * adv, base, sc, fg);
+}
+
+/* }================================================================== */
+
+
 /* row y of a grid (S.back, or S.front: what is shown) into the picture: every background, then the characters */
 static void paint_row (int y, const ECell *grid) {
   const ECell *b = &grid[(size_t)y * (size_t)S.cols];
@@ -603,9 +672,23 @@ static void paint_row (int y, const ECell *grid) {
       uint32_t fg, bg, at, ul;
       int wide = b[x].w == 2 && x + 1 < S.cols;
       if (b[x].ch == 0 && x > 0 && b[x - 1].w == 2) continue;	/* the right half of a wide one: painted with it */
+      if (is_badge(&b[x])) {	/* under the badge: the color beside it; the badge itself after */
+        int k = x;
+        while (k > 0 && is_badge(&b[k])) k--;
+        cell_colors(&b[k], &fg, &bg, &at, &ul);
+        if (pass == 0) fill(&W.fr, x * W.cw, y * W.ch, W.cw, W.ch, bg);
+        continue;
+      }
       cell_colors(&b[x], &fg, &bg, &at, &ul);
       if (pass == 0) fill(&W.fr, x * W.cw, y * W.ch, W.cw * (wide ? 2 : 1), W.ch, bg);
       else paint_fg(&b[x], x, y, wide, fg, bg, at, ul, 1);
+    }
+  for (x = 0; x < S.cols; x++)
+    if (is_badge(&b[x])) {
+      int e = x;
+      while (e < S.cols && is_badge(&b[e])) e++;
+      paint_badge(b, x, e, y);
+      x = e;
     }
   {	/* the window is not a whole number of cells: the row's colors go on to its edges */
     int gx = S.cols * W.cw, gy = S.rows * W.ch;

@@ -440,6 +440,7 @@ enum {
 #define RGB_CURLY	8	/* a squiggle, see scr_squiggle */
 #define RGB_STRIKE	16	/* a line through it, for ~~this~~ */
 #define RGB_DIM		32	/* half bright, for the inline suggestion's ghost text */
+#define RGB_BADGE	64	/* a count on a badge (the activity bar's): a window draws a small round one; a terminal, the cells */
 
 /* the colors of code (VS Code's Dark+ tokens) on the backgrounds of the editor */
 enum {
