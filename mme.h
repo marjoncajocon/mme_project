@@ -17,7 +17,7 @@
 **   elsp.c    IntelliSense: language servers
 **   ejson.c   JSON          econfig.c settings.json   etheme.c color themes
 **   ekeys.c   keybindings.json          esnip.c   snippets
-**   eext.c    extensions: Open VSX, VS Code's; their themes, snippets, languages
+**   eext.c    extensions: from a .vsix, VS Code's; their themes, snippets, languages
 **   ehistory.c Local History (the Timeline)   emd.c     the Markdown preview
 **   evim.c    Vim mode: VSCodeVim's keys in the editor
 **   echat.c   Chat and Inline Chat: Claude, through curl

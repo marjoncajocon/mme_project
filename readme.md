@@ -72,7 +72,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `elsp.c` | IntelliSense: a Language Server Protocol client (completion, definition, problems) |
 | `ejson.c` | JSON: settings.json and the language servers' messages |
 | `econfig.c` | settings.json: VS Code's settings, by VS Code's names |
-| `eext.c` | extensions: the Extensions view, Open VSX, VS Code's; their themes, snippets, languages |
+| `eext.c` | extensions: the Extensions view, Install from VSIX, VS Code's; their themes, snippets, languages |
 | `eregex.c` | regular expressions for Find, Replace and Search (`.*`) |
 | `etm.c` | TextMate grammars: VS Code's own highlighting, from VS Code and its extensions |
 | `eonig.c` | regular expressions as the grammars write them (Oniguruma's: lookbehind, `\G`, `(?x)` ...) |
@@ -638,15 +638,15 @@ With no file open the editor shows the keys to start with.
   (the API's server-side fallback). A refusal, an answer cut at its length, a
   refused key, a rate limit or an overloaded API are said in the talk in words.
 
-- **Extensions** — Ctrl+Shift+X (View > Extensions): with nothing typed the
-  installed ones, else a search of [Open VSX](https://open-vsx.org) (the
-  marketplace VSCodium uses). Enter on one: Install, Set Color Theme, Show
-  Details (its page and README in a tab), Uninstall; a click on its button
-  installs or uninstalls. They go in `mme-data/extensions`, as VS Code keeps
-  them (curl downloads the .vsix, tar or unzip opens it); Install from VSIX...
-  takes a .vsix file. The extensions VS Code has (`~/.vscode/extensions`, a
-  portable VS Code's `data/extensions`) are used too, read only
-  (`mme.extensions.useVSCodeExtensions`).
+- **Extensions** — Ctrl+Shift+X (View > Extensions): the installed ones; typing
+  filters them. mme never goes to a marketplace: download an extension's .vsix
+  yourself and install it with **Install from VSIX...** (the link at the top of
+  the view, or Extensions: Install from VSIX... in the palette). Enter on one:
+  Set Color Theme, Show Details (its page and README in a tab), Uninstall; a
+  click on its button uninstalls it. They go in `mme-data/extensions`, as VS
+  Code keeps them (tar or unzip opens the .vsix). The extensions VS Code has
+  (`~/.vscode/extensions`, a portable VS Code's `data/extensions`) are used
+  too, read only (`mme.extensions.useVSCodeExtensions`).
 
   What an extension can do in mme: its **color themes** (Ctrl+K Ctrl+T lists
   them; VS Code's colors and token colors are put on mme's), its **snippets**,

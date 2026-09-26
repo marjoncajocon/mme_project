@@ -1,5 +1,5 @@
 /*
-** eext.c - extensions: VS Code's, from Open VSX, and those VS Code has
+** eext.c - extensions: VS Code's, from a .vsix file, and those VS Code has
 **
 ** A VS Code extension is a folder with a package.json; its JavaScript runs
 ** in VS Code's extension host (Node and the vscode API), which a program
@@ -8,10 +8,10 @@
 ** extensions and comments). Grammars, commands, debuggers, views ... are
 ** listed on its page but do nothing here.
 **
-** Extensions are installed from Open VSX (open-vsx.org, the marketplace
-** VSCodium uses) into mme-data/extensions, as VS Code keeps them:
-** <publisher>.<name>-<version>/. curl downloads the .vsix (a zip) and tar
-** (Windows' bsdtar) or unzip takes it apart. Those VS Code installed
+** mme never goes to a marketplace: an extension is a .vsix file the user
+** downloaded, installed with Install from VSIX... into mme-data/extensions,
+** as VS Code keeps them: <publisher>.<name>-<version>/. tar (Windows'
+** bsdtar) or unzip takes the .vsix (a zip) apart. Those VS Code installed
 ** (~/.vscode/extensions) are read too, never changed, when
 ** "mme.extensions.useVSCodeExtensions" is true.
 */
@@ -857,11 +857,11 @@ static int load_theme (void *arg, uint32_t *color) {
 
 /*
 ** {==================================================================
-** Programs in the background: curl, tar
+** Programs in the background: tar (or unzip)
 ** ===================================================================
 */
 
-enum { JOB_NONE, JOB_SEARCH, JOB_INFO, JOB_README, JOB_DOWNLOAD, JOB_EXTRACT };
+enum { JOB_NONE, JOB_EXTRACT };
 
 typedef struct Job {
   int kind;
@@ -869,17 +869,16 @@ typedef struct Job {
   int fd;	/* its output, -1: not read */
   Buf out;
   char *id;	/* the extension it is for */
-  char *file, *dir;	/* DOWNLOAD / EXTRACT: the .vsix, the folder it goes to */
-  int keep;	/* EXTRACT: the .vsix is the user's, not ours to delete */
+  char *file, *dir;	/* the .vsix, the folder it goes to */
+  int keep;	/* the .vsix is the user's, not ours to delete */
 } Job;
 
-static Job g_look;	/* a search, or a page's info */
 static Job g_inst;	/* an install */
 
 
 static char *program (const char *name) {
 #ifdef _WIN32
-  if (strcmp(name, "tar") == 0 || strcmp(name, "curl") == 0) {	/* Windows' own (bsdtar reads zips; git's tar does not) */
+  if (strcmp(name, "tar") == 0) {	/* Windows' own (bsdtar reads zips; git's tar does not) */
     char *root = os_getenv("SystemRoot"), *sys, *p, *exe;
     if (root) {
       sys = path_join(root, "System32");
@@ -958,30 +957,6 @@ static void end_job (Job *j) {
   free(j->dir);
   memset(j, 0, sizeof(*j));
   j->fd = -1;
-}
-
-
-static int curl (Job *j, int kind, const char *url, const char *to) {
-  char *exe = program("curl"), *argv[12];
-  int n = 0, r;
-  if (exe == NULL) {
-    toast(1, "curl was not found: it downloads the extensions");
-    return -1;
-  }
-  argv[n++] = exe;
-  argv[n++] = (char *)"-sSfL";
-  argv[n++] = (char *)"--max-time";
-  argv[n++] = (char *)(kind == JOB_DOWNLOAD ? "600" : "30");
-  if (to) {
-    argv[n++] = (char *)"-o";
-    argv[n++] = (char *)to;
-  }
-  argv[n++] = (char *)url;
-  argv[n] = NULL;
-  r = start(j, kind, argv, to == NULL);
-  free(exe);
-  if (r != 0) toast(1, "curl could not be started");
-  return r;
 }
 
 
@@ -1119,31 +1094,6 @@ static void place (void) {
 }
 
 
-/* from Open VSX: namespace, name and the .vsix's address */
-static void install (const char *id, const char *url) {
-  char *ed, *tmp, *f, name[200];
-  if (g_inst.kind != JOB_NONE) {
-    toast(0, "Another extension is being installed");
-    return;
-  }
-  ed = ext_dir();
-  tmp = path_join(ed, ".tmp");
-  mkdir_p(tmp);
-  snprintf(name, sizeof(name), "%s.vsix", id);
-  f = path_join(tmp, name);
-  free(ed);
-  free(tmp);
-  out_log("Extensions", "[info] Downloading %s", url);
-  if (curl(&g_inst, JOB_DOWNLOAD, url, f) == 0) {
-    g_inst.id = xstrdup(id);
-    g_inst.file = f;
-    rows();
-    return;
-  }
-  free(f);
-}
-
-
 /* Extensions: Install from VSIX... */
 void ext_install_vsix (const char *path) {
   char id[128];
@@ -1183,33 +1133,25 @@ static void uninstall (int i) {
 
 /*
 ** {==================================================================
-** The view: a search box, then the installed ones or Open VSX's
+** The view: a box that filters the installed ones, then they
 ** ===================================================================
 */
 
 typedef struct Item {
-  int ext;	/* g_ext's index; -1: not installed */
-  char *id, *ns, *name, *display, *publisher, *desc, *version, *download;
-  long downloads;	/* -1: not known */
+  int ext;	/* g_ext's index */
+  char *id, *ns, *name, *display, *publisher, *desc, *version;
 } Item;
 
 static Item *g_item;
 static size_t g_nitem, g_capitem;
-static Item *g_found;	/* the last search's, kept while the query is not empty */
-static size_t g_nfound;
-static char g_q[256];
-static char g_ran[256];	/* what g_found is for */
-static int g_pending;
-static long long g_changed;
-static char g_status[160];	/* "Searching...", an error */
+static char g_q[256];	/* the filter */
 static size_t g_sel, g_top;
 static int g_h = 1;
 static int g_bx0 = -1, g_bx1 = -1;	/* the button's columns in a row, from the view's left */
 
-#define HEAD	3	/* "EXTENSIONS", the input, the section */
+#define HEAD	4	/* "EXTENSIONS", the filter, the section, Install from VSIX... */
+#define VSIX_ROW	3	/* the row of Install from VSIX... */
 #define ROWS	3	/* each extension's */
-#define DELAY	400000
-#define OPENVSX	"https://open-vsx.org/api"
 
 
 static void item_free (Item *it) {
@@ -1220,7 +1162,6 @@ static void item_free (Item *it) {
   free(it->publisher);
   free(it->desc);
   free(it->version);
-  free(it->download);
 }
 
 
@@ -1236,7 +1177,6 @@ static void add_item (Item **v, size_t *n, size_t *cap, const Item *it) {
 static Item dup_item (const Item *s) {
   Item d;
   d.ext = s->ext;
-  d.downloads = s->downloads;
   d.id = xstrdup(s->id ? s->id : "");
   d.ns = xstrdup(s->ns ? s->ns : "");
   d.name = xstrdup(s->name ? s->name : "");
@@ -1244,64 +1184,7 @@ static Item dup_item (const Item *s) {
   d.publisher = xstrdup(s->publisher ? s->publisher : "");
   d.desc = xstrdup(s->desc ? s->desc : "");
   d.version = xstrdup(s->version ? s->version : "");
-  d.download = xstrdup(s->download ? s->download : "");
   return d;
-}
-
-
-/* the list shown: installed with no query, else the search's */
-static void rows (void) {
-  size_t i;
-  for (i = 0; i < g_nitem; i++) item_free(&g_item[i]);
-  g_nitem = 0;
-  if (g_q[0] == '\0') {
-    for (i = 0; i < g_next; i++) {
-      Item it;
-      memset(&it, 0, sizeof(it));
-      it.ext = (int)i;
-      it.downloads = -1;
-      it.id = g_ext[i].id;
-      it.name = g_ext[i].name;
-      it.ns = g_ext[i].publisher;
-      it.display = g_ext[i].display;
-      it.publisher = g_ext[i].publisher;
-      it.desc = g_ext[i].desc;
-      it.version = g_ext[i].version;
-      it = dup_item(&it);
-      add_item(&g_item, &g_nitem, &g_capitem, &it);
-    }
-  }
-  else
-    for (i = 0; i < g_nfound; i++) {
-      Item it = dup_item(&g_found[i]);
-      it.ext = find_ext(it.id);
-      add_item(&g_item, &g_nitem, &g_capitem, &it);
-    }
-  if (g_sel >= g_nitem) g_sel = g_nitem ? g_nitem - 1 : 0;
-}
-
-
-static void url_escape (Buf *b, const char *s) {
-  for (; *s; s++) {
-    unsigned char c = (unsigned char)*s;
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.')
-      buf_putc(b, (char)c);
-    else buf_printf(b, "%%%02X", c);
-  }
-}
-
-
-static void search (void) {
-  Buf u;
-  g_pending = 0;
-  snprintf(g_ran, sizeof(g_ran), "%s", g_q);
-  if (g_look.kind != JOB_NONE) return;	/* after the one running */
-  buf_init(&u);
-  buf_puts(&u, OPENVSX "/-/search?size=50&query=");
-  url_escape(&u, g_q);
-  buf_putc(&u, '\0');
-  if (curl(&g_look, JOB_SEARCH, u.s, NULL) == 0) snprintf(g_status, sizeof(g_status), "Searching Open VSX...");
-  buf_free(&u);
 }
 
 
@@ -1314,10 +1197,9 @@ static int has_word (const char *s, const char *w) {
 }
 
 
-/* how well an extension fits the query: every word in its name 2, in its text 1 */
-static int fits (const Item *it) {
-  const char *q = g_ran;
-  int name = 1, any = 1;
+/* does extension e have every word of the filter in its names or its description? */
+static int passes (const Ext *e) {
+  const char *q = g_q;
   while (*q) {
     char w[64];
     size_t n = 0;
@@ -1325,64 +1207,35 @@ static int fits (const Item *it) {
     while (*q && *q != ' ' && n + 1 < sizeof(w)) w[n++] = *q++;
     w[n] = '\0';
     if (n == 0) break;
-    if (!has_word(it->display, w) && !has_word(it->name, w) && !has_word(it->ns, w)) {
-      name = 0;
-      if (!has_word(it->desc, w)) any = 0;
-    }
+    if (!has_word(e->display, w) && !has_word(e->name, w) && !has_word(e->publisher, w) && !has_word(e->id, w) &&
+        !has_word(e->desc, w))
+      return 0;
   }
-  return name ? 2 : any;
+  return 1;
 }
 
 
-static int cmp_found (const void *a, const void *b) {	/* the best fits, then the most downloaded */
-  const Item *x = (const Item *)a, *y = (const Item *)b;
-  int fx = fits(x), fy = fits(y);
-  if (fx != fy) return fy - fx;
-  return x->downloads < y->downloads ? 1 : x->downloads > y->downloads ? -1 : 0;
-}
-
-
-static void found (const char *json, size_t len) {
-  Json *j = json_parse(json, len);
-  const Json *a = json_get(j, "extensions");
+/* the list shown: the installed ones the filter lets through */
+static void rows (void) {
   size_t i;
-  for (i = 0; i < g_nfound; i++) item_free(&g_found[i]);
-  g_nfound = 0;
-  if (a == NULL || a->type != J_ARR) {
-    snprintf(g_status, sizeof(g_status), "Open VSX did not answer");
-    json_free(j);
-    return;
+  for (i = 0; i < g_nitem; i++) item_free(&g_item[i]);
+  g_nitem = 0;
+  for (i = 0; i < g_next; i++) {
+    Item it;
+    if (!passes(&g_ext[i])) continue;
+    memset(&it, 0, sizeof(it));
+    it.ext = (int)i;
+    it.id = g_ext[i].id;
+    it.name = g_ext[i].name;
+    it.ns = g_ext[i].publisher;
+    it.display = g_ext[i].display;
+    it.publisher = g_ext[i].publisher;
+    it.desc = g_ext[i].desc;
+    it.version = g_ext[i].version;
+    it = dup_item(&it);
+    add_item(&g_item, &g_nitem, &g_capitem, &it);
   }
-  {
-    size_t cap = 0;
-    for (i = 0; i < a->n; i++) {
-      const Json *x = a->kid[i];
-      Item it;
-      char *id;
-      if (json_bool(json_get(x, "deprecated"), 0)) continue;
-      memset(&it, 0, sizeof(it));
-      it.ns = (char *)json_str(json_get(x, "namespace"), "");
-      it.name = (char *)json_str(json_get(x, "name"), "");
-      it.display = (char *)json_str(json_get(x, "displayName"), it.name);
-      it.publisher = it.ns;
-      it.desc = (char *)json_str(json_get(x, "description"), "");
-      it.version = (char *)json_str(json_get(x, "version"), "");
-      it.download = (char *)json_str(json_get(x, "files.download"), "");
-      it.downloads = (long)json_num(json_get(x, "downloadCount"), 0);
-      id = xstrcat3(it.ns, ".", it.name);
-      it.id = lower_dup(id);
-      free(id);
-      {
-        Item d = dup_item(&it);
-        free(it.id);
-        add_item(&g_found, &g_nfound, &cap, &d);
-      }
-    }
-  }
-  qsort(g_found, g_nfound, sizeof(Item), cmp_found);
-  g_status[0] = '\0';
-  if (g_nfound == 0) snprintf(g_status, sizeof(g_status), "No extensions found.");
-  json_free(j);
+  if (g_sel >= g_nitem) g_sel = g_nitem ? g_nitem - 1 : 0;
 }
 
 /* }================================================================== */
@@ -1413,7 +1266,6 @@ static void page_write (const Item *it, const Ext *e, const char *readme, size_t
   buf_init(&b);
   buf_printf(&b, "# %s\n\n", it->display);
   buf_printf(&b, "%s  |  %s  |  v%s", it->publisher, it->id, it->version);
-  if (it->downloads >= 0) buf_printf(&b, "  |  %ld downloads", it->downloads);
   buf_printf(&b, "\n\n%s\n\n", it->desc);
   if (e) {
     buf_printf(&b, "Installed in %s%s\n\n", e->dir, e->vscode ? " (VS Code's, read only)" : "");
@@ -1437,7 +1289,6 @@ static void page_write (const Item *it, const Ext *e, const char *readme, size_t
       if (e->nconfig) buf_puts(&b, "- settings\n");
     }
   }
-  else buf_puts(&b, "Not installed. Install it from the Extensions view (Enter).\n");
   if (readme && rlen) {
     buf_puts(&b, "\n---\n\n");
     buf_putn(&b, readme, rlen);
@@ -1453,35 +1304,17 @@ static void page_write (const Item *it, const Ext *e, const char *readme, size_t
 }
 
 
-static Item g_paged;	/* the marketplace page being fetched */
-
+/* its page, from its package.json and its README.md */
 static void show_page (const Item *it) {
-  if (it->ext >= 0) {	/* installed: its README.md is here */
-    const Ext *e = &g_ext[it->ext];
-    char *f = path_join(e->dir, "README.md");
-    size_t len = 0;
-    char *s = read_file(f, &len);
-    Item x = *it;
-    x.version = e->version;
-    page_write(&x, e, s, len);
-    free(s);
-    free(f);
-    return;
-  }
-  if (g_look.kind != JOB_NONE) {
-    toast(0, "Busy: try again in a moment");
-    return;
-  }
-  {
-    Buf u;
-    buf_init(&u);
-    buf_printf(&u, OPENVSX "/%s/%s", it->ns, it->name);
-    buf_putc(&u, '\0');
-    item_free(&g_paged);
-    g_paged = dup_item(it);
-    if (curl(&g_look, JOB_INFO, u.s, NULL) == 0) toast(0, "Loading %s...", it->display);
-    buf_free(&u);
-  }
+  const Ext *e = &g_ext[it->ext];
+  char *f = path_join(e->dir, "README.md");
+  size_t len = 0;
+  char *s = read_file(f, &len);
+  Item x = *it;
+  x.version = e->version;
+  page_write(&x, e, s, len);
+  free(s);
+  free(f);
 }
 
 /* }================================================================== */
@@ -1495,54 +1328,9 @@ static void show_page (const Item *it) {
 
 int ext_idle (void) {
   int code, changed = 0;
-  if (g_pending && os_now_us() - g_changed >= DELAY && g_look.kind == JOB_NONE) {
-    if (g_q[0]) search();
-    else g_pending = 0;
-    changed = 1;
-  }
-  if (poll_job(&g_look, &code)) {
-    int kind = g_look.kind;
-    changed = 1;
-    if (kind == JOB_SEARCH) {
-      if (code == 0) found(g_look.out.s ? g_look.out.s : "", g_look.out.len);
-      else snprintf(g_status, sizeof(g_status), "Could not reach Open VSX (curl %d)", code);
-      end_job(&g_look);
-      if (strcmp(g_ran, g_q) != 0 && g_q[0]) g_pending = 1;	/* typed while it ran */
-      rows();
-    }
-    else if (kind == JOB_INFO) {
-      Json *j = code == 0 ? json_parse(g_look.out.s ? g_look.out.s : "", g_look.out.len) : NULL;
-      const char *rd = json_str(json_get(j, "files.readme"), NULL);
-      if (j) {
-        free(g_paged.version);
-        g_paged.version = xstrdup(json_str(json_get(j, "version"), ""));
-      }
-      end_job(&g_look);
-      if (rd == NULL || curl(&g_look, JOB_README, rd, NULL) != 0) page_write(&g_paged, NULL, NULL, 0);
-      json_free(j);
-    }
-    else if (kind == JOB_README) {
-      page_write(&g_paged, NULL, code == 0 ? g_look.out.s : NULL, code == 0 ? g_look.out.len : 0);
-      end_job(&g_look);
-    }
-    else end_job(&g_look);
-  }
   if (poll_job(&g_inst, &code)) {
     changed = 1;
-    if (g_inst.kind == JOB_DOWNLOAD) {
-      char *f = g_inst.file, *id = g_inst.id;
-      g_inst.file = g_inst.id = NULL;
-      end_job(&g_inst);
-      if (code != 0) {
-        toast(1, "Could not download %s (curl %d)", id, code);
-        out_log("Extensions", "[error] Could not download %s (curl exit code %d)", id, code);
-        os_unlink(f);
-      }
-      else extract(f, id, 0);
-      free(f);
-      free(id);
-    }
-    else if (g_inst.kind == JOB_EXTRACT) {
+    if (g_inst.kind == JOB_EXTRACT) {
       if (code != 0) {
         toast(1, "Could not take %s apart", path_basename(g_inst.file));
         out_log("Extensions", "[error] Could not extract %s (exit code %d)", g_inst.file, code);
@@ -1575,16 +1363,8 @@ static int busy_for (const char *id) {
 /* what the button of an item says */
 static const char *button (const Item *it) {
   if (busy_for(it->id)) return "Installing";
-  if (it->ext < 0) return "Install";
   if (g_ext[it->ext].vscode) return "VS Code";
   return "Uninstall";
-}
-
-
-static void fmt_count (char *out, size_t n, long v) {
-  if (v >= 1000000) snprintf(out, n, "%.1fM", (double)v / 1e6);
-  else if (v >= 1000) snprintf(out, n, "%ldK", v / 1000);
-  else snprintf(out, n, "%ld", v);
 }
 
 
@@ -1597,15 +1377,18 @@ void ext_draw (int x, int y, int w, int h, int focus) {
   scr_puts(x + 2, y, "EXTENSIONS", S_SIDE_HEAD);
   scr_fill(x + 1, y + 1, iw, S_INPUT);
   if (g_q[0]) scr_putsw(x + 2, y + 1, iw - 2, g_q, S_INPUT_ON);
-  else scr_putsw(x + 2, y + 1, iw - 2, "Search Extensions in Open VSX", S_INPUT_HINT);
+  else scr_putsw(x + 2, y + 1, iw - 2, "Filter Installed Extensions", S_INPUT_HINT);
   if (focus) {
     int cx = x + 2 + (int)str_cols(g_q);
     scr_cursor(cx < x + iw ? cx : x + iw - 1, y + 1);
   }
-  if (g_status[0] && g_q[0]) snprintf(sec, sizeof(sec), "%s", g_status);
-  else if (g_q[0]) snprintf(sec, sizeof(sec), "OPEN VSX  %lu", (unsigned long)g_nitem);
-  else snprintf(sec, sizeof(sec), "INSTALLED  %lu", (unsigned long)g_nitem);
-  scr_putsw(x + 1, y + 2, w - 2, sec, g_status[0] && g_q[0] ? S_SIDE_DIM : S_SIDE_HEAD);
+  snprintf(sec, sizeof(sec), "INSTALLED  %lu", (unsigned long)g_nitem);
+  scr_putsw(x + 1, y + 2, w - 2, sec, S_SIDE_HEAD);
+  scr_put(x + 1, y + VSIX_ROW, 0xEAC2, S_SIDE_DIM);	/* codicon cloud-download: a .vsix you downloaded */
+  {	/* a link, in the accent color */
+    int lw = scr_putsw(x + 3, y + VSIX_ROW, w - 4, g_inst.kind != JOB_NONE ? "Installing..." : "Install from VSIX...", S_SIDE), i;
+    for (i = 0; i < lw; i++) scr_set_fg(x + 3 + i, y + VSIX_ROW, ui_color(C_ACCENT));
+  }
   g_h = (h - HEAD) / ROWS;
   if (g_h < 1) g_h = 1;
   if (g_sel < g_top) g_top = g_sel;
@@ -1619,38 +1402,32 @@ void ext_draw (int x, int y, int w, int h, int focus) {
     for (i = 0; i < ROWS; i++) scr_fill(x, sy + i, w, st);
     scr_put(x + 1, sy, 0xEB29, st == S_SIDE ? S_ICON_BLUE : st);	/* codicon package */
     cx = x + 3;
-    if (it->downloads >= 0) {
-      char num[24];
-      int nw;
-      fmt_count(num, sizeof(num), it->downloads);
-      nw = (int)strlen(num) + 2;
-      scr_put(x + w - nw - 1, sy, 0xEAC2, dim);	/* cloud-download */
-      scr_puts(x + w - nw + 1, sy, num, dim);
-      scr_putsw(cx, sy, x + w - nw - 2 - cx, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
-    }
-    else scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
+    scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
     scr_putsw(x + 3, sy + 1, w - 4, it->desc, dim);
     scr_putsw(x + 3, sy + 2, w - bw - 5, it->publisher, dim);
     g_bx0 = w - bw - 1;
     g_bx1 = w - 1;
-    scr_fill(x + g_bx0, sy + 2, bw, it->ext >= 0 && !busy_for(it->id) ? S_INPUT : S_TOGGLE_ON);
-    scr_puts(x + g_bx0 + 1, sy + 2, bt, it->ext >= 0 && !busy_for(it->id) ? S_INPUT : S_TOGGLE_ON);
+    scr_fill(x + g_bx0, sy + 2, bw, !busy_for(it->id) ? S_INPUT : S_TOGGLE_ON);
+    scr_puts(x + g_bx0 + 1, sy + 2, bt, !busy_for(it->id) ? S_INPUT : S_TOGGLE_ON);
   }
-  if (g_nitem == 0 && g_q[0] == '\0' && h > HEAD + 2)
-    scr_putsw(x + 2, y + HEAD, w - 3, "None yet: type to search Open VSX", S_SIDE_DIM);
+  if (g_nitem == 0 && h > HEAD + 2) {
+    if (g_q[0]) scr_putsw(x + 2, y + HEAD + 1, w - 3, "No installed extension matches", S_SIDE_DIM);
+    else {
+      scr_putsw(x + 2, y + HEAD + 1, w - 3, "No extensions installed.", S_SIDE_DIM);
+      scr_putsw(x + 2, y + HEAD + 2, w - 3, "Download a .vsix, then Install from VSIX...", S_SIDE_DIM);
+    }
+  }
   side_bar(x, y + HEAD, w, h - HEAD, g_nitem * (size_t)ROWS, g_top * (size_t)ROWS, (size_t)(h - HEAD));
 }
 
 
-/* the button: install or uninstall */
+/* the button: uninstall */
 static void press (size_t k) {
   const Item *it;
   if (k >= g_nitem) return;
   it = &g_item[k];
   if (busy_for(it->id)) return;
-  if (it->ext >= 0) uninstall(it->ext);
-  else if (it->download && it->download[0]) install(it->id, it->download);
-  else toast(1, "Open VSX has no download for %s", it->display);
+  uninstall(it->ext);
 }
 
 
@@ -1690,22 +1467,18 @@ static void actions (size_t k) {
   Pick p;
   const Item *it;
   int acts[4], n = 0, r;
-  enum { A_PAGE, A_INSTALL, A_UNINSTALL, A_THEME };
+  enum { A_PAGE, A_UNINSTALL, A_THEME };
   if (k >= g_nitem) return;
   it = &g_item[k];
   pick_init(&p, it->display);
   p.keep_order = 1;
-  if (it->ext < 0 && !busy_for(it->id)) {
-    acts[n++] = A_INSTALL;
-    pick_add(&p, "Install", it->version, 0xEAC2);
-  }
-  if (it->ext >= 0 && g_ext[it->ext].ntheme) {
+  if (g_ext[it->ext].ntheme) {
     acts[n++] = A_THEME;
     pick_add(&p, "Set Color Theme", NULL, 0xEB5C);
   }
   acts[n++] = A_PAGE;
   pick_add(&p, "Show Details", NULL, 0xEA74);
-  if (it->ext >= 0 && !g_ext[it->ext].vscode) {
+  if (!g_ext[it->ext].vscode) {
     acts[n++] = A_UNINSTALL;
     pick_add(&p, "Uninstall", NULL, 0xEA81);
   }
@@ -1713,7 +1486,6 @@ static void actions (size_t k) {
   pick_free(&p);
   if (r < 0) return;
   switch (acts[r]) {
-    case A_INSTALL: press(k); break;
     case A_UNINSTALL: press(k); break;
     case A_THEME: pick_ext_theme(&g_ext[it->ext]); break;
     default: show_page(it); break;
@@ -1721,22 +1493,22 @@ static void actions (size_t k) {
 }
 
 
-static void typed (void) {
-  g_pending = 1;
-  g_changed = os_now_us();
-  g_status[0] = '\0';
-  if (g_q[0] == '\0') {	/* back to the installed ones at once */
-    g_pending = 0;
-    g_sel = g_top = 0;
-    rows();
-  }
+static void typed (void) {	/* the filter changed: the list at once, from its top */
+  g_sel = g_top = 0;
+  rows();
+}
+
+
+/* Install from VSIX...: mme.c's command (its file dialog) */
+static void vsix (SideAct *act) {
+  act->what = SA_CMD;
+  act->cmd = CMD_EXT_VSIX;
 }
 
 
 int ext_key (int k, SideAct *act) {
   int code = KEY_CODE(k);
   size_t len = strlen(g_q);
-  (void)act;
   switch (code) {
     case K_UP: if (g_sel > 0) g_sel--; return 1;
     case K_DOWN: if (g_sel + 1 < g_nitem) g_sel++; return 1;
@@ -1748,7 +1520,7 @@ int ext_key (int k, SideAct *act) {
     case K_HOME: g_sel = 0; return 1;
     case K_END: g_sel = g_nitem ? g_nitem - 1 : 0; return 1;
     case K_ENTER:
-      if (g_pending && g_q[0]) search();
+      if (g_nitem == 0 && g_q[0] == '\0') vsix(act);	/* nothing installed: the way to install */
       else actions(g_sel);
       return 1;
     case K_ESC:
@@ -1785,7 +1557,10 @@ int ext_key (int k, SideAct *act) {
 
 void ext_click (int row, int col, SideAct *act) {
   size_t k;
-  (void)act;
+  if (row == VSIX_ROW) {
+    if (g_inst.kind == JOB_NONE) vsix(act);
+    return;
+  }
   if (row < HEAD) return;
   k = g_top + (size_t)((row - HEAD) / ROWS);
   if (k >= g_nitem) return;
@@ -1807,7 +1582,7 @@ void ext_wheel (int d) {
 
 /* the view is shown: the installed list up to date */
 void ext_show (void) {
-  if (g_q[0] == '\0') rows();
+  rows();
 }
 
 /* }================================================================== */

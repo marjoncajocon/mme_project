@@ -80,7 +80,8 @@ class Scen(object):
     def __init__(self, name, target, steps, guards, settings=None, subs=None,
                  perf=False, private=False, stub_lsp=(), watch=(),
                  inline_lsp=None, fake_browser=False, stub_claude=None, stub_github=None, env=None,
-                 speech=False):
+                 speech=False, exts=()):
+        self.exts = exts            # (folder, package.json dict): extensions put in mme-data/extensions
         self.stub_lsp = stub_lsp    # languages that get reg/stublsp.py
         self.inline_lsp = inline_lsp  # stublsp.py as mme.inlineCompletionServer,
                                     # with this --auth= state ("out", "in",
@@ -803,6 +804,22 @@ SCENARIOS = [
          "the status bar carries a GitHub Copilot item, and it is drawn dim while "
          "the inline-completion server says nobody is signed in",
          inline_lsp="out"),
+    # ------------------------------------------------------------------ extensions: only the installed ones
+    Scen("ext-view-local", "lang/edit.c",
+         ["w:1500", "k:" + csiu("x", ctrl=True, shift=True), "w:800", "d", "k:mono", "w:600", "d",
+          "k:zzz", "w:600", "d"],
+         "the Extensions view lists the installed extensions and never searches a marketplace: "
+         "its box filters them (\"mono\" leaves the Monokai one, \"monozzz\" none), and "
+         "Install from VSIX... is at its top",
+         exts=[("acme.monokai-dark-1.0.0", {"name": "monokai-dark", "publisher": "acme", "version": "1.0.0",
+                                             "displayName": "Monokai Dark", "description": "A dark color theme"}),
+               ("zed.snippets-c-2.1.0", {"name": "snippets-c", "publisher": "zed", "version": "2.1.0",
+                                          "displayName": "C Snippets", "description": "Snippets for C"})]),
+    Scen("ext-view-empty", "lang/edit.c",
+         ["w:1500", "k:" + csiu("x", ctrl=True, shift=True), "w:800", "d"],
+         "with nothing installed the Extensions view says how to install one: download a .vsix, "
+         "then Install from VSIX..."),
+
     # ------------------------------------------------------------------ menus in a small window
     Scen("menu-short-window", "lang/edit.c",
          ["w:1500"] + click(5, 1) + ["w:500", "r:120,14", "w:800", "d",
@@ -1294,6 +1311,11 @@ def prepare(scen, exe_src, extra=None):
         conf["mme.inlineCompletionServer"] = stub + " --auth=" + scen.inline_lsp
     io.open(os.path.join(d, "mme-data", "settings.json"), "w", encoding="utf-8",
             newline="\n").write(json.dumps(conf, indent=2) + "\n")
+    for folder, pkg in scen.exts:
+        ed = os.path.join(d, "mme-data", "extensions", folder)
+        os.makedirs(ed)
+        io.open(os.path.join(ed, "package.json"), "w", encoding="utf-8",
+                newline="\n").write(json.dumps(pkg, indent=2) + "\n")
     return d
 
 
