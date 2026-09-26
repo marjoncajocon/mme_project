@@ -1800,6 +1800,7 @@ function register (kind, selector, provider, meta) {
   return new Disposable(() => {
     const i = providers.indexOf(p);
     if (i >= 0) providers.splice(i, 1);
+    languagesChanged();
   });
 }
 
@@ -1853,8 +1854,24 @@ function languagesChanged () {
       servedSent = k;
       notify('mme/languages', {languages: list});
     }
+    const ghost = new Set();
+    let all = false;
+    for (const p of providers) {
+      if (p.kind !== 'inlineCompletion') continue;
+      for (const sel of Array.isArray(p.selector) ? p.selector : [p.selector]) {
+        const l = typeof sel === 'string' ? sel : sel && sel.language;
+        if (l && l !== '*') ghost.add(l);
+        else all = true;	// '*', a scheme or a pattern: every file
+      }
+    }
+    const g = (all ? '*;' : '') + [...ghost].sort().join(',');
+    if (g !== inlineSent) {
+      inlineSent = g;
+      notify('mme/inlineLanguages', {languages: [...ghost].sort(), all});
+    }
   });
 }
+let inlineSent = '';
 
 // diagnostics: every collection's, per file, joined
 const collections = new Set();
@@ -2310,6 +2327,28 @@ const handlers = {
     if (!doc) return null;
     const [x] = await runProviders('linkedEditing', doc, [posFromLsp(p.position), tok], true);
     return x ? {ranges: x.r.ranges.map(rangeToLsp), wordPattern: x.r.wordPattern ? x.r.wordPattern.source : undefined} : null;
+  },
+  async 'textDocument/inlineCompletion' (p, tok) {	// ghost text (Supermaven, Blackbox...)
+    const doc = docFor(p.textDocument.uri);
+    if (!doc) return null;
+    const ctx = {triggerKind: p.context && p.context.triggerKind === 1 ? 0 : 1, selectedCompletionInfo: undefined};
+    const items = [];
+    for (const pr of matching('inlineCompletion', doc)) {
+      try {
+        let r = await pr.provider.provideInlineCompletionItems(doc, posFromLsp(p.position), ctx, tok);
+        if (!r) continue;
+        if (!Array.isArray(r)) r = r.items || [];
+        for (const it of r) {
+          const t = it.insertText !== undefined ? it.insertText : it.text;
+          if (t === undefined || t === null) continue;
+          items.push({insertText: t instanceof SnippetString ? {kind: 2, value: t.value} : String(t),
+            range: it.range ? rangeToLsp(it.range) : undefined, command: commandToLsp(it.command)});
+        }
+      } catch (e) {
+        if (!(e instanceof CancellationError)) log('[error] inline completion provider: ' + (e && e.stack ? e.stack : e));
+      }
+    }
+    return {items};
   },
   async 'workspace/executeCommand' (p) {
     const r = await executeCommand(p.command, ...(p.arguments || []));
@@ -2993,6 +3032,7 @@ function capabilities () {
     codeActionProvider: true, codeLensProvider: {resolveProvider: true}, inlayHintProvider: true,
     renameProvider: {prepareProvider: true}, foldingRangeProvider: true, selectionRangeProvider: true,
     documentLinkProvider: {resolveProvider: false}, colorProvider: true, linkedEditingRangeProvider: true,
+    inlineCompletionProvider: true,
     executeCommandProvider: {commands: []},
   };
 }

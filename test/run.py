@@ -844,6 +844,11 @@ SCENARIOS = [
          "an extension's showQuickPick is mme's picker: its items and place holder; the one picked goes back "
          "to the extension, which says it (\"You picked green\")",
          exts=[("acme.demo", "acme.demo")]),
+    Scen("ext-host-ghost-text", "lang/plain.txt",
+         ["w:5000", "k:" + END + " gho", "w:2500", "d", "a:0", "k:" + TAB, "w:1000", "d"],
+         "an extension's inline completion provider (registerInlineCompletionItemProvider, what "
+         "Supermaven and Blackbox use) gives the ghost text: dim after \"gho\", and Tab puts it in",
+         exts=[("acme.demo", "acme.demo")]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

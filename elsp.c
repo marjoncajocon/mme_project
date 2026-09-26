@@ -941,7 +941,9 @@ static LDoc *ldoc_inline_only (const Doc *d) {
 ** works, it just costs that language its real server).
 */
 static LDoc *ldoc_inline (const Doc *d) {
-  LDoc *l = ldoc_inline_only(d);
+  LDoc *l = ldoc_ext(d);
+  if (l != NULL && l->s->can_inline && ehost_inline(l->langid)) return l;	/* an extension's ghost text wins (Supermaven ...) */
+  l = ldoc_inline_only(d);
   if (l != NULL) return l;
   l = ldoc(d);
   return (l != NULL && l->s->can_inline) ? l : NULL;

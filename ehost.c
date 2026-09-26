@@ -42,6 +42,8 @@ typedef struct HExt {
 static HExt *g_run;
 static size_t g_nrun;
 static Vec g_langs;	/* the languages they answer for: their package.json's, then what the host says */
+static Vec g_ghost;	/* the languages an extension gives ghost text for (Supermaven ...): asked instead of Copilot */
+static int g_ghost_all;	/* one gives it for every file */
 static int g_ready;	/* g_run worked out */
 static unsigned g_gen;	/* for this reading of the extensions (ext_generation) */
 static char *g_dirs;	/* the folders that run, joined: another set starts the host again */
@@ -192,6 +194,16 @@ int ehost_serves (const char *lang) {
 }
 
 
+/* an extension gives ghost text for this language: the host is asked, not mme.inlineCompletionServer */
+int ehost_inline (const char *lang) {
+  size_t i;
+  if (g_ghost_all) return 1;
+  for (i = 0; lang && i < g_ghost.n; i++)
+    if (strcmp(g_ghost.v[i], lang) == 0) return 1;
+  return 0;
+}
+
+
 const char *ehost_state (const char *id) {
   size_t i;
   work_out();
@@ -213,6 +225,8 @@ static void forget (void) {
   g_run = NULL;
   g_nrun = 0;
   vec_free(&g_langs);
+  vec_free(&g_ghost);
+  g_ghost_all = 0;
   g_ready = 0;
   free(g_cmdline);
   g_cmdline = NULL;
@@ -455,6 +469,13 @@ int ehost_message (const char *method, const Json *p) {
     const Json *ls = json_get(p, "languages");
     size_t i;
     for (i = 0; ls && ls->type == J_ARR && i < ls->n; i++) add_lang(json_str(ls->kid[i], ""));
+  }
+  else if (strcmp(method, "mme/inlineLanguages") == 0) {
+    const Json *ls = json_get(p, "languages");
+    size_t i;
+    vec_free(&g_ghost);
+    for (i = 0; ls && ls->type == J_ARR && i < ls->n; i++) vec_push(&g_ghost, xstrdup(json_str(ls->kid[i], "")));
+    g_ghost_all = json_bool(json_get(p, "all"), 0);
   }
   else if (strcmp(method, "mme/extensionState") == 0) {
     const char *id = json_str(json_get(p, "id"), "");

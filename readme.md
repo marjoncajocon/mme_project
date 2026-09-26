@@ -673,6 +673,14 @@ With no file open the editor shows the keys to start with.
   Run This Extension). When a running extension serves a language, mme does not
   start its own server for it (the extension starts its own).
 
+  **Ghost text from extensions**: an AI extension that gives inline completions
+  (Supermaven, Blackbox ... through `registerInlineCompletionItemProvider`) is
+  asked for the ghost text instead of Copilot (`mme.inlineCompletionServer`)
+  while it runs, for the languages it covers; Tab, Ctrl+Right, Alt+] / Alt+[ and
+  Esc work on it as on Copilot's. Their chat panels are webviews and do not
+  show. Start mme-sdl from mmc-shell (`mme-sdl .`) and the extensions get the
+  shell's PATH (node, go, ...).
+
   Not there yet (Output > Extension Host lists every `[missing]` API an
   extension asked for): **webviews** (an extension's HTML panels - mme has no
   browser engine), tree views, debug adapters and task providers of an
