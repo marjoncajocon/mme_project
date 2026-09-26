@@ -52,6 +52,7 @@ static struct {
   int cw, ch, ascent;	/* a cell, in pixels */
   float px, px0;	/* the font's size; the one the settings give (Zoom Reset) */
   float scale;	/* the display's DPI over 96 */
+  double radius;	/* round corners, in pixels: mme.ui.cornerRadius at this DPI */
   int ow, oh;	/* the window, in pixels */
   int shown;	/* a picture has been shown */
   int dirty;	/* the window must be shown again (moved, exposed) */
@@ -668,6 +669,103 @@ static void paint_badge (const ECell *b, int x, int e, int y) {
 /* }================================================================== */
 
 
+/*
+** {==================================================================
+** Round corners (edraw.c's scr_round): the pixels past the curve take the
+** color beside the rectangle, blended at the edge so the curve is smooth
+** ===================================================================
+*/
+
+/* corner k (0 top left, 1 top right, 2 bottom left, 3 bottom right) of pixels x0 .. x1-1, y0 .. y1-1 */
+static void round_corner (int x0, int y0, int x1, int y1, int k, double rad) {
+  Frame *f = &W.fr;
+  int right = k & 1, bottom = (k & 2) != 0, sx = right ? x1 : x0 - 1, px, py;
+  double ccx = right ? x1 - rad : x0 + rad, ccy = bottom ? y1 - rad : y0 + rad;
+  int px0 = right ? (int)floor(ccx) : x0, px1 = right ? x1 : (int)ceil(ccx);
+  int py0 = bottom ? (int)floor(ccy) : y0, py1 = bottom ? y1 : (int)ceil(ccy);
+  if (sx < 0 || sx >= f->w) return;	/* at the window's edge: nothing beside it to take */
+  for (py = py0; py < py1; py++) {
+    uint32_t out;
+    if (py < 0 || py >= f->h) continue;
+    out = f->px[(size_t)py * (size_t)f->w + (size_t)sx];
+    for (px = px0; px < px1; px++) {
+      double dx = px + 0.5 - ccx, dy = py + 0.5 - ccy, a;
+      uint32_t *p;
+      if (px < 0 || px >= f->w || (right ? dx <= 0 : dx >= 0) || (bottom ? dy <= 0 : dy >= 0)) continue;
+      a = rad + 0.5 - sqrt(dx * dx + dy * dy);	/* how much of the pixel is inside the curve */
+      if (a >= 1.0) continue;
+      p = &f->px[(size_t)py * (size_t)f->w + (size_t)px];
+      *p = mix(out, *p, a <= 0.0 ? 0 : (int)(a * 255.0));
+    }
+  }
+}
+
+
+/* the round corners that are in row y, as grid has it (a corner drawn over since stays square) */
+static void paint_round (int y, const ECell *grid) {
+  int i, k;
+  if (W.radius < 1.0) return;
+  for (i = 0; i < g_nround; i++) {
+    const Round *r = &g_round[i];
+    int x0 = r->x * W.cw, y0 = r->y * W.ch, x1 = (r->x + r->w) * W.cw, y1 = (r->y + r->h) * W.ch;
+    double rad = r->size == RR_BOX ? W.radius : W.radius / 2.0;
+    if (y < r->y || y >= r->y + r->h) continue;
+    if (rad > (x1 - x0) / 2.0) rad = (x1 - x0) / 2.0;
+    if (rad > (y1 - y0) / 2.0) rad = (y1 - y0) / 2.0;
+    if (rad > W.ch - 1) rad = W.ch - 1;	/* each corner in one row */
+    if (rad < 1.0) continue;
+    for (k = 0; k < 4; k++) {
+      int cx = k & 1 ? r->x + r->w - 1 : r->x, cy = k & 2 ? r->y + r->h - 1 : r->y;
+      if (!(r->corners & (1 << k)) || cy != y || grid[(size_t)cy * (size_t)S.cols + (size_t)cx].st != r->st[k]) continue;
+      round_corner(x0, y0, x1, y1, k, rad);
+    }
+  }
+}
+
+
+/*
+** The window's own corners (a window without a frame): Windows 11 rounds
+** them itself, smooth, its shadow kept (DWMWA_WINDOW_CORNER_PREFERENCE);
+** an older Windows is given a round region (its edge not smoothed).
+** Maximized: square, as every window.
+*/
+static void window_round (void) {
+#ifdef _WIN32
+  typedef long (__stdcall *DwmSetFn) (HWND, DWORD, const void *, DWORD);
+  static DwmSetFn dwm_set;
+  static int dwm = -1;
+  SDL_SysWMinfo wm;
+  HWND h;
+  RECT rc;
+  int r = (int)W.radius;
+  SDL_VERSION(&wm.version);
+  if (W.win == NULL || !SDL_GetWindowWMInfo(W.win, &wm)) return;
+  h = wm.info.win.window;
+  if (dwm < 0) {
+    HMODULE m = LoadLibraryW(L"dwmapi.dll");
+    dwm_set = m ? (DwmSetFn)(void (*)(void))GetProcAddress(m, "DwmSetWindowAttribute") : NULL;
+    dwm = 0;
+    if (dwm_set) {
+      DWORD pref = 2;	/* DWMWCP_ROUND: refused before Windows 11 */
+      dwm = dwm_set(h, 33, &pref, sizeof(pref)) == 0;
+    }
+  }
+  if (dwm) {
+    DWORD pref = r > 0 ? 2 : 1;	/* DWMWCP_DONOTROUND: mme.ui.cornerRadius 0 */
+    dwm_set(h, 33, &pref, sizeof(pref));
+    return;
+  }
+  if (!W.borderless || r <= 0 || IsZoomed(h) || !GetWindowRect(h, &rc)) {
+    SetWindowRgn(h, NULL, TRUE);
+    return;
+  }
+  SetWindowRgn(h, CreateRoundRectRgn(0, 0, rc.right - rc.left + 1, rc.bottom - rc.top + 1, 2 * r, 2 * r), TRUE);
+#endif
+}
+
+/* }================================================================== */
+
+
 /* row y of a grid (S.back, or S.front: what is shown) into the picture: every background, then the characters */
 static void paint_row (int y, const ECell *grid) {
   const ECell *b = &grid[(size_t)y * (size_t)S.cols];
@@ -708,6 +806,7 @@ static void paint_row (int y, const ECell *grid) {
       }
     }
   }
+  paint_round(y, grid);
   if (y == 0 && W.borderless) tb_paint(b);	/* the title bar's buttons, over its right end */
   if (W.car_on && W.car_y == y) W.car_on = 0;	/* painted over */
   mark(y);
@@ -1124,6 +1223,7 @@ static void tb_update (void) {
   W.tb_hover = W.tb_press = -1;
   SDL_SetWindowBordered(W.win, want ? SDL_FALSE : SDL_TRUE);
   S.full = 1;	/* another size: drawn again */
+  window_round();
 }
 
 
@@ -1233,6 +1333,15 @@ void scr_flush (void) {
   if (W.win == NULL || S.back == NULL) return;
   if (S.full || now - W.font_seen >= 1000) font_settings();	/* editor.fontSize changed: the font too */
   if (S.full) memset(g_style, 0, sizeof(g_style));	/* the theme may have changed */
+  {
+    double r = json_num(settings_get("mme\\.ui\\.cornerRadius"), 10) * W.scale;
+    if (r < 0) r = 0;
+    if (r != W.radius) {	/* another radius: every corner painted again, the window's too */
+      W.radius = r;
+      S.full = 1;
+      window_round();
+    }
+  }
   picture_size();
   if (W.up0 > S.rows) W.up0 = S.rows;
   for (y = 0; y < S.rows; y++) {
@@ -2025,6 +2134,7 @@ static void on_event (const SDL_Event *e) {
         case SDL_WINDOWEVENT_SIZE_CHANGED: case SDL_WINDOWEVENT_RESIZED: case SDL_WINDOWEVENT_DISPLAY_CHANGED:
           font_dpi();	/* another screen may have another DPI */
           S.full = 1;
+          window_round();	/* maximized: square; its new size: the region again */
           break;
         case SDL_WINDOWEVENT_FOCUS_GAINED:
           W.focused = 1;

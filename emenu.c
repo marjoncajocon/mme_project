@@ -1242,6 +1242,7 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
     st = on ? S_BOX_SEL : S_BOX;
     hst = on ? S_BOX_HIT_SEL : S_BOX_HIT;
     scr_fill(g_box.x + 1, y, g_box.w - 2, st);
+    if (on) scr_round(g_box.x + 1, y, g_box.w - 2, 1, RC_ALL, RR_SMALL);
     lx = g_box.x + 2;
     if (it->icon) {
       scr_put(lx, y, (uint32_t)it->icon, st);
@@ -1540,6 +1541,7 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
       for (i = 0; i < n; i++) {
         int st = (i == sel) ? S_STATUS : S_INPUT;
         scr_fill(bx[i], y + 5, bw[i], st);
+        if (st == S_STATUS) scr_round(bx[i], y + 5, bw[i], 1, RC_ALL, RR_SMALL);
         scr_puts(bx[i] + 2, y + 5, button[i], st);
       }
     }
@@ -1951,6 +1953,7 @@ void note_center (void) {
           int bw = (int)str_cols(a->act[b]) + 2;
           if (bx + bw >= x + w - 3) break;
           scr_fill(bx, ry, bw, b == 0 ? S_STATUS : S_INPUT);
+          if (b == 0) scr_round(bx, ry, bw, 1, RC_ALL, RR_SMALL);
           scr_puts(bx + 1, ry, a->act[b], b == 0 ? S_STATUS : S_INPUT);
           bx += bw + 1;
         }

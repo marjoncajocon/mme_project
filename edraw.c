@@ -30,6 +30,22 @@ static struct {
 } S;
 
 
+/*
+** Round corners (scr_round): a terminal has whole cells only, mme-sdl paints
+** them round (esdl.c). Each corner keeps the style its cell had: one that
+** something else was drawn over since is left square.
+*/
+#define MAX_ROUND	128
+
+typedef struct {
+  int x, y, w, h, corners, size;
+  uint16_t st[4];	/* the corners' cells' styles: top left, top right, bottom left, bottom right */
+} Round;
+
+static Round g_round[MAX_ROUND];
+static int g_nround;
+
+
 static const char *style_sgr (int st) {
   return theme_sgr(st);
 }
@@ -135,6 +151,7 @@ void scr_redraw (void) {
 
 void scr_clear (int st) {
   size_t i, n = (size_t)S.cols * (size_t)S.rows;
+  g_nround = 0;	/* a new picture: its own round corners */
   for (i = 0; i < n; i++) {
     S.back[i].ch = ' ';
     S.back[i].st = (uint16_t)st;
@@ -286,13 +303,46 @@ int scr_puts (int x, int y, const char *s, int st) {
 
 
 void scr_fill (int x, int y, int w, int st) {
+  int x0 = x, w0 = w;
   for (; w > 0 && x < S.cols; w--, x++) scr_put(x, y, ' ', st);
+  if ((st == S_INPUT || st == S_MENU_SEL) && w0 >= 3) scr_round(x0, y, w0, 1, RC_ALL, RR_SMALL);	/* a box to type in, a menu's item */
 }
 
 
 void scr_box (int x, int y, int w, int h, int st) {
   int i;
   for (i = 0; i < h; i++) scr_fill(x, y + i, w, st);
+  if ((st == S_BOX || st == S_MENU || st == S_TOAST) && w < S.cols) scr_round(x, y, w, h, RC_ALL, RR_BOX);	/* a popup */
+}
+
+
+/* cells x .. x+w-1, y .. y+h-1 as drawn now, with round corners (in mme-sdl); a row just under one of the same kind makes it taller */
+void scr_round (int x, int y, int w, int h, int corners, int size) {
+  Round *r;
+  int k;
+  if (w < 1 || h < 1 || x < 0 || y < 0 || x + w > S.cols || y + h > S.rows) return;
+  if (g_nround > 0) {
+    r = &g_round[g_nround - 1];
+    if (r->x == x && r->w == w && r->y + r->h == y && r->size == size && r->corners == corners &&
+        S.back[(size_t)y * (size_t)S.cols + (size_t)x].st == r->st[0]) {
+      r->h += h;
+      r->st[2] = S.back[(size_t)(y + h - 1) * (size_t)S.cols + (size_t)x].st;
+      r->st[3] = S.back[(size_t)(y + h - 1) * (size_t)S.cols + (size_t)(x + w - 1)].st;
+      return;
+    }
+  }
+  if (g_nround == MAX_ROUND) return;
+  r = &g_round[g_nround++];
+  r->x = x;
+  r->y = y;
+  r->w = w;
+  r->h = h;
+  r->corners = corners;
+  r->size = size;
+  for (k = 0; k < 4; k++) {
+    int cx = k & 1 ? x + w - 1 : x, cy = k & 2 ? y + h - 1 : y;
+    r->st[k] = S.back[(size_t)cy * (size_t)S.cols + (size_t)cx].st;
+  }
 }
 
 

@@ -570,6 +570,9 @@ void scr_glyph (int x, int y, uint32_t ch, uint32_t fg);	/* a guide line: ch in 
 uint32_t scr_ch (int x, int y);	/* what the cell shows */
 void scr_fill (int x, int y, int w, int st);
 void scr_box (int x, int y, int w, int h, int st);	/* a filled rectangle */
+enum { RC_TL = 1, RC_TR = 2, RC_BL = 4, RC_BR = 8, RC_ALL = 15 };
+enum { RR_BOX, RR_SMALL };	/* a popup's radius (mme.ui.cornerRadius), half of it (buttons, tabs, boxes to type in) */
+void scr_round (int x, int y, int w, int h, int corners, int size);	/* those cells, drawn now, with round corners (mme-sdl) */
 void scr_restyle (int x, int y, int w, int st);	/* the colors of cells, not their text */
 void scr_cursor (int x, int y);
 void scr_cursor_shape (int decscusr);	/* 1 .. 6: block, underline, bar; blinking or not */

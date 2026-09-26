@@ -134,6 +134,16 @@ hidden menu bar (`window.menuBarVisibility`, Zen mode), since the window must
 still be moved. It uses plain Windows messages (WM_NCHITTEST, WM_NCCALCSIZE),
 which Windows XP has too.
 
+Corners are round, as a modern editor's: the popups (the Command Palette,
+menus, dialogs, notifications, the hover, suggestions, signature help, the
+find widget) by `mme.ui.cornerRadius` pixels (10 by default, grown with
+the screen's DPI; 0: square), the buttons, the tab in front, the boxes to
+type in and the item selected by half of it, smooth (the curve blended into
+what is beside it). The window's own corners: Windows 11 rounds them itself
+(smooth, with its shadow); an older Windows gets a round region of that
+radius (its edge not smoothed); maximized, square. A terminal has whole
+cells only: there the corners stay square.
+
 New Window (Ctrl+Shift+N) starts mme-sdl again, a window with no folder yet
 (the Welcome page opens one); Duplicate As Workspace in New Window opens the
 folder in another; Close Window (Ctrl+Shift+W) closes this one. Each window is

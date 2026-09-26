@@ -3121,6 +3121,7 @@ static void draw_tabs (void) {
                    t->page, t->page || t->md || t->real == NULL ? 0 : git_mark(t->real, 0));
     }
     else x = draw_tab(x, y, diff_title(), i == on, 0, 0, 0, &cx, 0, 0);
+    if (i == on && x > g_tabs.x0[i]) scr_round(g_tabs.x0[i], y, x - g_tabs.x0[i], 1, RC_TL | RC_TR, RR_SMALL);
     g_tabs.x1[i] = x;
     g_tabs.close[i] = cx;
   }
@@ -3384,6 +3385,8 @@ static void draw_find (void) {
   g_fw.word_x = g_fw.in_x + g_fw.in_w - 5;
   g_fw.re_x = g_fw.in_x + g_fw.in_w - 3;
   scr_fill(x, y, w, S_BOX);
+  if (E.replacing) scr_fill(x, y + 1, w, S_BOX);
+  scr_round(x, y, w, E.replacing ? 2 : 1, RC_ALL, RR_BOX);
   scr_put(g_fw.chev_x, y, E.replacing ? 0xEAB4 : 0xEAB6, S_BOX);	/* the chevron: replace */
   scr_fill(g_fw.in_x, y, g_fw.in_w, S_INPUT);
   if (E.find[0]) cx = g_fw.in_x + 1 + scr_putsw(g_fw.in_x + 1, y, g_fw.in_w - 9, E.find, S_INPUT_ON);
@@ -8299,6 +8302,7 @@ static void draw_comp_details (const CompItem *c, int lx, int ly, int lw, int lh
     scr_fill(x, y + i, pw, S_BOX);
     if (k < lines.n) scr_putsw(x + 1, y + i, pw - 2, lines.v[k], i < nd ? S_BOX_DIM : S_BOX);
   }
+  scr_round(x, y, pw, h, RC_ALL, RR_BOX);
   vec_free(&lines);
 }
 
@@ -8330,6 +8334,8 @@ static void draw_comp (int gw) {
   if (y + h > L.text_y + L.text_h && cy - h >= L.text_y) y = cy - h;
   if (CP.sel < CP.top) CP.top = CP.sel;
   if (CP.sel >= CP.top + (size_t)h) CP.top = CP.sel - (size_t)h + 1;
+  for (i = 0; i < h && CP.top + (size_t)i < CP.nvis; i++) scr_fill(x, y + i, w, S_BOX);
+  scr_round(x, y, w, i, RC_ALL, RR_BOX);	/* the box first: its corners, whichever row is selected */
   for (i = 0; i < h; i++) {
     size_t v = CP.top + (size_t)i;
     const CompItem *c;
@@ -9233,9 +9239,10 @@ static void draw_hover (int gw) {
       state = syntax_scan(sx[i], lines[i], len, i > 0 && code[i - 1] ? state : 0, tok);
       free(tok);
     }
+  for (i = 0; i < h; i++) scr_fill(x, y + i, w, S_BOX);
+  scr_round(x, y, w, h, RC_ALL, RR_BOX);
   for (i = 0; i < h; i++) {
     int k = HV.top + i;
-    scr_fill(x, y + i, w, S_BOX);
     if (lines[k] == NULL) {
       int c;
       for (c = 1; c < w - 1; c++) scr_put(x + c, y + i, 0x2500, S_MENU_LINE);
@@ -9391,6 +9398,7 @@ static void draw_signature (int gw) {
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
   for (i = 0; i < h; i++) scr_fill(x, y + i, w, S_BOX);
+  scr_round(x, y, w, h, RC_ALL, RR_BOX);
   {
     int lx = x + 1;
     if (pre) {	/* the overloads: arrows to click, "1/3" */
