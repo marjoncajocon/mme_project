@@ -22,9 +22,12 @@ all: mme-sdl
 mme-sdl: $(SRC) ../mme.h ../mmc.h ../mterm.h ../edraw.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -I.. $$($(SDL2_CONFIG) --cflags) -o mme-sdl $(SRC) $$($(SDL2_CONFIG) --libs) -lm -lpthread
 
+# the fonts (JetBrains Mono Nerd Font) as build.bat puts them in bin\mme-fonts:
+# into $(PREFIX)/share/mme-fonts, where mme-sdl looks beside its bin
 install: mme-sdl
 	mkdir -p $(PREFIX)/bin
 	cp mme-sdl $(PREFIX)/bin/
+	if [ -d bin/mme-fonts ]; then mkdir -p $(PREFIX)/share/mme-fonts && cp bin/mme-fonts/* $(PREFIX)/share/mme-fonts/; fi
 
 clean:
 	rm -f mme-sdl

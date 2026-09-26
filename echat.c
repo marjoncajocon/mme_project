@@ -861,8 +861,22 @@ static void job_finish (void) {
       buf_puts(&t->text, "Claude gave no answer.");
     }
     C.stale = 1;
+    if (!msg[0] && t && t->who == TU_CLAUDE && t->text.len) {	/* a screen reader's: the answer, read out */
+      acc_signal(SIG_CHAT);
+      acc_sayf("%.*s", (int)(t->text.len < 1000 ? t->text.len : 1000), t->text.s);
+    }
   }
   job_close();
+}
+
+
+/* the last answer as text (Accessible View), NULL: none */
+const char *chat_answer (size_t *len) {
+  size_t i = C.n;
+  while (i > 0 && C.t[i - 1].who != TU_CLAUDE) i--;
+  if (i == 0 || C.t[i - 1].text.len == 0) return NULL;
+  *len = C.t[i - 1].text.len;
+  return C.t[i - 1].text.s;
 }
 
 

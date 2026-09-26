@@ -199,54 +199,156 @@ static void busy (const char *what) {
 }
 
 
+/* a value of curl's config (-K): quoted, \ " and the line ends escaped */
+static void cfg_put (Buf *b, const char *name, const char *s, size_t n) {
+  size_t i;
+  buf_printf(b, "%s = \"", name);
+  for (i = 0; i < n; i++) {
+    char c = s[i];
+    if (c == '\n') buf_puts(b, "\\n");
+    else if (c == '\r') buf_puts(b, "\\r");
+    else if (c == '\t') buf_puts(b, "\\t");
+    else {
+      if (c == '\\' || c == '"') buf_putc(b, '\\');
+      buf_putc(b, c);
+    }
+  }
+  buf_puts(b, "\"\n");
+}
+
+
+struct GhReq {
+  OsProc proc;
+  long pid;
+  int out;	/* what curl prints: the answer, then its status */
+  Buf got;
+};
+
+
 /*
-** A request: method, the path after the API's base, a JSON body (or NULL),
-** what is accepted (NULL: JSON). The answer in out; the HTTP status (0:
-** curl could not be run or reach it).
+** A request started: method, the path after the API's base, a JSON body
+** (or NULL), what is accepted (NULL: JSON). curl's arguments name nothing
+** but "-K -": the URL, the token and the body go in on its stdin (no length
+** limit, nothing another program sees). NULL: curl is not there.
 */
-static int http (const char *method, const char *path, const char *body, const char *accept, Buf *out) {
-  char *curl = curl_path(), *base, *url, *argv[24], auth[400], acc[120], code[8] = "";
+static GhReq *start (const char *method, const char *path, const char *body, const char *accept) {
+  char *curl = curl_path(), *base, *argv[4];
   const char *tok = token();
-  int n = 0, status = 0;
-  size_t k;
+  int in[2], out[2], io[3];
+  size_t done = 0;
+  Buf c;
+  GhReq *r;
   if (curl == NULL) {
     toast(1, "GitHub: curl was not found.");
-    return 0;
+    return NULL;
   }
   base = api_base();
-  url = (char *)xmalloc(strlen(base) + strlen(path) + 1);
-  sprintf(url, "%s%s", base, path);
-  snprintf(acc, sizeof(acc), "Accept: %s", accept ? accept : "application/vnd.github+json");
-  argv[n++] = curl;
-  argv[n++] = (char *)"-s";
-  argv[n++] = (char *)"-L";
-  argv[n++] = (char *)"--max-time";
-  argv[n++] = (char *)"30";
-  argv[n++] = (char *)"-X";
-  argv[n++] = (char *)method;
-  argv[n++] = (char *)"-H";
-  argv[n++] = acc;
-  argv[n++] = (char *)"-H";
-  argv[n++] = (char *)"User-Agent: mme";
-  argv[n++] = (char *)"-H";
-  argv[n++] = (char *)"X-GitHub-Api-Version: 2022-11-28";
-  if (tok) {
-    snprintf(auth, sizeof(auth), "Authorization: Bearer %s", tok);
-    argv[n++] = (char *)"-H";
-    argv[n++] = auth;
+  buf_init(&c);
+  buf_printf(&c, "%s%s", base, path);
+  {
+    char *url = xstrdup(c.s);
+    c.len = 0;
+    c.s[0] = '\0';
+    cfg_put(&c, "url", url, strlen(url));
+    free(url);
+  }
+  buf_puts(&c, "silent\nlocation\nmax-time = 30\n");
+  cfg_put(&c, "request", method, strlen(method));
+  {
+    char h[400];
+    snprintf(h, sizeof(h), "Accept: %s", accept ? accept : "application/vnd.github+json");
+    cfg_put(&c, "header", h, strlen(h));
+    cfg_put(&c, "header", "User-Agent: mme", 15);
+    cfg_put(&c, "header", "X-GitHub-Api-Version: 2022-11-28", 32);
+    if (tok) {
+      snprintf(h, sizeof(h), "Authorization: Bearer %s", tok);
+      cfg_put(&c, "header", h, strlen(h));
+      memset(h, 0, sizeof(h));
+    }
   }
   if (body) {
-    argv[n++] = (char *)"-H";
-    argv[n++] = (char *)"Content-Type: application/json";
-    argv[n++] = (char *)"-d";
-    argv[n++] = (char *)body;
+    cfg_put(&c, "header", "Content-Type: application/json", 30);
+    cfg_put(&c, "data-binary", body, strlen(body));
   }
-  argv[n++] = (char *)"-w";
-  argv[n++] = (char *)"\n%{http_code}";
-  argv[n++] = url;
-  argv[n] = NULL;
-  buf_init(out);
-  if (run_capture(argv, out) == 0 && out->len > 0) {	/* the status: the last line */
+  cfg_put(&c, "write-out", "\n%{http_code}", 13);
+  argv[0] = curl;
+  argv[1] = (char *)"-K";
+  argv[2] = (char *)"-";
+  argv[3] = NULL;
+  r = (GhReq *)xmalloc(sizeof(*r));
+  memset(r, 0, sizeof(*r));
+  if (os_pipe(in) != 0) {
+    free(r);
+    r = NULL;
+  }
+  else if (os_pipe(out) != 0) {
+    os_close(in[0]);
+    os_close(in[1]);
+    free(r);
+    r = NULL;
+  }
+  else {
+    io[0] = in[0];
+    io[1] = out[1];
+    io[2] = -1;
+    if (os_spawn(curl, argv, NULL, io, 3, &r->proc, &r->pid) != 0) {
+      os_close(in[0]);
+      os_close(in[1]);
+      os_close(out[0]);
+      os_close(out[1]);
+      free(r);
+      r = NULL;
+    }
+    else {
+      os_close(in[0]);
+      os_close(out[1]);
+      while (done < c.len) {	/* curl reads its config before anything else */
+        long w = os_write(in[1], c.s + done, c.len - done);
+        if (w <= 0) break;
+        done += (size_t)w;
+      }
+      os_close(in[1]);
+      r->out = out[0];
+      buf_init(&r->got);
+    }
+  }
+  if (c.s) memset(c.s, 0, c.cap);	/* it held the token */
+  buf_free(&c);
+  free(base);
+  free(curl);
+  if (r == NULL) toast(1, "GitHub: curl could not be started.");
+  return r;
+}
+
+
+GhReq *gh_start (const char *method, const char *path, const char *body) {
+  return start(method, path, body, NULL);
+}
+
+
+/*
+** What the request has come to, while the editor waits for keys: -1 it is
+** not done; else the HTTP status (0: GitHub could not be reached), the
+** answer in *out (buf_free it), and r is freed.
+*/
+int gh_poll (GhReq *r, Buf *out) {
+  char chunk[16384];
+  int status = 0;
+  size_t k;
+  while (os_wait_readable(r->out, 0) == 1) {
+    long n = os_read(r->out, chunk, sizeof(chunk));
+    if (n <= 0) {
+      os_close(r->out);
+      r->out = -1;
+      break;
+    }
+    buf_putn(&r->got, chunk, (size_t)n);
+  }
+  if (r->out >= 0) return -1;
+  os_wait(r->proc);
+  *out = r->got;
+  if (out->len > 0) {	/* the status: the last line */
+    char code[8];
     k = out->len;
     while (k > 0 && out->s[k - 1] != '\n') k--;
     snprintf(code, sizeof(code), "%.*s", (int)(out->len - k < 7 ? out->len - k : 7), out->s + k);
@@ -254,14 +356,38 @@ static int http (const char *method, const char *path, const char *body, const c
     out->len = k > 0 ? k - 1 : 0;
     out->s[out->len] = '\0';
   }
-  free(url);
-  free(base);
-  free(curl);
+  free(r);
   return status;
 }
 
 
-static void http_fail (int status, const Buf *out) {	/* what went wrong, in words */
+/* a request, waited for (the notice of busy() on the screen) */
+static int http (const char *method, const char *path, const char *body, const char *accept, Buf *out) {
+  GhReq *r = start(method, path, body, accept);
+  int st;
+  buf_init(out);
+  if (r == NULL) return 0;
+  while ((st = gh_poll(r, out)) < 0) os_wait_readable(r->out, 200);
+  return st;
+}
+
+
+int gh_request (const char *method, const char *path, const char *body, Buf *out) {
+  return http(method, path, body, NULL, out);
+}
+
+
+void gh_busy (const char *what) {
+  busy(what);
+}
+
+
+int gh_signed_in (void) {
+  return token() != NULL;
+}
+
+
+void gh_fail (int status, const Buf *out) {	/* what went wrong, in words */
   Json *j = out->s ? json_parse(out->s, out->len) : NULL;
   const char *msg = json_str(json_get(j, "message"), "");
   if (status == 0) toast(1, "GitHub: it could not be reached (see your connection, or curl).");
@@ -279,7 +405,7 @@ static Json *get_json (const char *path) {
   int st = http("GET", path, NULL, NULL, &out);
   Json *j = NULL;
   if (st >= 200 && st < 300) j = json_parse(out.s ? out.s : "", out.len);
-  else http_fail(st, &out);
+  else gh_fail(st, &out);
   buf_free(&out);
   return j;
 }
@@ -440,7 +566,7 @@ static void open_changes (int num) {
   snprintf(path, sizeof(path), "/repos/%s/%s/pulls/%d", g_owner, g_repo, num);
   st = http("GET", path, NULL, "application/vnd.github.v3.diff", &out);
   if (st < 200 || st >= 300) {
-    http_fail(st, &out);
+    gh_fail(st, &out);
     buf_free(&out);
     return;
   }
@@ -476,7 +602,7 @@ static void add_comment (int num) {
   snprintf(path, sizeof(path), "/repos/%s/%s/issues/%d/comments", g_owner, g_repo, num);
   st = http("POST", path, body.s, NULL, &out);
   if (st == 201) toast(0, "GitHub: the comment was added to #%d.", num);
-  else http_fail(st, &out);
+  else gh_fail(st, &out);
   buf_free(&out);
   buf_free(&body);
 }
@@ -714,7 +840,7 @@ static void create_pr (void) {
     toast(0, "GitHub: pull request #%d was created: %s", (int)json_num(json_get(j, "number"), 0), json_str(json_get(j, "html_url"), ""));
     json_free(j);
   }
-  else http_fail(st, &out);
+  else gh_fail(st, &out);
   buf_free(&out);
   buf_free(&req);
   free(base);
@@ -749,7 +875,7 @@ static void create_issue (void) {
     toast(0, "GitHub: issue #%d was created: %s", (int)json_num(json_get(j, "number"), 0), json_str(json_get(j, "html_url"), ""));
     json_free(j);
   }
-  else http_fail(st, &out);
+  else gh_fail(st, &out);
   buf_free(&out);
   buf_free(&req);
   free(title);

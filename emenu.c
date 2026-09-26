@@ -153,7 +153,11 @@ static const char *const names[CMD_N] = {
   "GitHub Pull Requests: Pull Requests", "GitHub Issues: Issues", "GitHub Pull Requests: Create Pull Request",
   "GitHub Issues: Create Issue", "GitHub: Sign In", "GitHub: Sign Out",
   "Remote-SSH: Connect to Host...",
-  "Chat: Change Model...", "Chat: Toggle Agent Mode"
+  "Chat: Change Model...", "Chat: Toggle Agent Mode",
+  "Settings Sync: Turn On...", "Settings Sync: Turn Off", "Settings Sync: Sync Now", "Settings Sync: Show Synced Data",
+  "Ports: Forward a Port", "Ports: Focus on Ports View",
+  "View: Move Editor into New Window", "View: Copy Editor into New Window",
+  "Open Accessible View", "Help: Accessibility Help"
 };
 
 static const char *const keys[CMD_N] = {
@@ -224,7 +228,11 @@ static const char *const keys[CMD_N] = {
   "", "", "", "", "",
   "", "", "", "", "", "",
   "",
-  "", ""
+  "", "",
+  "", "", "", "",
+  "", "",
+  "", "",
+  "Alt+F2", "Alt+F1"
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -392,7 +400,12 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "ipynb.newUntitledIpynb",
   "github.pullRequests.list", "github.issues.list", "pr.create", "issue.createIssue", "github.signIn", "github.signOut",
   "opensshremotes.openEmptyWindow",
-  "workbench.action.chat.changeModel", "workbench.action.chat.toggleAgentMode"
+  "workbench.action.chat.changeModel", "workbench.action.chat.toggleAgentMode",
+  "workbench.userDataSync.actions.turnOn", "workbench.userDataSync.actions.turnOff",
+  "workbench.userDataSync.actions.syncNow", "workbench.userDataSync.actions.showSyncedData",
+  "remote.tunnel.forwardCommandPalette", "~remote.forwardedPorts.focus",
+  "workbench.action.moveEditorToNewWindow", "workbench.action.copyEditorToNewWindow",
+  "editor.action.accessibleView", "editor.action.accessibilityHelp"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -646,8 +659,13 @@ int popup_list (int x, int y, const char *const *label, const int *flags, int n)
   if (y + h > scr_rows()) y = scr_rows() - h;
   if (x < 0) x = 0;
   if (y < 0) y = 0;
+  int said = -1;
   for (;;) {
     int k, code;
+    if (sel >= 0 && sel != said) {	/* a screen reader's */
+      acc_sayf("%s%s%s", label[sel], flags[sel] & MF_CHECK ? ", checked" : "", flags[sel] & MF_SUB ? ", submenu" : "");
+      said = sel;
+    }
     ui_background();
     scr_box(x, y, w, h, S_MENU);
     for (i = 0; i < n; i++) {
@@ -698,8 +716,13 @@ int menu_popup (int x, int y, const int *cmd, const char *const *label) {
   if (y + h > scr_rows()) y = scr_rows() - h;
   if (x < 0) x = 0;
   if (y < 0) y = 0;
+  int said = -1;
   for (;;) {
     int k, code;
+    if (sel >= 0 && sel != said) {	/* a screen reader's */
+      acc_sayf("%s%s%s", label && label[sel] ? label[sel] : names[cmd[sel]], *keys[cmd[sel]] ? ", " : "", keys[cmd[sel]]);
+      said = sel;
+    }
     ui_background();
     scr_box(x, y, w, h, S_MENU);
     for (i = 0; i < n; i++) {
@@ -740,10 +763,17 @@ int menu_popup (int x, int y, const int *cmd, const char *const *label) {
 
 
 int menu_run (int m) {
-  int sel = step(menus[m].cmd, -1, 1);
+  int sel = step(menus[m].cmd, -1, 1), said_m = -1, said = -1;
   for (;;) {
     const int *cmd = menus[m].cmd;
     int k, code;
+    if (sel >= 0 && (m != said_m || sel != said)) {	/* a screen reader's: the menu, the item and its keys */
+      const char *kl = user_keys[cmd[sel]] ? user_keys[cmd[sel]] : keys[cmd[sel]];
+      acc_sayf("%s%s%s%s%s", m != said_m ? menus[m].name : "", m != said_m ? " menu, " : "", names[cmd[sel]],
+               kl && *kl ? ", " : "", kl ? kl : "");
+      said_m = m;
+      said = sel;
+    }
     ui_background();
     menubar_draw(m);
     drop_draw(m, sel);
@@ -801,8 +831,13 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
   if (y + h > scr_rows() - 1) y = scr_rows() - 1 - h;
   if (x < 0) x = 0;
   if (y < 1) y = 1;
+  int said = -1;
   for (;;) {
     int k, code;
+    if (sel >= 0 && sel != said && label[sel]) {	/* a screen reader's */
+      acc_sayf("%s%s%s", label[sel], keys && keys[sel] && keys[sel][0] ? ", " : "", keys && keys[sel] ? keys[sel] : "");
+      said = sel;
+    }
     ui_background();
     scr_box(x, y, w, h, S_MENU);
     for (i = 0; i < n; i++) {
@@ -1256,7 +1291,8 @@ int pick_run (Pick *p) {
   char matched[sizeof(p->text)];	/* what the items in vis were matched with */
   size_t sel = 0, top = 0;
   int r;
-  int shown = -1;
+  int shown = -1, said = -1;	/* said: the item spoken (eaccess.c), -2 "No results" */
+  size_t said_n = 0;	/* and how many there were */
   vis.v = (size_t *)xmalloc((p->n + 1) * sizeof(size_t));
   vis.score = (int *)xmalloc((p->n + 1) * sizeof(int));
   filter(p, &vis, 0);
@@ -1272,6 +1308,18 @@ int pick_run (Pick *p) {
       p->on_move(shown);
     }
     if (sel < top) top = sel;
+    if (vis.n && ((int)vis.v[sel] != said || vis.n != said_n)) {	/* a screen reader's: the item, where it is in the list */
+      const PickItem *it = &p->item[vis.v[sel]];
+      acc_sayf("%s%s%s%s%s, %lu of %lu", said == -1 && p->title ? p->title : "", said == -1 && p->title ? ": " : "",
+               it->label ? it->label : "", it->detail && *it->detail ? ", " : "", it->detail ? it->detail : "",
+               (unsigned long)sel + 1, (unsigned long)vis.n);
+      said = (int)vis.v[sel];
+      said_n = vis.n;
+    }
+    else if (!vis.n && said != -2) {
+      acc_say(p->n ? "No results" : p->title ? p->title : "");
+      said = -2;
+    }
     ui_background();
     pick_draw(p, &vis, sel, top);
     if (g_box.rows > 0 && sel >= top + (size_t)g_box.rows) {
@@ -1463,7 +1511,7 @@ int key_capture (const char *title, int *k2) {
 
 
 int dialog (const char *msg, const char *detail, const char *const *button, int n) {
-  int sel = 0, i;
+  int sel = 0, i, said = -1;
   int bx[8], bw[8];
   if (n > 8) n = 8;
   for (;;) {
@@ -1494,6 +1542,15 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
         scr_fill(bx[i], y + 5, bw[i], st);
         scr_puts(bx[i] + 2, y + 5, button[i], st);
       }
+    }
+    if (said != sel) {	/* a screen reader's: the question, then the button with the focus */
+      if (said < 0) {
+        size_t dl = detail ? strlen(detail) : 0;
+        acc_sayf("%s %s%s %s button, %d of %d", msg, detail ? detail : "", dl && strchr(".?!", detail[dl - 1]) ? "" : ".",
+                 button[sel], sel + 1, n);
+      }
+      else acc_sayf("%s button, %d of %d", button[sel], sel + 1, n);
+      said = sel;
     }
     scr_cursor(0, -1);
     scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
@@ -1610,6 +1667,13 @@ static void toast_v (int sev, const char *src, const char *fmt, va_list ap) {
   g_t.sev = sev;
   g_t.time = os_now_us();
   note_add(g_t.msg, sev, src);
+  acc_sayf("%s%s", sev == 2 ? "Error: " : sev == 1 ? "Warning: " : "", g_t.msg);
+}
+
+
+/* the last notification's text (Accessible View), NULL: none */
+const char *note_last (void) {
+  return g_note.n ? g_note.msg[g_note.n - 1] : NULL;
 }
 
 
@@ -1653,6 +1717,8 @@ void toast_ask (int sev, const char *src, const char *msg, const char *const *ac
   a->done = done;
   a->ud = ud;
   note_add(msg, sev, src);
+  acc_sayf("%s%s. Buttons: %s%s%s", sev == 2 ? "Error: " : sev == 1 ? "Warning: " : "", msg, a->act[0],
+           a->nact > 1 ? ", " : "", a->nact > 1 ? a->act[1] : "");
 }
 
 

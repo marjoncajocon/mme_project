@@ -2,6 +2,8 @@
 /mme
 /mme.exe
 /dist/
+/sdl2_port/dist/
+/sdl2_port/mme-sdl
 *.pdb
 *.o
 *.obj

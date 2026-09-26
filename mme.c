@@ -5648,6 +5648,7 @@ static int editor_shape (void) {
 /* settings.json read again: what it says now shows at once */
 static void apply_settings (int report) {
   int r = settings_load();
+  acc_settings_changed();
   ext_init();	/* the extensions' themes, before the theme is set */
   E.minimap = opt.minimap;
   scr_cursor_shape(editor_shape());
@@ -14706,12 +14707,16 @@ static void after_save (void) {
     free(d);
   }
   sp = settings_path();
-  if (sp && T->real && m_fncmp(sp, T->real) == 0) apply_settings(1);
+  if (sp && T->real && m_fncmp(sp, T->real) == 0) {
+    apply_settings(1);
+    sync_changed();
+  }
   free(sp);
   sp = keys_path();
   if (sp && T->real && m_fncmp(sp, T->real) == 0) {
     int bad = keys_load() != 0;
     toast(bad, bad ? "keybindings.json is not valid JSON: not applied" : "Keyboard shortcuts applied");
+    sync_changed();
   }
   free(sp);
   sp = snip_dir();
@@ -14720,6 +14725,7 @@ static void after_save (void) {
     if (m_fncmp(dir, sp) == 0) {
       snip_reload();
       toast(0, "Snippets applied");
+      sync_changed();
     }
     free(dir);
   }
@@ -14729,6 +14735,14 @@ static void after_save (void) {
   if (T->sx) lsp_open(T->doc, syntax_name(T->sx));
   git_refresh();
   side_refresh();
+}
+
+
+/* Settings Sync wrote them: applied as a save of them is */
+void user_files_changed (int settings, int keys, int snippets) {
+  if (settings) apply_settings(0);
+  if (keys) keys_load();
+  if (snippets) snip_reload();
 }
 
 
@@ -14758,9 +14772,11 @@ static int save_front_lang (int reason) {
   before_save(reason != SAVE_EXPLICIT);
   if (doc_save(d) != 0) {
     toast(1, "Failed to save '%s'", doc_name());
+    acc_signal(SIG_TASK_FAILED);
     return -1;
   }
   after_save();
+  acc_signal(SIG_SAVE);
   return 0;
 }
 
@@ -16465,6 +16481,208 @@ static void drop_target (int x, int y) {
 }
 
 
+/*
+** {==================================================================
+** Accessibility: what a screen reader says as the caret, the focus and the
+** tab move (eaccess.c speaks it), and Accessible View
+** ===================================================================
+*/
+
+/* the caret's line: a sound for what it has (an error, a breakpoint, a fold) */
+static void acc_line_signals (size_t y) {
+  size_t n, i;
+  const Diag *dv = lsp_diags(T->doc, &n);
+  int worst = 0;
+  for (i = 0; i < n; i++)
+    if (dv[i].a.y <= y && y <= dv[i].b.y && (worst == 0 || dv[i].sev < worst)) worst = dv[i].sev;
+  if (worst == 1) acc_signal(SIG_ERROR);
+  else if (worst == 2) acc_signal(SIG_WARNING);
+  if (T->real && (dbg_mark(T->real, y) & DM_BP)) acc_signal(SIG_BREAKPOINT);
+  if (is_folded(y)) acc_signal(SIG_FOLDED);
+}
+
+
+static void acc_say_line (size_t y) {
+  const Row *r = &T->doc->row[y];
+  size_t i = 0;
+  while (i < r->len && (r->s[i] == ' ' || r->s[i] == '\t')) i++;
+  if (i == r->len) acc_say("blank");
+  else acc_sayf("%.*s", (int)(r->len - i > 900 ? 900 : r->len - i), r->s + i);
+}
+
+
+/* the character at the caret, or the word it starts (Ctrl+Left / Right) */
+static void acc_say_at (int word) {
+  const Row *r = &T->doc->row[T->cur.y];
+  size_t x = T->cur.x, e = x;
+  const char *nm;
+  if (x >= r->len) {
+    acc_say(r->len ? "end of line" : "blank");
+    return;
+  }
+  if (word && gh_word_char(r->s[x])) {
+    while (e < r->len && gh_word_char(r->s[e])) e++;
+    acc_sayf("%.*s", (int)(e - x), r->s + x);
+    return;
+  }
+  if ((unsigned char)r->s[x] < 0x80 && (nm = acc_char_name((unsigned char)r->s[x])) != NULL) acc_say(nm);
+  else {
+    e = x + 1;
+    while (e < r->len && ((unsigned char)r->s[e] & 0xC0) == 0x80) e++;	/* the whole UTF-8 character */
+    acc_sayf("%.*s", (int)(e - x), r->s + x);
+  }
+}
+
+
+/* after a key or a click: what changed, said (nothing unless mme speaks) */
+static void acc_track (int k) {
+  static const Tab *lt;
+  static Pos lc, la;
+  static int lsel, lfocus = -1, lkind;
+  static char lside[512];
+  int code = KEY_CODE(k);
+  if (!acc_on()) return;
+  if (E.focus != lfocus) {	/* the part with the focus */
+    static const char *const part[] = {"Editor", "Explorer", "Terminal", "Chat"};
+    if (E.focus >= 0 && E.focus <= F_CHAT) acc_say(E.focus == F_SIDE && E.view != VIEW_FILES ? "Side Bar" : part[E.focus]);
+    lfocus = E.focus;
+    lt = NULL;
+    lside[0] = '\0';
+  }
+  if (E.focus == F_EDITOR && HAS_DOC && !T->page) {
+    if (T != lt) {	/* another tab: the file, its language, the line */
+      acc_sayf("%s, %s, line %lu", doc_name(), T->sx ? syntax_name(T->sx) : "Plain Text", (unsigned long)T->cur.y + 1);
+      acc_line_signals(T->cur.y);
+    }
+    else if (T->sel && (!lsel || pos_cmp(T->cur, lc) != 0 || pos_cmp(T->anchor, la) != 0)) {	/* the selection */
+      Pos a, b;
+      size_t n;
+      char *s;
+      sel_range(&a, &b);
+      s = doc_text(T->doc, a, b, &n);
+      if (n > 400) acc_sayf("%lu characters selected", (unsigned long)n);
+      else acc_sayf("%s selected", s);
+      free(s);
+    }
+    else if (T->cur.y != lc.y) {	/* another line */
+      acc_say_line(T->cur.y);
+      acc_line_signals(T->cur.y);
+    }
+    else if (T->cur.x != lc.x && (code == K_LEFT || code == K_RIGHT) && (k & KM_CTRL)) {	/* the word moved over */
+      const Row *r = &T->doc->row[T->cur.y];
+      size_t a = lc.x < T->cur.x ? lc.x : T->cur.x, b = lc.x < T->cur.x ? T->cur.x : lc.x;
+      if (b > r->len) b = r->len;
+      while (a < b && (r->s[a] == ' ' || r->s[a] == '\t')) a++;
+      while (b > a && (r->s[b - 1] == ' ' || r->s[b - 1] == '\t')) b--;
+      if (a < b) acc_sayf("%.*s", (int)(b - a), r->s + a);
+      else acc_say_at(0);
+    }
+    else if (T->cur.x != lc.x && (code == K_LEFT || code == K_RIGHT || code == K_HOME || code == K_END || code == K_MOUSE))
+      acc_say_at(0);
+    lt = T;
+    lc = T->cur;
+    la = T->anchor;
+    lsel = T->sel;
+  }
+  else if (E.focus == F_SIDE && E.view == VIEW_FILES) {	/* the Explorer's row: its name, a folder open or not */
+    const char *name = NULL;
+    int depth = 0, kind = files_selected_row(&name, &depth);
+    char now[512];
+    snprintf(now, sizeof(now), "%s/%d", kind ? name : "", depth);
+    if (kind && (strcmp(now, lside) != 0 || kind != lkind))
+      acc_sayf("%s%s", name, kind == 3 ? ", folder, expanded" : kind == 2 ? ", folder, collapsed" : "");
+    snprintf(lside, sizeof(lside), "%s", now);
+    lkind = kind;
+  }
+  else lt = NULL;
+}
+
+
+/*
+** Accessible View (Alt+F2): what is shown only in a box, as text in a tab
+** of its own to read line by line: the hover, else Chat's answer, the
+** terminal, the last notification
+*/
+static void accessible_view (void) {
+  char *own = NULL;
+  const char *s = NULL;
+  size_t n = 0;
+  if (HV.text) s = HV.text;
+  else if (E.focus == F_CHAT) s = chat_answer(&n);
+  else if (E.focus == F_PANEL && E.panel && E.panel_view == 0) s = own = panel_text(&n);
+  if (s == NULL) s = note_last();
+  if (s == NULL) {
+    toast(0, "Accessible View: nothing to show here (a hover, Chat's answer, the terminal, a notification).");
+    return;
+  }
+  if (n == 0) n = strlen(s);
+  hover_close();
+  tab_new();
+  doc_set_text(T->doc, s, n);
+  T->doc->saved = T->doc->changes;	/* nothing to save */
+  E.focus = F_EDITOR;
+  free(own);
+  acc_say("Accessible View");
+}
+
+
+static void accessibility_help (void) {
+  md_page("help", "Accessibility Help.md",
+          "# Accessibility Help\n\n"
+          "mme speaks for itself when `editor.accessibilitySupport` is `\"on\"` (or `\"auto\"` and a screen reader "
+          "runs, in mme-sdl): the line the caret moves to, the character or word it moves over, the selection, "
+          "the file of the tab in front, the item of a list or a menu, a dialog and its buttons, a notification.\n\n"
+          "| Keys | What |\n|---|---|\n"
+          "| Alt+F2 | Accessible View: the hover, Chat's answer, the terminal or the last notification as text |\n"
+          "| Alt+F1 | this help |\n"
+          "| Ctrl+Shift+P, F1 | the Command Palette: every command, by its name |\n"
+          "| F8, Shift+F8 | the next / previous problem |\n"
+          "| Ctrl+Shift+E, Ctrl+Shift+F, Ctrl+Shift+G | Explorer, Search, Source Control |\n"
+          "| Ctrl+` | the terminal |\n"
+          "| Ctrl+K Ctrl+I | the hover, by the keys (then Alt+F2 reads it) |\n"
+          "| F10 | the menu bar |\n\n"
+          "Settings: `editor.accessibilitySupport` (`auto`, `on`, `off`), `mme.accessibility.speechRate` "
+          "(-10 .. 10), `mme.accessibility.volume` (0 .. 100, Windows' voice), and the sounds of `accessibility.signals.lineHasError`, `.lineHasWarning`, "
+          "`.lineHasBreakpoint`, `.lineHasFoldedArea`, `.taskCompleted`, `.taskFailed`, `.save`, "
+          "`.chatResponseReceived` (each `{\"sound\": \"auto\" | \"on\" | \"off\"}`; auto: while mme speaks).\n");
+}
+
+/* }================================================================== */
+
+
+/*
+** Move / Copy Editor into New Window, VS Code's floating editor: the file
+** in a window of its own (a file's window: no sidebar), at its line. Its
+** changes are saved first: the other window opens the file as it is.
+*/
+static void editor_to_window (int move) {
+  static const char *const bt[] = {"Save", "Cancel"};
+  char *arg;
+  int r;
+  if (!HAS_DOC || T->real == NULL) {
+    toast(1, "%s Editor into New Window: the editor has no file yet (save it first).", move ? "Move" : "Copy");
+    return;
+  }
+  if (doc_dirty(T->doc)) {
+    char msg[512];
+    snprintf(msg, sizeof(msg), "Save %s before it opens in a new window?", doc_name());
+    if (dialog(msg, "The new window opens the file as it is saved.", bt, 2) != 0) return;
+    run_command(CMD_SAVE);
+    if (doc_dirty(T->doc)) return;
+  }
+  arg = (char *)xmalloc(strlen(T->real) + 24);
+  if (T->page) strcpy(arg, T->real);
+  else sprintf(arg, "%s:%lu", T->real, (unsigned long)T->cur.y + 1);
+  r = term_new_window(arg);
+  free(arg);
+  if (r != 0) {
+    toast(1, "New Window: mme cannot open a window here (run mme-sdl, or mme in mmc-term or Windows Terminal).");
+    return;
+  }
+  if (move) run_command(CMD_CLOSE);
+}
+
+
 /* the dragged tab dropped where drop_target said */
 static void drop_tab (void) {
   int gs = E.tdrag_g, i = E.tdrag_i, gd = E.tdrop_g;
@@ -16893,6 +17111,12 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_REMOTE_CONNECT: remote_connect(); break;
+    case CMD_SYNC_ON: case CMD_SYNC_OFF: case CMD_SYNC_NOW: case CMD_SYNC_SHOW: sync_command(cmd); break;
+    case CMD_PORT_FORWARD: case CMD_PORTS: ports_command(cmd); break;
+    case CMD_EDITOR_TO_WINDOW: editor_to_window(1); break;
+    case CMD_ACC_VIEW: accessible_view(); break;
+    case CMD_ACC_HELP: accessibility_help(); break;
+    case CMD_EDITOR_COPY_WINDOW: editor_to_window(0); break;
     case CMD_GH_PRS: case CMD_GH_ISSUES: case CMD_GH_CREATE_PR: case CMD_GH_CREATE_ISSUE: case CMD_GH_SIGNIN:
     case CMD_GH_SIGNOUT:
       gh_command(cmd);
@@ -17600,7 +17824,7 @@ static int global_key (int k) {
     {']' | KM_CTRL | KM_SHIFT, CMD_UNFOLD}, {'}' | KM_CTRL | KM_SHIFT, CMD_UNFOLD}, {K_F1, CMD_PALETTE},
     {'1' | KM_ALT, CMD_EXPLORER}, {'2' | KM_ALT, CMD_SEARCH}, {'3' | KM_ALT, CMD_GIT},
     {',' | KM_CTRL, CMD_SETTINGS}, {K_F12, CMD_DEFINITION}, {' ' | KM_CTRL, CMD_SUGGEST},
-    {K_F8, CMD_NEXT_PROBLEM}, {K_F8 | KM_SHIFT, CMD_PREV_PROBLEM},
+    {K_F8, CMD_NEXT_PROBLEM}, {K_F8 | KM_SHIFT, CMD_PREV_PROBLEM}, {K_F2 | KM_ALT, CMD_ACC_VIEW}, {K_F1 | KM_ALT, CMD_ACC_HELP},
     {K_F2, CMD_RENAME}, {'.' | KM_CTRL, CMD_QUICKFIX}, {'z' | KM_ALT, CMD_WORDWRAP}, {CTRL('\\'), CMD_SPLIT}, {'\\' | KM_CTRL, CMD_SPLIT},
     {'1' | KM_CTRL, CMD_GROUP1}, {'2' | KM_CTRL, CMD_GROUP2}, {'3' | KM_CTRL, CMD_GROUP3}, {'4' | KM_CTRL, CMD_GROUP4},
     {K_RIGHT | KM_CTRL | KM_ALT, CMD_MOVE_NEXT_GROUP}, {K_LEFT | KM_CTRL | KM_ALT, CMD_MOVE_PREV_GROUP},
@@ -20813,13 +21037,20 @@ static void on_mouse (void) {
     else if (!m->press) E.grp_resize = 0;
     return;
   }
-  if (E.tdrag) {	/* a tab pressed: dragged to another place, group or side */
+  if (E.tdrag) {	/* a tab pressed: dragged to another place, group or side, or out of the window */
     if (m->drag && m->button == 0) {
-      if (E.tdrag == 1 && (abs(m->x - E.tdrag_x) >= 2 || m->y != E.tdrag_y)) E.tdrag = 2;
-      if (E.tdrag == 2) drop_target(m->x, m->y);
+      if (E.tdrag == 1 && (abs(m->x - E.tdrag_x) >= 2 || m->y != E.tdrag_y || m->out)) E.tdrag = 2;
+      if (E.tdrag == 2 && m->out) E.tdrop_zone = DROP_NONE;
+      else if (E.tdrag == 2) drop_target(m->x, m->y);
     }
     else if (!m->press) {
-      if (E.tdrag == 2) drop_tab();
+      if (E.tdrag == 2 && m->out && E.tdrag_g >= 0 && E.tdrag_g < g_ngrp && E.tdrag_i < g_grp[E.tdrag_g].ntab) {
+        focus_group(E.tdrag_g);	/* dropped outside: a window of its own, there (mme-sdl) */
+        focus_tab(E.tdrag_i);
+        E.tdrag = 0;
+        editor_to_window(1);
+      }
+      else if (E.tdrag == 2) drop_tab();
       E.tdrag = 0;
     }
     return;
@@ -21471,6 +21702,7 @@ int main (int argc, char **argv) {
   }
   atexit(cleanup);
   win_register(g_session ? (ws_active() ? ws_file() : side_root()) : "", term_can_raise());	/* the other windows see this one */
+  sync_init();
   ui_background = background;
   check_size();
   layout();
@@ -21496,6 +21728,7 @@ int main (int argc, char **argv) {
     lsp_poll();
     dbg_poll();
     nb_poll();
+    sync_poll();
     switch (win_poll()) {	/* another window asked: Exit, or this folder is wanted */
       case 'q': run_command(CMD_CLOSE_WINDOW); break;
       case 'f': term_raise(); break;
@@ -21524,6 +21757,7 @@ int main (int argc, char **argv) {
     }
     if (k == K_MOUSE) on_mouse();
     else on_key(k);
+    acc_track(k);	/* a screen reader's: what changed, said */
     autosave_focus();
   }
   search_stop();	/* the workers end before the editor does */

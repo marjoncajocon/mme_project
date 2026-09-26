@@ -387,6 +387,7 @@ typedef struct Mouse {
   int drag;	/* moved with a button down */
   int wheel;	/* -1 up, 1 down, 0 not the wheel */
   int mods;	/* KM_* */
+  int out;	/* past the window's edge (mme-sdl, a button held: a tab dragged out) */
 } Mouse;
 
 extern Mouse term_mouse;
@@ -403,6 +404,49 @@ int term_cell_px (int *w, int *h);	/* 0: the terminal has not said */
 int term_new_window (const char *arg);	/* mme again in a window of its own (a terminal's, mme-sdl's), with arg: a folder, "--new-window"; -1: cannot */
 int spawn_detached (char **argv);	/* mme.c: argv[0] (a whole path) started on its own, nothing waited for; 0 started */
 void gh_command (int cmd);	/* egithub.c: CMD_GH_* (GitHub's pull requests and issues) */
+typedef struct GhReq GhReq;
+GhReq *gh_start (const char *method, const char *path, const char *body);	/* GitHub's API, not waited for; NULL: no curl */
+int gh_poll (GhReq *r, Buf *out);	/* -1 not done; else the HTTP status (0: not reached), the answer in *out, r freed */
+int gh_request (const char *method, const char *path, const char *body, Buf *out);	/* waited for; the HTTP status */
+void gh_fail (int status, const Buf *out);	/* a toast of what went wrong */
+void gh_busy (const char *what);	/* "GitHub: what..." drawn now */
+int gh_signed_in (void);	/* a token is there (GitHub: Sign In's, GH_TOKEN, gh's ...) */
+
+/* esync.c - Settings Sync through a secret GitHub Gist */
+void sync_command (int cmd);	/* CMD_SYNC_* */
+int sync_on (void);
+void sync_init (void);	/* at start: a sync once the window is up */
+void sync_poll (void);	/* the main loop's */
+void sync_changed (void);	/* settings.json, keybindings.json or a snippets file changed here */
+void user_files_changed (int settings, int keys, int snippets);	/* mme.c: they were written by Settings Sync: applied */
+
+/* eaccess.c - accessibility: mme's own voice, and VS Code's accessibility signals */
+enum {
+  SIG_ERROR, SIG_WARNING, SIG_BREAKPOINT, SIG_FOLDED,	/* the caret's line has one */
+  SIG_TASK_DONE, SIG_TASK_FAILED, SIG_SAVE, SIG_CHAT,
+  SIG_N
+};
+int acc_on (void);	/* editor.accessibilitySupport: mme speaks */
+void acc_settings_changed (void);
+void acc_say (const char *text);	/* said now, what was being said cut short */
+void acc_sayf (const char *fmt, ...);
+void acc_signal (int sig);	/* its sound, as accessibility.signals.<name>.sound says */
+const char *acc_char_name (unsigned c);	/* "left paren"; NULL: said as it is */
+int term_tone (int sig);	/* eterm.c / esdl.c: a signal's tone of its own; -1 none (the bell) */
+const char *note_last (void);	/* emenu.c: the last notification, NULL: none */
+int files_selected_row (const char **name, int *depth);	/* eside.c: 1 a file, 2 a folder, 3 an open one; 0 none */
+char *panel_text (size_t *len);	/* epanel.c: the terminal in front as text; free it */
+const char *chat_answer (size_t *len);	/* echat.c: the last answer, NULL: none */
+
+/* eports.c - Remote-SSH's forwarded ports */
+int ports_remote (void);	/* this mme runs on a Remote-SSH host (MME_REMOTE) */
+void ports_command (int cmd);	/* CMD_PORT_FORWARD, CMD_PORTS: on the host */
+void ports_scan (const char *s, size_t n);	/* the host's terminal output: localhost URLs forwarded */
+void ports_reply (const char *text);	/* eterm.c: the window's answer (OSC 7717 on the input) */
+void ports_host (const char *host);	/* eremote.c: the window's host */
+void ports_osc (const char *text);	/* epanel.c: the host's mme asks (OSC 7717), in a Remote-SSH window */
+void ports_poll (void);	/* the Remote-SSH window's loop */
+void ports_stop_all (void);
 int agent_edit (const char *path, const char *old_text, const char *new_text, char *err, size_t n);	/* mme.c: in its tab, unsaved; 0 done */
 int agent_create (const char *path, const char *text, char *err, size_t n);	/* mme.c: a new file's tab, unsaved; 0 done */
 void remote_connect (void);	/* eremote.c: Remote-SSH: Connect to Host... */
@@ -670,6 +714,10 @@ enum {
   CMD_GH_PRS, CMD_GH_ISSUES, CMD_GH_CREATE_PR, CMD_GH_CREATE_ISSUE, CMD_GH_SIGNIN, CMD_GH_SIGNOUT,	/* egithub.c */
   CMD_REMOTE_CONNECT,	/* eremote.c */
   CMD_CHAT_MODEL, CMD_CHAT_AGENT,	/* echat.c: Change Model, Toggle Agent Mode */
+  CMD_SYNC_ON, CMD_SYNC_OFF, CMD_SYNC_NOW, CMD_SYNC_SHOW,	/* esync.c */
+  CMD_PORT_FORWARD, CMD_PORTS,	/* eports.c */
+  CMD_EDITOR_TO_WINDOW, CMD_EDITOR_COPY_WINDOW,	/* Move / Copy Editor into New Window */
+  CMD_ACC_VIEW, CMD_ACC_HELP,	/* Accessible View, Accessibility Help (eaccess.c) */
   CMD_N
 };
 

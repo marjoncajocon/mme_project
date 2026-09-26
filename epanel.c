@@ -376,6 +376,9 @@ static void osc_done (Term *t, int st) {
   if (strncmp(s, "633;", 4) == 0 || strncmp(s, "133;", 4) == 0) {
     if (opt.term_shell_int) on_si(t, s + 4);
   }
+  else if (strncmp(s, "7717;", 5) == 0) {	/* a Remote-SSH host's mme asks (eports.c); nobody else is heard */
+    if (remote_mode) ports_osc(s + 5);
+  }
   else {
     if (strncmp(s, "7;", 2) == 0) osc7(t, s + 2);
     vt_feed(&t->vt, "\033]", 2);
@@ -389,6 +392,7 @@ static void osc_done (Term *t, int st) {
 /* the shell's output to its screen; the OSCs are looked at on the way */
 static void term_feed (Term *t, const char *s, size_t n) {
   size_t i, from = 0;
+  ports_scan(s, n);	/* on a Remote-SSH host: a localhost URL is forwarded */
   for (i = 0; i < n; i++) {
     unsigned char c = (unsigned char)s[i];
     switch (t->ost) {
@@ -1311,6 +1315,24 @@ static int line_matches (const Term *t, int y, int *c0, int *c1, int max) {
       i += tl - 1;
     }
   return k;
+}
+
+
+/* the terminal in front as text, its scrollback too (Accessible View); NULL: none. Free it */
+char *panel_text (size_t *len) {
+  Buf b;
+  int y;
+  if (NONE) return NULL;
+  buf_init(&b);
+  for (y = -P.g->sb_len; y < P.g->rows; y++) {
+    const Line *l = grid_line(P.g, y);
+    cell_text(&P, y, 0, P.cols, !(l && l->wrapped), &b);
+    if (!(l && l->wrapped)) buf_putc(&b, '\n');
+  }
+  while (b.len > 1 && b.s[b.len - 1] == '\n' && b.s[b.len - 2] == '\n') b.len--;	/* not the empty rows under the prompt */
+  buf_putc(&b, '\0');
+  *len = b.len - 1;
+  return b.s;
 }
 
 

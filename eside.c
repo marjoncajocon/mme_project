@@ -1681,6 +1681,17 @@ const char *files_selected (void) {
 }
 
 
+/* the row selected, for a screen reader: its name, 1 a folder (2 open); 0: none */
+int files_selected_row (const char **name, int *depth) {
+  const Node *nd;
+  if (!g_nvis || g_sel >= g_nvis) return 0;
+  nd = g_vis[g_sel];
+  *name = nd->name;
+  *depth = nd->depth;
+  return nd->dir ? (nd->open ? 3 : 2) : 1;
+}
+
+
 int files_key (int k, SideAct *act) {
   int code = KEY_CODE(k);
   Node *n;

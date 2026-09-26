@@ -132,7 +132,7 @@ static char *server_build (const char *name) {
 */
 static void remote_run (Buf *b, const char *folder, const char *q) {
   const char *p;
-  buf_printf(b, "M=$HOME/.mme-server/mme; [ -x %s$M%s ] || M=mme; exec %s$M%s %s", q, q, q, q, q);
+  buf_printf(b, "export MME_REMOTE=1; M=$HOME/.mme-server/mme; [ -x %s$M%s ] || M=mme; exec %s$M%s %s", q, q, q, q, q);
   if (folder[0] == '~') {
     buf_puts(b, "$HOME");
     folder++;
@@ -199,7 +199,9 @@ static char *connect_script (const char *host, const char *folder) {
   buf_printf(&s, "  echo \"Installing mme on %s ($U)...\"\n", host);
   buf_printf(&s, "  ssh '%s' 'mkdir -p ~/.mme-server && cat > ~/.mme-server/mme.new && chmod +x ~/.mme-server/mme.new && "
                  "mv -f ~/.mme-server/mme.new ~/.mme-server/mme' < \"$BIN\" || { echo 'Could not install.'; read x; exit 1; }\nfi\n", host);
-  buf_printf(&s, "exec ssh -t '%s' '%s'\n", host, run.s);
+  /* its connection is the master of the ports' ssh (eports.c): they need no password */
+  buf_printf(&s, "exec ssh -t -o ControlMaster=auto -o 'ControlPath=~/.ssh/mme-%%r@%%h-%%p' -o ControlPersist=10 '%s' '%s'\n",
+             host, run.s);
 #endif
   if ((fd = os_open(f, OS_WRITE)) >= 0) {
     os_write(fd, s.s, s.len);
@@ -244,12 +246,14 @@ int remote_main (const char *spec) {
   home = os_getenv("HOME");
   if (home == NULL) home = os_getenv("USERPROFILE");
   panel_run(cols, rows, host, cmd, home, 0);
+  ports_host(host);
   free(home);
   free(cmd);
   free(script);
   while (!done) {
     int k, c2, r2;
     if (panel_poll() == 2 || !panel_alive() || remote_close >= 2) break;	/* the remote mme (ssh) ended; the x twice */
+    ports_poll();
     term_size(&c2, &r2);
     if (c2 != cols || r2 != rows) {
       cols = c2;
@@ -278,6 +282,7 @@ int remote_main (const char *spec) {
     }
     panel_key(k);
   }
+  ports_stop_all();
   panel_kill_all();
   term_close();
   return 0;

@@ -486,6 +486,7 @@ void task_done (int id, int code) {
     R.line.len = 0;
   }
   if (code != 0 && R.n == 0) toast(1, "The task exited with code %d", code);
+  acc_signal(code == 0 ? SIG_TASK_DONE : SIG_TASK_FAILED);
   R.id = 0;
 }
 

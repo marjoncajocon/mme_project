@@ -43,6 +43,12 @@ void term_write (const char *s, size_t n) {
 }
 
 
+int term_tone (int sig) {	/* a terminal has its bell only (eaccess.c rings it) */
+  (void)sig;
+  return -1;
+}
+
+
 static void term_puts (const char *s) {
   term_write(s, strlen(s));
 }
@@ -384,11 +390,35 @@ static Mouse g_pending_mouse;
 static int read_key (int ms);
 
 static int term_key_raw (int ms);
+static void read_paste (Buf *b);
 
 void (*term_key_hook) (int k);	/* every key read, whoever reads it (screencast mode) */
 
+static Buf g_pbuf;	/* a paste read already (term_paste gives it) */
+static int g_pready;
+
+/*
+** A paste is read at once: one that is "mme-ports:..." is the answer of
+** the Remote-SSH window's mme (eports.c), not the user's, and is not a key
+*/
+static int paste_check (int k) {
+  if (KEY_CODE(k) != K_PASTE) return k;
+  buf_free(&g_pbuf);
+  buf_init(&g_pbuf);
+  read_paste(&g_pbuf);
+  if (g_pbuf.len > 10 && memcmp(g_pbuf.s, "mme-ports:", 10) == 0) {
+    buf_putc(&g_pbuf, '\0');
+    ports_reply(g_pbuf.s + 10);
+    buf_free(&g_pbuf);
+    return K_NONE;
+  }
+  g_pready = 1;
+  return k;
+}
+
+
 int term_key (int ms) {
-  int k = term_key_raw(ms);
+  int k = paste_check(term_key_raw(ms));
   if (k != K_NONE && term_key_hook) term_key_hook(k);
   return k;
 }
@@ -439,6 +469,17 @@ static int read_key (int ms) {
 
 
 void term_paste (Buf *b) {
+  if (g_pready) {	/* paste_check read it */
+    g_pready = 0;
+    if (g_pbuf.len) buf_putn(b, g_pbuf.s, g_pbuf.len);
+    buf_free(&g_pbuf);
+    return;
+  }
+  read_paste(b);
+}
+
+
+static void read_paste (Buf *b) {
   static const char end[] = "\033[201~";
   size_t match = 0;
   int c, cr = 0;

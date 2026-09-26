@@ -34,6 +34,8 @@
 
 Mouse term_mouse;
 
+static int g_precise;	/* the wheel's preciseX / preciseY are there: SDL 2.0.18 and later */
+
 
 /*
 ** {==================================================================
@@ -1289,8 +1291,22 @@ static void font_metrics (void) {
 
 
 /*
+** window.titleBarStyle: "custom" is VS Code's default, but on macOS, whose
+** window without a title bar is not minimized (nor made full screen)
+*/
+static int title_custom (void) {
+#ifdef __APPLE__
+  return strcmp(json_str(settings_get("window\\.titleBarStyle"), "native"), "custom") == 0;
+#else
+  return strcmp(json_str(settings_get("window\\.titleBarStyle"), "custom"), "native") != 0;
+#endif
+}
+
+
+/*
 ** The folder the fonts come with (tfont.c keeps one): mme-fonts next to
-** the program, else usr/share/fonts when it is in an mmc shell's usr/bin
+** the program, else share/mme-fonts beside its bin (make install's), else
+** usr/share/fonts when it is in an mmc shell's usr/bin
 */
 static void font_dirs (void) {
   char *exe = os_exe_path(NULL), *dir, *up, *share, *fonts;
@@ -1302,7 +1318,11 @@ static void font_dirs (void) {
     free(fonts);
     up = path_dirname(dir);
     share = path_join(up, "share");
-    fonts = path_join(share, "fonts");
+    fonts = path_join(share, "mme-fonts");
+    if (os_stat(fonts, &st) != 0 || !st.exists || !st.is_dir) {
+      free(fonts);
+      fonts = path_join(share, "fonts");
+    }
     free(share);
     free(up);
   }
@@ -1343,7 +1363,7 @@ static int font_setup (void) {
 /* editor.fontFamily or editor.fontSize changed in the settings: the font is made again (the zoom goes) */
 static void font_settings (void) {
   const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
-  W.custom = strcmp(json_str(settings_get("window\\.titleBarStyle"), "custom"), "native") != 0;
+  W.custom = title_custom();
   double size = json_num(settings_get("editor\\.fontSize"), 14);
   W.font_seen = (long long)SDL_GetTicks();
   if (size == W.font_size && strcmp(fam, W.font_fam) == 0) return;
@@ -1479,15 +1499,62 @@ void term_raise (void) {	/* another window asked (the folder is open here): this
 }
 
 
-/* New Window: mme-sdl again, a window (a process) of its own, as VS Code's windows */
+/*
+** An accessibility signal's sound where Windows' system sounds are not
+** (eaccess.c): a short tone of its own pitch, from SDL's audio
+*/
+int term_tone (int sig) {
+  static const int hz[SIG_N] = {220, 330, 523, 392, 660, 196, 587, 784};
+  static SDL_AudioDeviceID dev;
+  static int tried;
+  static float buf[48000 / 10];
+  int i, n = 48000 * 80 / 1000;	/* 80 ms */
+  if (sig < 0 || sig >= SIG_N) return -1;
+  if (!tried) {
+    SDL_AudioSpec want, have;
+    tried = 1;
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0) {
+      memset(&want, 0, sizeof(want));
+      want.freq = 48000;
+      want.format = AUDIO_F32SYS;
+      want.channels = 1;
+      want.samples = 512;
+      dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+      if (dev) SDL_PauseAudioDevice(dev, 0);
+    }
+  }
+  if (!dev) return -1;
+  for (i = 0; i < n; i++) {	/* faded in and out: no click */
+    double env = i < 480 ? i / 480.0 : n - i < 960 ? (n - i) / 960.0 : 1.0;
+    buf[i] = (float)(0.2 * env * sin(2.0 * M_PI * hz[sig] * i / 48000.0));
+  }
+  SDL_ClearQueuedAudio(dev);
+  SDL_QueueAudio(dev, buf, (Uint32)((size_t)n * sizeof(float)));
+  return 0;
+}
+
+
+/*
+** New Window: mme-sdl again, a window (a process) of its own, as VS Code's
+** windows. A tab dropped out of the window: the new one opens there
+** (MME_WINDOW_AT, the screen's point, read by its term_open).
+*/
 int term_new_window (const char *arg) {
   char *exe = os_exe_path(NULL), *argv[3];
-  int r;
+  int r, at = term_mouse.out;
   if (exe == NULL) return -1;
   argv[0] = exe;
   argv[1] = (char *)arg;
   argv[2] = NULL;
+  if (at) {
+    char pos[32];
+    int gx = 0, gy = 0;
+    SDL_GetGlobalMouseState(&gx, &gy);
+    snprintf(pos, sizeof(pos), "%d,%d", gx, gy);
+    os_setenv("MME_WINDOW_AT", pos);
+  }
   r = spawn_detached(argv);
+  if (at) os_setenv("MME_WINDOW_AT", NULL);
   free(exe);
   return r;
 }
@@ -1592,7 +1659,7 @@ static void window_icon (void) {
 
 int term_open (void) {
   float ddpi = 96.0f, hdpi = 96.0f, vdpi = 96.0f;
-  int w, h;
+  int w, h, wx, wy;
   SDL_SetMainReady();
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");	/* sharp on a high DPI screen */
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
@@ -1602,6 +1669,11 @@ int term_open (void) {
   SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");	/* mme.rc's icon, in the title bar and the taskbar */
   SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
   if (SDL_Init(SDL_INIT_VIDEO) != 0) return -1;
+  {
+    SDL_version v;
+    SDL_GetVersion(&v);	/* the SDL2 it runs with (a Linux system's own can be older than the headers) */
+    g_precise = SDL_VERSIONNUM(v.major, v.minor, v.patch) >= SDL_VERSIONNUM(2, 0, 18);
+  }
   if (SDL_GetDisplayDPI(0, &ddpi, &hdpi, &vdpi) != 0 || hdpi < 48.0f) hdpi = 96.0f;
   W.scale = hdpi / 96.0f;
   if (font_setup() != 0) {
@@ -1617,10 +1689,34 @@ int term_open (void) {
       if (h > u.h * 9 / 10) h = u.h * 9 / 10;
     }
   }
-  W.custom = strcmp(json_str(settings_get("window\\.titleBarStyle"), "custom"), "native") != 0;
+  W.custom = title_custom();
   W.borderless = W.custom;	/* the menu bar is shown, mostly: tb_update says when not */
   W.tb_hover = W.tb_press = -1;
-  W.win = SDL_CreateWindow("mme", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h,
+  {	/* a tab dropped out of another window: this one where it was dropped */
+    char *at = os_getenv("MME_WINDOW_AT");
+    int ax, ay;
+    wx = wy = SDL_WINDOWPOS_CENTERED;
+    if (at && sscanf(at, "%d,%d", &ax, &ay) == 2) {
+      SDL_Rect u = {0, 0, 0, 0}, b;
+      int i, n = SDL_GetNumVideoDisplays();
+      for (i = 0; i < n; i++)	/* the screen it was dropped on: all of the window on it */
+        if (SDL_GetDisplayBounds(i, &b) == 0 && ax >= b.x && ax < b.x + b.w && ay >= b.y && ay < b.y + b.h) {
+          if (SDL_GetDisplayUsableBounds(i, &u) != 0) u = b;
+          break;
+        }
+      wx = ax - w / 4;
+      wy = ay - W.ch;
+      if (u.w > 0) {
+        if (wx + w > u.x + u.w) wx = u.x + u.w - w;
+        if (wy + h > u.y + u.h) wy = u.y + u.h - h;
+        if (wx < u.x) wx = u.x;
+        if (wy < u.y) wy = u.y;
+      }
+    }
+    free(at);
+    os_setenv("MME_WINDOW_AT", NULL);	/* not for its own windows */
+  }
+  W.win = SDL_CreateWindow("mme", wx, wy, w, h,
                            SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | (W.custom ? SDL_WINDOW_BORDERLESS : 0));
   if (W.win == NULL) return -1;
   SDL_SetWindowHitTest(W.win, hit_test, NULL);
@@ -1700,6 +1796,9 @@ static int km_of (Uint16 m) {
   if (m & KMOD_SHIFT) k |= KM_SHIFT;
   if (m & KMOD_CTRL) k |= KM_CTRL;
   if (m & KMOD_ALT) k |= KM_ALT;	/* right Alt too: AltGr's characters are told apart by their text (on_keydown) */
+#ifdef __APPLE__
+  if (m & KMOD_GUI) k |= KM_CTRL;	/* Cmd: Cmd+S saves, Cmd+C copies, as VS Code's keys on a Mac */
+#endif
   return k;
 }
 
@@ -1876,6 +1975,7 @@ static void mouse_at (int x, int y) {
     x = x * pw / ww;
     y = y * ph / wh;
   }
+  term_mouse.out = x < 0 || y < 0 || (pw > 0 && x >= pw) || (ph > 0 && y >= ph);	/* a tab dragged out */
   if (x < 0) x = 0;	/* dragged out of the window: its edge, as a terminal says */
   if (y < 0) y = 0;
   term_mouse.x = x / (W.cw > 0 ? W.cw : 1);
@@ -1998,7 +2098,8 @@ static void on_event (const SDL_Event *e) {
       push(K_MOUSE);
       break;
     case SDL_MOUSEWHEEL: {	/* a notch is a step; a touchpad's bits add up to steps; across: Shift+wheel */
-      float dx = e->wheel.preciseX, dy = e->wheel.preciseY;
+      float dx = g_precise ? e->wheel.preciseX : (float)e->wheel.x;
+      float dy = g_precise ? e->wheel.preciseY : (float)e->wheel.y;
       int mods = km_of(SDL_GetModState());
       if (e->wheel.direction == SDL_MOUSEWHEEL_FLIPPED) {
         dx = -dx;

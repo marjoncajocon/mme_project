@@ -87,7 +87,31 @@ On Linux and macOS, with SDL2 installed (`libsdl2-dev`, `brew install sdl2`):
 
 ```
 make
+make install        # mme-sdl into /usr/local/bin, bin/mme-fonts into /usr/local/share/mme-fonts
 ```
+
+Or from Windows, with zig, without those systems at hand:
+
+```
+build cross
+```
+
+makes `dist\mme-sdl-x86_64-linux`, `-aarch64-linux`, `-x86_64-macos` and
+`-aarch64-macos` (Apple Silicon, signed ad hoc as it must be), with
+`dist\mme-fonts` to put next to them. Their SDL2 is not needed here:
+`sdlstub.c` (every function SDL2's headers declare, empty) is built into a
+library named as each system's is, and the program loads the real one where
+it runs: `libSDL2-2.0.so.0` on Linux (glibc 2.17 and later: `apt install
+libsdl2-2.0-0`, `dnf install SDL2`, `pacman -S sdl2`), `libSDL2-2.0.0.dylib`
+on macOS (Homebrew's, in `/opt/homebrew/lib` or `/usr/local/lib`, or one next
+to `mme-sdl`). Any SDL2 from 2.0.5 on works; the touchpad's fine scrolling
+wants 2.0.18 (it is asked at run time).
+
+On macOS, Cmd is Ctrl (Cmd+S, Cmd+C, Cmd+Shift+P, as VS Code's keys there),
+and the window keeps the system's title bar by default (a window without one
+is not minimized there): `"window.titleBarStyle": "custom"` asks for mme's.
+The fonts are found in `mme-fonts` next to the program, `share/mme-fonts`
+beside its `bin`, then the system's (Menlo, DejaVu Sans Mono ...).
 
 ## Keys and the window
 
@@ -131,3 +155,6 @@ terminal does. The image preview shows the picture itself.
   only. The terminal panel has no ConPTY on XP.
 - Visual C++: the script is there, but no Visual C++ was on the machine it was
   written on to try it.
+- Linux and macOS: the four `build cross` programs are compiled and linked
+  with no warnings (and each names the right SDL2 library), but they were not
+  run on those systems yet.

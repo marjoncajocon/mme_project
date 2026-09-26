@@ -13,6 +13,7 @@ rem                                             32: i386-win32-tcc.exe, msvcrt.d
 rem                                                 Windows XP and later
 rem   xp         the same as "tcc 32"
 rem   msvc       Visual C++ (cl): from a "Native Tools" prompt, or found with vswhere
+rem   cross      zig: Linux and macOS (x86_64, aarch64) into dist\, see below
 rem   clean
 rem
 rem 64 bit goes into bin\, 32 bit into bin32\: each is the program on its own,
@@ -26,6 +27,13 @@ rem stands in for them (it includes edraw.c itself). mos.c comes in through
 rem emos.c (console programs started without a console window) and tpty.c
 rem through etpty.c (Vista's calls looked up at run time, so XP starts it).
 rem SDL2 2.32.10 comes from deps\ (see README.md).
+rem
+rem "build cross" makes mme-sdl for Linux and macOS here, without their SDL2:
+rem it is linked to sdlstub.c built as a library named as theirs is, and it
+rem loads the system's own where it runs: libSDL2-2.0.so.0 on Linux (glibc
+rem 2.17 and later; apt install libsdl2-2.0-0, dnf install SDL2, pacman -S
+rem sdl2), libSDL2-2.0.0.dylib on macOS (brew install sdl2, or the dylib next
+rem to mme-sdl). dist\mme-fonts goes next to them.
 
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
@@ -73,11 +81,12 @@ set SRC=%SRC% esdl.c emos.c etpty.c tfont.c tshape.c
 if not exist %OUT% mkdir %OUT%
 if not exist %OBJ% mkdir %OBJ%
 
+if "%CC%"=="cross" goto cross
 if "%CC%"=="zig" goto zig
 if "%CC%"=="gcc" goto gcc
 if "%CC%"=="tcc" goto tcc
 if "%CC%"=="msvc" goto msvc
-echo usage: build [zig ^| gcc ^| tcc ^| xp ^| msvc ^| clean] [32 ^| 64]
+echo usage: build [zig ^| gcc ^| tcc ^| xp ^| msvc ^| cross ^| clean] [32 ^| 64]
 exit /b 2
 
 :zig
@@ -92,6 +101,30 @@ call :make_room
 if exist %OUT%\mme-sdl.pdb del %OUT%\mme-sdl.pdb
 copy /y %SDL%\%SDLARCH%\bin\SDL2.dll %OUT%\ >nul
 goto done
+
+:cross
+set ZIG=zig
+where zig >nul 2>nul || set ZIG=D:\env\zig\zig.exe
+set CF=-std=c11 -O2 -Wall -Wextra -pedantic -I.. -I%SDL%\include -D_REENTRANT
+if not exist dist mkdir dist
+for %%A in (x86_64 aarch64) do (
+  echo %%A-linux
+  if not exist obj\%%A-linux mkdir obj\%%A-linux
+  %ZIG% cc -target %%A-linux-gnu.2.17 -shared -Wl,-soname,libSDL2-2.0.so.0 -o obj\%%A-linux\libSDL2.so sdlstub.c || exit /b 1
+  %ZIG% cc %CF% -s -target %%A-linux-gnu.2.17 -o dist\mme-sdl-%%A-linux %SRC% -Lobj\%%A-linux -lSDL2 -lm -lpthread || exit /b 1
+  echo %%A-macos
+  if not exist obj\%%A-macos mkdir obj\%%A-macos
+  %ZIG% cc -target %%A-macos -shared -Wl,-install_name,@rpath/libSDL2-2.0.0.dylib -o obj\%%A-macos\libSDL2.dylib sdlstub.c || exit /b 1
+  %ZIG% cc %CF% -target %%A-macos -o dist\mme-sdl-%%A-macos %SRC% -Lobj\%%A-macos -lSDL2 -lm -lpthread ^
+    -Wl,-rpath,@executable_path -Wl,-rpath,/opt/homebrew/lib -Wl,-rpath,/usr/local/lib || exit /b 1
+)
+if exist dist\*.pdb del dist\*.pdb
+if not exist dist\mme-fonts mkdir dist\mme-fonts
+for %%F in ("%FONTS%\JetBrainsMonoNerdFontMono-*.ttf" "%FONTS%\JetBrainsMonoNerdFont-OFL.txt") do (
+  if not exist "dist\mme-fonts\%%~nxF" copy /y "%%F" dist\mme-fonts\ >nul
+)
+echo done, see sdl2_port\dist\ (mme-sdl-ARCH-linux, mme-sdl-ARCH-macos, mme-fonts)
+exit /b 0
 
 :gcc
 if "%ARCH%"=="64" (
@@ -204,6 +237,7 @@ echo   (%~nx2 is running: it keeps the old version until you restart it)
 exit /b 0
 
 :clean
+if exist dist rmdir /s /q dist
 if exist bin rmdir /s /q bin
 if exist bin32 rmdir /s /q bin32
 if exist obj rmdir /s /q obj

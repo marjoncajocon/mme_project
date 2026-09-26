@@ -502,6 +502,7 @@ void keys_save (void) {
   buf_free(&b);
   free(f);
   show_keys();
+  sync_changed();
 }
 
 

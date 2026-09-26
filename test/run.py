@@ -79,7 +79,8 @@ class Scen(object):
 
     def __init__(self, name, target, steps, guards, settings=None, subs=None,
                  perf=False, private=False, stub_lsp=(), watch=(),
-                 inline_lsp=None, fake_browser=False, stub_claude=None):
+                 inline_lsp=None, fake_browser=False, stub_claude=None, stub_github=None, env=None,
+                 speech=False):
         self.stub_lsp = stub_lsp    # languages that get reg/stublsp.py
         self.inline_lsp = inline_lsp  # stublsp.py as mme.inlineCompletionServer,
                                     # with this --auth= state ("out", "in",
@@ -91,6 +92,13 @@ class Scen(object):
                                     # this --mode= ("ok", "401", "529",
                                     # "refusal"); mme.chat.baseUrl points at it
                                     # and mme.chat.apiKey is its dummy key
+        self.stub_github = stub_github  # stubgithub.py as GitHub's API (its
+                                    # gists), with this --mode= ("empty",
+                                    # "synced", "noscope"); MME_GITHUB_API
+                                    # points at it, GH_TOKEN is its dummy token
+        self.env = env or {}        # more environment for mme (MME_REMOTE: as on a Remote-SSH host)
+        self.speech = speech        # editor.accessibilitySupport on, and what mme says (MME_SPEECH_LOG,
+                                    # never a voice) goes after the screens, as "---- speech" lines
         self.name = name
         self.target = target        # relative to fix/, or an absolute path
         self.steps = steps          # harness steps
@@ -943,6 +951,97 @@ SCENARIOS = [
          ["w:1500", "k:" + CTRL_SHIFT_P, "k:Chat", "w:900", "d"],
          "the palette carries Chat's and Inline Chat's commands by VS Code's names"),
 
+    # ------------------------------------------------------------------ accessibility
+    # what mme would say to a screen reader's user, from MME_SPEECH_LOG
+    Scen("acc-editor", "lang/edit.c",
+         ["w:1500", "k:" + DOWN, "w:150", "k:" + DOWN, "w:150", "k:" + RIGHT, "w:150", "k:" + RIGHT, "w:150",
+          "k:" + csiu("\x1b[C"[0], ctrl=True) if False else "k:`[1;5C", "w:150", "k:" + END, "w:150",
+          "k:`[1;2H", "w:300", "k:" + CTRL_S, "w:600", "d"],
+         "with editor.accessibilitySupport on, mme says the file when it opens, the line the caret goes to, "
+         "the character or word it moves over, the end of a line, the selection, and plays the save's sound",
+         speech=True, private=True),
+    Scen("acc-lists", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:toggle", "w:500", "k:" + DOWN, "w:200", "k:" + ESC, "w:300",
+          "k:x", "w:200", "k:" + CTRL_W, "w:500", "k:" + RIGHT, "w:200", "k:" + ESC, "w:300", "d"],
+         "the palette's item is said with where it is in the list; a dialog says its question and "
+         "the button with the focus, again when the focus moves; a notification is said",
+         speech=True, private=True),
+    Scen("acc-explorer", "proj",
+         ["w:1500", "k:" + CTRL_SHIFT_E, "w:300", "k:" + DOWN, "w:200", "k:" + DOWN, "w:200", "k:" + UP, "w:300", "d"],
+         "the Explorer's rows are said as the selection moves: a folder with expanded or collapsed",
+         speech=True),
+    Scen("acc-view", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:settings sync: sync now", "w:400", "k:\r", "w:600",
+          "k:`[1;3Q", "w:800", "d"],
+         "Accessible View (Alt+F2) opens the last notification as text in a tab of its own",
+         speech=True),
+
+    # ------------------------------------------------------------------ editor windows
+    # the window itself is never opened here (a terminal build would start Windows
+    # Terminal): these stop before it, as they must
+    Scen("editor-window-untitled", "lang/edit.c",
+         ["w:1500", "k:" + csiu("n", ctrl=True), "w:400", "k:" + CTRL_SHIFT_P, "k:move editor into new window", "w:400", "k:\r",
+          "w:800", "d"],
+         "Move Editor into New Window with an Untitled file says it must be saved first; nothing opens"),
+    Scen("editor-window-dirty", "lang/edit.c",
+         ["w:1500", "k:x", "w:300", "k:" + CTRL_SHIFT_P, "k:copy editor into new window", "w:400", "k:\r",
+          "w:800", "d", "k:" + ESC, "w:400", "d"],
+         "Copy Editor into New Window with unsaved changes asks to save them first (the other window "
+         "reads the file); Esc leaves it as it was, the change still there",
+         private=True),
+
+    # ------------------------------------------------------------------ ports (Remote-SSH)
+    # MME_REMOTE: this mme is the one on a Remote-SSH host; what it asks of the
+    # window (an OSC) goes to the harness here, so the ports stay "forwarding"
+    Scen("ports-auto-forward", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_BACKTICK, "w:2500", "k:echo Serving on http://localhost:5173/ and 127.0.0.1:22", "k:\r",
+          "w:2000", "k:" + CTRL_SHIFT_P, "k:ports: focus on ports view", "w:400", "k:\r", "w:800", "d"],
+         "on a Remote-SSH host, a localhost URL the terminal prints is forwarded by itself (5173, "
+         "from the terminal); a system port (22) is not",
+         env={"MME_REMOTE": "1"}),
+    Scen("ports-forward-ask", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:ports: forward a port", "w:400", "k:\r", "w:500", "k:99999", "k:\r",
+          "w:600", "d", "k:" + CTRL_SHIFT_P, "k:ports: forward a port", "w:400", "k:\r", "w:500", "k:8080", "k:\r",
+          "w:600", "k:" + CTRL_SHIFT_P, "k:ports: focus on ports view", "w:400", "k:\r", "w:800", "d",
+          "k:\r", "w:500", "d", "k:" + DOWN, "k:\r", "w:600", "d"],
+         "Ports: Forward a Port takes a port number (99999 is not one); the Ports view lists it, "
+         "and Stop Forwarding Port takes it off",
+         env={"MME_REMOTE": "1"}),
+    Scen("ports-not-remote", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:ports: forward a port", "w:400", "k:\r", "w:800", "d"],
+         "outside a Remote-SSH window, Forward a Port says where ports are forwarded"),
+
+    # ------------------------------------------------------------------ settings sync
+    # stubgithub.py plays GitHub's gists; it keeps a file without its last
+    # line end, as GitHub may keep one other than it was sent
+    Scen("sync-turn-on", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:settings sync: turn on", "w:400", "k:\r", "w:3000", "d",
+          "k:" + CTRL_SHIFT_P, "k:settings sync: sync now", "w:400", "k:\r", "w:3000", "d",
+          "k:" + CTRL_SHIFT_P, "k:settings sync: show synced data", "w:400", "k:\r", "w:3000", "d"],
+         "Settings Sync: Turn On makes the secret gist of this machine's settings; Sync Now after it "
+         "finds nothing changed (GitHub's copy, kept otherwise, is not taken for a change); "
+         "Show Synced Data lists the files in sync",
+         stub_github="empty"),
+    Scen("sync-conflict", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:settings sync: turn on", "w:400", "k:\r", "w:3000", "d",
+          "k:" + RIGHT, "w:200", "k:\r", "w:3000", "d",
+          "k:" + CTRL_SHIFT_P, "k:settings sync: show synced data", "w:400", "k:\r", "w:3000", "d"],
+         "another machine's gist is found by its description: settings.json differing asks which to "
+         "keep, GitHub's is taken and applied (its light theme), its snippets file comes along",
+         stub_github="synced"),
+    Scen("sync-after-change", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:settings sync: turn on", "w:400", "k:\r", "w:3000",
+          "k:" + CTRL_SHIFT_P, "k:toggle render whitespace", "w:400", "k:\r", "w:4000",
+          "k:" + CTRL_SHIFT_P, "k:settings sync: show synced data", "w:400", "k:\r", "w:3000", "d"],
+         "a setting changed (Toggle Render Whitespace) is sent to GitHub by itself a moment later: "
+         "Show Synced Data finds settings.json in sync, not changed here",
+         stub_github="empty"),
+    Scen("sync-no-scope", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:settings sync: turn on", "w:400", "k:\r", "w:3000", "d",
+          "k:" + CTRL_SHIFT_P, "k:settings sync: sync now", "w:400", "k:\r", "w:1500", "d"],
+         "a token GitHub will not make a gist with says it needs the gist scope, and sync stays off",
+         stub_github="noscope"),
+
     # ------------------------------------------------------------------ panel
     Scen("panel-terminal", "lang/edit.c",
          ["w:900", "k:" + CTRL_BACKTICK, "w:2500", "d",
@@ -1211,31 +1310,62 @@ def start_stub_claude(mode):
     return p, "http://127.0.0.1:%s" % (line[1] if len(line) > 1 else "9")
 
 
+# the token stubgithub.py wants; never a real one
+STUB_GITHUB_TOKEN = "gh-test-token"
+
+
+def start_stub_github(mode):
+    """stubgithub.py on a free port: (process, its base URL)"""
+    p = subprocess.Popen([sys.executable, os.path.join(HERE, "stubgithub.py"), "--mode=" + mode],
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    line = p.stdout.readline().decode("ascii", "replace").split()
+    return p, "http://127.0.0.1:%s" % (line[1] if len(line) > 1 else "9")
+
+
 def run_once(scen, use_prof):
     stub = None
+    gh = None
     extra = {}
+    if scen.stub_github:
+        gh, extra["__github"] = start_stub_github(scen.stub_github)
     if scen.stub_claude:
         stub, url = start_stub_claude(scen.stub_claude)
-        extra = {"mme.chat.baseUrl": url, "mme.chat.apiKey": STUB_CLAUDE_KEY}
+        extra.update({"mme.chat.baseUrl": url, "mme.chat.apiKey": STUB_CLAUDE_KEY})
         if scen.stub_claude == "openai":	# the same stub as an OpenAI-compatible API
-            extra = {"mme.chat.provider": "openai", "mme.chat.openai.baseUrl": url + "/v1",
-                     "mme.chat.openai.apiKey": "sk-openai-test", "mme.chat.model": "gpt-test"}
+            extra.update({"mme.chat.provider": "openai", "mme.chat.openai.baseUrl": url + "/v1",
+                          "mme.chat.openai.apiKey": "sk-openai-test", "mme.chat.model": "gpt-test"})
     try:
         return run_once_(scen, use_prof, extra)
     finally:
-        if stub:
-            stub.kill()
-            stub.wait()
+        for p in (stub, gh):
+            if p:
+                p.kill()
+                p.wait()
 
 
 def run_once_(scen, use_prof, extra):
+    extra = dict(extra)
+    github = extra.pop("__github", None)
+    if scen.speech:
+        extra["editor.accessibilitySupport"] = "on"
     work = prepare(scen, PBIN if use_prof else BIN, extra)
     tgt = target_path(scen, work)
     env = dict(os.environ)
     # the user's own Anthropic key must never reach a scenario: a chat that
     # found one would talk to the real API, and spend money doing it
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL"):
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL",
+              "GH_TOKEN", "GITHUB_TOKEN", "MME_GITHUB_API"):
         env.pop(k, None)
+    if github:	# stubgithub.py, never the real GitHub, with its dummy token
+        env["MME_GITHUB_API"] = github
+        env["GH_TOKEN"] = STUB_GITHUB_TOKEN
+    env.pop("MME_REMOTE", None)
+    env.pop("MME_SPEECH_LOG", None)
+    env.update(scen.env)
+    speech = os.path.join(work, "speech.txt")
+    if scen.speech:
+        wipe(speech)
+        env["MME_SPEECH_LOG"] = speech
     log = os.path.join(work, "tick.log")
     env["MME_TICKLOG"] = log
     # nothing below may reach into the user's own git or VS Code configuration
@@ -1261,6 +1391,9 @@ def run_once_(scen, use_prof, extra):
     took = time.time() - t0
     text = normalise(out.decode("utf-8", "replace"), scen.subs)
     text += watched(scen, work)
+    if scen.speech:
+        said = io.open(speech, encoding="utf-8", errors="replace").read() if os.path.isfile(speech) else ""
+        text += "---- speech\n" + normalise(said, scen.subs)
     ticks = read_ticks(log) if use_prof else None
     return text, ticks, took
 

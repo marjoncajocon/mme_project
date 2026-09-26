@@ -62,6 +62,9 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `ewindows.c` | the windows know each other: Exit closes them all, a folder open in one comes to the front there |
 | `egithub.c` | GitHub pull requests and issues (REST API through curl): lists, descriptions, checkout, comments, create |
 | `eremote.c` | Remote-SSH: a window whose mme runs on another machine over ssh (installed there when needed) |
+| `eports.c` | Remote-SSH's forwarded ports: the Ports view, ssh -L for each, a localhost URL in the terminal forwarded by itself |
+| `esync.c` | Settings Sync: settings.json, keybindings.json and the snippets through a secret GitHub Gist |
+| `eaccess.c` | accessibility: mme's own voice (SAPI, spd-say, say) and VS Code's accessibility signals |
 | `esyntax.c` | syntax highlighting in VS Code's Dark+ colors, for about sixty languages, with VS Code's language ids |
 | `eemmet.c` | Emmet: HTML and CSS abbreviations, as VS Code expands them |
 | `epanel.c` | the panel: the integrated terminals, split, links, find, profiles |
@@ -728,6 +731,49 @@ With no file open the editor shows the keys to start with.
   step shows in the answer; the edits go into the editor unsaved (look, undo,
   save), and an edit or a command is asked about first (Allow, Allow All for
   this chat, Deny); at most 25 rounds of tools an answer.
+- **Settings Sync** — "Settings Sync: Turn On..." keeps settings.json,
+  keybindings.json and the snippets the same on every machine, through a
+  secret gist of the GitHub account "GitHub: Sign In" knows (its token needs
+  the gist scope); another machine signed in finds it by its description.
+  It syncs when turned on, at start, a moment after one of the files is
+  saved (or a setting set in the Settings editor), and on "Settings Sync:
+  Sync Now". Each file keeps two bases (what it was here and on GitHub when
+  last in sync): the side that changed is taken; both changed is a conflict,
+  and Sync Now asks which to keep (a sync of its own only says so, with a
+  Sync Now button). "Show Synced Data" lists the files and their state;
+  "Turn Off" can delete the gist too. The profile in use is synced.
+- **Ports (Remote-SSH)** — in a Remote-SSH window, "Ports: Forward a Port"
+  makes a port of the host a port here (its localhost): the window runs
+  `ssh -N -L` for it (the same port, or the next one free here) and says
+  "Your application running on port 3000 is available", with Open in
+  Browser (this computer's browser). A localhost URL the host's terminal
+  prints (a dev server's) is forwarded by itself (remote.autoForwardPorts,
+  on by default). "Ports: Focus on Ports View" lists them: Open in Browser,
+  Stop Forwarding Port, Copy Local Address. The host's mme asks the window
+  with an OSC of its own and is answered on its input; the forward's ssh
+  asks for no password, so it needs a key (Linux and macOS share the
+  window's own connection, ControlMaster, and need none).
+- **Editor windows** — "View: Move Editor into New Window" and "Copy Editor
+  into New Window" open the file in a window of its own (a file's window:
+  no sidebar), at its line; unsaved changes are saved first. In mme-sdl a
+  tab dragged out of the window does it too, and the new window opens where
+  it was dropped.
+- **Accessibility** — with `editor.accessibilitySupport` "on" (or "auto"
+  while a screen reader runs, in mme-sdl) mme speaks for itself, as VS Code
+  does with a screen reader: the file of a tab (its language, its line), the
+  line the caret moves to, the character (by name: "left paren") or the word
+  it moves over, the selection, a list's item ("2 of 32"), a menu's item and
+  its keys, a dialog and the button with the focus, the Explorer's rows
+  (folder, expanded), a notification, Chat's answer. The voice is Windows'
+  own (SAPI, looked up at run time: XP has it), spd-say on Linux, say on
+  macOS; `mme.accessibility.speechRate`, `mme.accessibility.volume`.
+  Accessible View (Alt+F2) opens the hover, Chat's answer, the terminal or
+  the last notification as text in a tab, to read line by line;
+  Accessibility Help (Alt+F1) has the keys. VS Code's accessibility signals
+  play a sound for a line with an error, a warning, a breakpoint or a fold,
+  a save, a task done or failed, Chat's answer
+  (`accessibility.signals.<name>.sound`: auto, on, off): Windows' sounds, a
+  tone of mme-sdl's own elsewhere, the bell in a terminal.
 - **Jupyter notebooks** — a `.ipynb` opens in VS Code's notebook editor:
   Markdown cells drawn, code cells in the language's colors with `[n]`, their
   outputs under them (text, errors in red, pictures: plots show as themselves
@@ -1071,5 +1117,5 @@ Alt+1 and Ctrl+PgDn there.
 
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and
-uses the language servers and debug adapters it ships. Notebooks, remote
-development and settings sync are not planned.
+uses the language servers and debug adapters it ships. Remote development is
+Remote-SSH's only (not Dev Containers, WSL or Codespaces).

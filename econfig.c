@@ -1435,6 +1435,7 @@ void settings_reset (const char *key) {
   free(s);
   free(f);
   json_changed(key, NULL);
+  sync_changed();
 }
 
 
@@ -1499,6 +1500,7 @@ void settings_put_raw (const char *key, const char *value) {
   free(s);
   free(f);
   json_changed(key, value);
+  sync_changed();
 }
 
 
