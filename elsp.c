@@ -91,8 +91,9 @@ typedef struct LDoc {
 
 typedef struct DFile {
   char *uri;
-  Diag *v;	/* the server's, then the task's */
+  Diag *v;	/* the server's, then the extensions', then the task's */
   size_t n;
+  size_t nx;	/* the nx before the task's are the extension host's */
   size_t nt;	/* the last nt are a task's (its problem matcher) */
 } DFile;
 
@@ -480,6 +481,12 @@ static char **split_cmd (const char *cmd) {
     const char *e;
     while (*cmd == ' ') cmd++;
     if (!*cmd) break;
+    if (*cmd == '"') {	/* "C:\\Program Files\\nodejs\\node.exe": one word, spaces and all */
+      for (e = ++cmd; *e && *e != '"'; e++) ;
+      argv[n++] = xstrndup(cmd, (size_t)(e - cmd));
+      cmd = *e ? e + 1 : e;
+      continue;
+    }
     for (e = cmd; *e && *e != ' '; e++) ;
     argv[n++] = xstrndup(cmd, (size_t)(e - cmd));
     cmd = e;
@@ -514,7 +521,8 @@ static Srv *start (const char *lang) {
   argv = split_cmd(cmd);
   if (argv == NULL || os_pipe(to) != 0 || os_pipe(from) != 0) {
     if (strlen(g_failed) + strlen(key) < sizeof(g_failed)) strcat(g_failed, key);
-    toast(1, "IntelliSense for %s: '%s' was not found", lang, cmd);
+    if (strcmp(lang, EXT_LANG) == 0) toast(1, "Extensions: node was not found (mme.extensions.nodePath)");
+    else toast(1, "IntelliSense for %s: '%s' was not found", lang, cmd);
     if (argv)
       for (i = 0; argv[i]; i++) free(argv[i]);
     free(argv);
@@ -531,6 +539,7 @@ static Srv *start (const char *lang) {
     char *dot;
     snprintf(s->chan, sizeof(s->chan), "%s", path_basename(argv[0]));
     if ((dot = strrchr(s->chan, '.')) != NULL && dot != s->chan) *dot = '\0';
+    if (strcmp(lang, EXT_LANG) == 0) snprintf(s->chan, sizeof(s->chan), "Extension Host");
   }
   root = xstrdup(side_root());
   {	/* the server works in the folder that is open */
@@ -621,11 +630,26 @@ static Srv *start (const char *lang) {
 }
 
 
+static int is_ext (const Srv *s) {
+  return strcmp(s->lang, EXT_LANG) == 0;
+}
+
+
 static Srv *server (const char *lang) {
   int i;
+  if (lang[0] != '*' && ehost_serves(lang)) return NULL;	/* an extension's (the host's): VS Code's way, not both */
   for (i = 0; i < g_nsrv; i++)
     if (!g_srv[i]->gone && strcmp(g_srv[i]->lang, lang) == 0) return g_srv[i]->dead ? NULL : g_srv[i];
   return start(lang);
+}
+
+
+static Srv *srv_of (const char *lang);
+
+/* a server for lang is running */
+int lsp_running (const char *lang) {
+  Srv *s = srv_of(lang);
+  return s != NULL && !s->dead;
 }
 
 
@@ -885,7 +909,18 @@ const char *lsp_lang (const char *syntax) {
 static LDoc *ldoc (const Doc *d) {
   size_t i;
   for (i = 0; i < g_ndoc; i++)
-    if (g_doc[i].d == d && strcmp(g_doc[i].s->lang, INLINE_LANG) != 0) return &g_doc[i];
+    if (g_doc[i].d == d && g_doc[i].s->lang[0] != '*') return &g_doc[i];
+  for (i = 0; i < g_ndoc; i++)	/* an extension answers for its language */
+    if (g_doc[i].d == d && is_ext(g_doc[i].s) && ehost_serves(g_doc[i].langid)) return &g_doc[i];
+  return NULL;
+}
+
+
+/* the extension host's binding of a document */
+static LDoc *ldoc_ext (const Doc *d) {
+  size_t i;
+  for (i = 0; i < g_ndoc; i++)
+    if (g_doc[i].d == d && is_ext(g_doc[i].s)) return &g_doc[i];
   return NULL;
 }
 
@@ -953,8 +988,8 @@ static int binds_lang (const LDoc *l, const char *lang) {
 }
 
 
-void lsp_open (Doc *d, const char *syntax) {
-  const char *lang = lsp_lang(syntax);
+void lsp_open (Doc *d, const char *syntax) {	/* syntax NULL: plain text, the extensions' only */
+  const char *lang = syntax ? lsp_lang(syntax) : NULL;
   LDoc *l;
   Srv *s;
   if (d->path == NULL) return;
@@ -964,9 +999,12 @@ void lsp_open (Doc *d, const char *syntax) {
   if (lang != NULL) {
     if ((l = ldoc(d)) != NULL && !binds_lang(l, lang)) unbind(l);
     if ((l = ldoc_inline_only(d)) != NULL && !binds_lang(l, lang)) unbind(l);
+    if ((l = ldoc_ext(d)) != NULL && !binds_lang(l, lang)) unbind(l);
   }
+  if (ldoc_ext(d) == NULL && *settings_server(EXT_LANG) && (s = server(EXT_LANG)) != NULL)
+    bind_doc(d, s, lang != NULL ? lang : "plaintext");	/* the extensions see every file, as in VS Code */
   if (lang != NULL && ldoc(d) == NULL && (s = server(lang)) != NULL) bind_doc(d, s, lang);
-  if (ldoc_inline_only(d) == NULL) {	/* and the one that answers for every language */
+  if (syntax != NULL && ldoc_inline_only(d) == NULL) {	/* and the one that answers for every language */
     const char *cmd = settings_server(INLINE_LANG);
     if (cmd != NULL && cmd[0] != '\0' && (s = server(INLINE_LANG)) != NULL)
       bind_doc(d, s, lang != NULL ? lang : "plaintext");
@@ -2192,10 +2230,10 @@ static void diag_drop (const char *uri) {
   DFile *f = dfile(uri, 0);
   size_t i, ns;
   if (f == NULL) return;
-  ns = f->n - f->nt;
+  ns = f->n - f->nt - f->nx;
   for (i = 0; i < ns; i++) free(f->v[i].msg);
-  memmove(f->v, f->v + ns, f->nt * sizeof(Diag));
-  f->n = f->nt;
+  memmove(f->v, f->v + ns, (f->nx + f->nt) * sizeof(Diag));
+  f->n = f->nx + f->nt;
 }
 
 
@@ -2203,18 +2241,22 @@ static void diag_drop (const char *uri) {
 static void diag_set (Srv *s, const char *uri, const Json *list) {
   DFile *f;
   const LDoc *l = NULL;
-  size_t i;
+  size_t i, start, count, keep_after;
+  Diag *old;
   if (uri == NULL || list == NULL || list->type != J_ARR) return;
   f = dfile(uri, 1);
-  {	/* the server's go, the task's stay after the new ones */
-    Diag *old = f->v;
-    size_t ns = f->n - f->nt;
-    for (i = 0; i < ns; i++) free(old[i].msg);
-    f->v = (Diag *)xmalloc((list->n + f->nt + 1) * sizeof(Diag));
-    if (f->nt) memcpy(f->v + list->n, old + ns, f->nt * sizeof(Diag));
-    free(old);
-  }
-  f->n = 0;
+  /* its part goes (the server's, or the extension host's), the others stay around the new ones */
+  start = is_ext(s) ? f->n - f->nt - f->nx : 0;
+  count = is_ext(s) ? f->nx : f->n - f->nt - f->nx;
+  keep_after = f->n - start - count;
+  old = f->v;
+  for (i = start; i < start + count; i++) free(old[i].msg);
+  f->v = (Diag *)xmalloc((f->n - count + list->n + 1) * sizeof(Diag));
+  if (start) memcpy(f->v, old, start * sizeof(Diag));
+  if (keep_after) memcpy(f->v + start + list->n, old + start + count, keep_after * sizeof(Diag));
+  free(old);
+  if (is_ext(s)) f->nx = list->n;
+  f->n = start;
   for (i = 0; i < g_ndoc; i++)
     if (strcmp(g_doc[i].uri, uri) == 0) l = &g_doc[i];
   for (i = 0; i < list->n; i++) {
@@ -2234,8 +2276,7 @@ static void diag_set (Srv *s, const char *uri, const Json *list) {
       v->b.x = unum(json_get(en, "character"), 0);
     }
   }
-  if (f->nt) memmove(f->v + f->n, f->v + list->n, f->nt * sizeof(Diag));	/* the task's, after */
-  f->n += f->nt;
+  f->n += keep_after;
 }
 
 
@@ -2304,6 +2345,78 @@ static unsigned g_task_gen;
 unsigned lsp_task_gen (void) {
   return g_task_gen;
 }
+
+
+/* ------------------------------------------------------------------ the extension host */
+
+/* the extension host, running; NULL: none */
+static Srv *ext_srv (void) {
+  Srv *s = srv_of(EXT_LANG);
+  return (s && s->ready && !s->dead) ? s : NULL;
+}
+
+
+/* a command of an extension's (ehost.c): the host runs it; 0: there is no host */
+int lsp_ext_command (const char *id, const char *args) {
+  Srv *s = ext_srv();
+  Buf b;
+  if (s == NULL) return 0;
+  buf_init(&b);
+  buf_puts(&b, "{\"command\":");
+  json_put_str(&b, id, strlen(id));
+  buf_printf(&b, ",\"arguments\":%s}", args ? args : "[]");
+  request(s, "workspace/executeCommand", b.s, RQ_OTHER, NULL);
+  buf_free(&b);
+  return 1;
+}
+
+
+/* the file was saved: onDidSaveTextDocument */
+void lsp_ext_saved (Doc *d) {
+  LDoc *l = ldoc_ext(d);
+  char params[4200];
+  if (l == NULL || !l->opened || l->s->dead) return;
+  if (l->sent != d->edits) did_change(l);
+  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
+  notify(l->s, "textDocument/didSave", params);
+}
+
+
+/* settings.json changed: the host's copy (workspace.getConfiguration) */
+void lsp_ext_settings (void) {
+  Srv *s = ext_srv();
+  Buf b;
+  if (s == NULL) return;
+  buf_init(&b);
+  buf_puts(&b, "{\"settings\":");
+  if (settings_all()) json_write(&b, settings_all());
+  else buf_puts(&b, "{}");
+  buf_putc(&b, '}');
+  notify(s, "workspace/didChangeConfiguration", b.s);
+  buf_free(&b);
+}
+
+
+/* the editor in front and its selection (window.activeTextEditor); d NULL: none */
+void lsp_ext_active (Doc *d, Pos anchor, Pos cur) {
+  static char last[4300];
+  LDoc *l = d ? ldoc_ext(d) : NULL;
+  Srv *s = ext_srv();
+  char params[4300];
+  if (s == NULL) return;
+  if (l && !l->opened) did_open(l);
+  if (l && l->opened)
+    snprintf(params, sizeof(params),
+             "{\"uri\":\"%s\",\"selection\":{\"start\":{\"line\":%lu,\"character\":%lu},\"end\":{\"line\":%lu,\"character\":%lu}}}",
+             l->uri, (unsigned long)anchor.y, (unsigned long)col_out(l->s, d, anchor.y, anchor.x), (unsigned long)cur.y,
+             (unsigned long)col_out(l->s, d, cur.y, cur.x));
+  else snprintf(params, sizeof(params), "{}");
+  if (strcmp(params, last) == 0) return;
+  snprintf(last, sizeof(last), "%s", params);
+  notify(s, "mme/activeEditor", params);
+}
+
+/* ------------------------------------------------------------------ */
 
 
 void lsp_task_clear (void) {
@@ -3029,6 +3142,22 @@ static void answer (Srv *s, const Json *msg) {
   const Json *id = json_get(msg, "id");
   const char *method = json_str(json_get(msg, "method"), "");
   Buf b;
+  if (is_ext(s) && strncmp(method, "mme/", 4) == 0) {	/* the extension host asks mme (ehost.c) */
+    Buf r;
+    buf_init(&r);
+    if (!ehost_request(method, json_get(msg, "params"), &r)) buf_puts(&r, "null");
+    buf_init(&b);
+    buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
+    if (id->type == J_STR) json_put_str(&b, id->str, id->len);
+    else buf_printf(&b, "%.0f", id->num);
+    buf_puts(&b, ",\"result\":");
+    buf_putn(&b, r.s ? r.s : "null", r.s ? r.len : 4);
+    buf_putc(&b, '}');
+    if (!s->dead) send_msg(s, &b);
+    buf_free(&b);
+    buf_free(&r);
+    return;
+  }
   if (strcmp(method, "window/showMessageRequest") == 0 && json_get(msg, "params.actions") &&
       json_get(msg, "params.actions")->type == J_ARR && json_get(msg, "params.actions")->n > 0) {
     const Json *acts = json_get(msg, "params.actions");	/* a question: answered when a button is picked */
@@ -3103,6 +3232,10 @@ static void handle (Srv *s, const Json *msg) {
   }
   if (method) {
     const char *mth = json_str(method, "");	/* not method->str: it is NULL when "method" is not a string */
+    if (is_ext(s) && strncmp(mth, "mme/", 4) == 0) {	/* the extension host tells (ehost.c) */
+      ehost_message(mth, json_get(msg, "params"));
+      return;
+    }
     if (strcmp(mth, "textDocument/publishDiagnostics") == 0)
       diagnostics(s, json_get(msg, "params"));
     else if (strcmp(mth, "$/progress") == 0) progress(s, json_get(msg, "params"));

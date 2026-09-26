@@ -1510,9 +1510,15 @@ const Json *settings_get (const char *key) {
 }
 
 
+const Json *settings_all (void) {
+  return g_eff ? g_eff : g_json;
+}
+
+
 const char *settings_server (const char *lang) {
   if (strcmp(lang, INLINE_LANG) == 0)	/* not a language: its own setting */
     return json_str(settings_get("mme\\.inlineCompletionServer"), "");
+  if (strcmp(lang, EXT_LANG) == 0) return ehost_command();	/* the extension host (ehost.c) */
   static const struct {
     const char *lang, *cmd;
   } def[] = {

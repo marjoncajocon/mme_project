@@ -132,6 +132,17 @@ void out_select (int i) {
 
 
 /* Output: Clear Output */
+/* an extension's channel.clear(): that one, shown or not */
+void out_clear_chan (const char *name) {
+  Chan *c = chan(name);
+  int i;
+  for (i = 0; i < c->n; i++) free(*at(c, i));
+  c->n = c->head = c->top = 0;
+  c->open = 0;
+  c->follow = 1;
+}
+
+
 void out_clear (void) {
   Chan *c;
   int i;

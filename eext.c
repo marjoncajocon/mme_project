@@ -263,6 +263,34 @@ static int find_ext (const char *id) {
 }
 
 
+/* the extensions found, for ehost.c: which of them run is its business */
+size_t ext_count (void) {
+  return g_next;
+}
+
+
+static unsigned g_gen;	/* one more at every scan */
+
+unsigned ext_generation (void) {
+  return g_gen;
+}
+
+
+const char *ext_id_at (size_t i) {
+  return i < g_next ? g_ext[i].id : "";
+}
+
+
+const char *ext_dir_at (size_t i) {
+  return i < g_next ? g_ext[i].dir : "";
+}
+
+
+int ext_is_vscode (size_t i) {
+  return i < g_next && g_ext[i].vscode;
+}
+
+
 /* every extension folder in root; VS Code's .obsolete ones left out */
 static void scan_root (const char *root, int vscode) {
   Vec v;
@@ -323,6 +351,7 @@ void ext_rescan (void) {
   char *d = ext_dir();
   for (i = 0; i < g_next; i++) ext_free(&g_ext[i]);
   g_next = 0;
+  g_gen++;
   scan_root(d, 0);
   free(d);
   if (opt.vscode_ext) {	/* VS Code's: ~/.vscode/extensions, a portable one's data/extensions (evscode.c) */
@@ -1402,7 +1431,15 @@ void ext_draw (int x, int y, int w, int h, int focus) {
     for (i = 0; i < ROWS; i++) scr_fill(x, sy + i, w, st);
     scr_put(x + 1, sy, 0xEB29, st == S_SIDE ? S_ICON_BLUE : st);	/* codicon package */
     cx = x + 3;
-    scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
+    cx += scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
+    {	/* its code in the extension host: how it is */
+      const char *hs = ehost_state(it->id);
+      if (hs) {
+        char tag[32];
+        snprintf(tag, sizeof(tag), "  %s", strcmp(hs, "error") == 0 ? "failed" : hs);
+        scr_putsw(cx, sy, x + w - cx - 1, tag, dim);
+      }
+    }
     scr_putsw(x + 3, sy + 1, w - 4, it->desc, dim);
     scr_putsw(x + 3, sy + 2, w - bw - 5, it->publisher, dim);
     g_bx0 = w - bw - 1;
@@ -1462,12 +1499,39 @@ static void pick_ext_theme (const Ext *e) {
 }
 
 
+/* mme.extensions.run with id in it (on) or not: the extension host starts again with it */
+static void set_run (const char *id, int on) {
+  const Json *list = settings_get("mme\\.extensions\\.run");
+  Buf b;
+  size_t i;
+  int n = 0;
+  buf_init(&b);
+  buf_putc(&b, '[');
+  for (i = 0; list && list->type == J_ARR && i < list->n; i++) {
+    const char *s = json_str(list->kid[i], "");
+    if (m_stricmp(s, id) == 0) continue;
+    buf_puts(&b, n++ ? ", " : "");
+    json_put_str(&b, s, strlen(s));
+  }
+  if (on) {
+    buf_puts(&b, n++ ? ", " : "");
+    json_put_str(&b, id, strlen(id));
+  }
+  buf_putc(&b, ']');
+  buf_putc(&b, '\0');
+  settings_put_json("mme.extensions.run", b.s);
+  buf_free(&b);
+  mme_settings_changed();
+  toast(0, on ? "%s: its code runs now (the extension host)" : "%s: its code no longer runs", id);
+}
+
+
 /* Enter: what can be done with it */
 static void actions (size_t k) {
   Pick p;
   const Item *it;
-  int acts[4], n = 0, r;
-  enum { A_PAGE, A_UNINSTALL, A_THEME };
+  int acts[6], n = 0, r;
+  enum { A_PAGE, A_UNINSTALL, A_THEME, A_RUN, A_STOP };
   if (k >= g_nitem) return;
   it = &g_item[k];
   pick_init(&p, it->display);
@@ -1475,6 +1539,16 @@ static void actions (size_t k) {
   if (g_ext[it->ext].ntheme) {
     acts[n++] = A_THEME;
     pick_add(&p, "Set Color Theme", NULL, 0xEB5C);
+  }
+  if (g_ext[it->ext].vscode) {	/* VS Code's run only when named in mme.extensions.run */
+    if (ehost_state(it->id) == NULL) {
+      acts[n++] = A_RUN;
+      pick_add(&p, "Run This Extension", "its code, in the extension host", 0xEB2C);
+    }
+    else {
+      acts[n++] = A_STOP;
+      pick_add(&p, "Stop Running It", NULL, 0xEAD7);
+    }
   }
   acts[n++] = A_PAGE;
   pick_add(&p, "Show Details", NULL, 0xEA74);
@@ -1488,6 +1562,8 @@ static void actions (size_t k) {
   switch (acts[r]) {
     case A_UNINSTALL: press(k); break;
     case A_THEME: pick_ext_theme(&g_ext[it->ext]); break;
+    case A_RUN: set_run(it->id, 1); break;
+    case A_STOP: set_run(it->id, 0); break;
     default: show_page(it); break;
   }
 }

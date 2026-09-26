@@ -49,6 +49,11 @@ EDITOR = os.path.dirname(HERE)              # the checkout this suite tests
 # they live in a build directory outside the checkout.
 BUILD = os.environ.get("MME_TEST_WORK") or os.path.join(tempfile.gettempdir(), "mme-test")
 
+# node, for the scenarios that run an extension's code (the extension host); they are skipped without it
+NODE = shutil.which("node") or next((os.path.join(r, "node.exe") for r in
+                                     [r"D:\env\node\node-v22.22.2-win-x64", r"C:\Program Files\nodejs"]
+                                     if os.path.isfile(os.path.join(r, "node.exe"))), None)
+
 HARNESS = os.path.join(HERE, "hx.exe")   # ../harness.c plus the b: and a: steps
 TREE = os.path.join(HERE, "tree")           # a copy of the editor sources
 PTREE = os.path.join(HERE, "ptree")         # the same, plus the tick profiler
@@ -81,7 +86,8 @@ class Scen(object):
                  perf=False, private=False, stub_lsp=(), watch=(),
                  inline_lsp=None, fake_browser=False, stub_claude=None, stub_github=None, env=None,
                  speech=False, exts=()):
-        self.exts = exts            # (folder, package.json dict): extensions put in mme-data/extensions
+        self.exts = exts            # (folder, package.json dict, or a fixture folder to copy): extensions
+                                    # put in mme-data/extensions; one with code runs in the extension host
         self.stub_lsp = stub_lsp    # languages that get reg/stublsp.py
         self.inline_lsp = inline_lsp  # stublsp.py as mme.inlineCompletionServer,
                                     # with this --auth= state ("out", "in",
@@ -820,6 +826,30 @@ SCENARIOS = [
          "with nothing installed the Extensions view says how to install one: download a .vsix, "
          "then Install from VSIX..."),
 
+    # ------------------------------------------------------------------ the extension host: an extension's code runs
+    Scen("ext-host-status-diag", "lang/plain.txt",
+         ["w:5000", "d", "k:" + END + " TODO", "w:2500", "d", "a:0"],
+         "the demo extension (test/ext-fixture/acme.demo) runs in the extension host: its status bar item "
+         "(createStatusBarItem) shows, and the TODO typed gets its warning (a DiagnosticCollection) - the "
+         "squiggle and the status bar's count",
+         exts=[("acme.demo", "acme.demo")]),
+    Scen("ext-host-palette-message", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:demo", "w:700", "d", "k:" + ENTER, "w:2500", "d"],
+         "the extension's contributes.commands are in the Command Palette as \"Demo: Say Hello\"; running it "
+         "runs its code, which shows a message with two buttons (showInformationMessage with items)",
+         exts=[("acme.demo", "acme.demo")]),
+    Scen("ext-host-quick-pick", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:demo pick", "w:700", "k:" + ENTER, "w:1500", "d",
+          "k:" + DOWN + ENTER, "w:2000", "d"],
+         "an extension's showQuickPick is mme's picker: its items and place holder; the one picked goes back "
+         "to the extension, which says it (\"You picked green\")",
+         exts=[("acme.demo", "acme.demo")]),
+    Scen("ext-host-completion", "lang/plain.txt",
+         ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
+         "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "
+         "items are in the suggestions with their detail",
+         exts=[("acme.demo", "acme.demo")]),
+
     # ------------------------------------------------------------------ menus in a small window
     Scen("menu-short-window", "lang/edit.c",
          ["w:1500"] + click(5, 1) + ["w:500", "r:120,14", "w:800", "d",
@@ -1313,9 +1343,16 @@ def prepare(scen, exe_src, extra=None):
             newline="\n").write(json.dumps(conf, indent=2) + "\n")
     for folder, pkg in scen.exts:
         ed = os.path.join(d, "mme-data", "extensions", folder)
+        if isinstance(pkg, str):	# a fixture extension, code and all
+            shutil.copytree(os.path.join(HERE, "ext-fixture", pkg), ed)
+            continue
         os.makedirs(ed)
         io.open(os.path.join(ed, "package.json"), "w", encoding="utf-8",
                 newline="\n").write(json.dumps(pkg, indent=2) + "\n")
+    if any(isinstance(pkg, str) for _, pkg in scen.exts) and NODE:
+        conf["mme.extensions.nodePath"] = NODE
+        io.open(os.path.join(d, "mme-data", "settings.json"), "w", encoding="utf-8",
+                newline="\n").write(json.dumps(conf, indent=2) + "\n")
     return d
 
 

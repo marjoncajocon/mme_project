@@ -282,6 +282,10 @@ static const Setting set[] = {
    "Control the visibility of the menu bar. A setting of 'toggle' or 'hidden' hides it (Alt+F, F10 still open the menus)."},
   {"mme.ui.fontSize", C_LOOK, ST_NUM, 0, "14", NULL,
    "Font size in pixels of the workbench (mme-sdl): the menus, the side bar, the tabs, the panel, the status bar. The code editor has #editor.fontSize#. Ctrl+= and Ctrl+- zoom both."},
+  {"mme.extensions.run", C_EXT, ST_OBJ, 0, "[]", NULL,
+   "The VS Code extensions whose code runs in mme's extension host (node), by id: [\"redhat.vscode-yaml\", \"golang.go\"]. Those installed with Install from VSIX run by themselves. An extension's themes, snippets and grammars work either way; webviews do not. Microsoft's own extensions (Pylance, C/C++, Python) are licensed for Microsoft's VS Code only."},
+  {"mme.extensions.nodePath", C_EXT, ST_STR, 0, "\"\"", NULL,
+   "The node program that runs the extensions' code. Empty: node from the PATH."},
   {"window.titleBarStyle", C_LOOK, ST_ENUM, 0, "\"custom\"", "custom|native",
    "Adjust the appearance of the window title bar (mme-sdl): 'custom' draws it with the menu bar, its own minimize, maximize and close buttons, no system frame; 'native' uses the system's frame. In a terminal the terminal has the frame."},
   {"workbench.statusBar.visible", C_LOOK, ST_BOOL, 0, "true", NULL,
@@ -373,12 +377,66 @@ static const Setting more[] = {
 
 #define NMORE	((int)(sizeof(more) / sizeof(more[0])))
 
+/* the running extensions' own settings (their contributes.configuration, from ehost.c), under Extensions */
+#define MAX_XSET	512
+static Setting g_xset[MAX_XSET];
+static int g_nxset;
+#define NALL	(NSET + g_nxset)
+
+static const Setting *set_at (int i) {
+  return i < NSET ? &set[i] : &g_xset[i - NSET];
+}
+
+
+void settings_ext_clear (void) {
+  int i;
+  for (i = 0; i < g_nxset; i++) {
+    free((char *)g_xset[i].key);
+    free((char *)g_xset[i].def);
+    free((char *)g_xset[i].values);
+    free((char *)g_xset[i].desc);
+  }
+  g_nxset = 0;
+}
+
+
+void settings_ext_add (const char *key, const char *type, const Json *def, const Json *en, const char *desc) {
+  Setting *x;
+  Buf b;
+  size_t k;
+  int i;
+  if (g_nxset == MAX_XSET || key == NULL || !*key) return;
+  for (i = 0; i < NSET; i++)	/* one of mme's own already */
+    if (strcmp(set[i].key, key) == 0) return;
+  for (i = 0; i < g_nxset; i++)
+    if (strcmp(g_xset[i].key, key) == 0) return;
+  x = &g_xset[g_nxset++];
+  memset(x, 0, sizeof(*x));
+  x->key = xstrdup(key);
+  x->toc = C_EXT;
+  x->type = strcmp(type, "boolean") == 0 ? ST_BOOL : (strcmp(type, "number") == 0 || strcmp(type, "integer") == 0) ? ST_NUM
+          : strcmp(type, "string") == 0 ? ST_STR : ST_OBJ;
+  buf_init(&b);
+  if (def && def->type != J_NULL) json_write(&b, def);
+  else buf_puts(&b, x->type == ST_BOOL ? "false" : x->type == ST_NUM ? "0" : x->type == ST_STR ? "\"\"" : "{}");
+  buf_putc(&b, '\0');
+  x->def = buf_take(&b);
+  if (x->type == ST_STR && en && en->type == J_ARR && en->n > 0) {	/* a list to pick from */
+    buf_init(&b);
+    for (k = 0; k < en->n; k++) buf_printf(&b, "%s%s", k ? "|" : "", json_str(en->kid[k], ""));
+    buf_putc(&b, '\0');
+    x->values = buf_take(&b);
+    x->type = ST_ENUM;
+  }
+  x->desc = xstrdup(desc ? desc : "");
+}
+
 
 /* the setting named key, of the page's or the others; NULL: none */
 static const Setting *find_set (const char *key) {
   int i;
-  for (i = 0; i < NSET; i++)
-    if (strcmp(set[i].key, key) == 0) return &set[i];
+  for (i = 0; i < NALL; i++)
+    if (strcmp(set_at(i)->key, key) == 0) return set_at(i);
   for (i = 0; i < NMORE; i++)
     if (strcmp(more[i].key, key) == 0) return &more[i];
   return NULL;
@@ -585,11 +643,11 @@ static char *doc_md (const Setting *s, int title) {
 ** lang: in a "[python]" block, only the ones a language can override.
 */
 CompItem *settings_suggest (const char *const *have, size_t nhave, int lang, size_t *n) {
-  CompItem *v = (CompItem *)xmalloc((NSET + NMORE + 1) * sizeof(CompItem));
+  CompItem *v = (CompItem *)xmalloc((NALL + NMORE + 1) * sizeof(CompItem));
   int i;
   size_t o = 0, h;
-  for (i = 0; i < NSET + NMORE; i++) {
-    const Setting *s = i < NSET ? &set[i] : &more[i - NSET];
+  for (i = 0; i < NALL + NMORE; i++) {
+    const Setting *s = i < NALL ? set_at(i) : &more[i - NALL];
     CompItem *c;
     Buf b;
     for (h = 0; h < nhave && strcmp(have[h], s->key) != 0; h++) {}
@@ -785,7 +843,7 @@ typedef struct Entry {
 static struct {
   char search[128];
   int focus;
-  Entry e[NSET * 2 + TOC_N + 2];
+  Entry e[(NSET + MAX_XSET) * 2 + TOC_N + 2];
   int ne, sel;	/* sel: the entry of the setting in focus */
   int top;	/* the list's first row shown */
   int editing;	/* a number or a string being typed */
@@ -839,10 +897,10 @@ static int matches (const Setting *s) {
 /* is setting i under toc entry t (Commonly Used: the common ones; a top one: its parts too)? */
 static int under (int i, int t) {
   int p;
-  if (t == C_COMMON) return set[i].common;
-  if (set[i].toc == t) return 1;
+  if (t == C_COMMON) return set_at(i)->common;
+  if (set_at(i)->toc == t) return 1;
   if (toc[t].depth != 0) return 0;
-  for (p = set[i].toc; p > 0 && toc[p].depth > 0; p--) ;	/* its top entry */
+  for (p = set_at(i)->toc; p > 0 && toc[p].depth > 0; p--) ;	/* its top entry */
   return p == t;
 }
 
@@ -857,15 +915,15 @@ static void build (void) {
   for (t = 0; t < TOC_N; t++) {
     int any = 0;
     if (S.search[0] && t == C_COMMON) continue;
-    for (i = 0; i < NSET; i++)
-      if (under(i, t) && matches(&set[i])) any = 1;
+    for (i = 0; i < NALL; i++)
+      if (under(i, t) && matches(set_at(i))) any = 1;
     if (!any) continue;
     if (!S.search[0]) {
       S.e[S.ne].head = t;
       S.e[S.ne++].set = -1;
     }
-    for (i = 0; i < NSET; i++)
-      if ((t == C_COMMON ? set[i].common : set[i].toc == t) && matches(&set[i])) {
+    for (i = 0; i < NALL; i++)
+      if ((t == C_COMMON ? set_at(i)->common : set_at(i)->toc == t) && matches(set_at(i))) {
         S.e[S.ne].head = t;	/* for a setting: the entry it is under */
         S.e[S.ne++].set = i;
       }
@@ -934,7 +992,7 @@ static int block_h (const Setting *s, int w) {
 
 static int entry_h (int i, int w) {
   if (S.e[i].set < 0) return 2;	/* a heading, a blank row */
-  return block_h(&set[S.e[i].set], w);
+  return block_h(set_at(S.e[i].set), w);
 }
 
 
@@ -1052,7 +1110,7 @@ static void draw_control (const Setting *s, int e, int x, int y, int w, int on) 
 
 /* one setting at row y (maybe partly above the list: from row 'skip' of it) */
 static void draw_block (int e, int y, int skip, int maxy) {
-  const Setting *s = &set[S.e[e].set];
+  const Setting *s = set_at(S.e[e].set);
   char cat[128], name[96], d[600];
   const char *ls[16];
   int ll[16], n, i, r = 0, on = e == S.sel && S.focus == FOCUS_LIST, x = S.list_x, w = S.list_w;
@@ -1112,7 +1170,7 @@ static void draw_drop (void) {
   int i, n, h, x, y, w = 0;
   char v[128], now[256];
   if (!S.drop || S.sel < 0) return;
-  s = &set[S.e[S.sel].set];
+  s = set_at(S.e[S.sel].set);
   for (i = 0; i < S.nhit; i++)
     if (S.hit[i].entry == S.sel && S.hit[i].ctl_y >= 0) break;
   if (i == S.nhit) {
@@ -1231,8 +1289,8 @@ void sui_draw (int x, int y, int w, int h, int focus) {
     for (t = 0; t < TOC_N && r < S.body_h; t++) {
       int n = 0, k, is_on;
       char line[64];
-      for (k = 0; k < NSET; k++)
-        if (under(k, t) && matches(&set[k])) n++;
+      for (k = 0; k < NALL; k++)
+        if (under(k, t) && matches(set_at(k))) n++;
       if (S.search[0] && (n == 0 || t == C_COMMON)) continue;
       is_on = t == cur_toc;
       if (S.search[0]) snprintf(line, sizeof(line), "%*s%s (%d)", toc[t].depth * 2, "", toc[t].name, n);
@@ -1269,7 +1327,7 @@ static void activate (PageAct *a) {
   const Setting *s;
   char v[256];
   if (S.sel < 0) return;
-  s = &set[S.e[S.sel].set];
+  s = set_at(S.e[S.sel].set);
   value_of(s, v, sizeof(v));
   switch (s->type) {
     case ST_BOOL: write_value(s, strcmp(v, "true") == 0 ? "false" : "true", a); break;
@@ -1298,7 +1356,7 @@ static void activate (PageAct *a) {
 
 /* what was typed goes in (a number must be one) */
 static void edit_done (PageAct *a) {
-  const Setting *s = &set[S.e[S.sel].set];
+  const Setting *s = set_at(S.e[S.sel].set);
   S.editing = 0;
   if (s->type == ST_NUM) {
     char *end;
@@ -1386,7 +1444,7 @@ static void gear_menu (int x, int y, PageAct *a) {
   char v[256];
   int r;
   if (S.sel < 0) return;
-  s = &set[S.e[S.sel].set];
+  s = set_at(S.e[S.sel].set);
   r = context_menu(x, y, label, NULL, 4);
   if (r == 0) {
     settings_reset(s->key);
@@ -1412,7 +1470,7 @@ void sui_key (int k, PageAct *a) {
   int code = KEY_CODE(k);
   a->what = PA_NONE;
   if (S.drop) {	/* the enum's list */
-    const Setting *s = &set[S.e[S.sel].set];
+    const Setting *s = set_at(S.e[S.sel].set);
     int n = enum_count(s);
     if (code == K_UP && S.drop_sel > 0) S.drop_sel--;
     else if (code == K_DOWN && S.drop_sel + 1 < n) S.drop_sel++;
@@ -1535,7 +1593,7 @@ void sui_mouse (const Mouse *m, PageAct *a) {
   if (!press && !(m->button == 2 && m->press)) return;
   if (S.drop) {	/* a value of the open list, or a click elsewhere closes it */
     if (press && m->x >= S.drop_x && m->x < S.drop_x + S.drop_w && m->y >= S.drop_y && m->y < S.drop_y + S.drop_n) {
-      const Setting *s = &set[S.e[S.sel].set];
+      const Setting *s = set_at(S.e[S.sel].set);
       char v[128];
       enum_at(s, S.drop_top + m->y - S.drop_y, v, sizeof(v));
       write_value(s, v, a);
@@ -1569,7 +1627,7 @@ void sui_mouse (const Mouse *m, PageAct *a) {
     if (m->y < S.hit[i].y0 || m->y >= S.hit[i].y1) continue;
     S.sel = S.hit[i].entry;
     S.focus = FOCUS_LIST;
-    s = &set[S.e[S.sel].set];
+    s = set_at(S.e[S.sel].set);
     if (m->button == 2 || (S.hit[i].gear_x >= 0 && m->x == S.hit[i].gear_x && m->y == S.hit[i].y0)) {
       gear_menu(m->x, m->y + 1, a);
       return;

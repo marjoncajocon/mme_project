@@ -3674,6 +3674,7 @@ static void status_items (void) {
     snprintf(t, sizeof(t), "%s %s", ui_spinner(), p);
     status_add("status.lsp.progress", "Language Server Progress", 0, 20, t, p, CMD_LSP_STATUS);
   }
+  ehost_status();	/* the extensions' (createStatusBarItem) */
 }
 
 
@@ -5695,9 +5696,29 @@ static int editor_shape (void) {
 
 /* settings.json read again: what it says now shows at once */
 static void apply_settings (int report) {
+  static char *run_was;
   int r = settings_load();
   acc_settings_changed();
   ext_init();	/* the extensions' themes, before the theme is set */
+  {	/* which extensions run: when it changed, the extension host starts again with the new ones */
+    Buf b;
+    const Json *run = settings_get("mme\\.extensions\\.run"), *node = settings_get("mme\\.extensions\\.nodePath");
+    buf_init(&b);
+    if (run) json_write(&b, run);
+    if (node) json_write(&b, node);
+    buf_putc(&b, '\0');
+    if (run_was == NULL || strcmp(run_was, b.s) != 0) {
+      int again = run_was != NULL;
+      free(run_was);
+      run_was = buf_take(&b);
+      if (again) {
+        ehost_reset();
+        lsp_restart(EXT_LANG);
+      }
+    }
+    else buf_free(&b);
+  }
+  lsp_ext_settings();	/* workspace.onDidChangeConfiguration */
   E.minimap = opt.minimap;
   scr_cursor_shape(editor_shape());
   theme_set(opt.theme);
@@ -6126,7 +6147,7 @@ static int open_file (const char *path, int preview) {
   G->diff = 0;
   reset_view();
   set_real();
-  if (T->sx) lsp_open(T->doc, syntax_name(T->sx));
+  lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
   if (E.side && E.view == VIEW_FILES) side_follow(T->real);
   recent_file_add(p);
   free(p);
@@ -12954,7 +12975,7 @@ static void change_language (void) {
   T->sx = r == 0 ? NULL : syntax_nth(r - 1);
   T->doc->hl_n = 0;	/* highlighted again */
   T->doc->hl_from = 0;
-  if (T->sx && T->doc->path) lsp_open(T->doc, syntax_name(T->sx));
+  if (T->doc->path) lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
 }
 
 
@@ -13306,27 +13327,28 @@ static void used_add (int cmd) {
 
 static void palette (const char *init) {
   Pick p;
-  int cmds[CMD_N], n = 0, c, r;
-  char used[CMD_N];
+  int all = CMD_N + ehost_ncmd(), n = 0, c, r;
+  int *cmds = (int *)xmalloc((size_t)all * sizeof(int));
+  char *used = (char *)xmalloc((size_t)all);
   size_t i;
   pick_init(&p, NULL);
   if (init) snprintf(p.text, sizeof(p.text), "%s", init);
   p.prefix = ">";
   used_load();
-  memset(used, 0, sizeof(used));
+  memset(used, 0, (size_t)all);
   for (i = 0; i < g_cmd_used.n; i++) {	/* VS Code's "recently used" first */
     char d[96];
     c = cmd_by_id(g_cmd_used.v[i]);
-    if (c <= 0 || c == CMD_PALETTE || used[c]) continue;
+    if (c <= 0 || c >= all || c == CMD_PALETTE || used[c] || (c >= CMD_N && !ehost_listed(c))) continue;
     used[c] = 1;
     if (n == 0) snprintf(d, sizeof(d), "%s%srecently used", cmd_keys(c), *cmd_keys(c) ? "   " : "");
     else snprintf(d, sizeof(d), "%s", cmd_keys(c));
     cmds[n++] = c;
     pick_add(&p, cmd_name(c), d, 0);
   }
-  for (c = 1; c < CMD_N; c++) {
+  for (c = 1; c < all; c++) {	/* mme's, then the extensions' */
     char d[96];
-    if (c == CMD_PALETTE || used[c]) continue;
+    if (c == CMD_PALETTE || used[c] || (c >= CMD_N && !ehost_listed(c))) continue;
     if (n > 0 && used[0] == 0) snprintf(d, sizeof(d), "%s%sother commands", cmd_keys(c), *cmd_keys(c) ? "   " : "");
     else snprintf(d, sizeof(d), "%s", cmd_keys(c));
     used[0] = 1;	/* the label only once */
@@ -13336,9 +13358,15 @@ static void palette (const char *init) {
   r = pick_run(&p);
   pick_free(&p);
   if (r >= 0) {
-    used_add(cmds[r]);
-    run_command(cmds[r]);
+    c = cmds[r];
+    used_add(c);
+    free(cmds);
+    free(used);
+    run_command(c);
+    return;
   }
+  free(cmds);
+  free(used);
 }
 
 
@@ -14754,6 +14782,7 @@ static int save_conflict (void) {
 /* after a save: settings.json, keybindings.json and snippets apply; git and the Explorer look again */
 static void after_save (void) {
   char *sp;
+  lsp_ext_saved(T->doc);	/* onDidSaveTextDocument */
   if (T->real) test_saved(T->real);	/* its tests read again */
   history_add(T->doc->path, "File Saved");	/* Local History */
   TL.stale = 1;
@@ -14796,7 +14825,7 @@ static void after_save (void) {
   free(sp);
   T->preview = 0;
   T->sx = syntax_detect(T->doc->path, T->doc);
-  if (T->sx) lsp_open(T->doc, syntax_name(T->sx));
+  lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
   git_refresh();
   side_refresh();
 }
@@ -14872,6 +14901,45 @@ static void save_tab (Tab *t, int reason) {
 }
 
 
+/* ehost.c: the extension host just got something to run: every open file goes to it */
+void mme_lsp_reopen (void) {
+  int g, i;
+  for (g = 0; g < g_ngrp; g++)
+    for (i = 0; i < g_grp[g].ntab; i++) {
+      Tab *t = g_grp[g].tab[i];
+      if (!t->page && t->doc->path) lsp_open(t->doc, t->sx ? syntax_name(t->sx) : NULL);
+    }
+}
+
+
+/* ehost.c: an extension ran one of mme's commands, changed a setting, saved a file */
+void mme_command (int cmd) {
+  run_command(cmd);
+}
+
+
+void mme_settings_changed (void) {
+  apply_settings(0);
+}
+
+
+int mme_save_path (const char *path) {
+  Group *g0 = G;
+  Tab *t0 = T;
+  int g, i, r = -1;
+  for (g = 0; g < g_ngrp && r < 0; g++)
+    for (i = 0; i < g_grp[g].ntab && r < 0; i++) {
+      Tab *t = g_grp[g].tab[i];
+      if (t->page || t->doc->path == NULL || m_fncmp(t->doc->path, path) != 0) continue;
+      if (!doc_dirty(t->doc)) r = 0;
+      else if (tab_front(t)) r = save_front(SAVE_EXPLICIT);
+    }
+  G = g0;
+  T = t0;
+  return r;
+}
+
+
 /* files.autoSave afterDelay: a text not changed for files.autoSaveDelay ms is saved */
 static void autosave_idle (void) {
   long long now = os_now_us();
@@ -14931,7 +14999,7 @@ static void reload_doc (Doc *d) {
       t->nmc = 0;
       t->nfold = 0;
     }
-  if (sx) lsp_open(d, syntax_name(sx));
+  lsp_open(d, sx ? syntax_name(sx) : NULL);
   free(path);
 }
 
@@ -17805,6 +17873,10 @@ static void run_command (int cmd) {
       break;
     }
     default:
+      if (cmd >= CMD_N) {	/* an extension's: the extension host runs it */
+        ehost_run(cmd);
+        break;
+      }
       if (cmd >= CMD_SEARCHED_NEW && cmd <= CMD_SEARCHED_DELETE_FILE) {	/* esearched.c */
         searched_cmd(cmd);
         break;
@@ -17843,7 +17915,7 @@ void on_disk_changed (void) {
         d->refs = refs;
         d->edits = edits + 1;	/* the views and the server see a new text */
         free(path);
-        if (t->sx) lsp_open(d, syntax_name(t->sx));
+        lsp_open(d, t->sx ? syntax_name(t->sx) : NULL);
       }
       t->cur = doc_clamp(d, t->cur);
       t->anchor = doc_clamp(d, t->anchor);
@@ -18075,7 +18147,7 @@ static void tabs_renamed (const char *from, const char *to) {
         free(t->real);
         t->real = os_realpath(d->path);
         t->sx = syntax_detect(d->path, d);
-        if (t->sx) lsp_open(d, syntax_name(t->sx));
+        lsp_open(d, t->sx ? syntax_name(t->sx) : NULL);
       }
     }
 }
@@ -21755,7 +21827,7 @@ int main (int argc, char **argv) {
       }
       T->sx = syntax_detect(argv[1], T->doc);
       set_real();
-      if (T->sx) lsp_open(T->doc, syntax_name(T->sx));
+      lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
       recent_file_add(argv[1]);
     }
   }
@@ -21807,6 +21879,7 @@ int main (int argc, char **argv) {
   while (!E.quit) {
     int k;
     lsp_poll();
+    ehost_idle();	/* the extensions installed, uninstalled: the extension host again */
     dbg_poll();
     nb_poll();
     sync_poll();
@@ -21817,6 +21890,8 @@ int main (int argc, char **argv) {
     nav_track();
     cursor_record();	/* Ctrl+U: the cursors as they were */
     mru_track();
+    if (HAS_DOC && !T->page && !G->diff && !T->md) lsp_ext_active(T->doc, T->sel ? T->anchor : T->cur, T->cur);
+    else lsp_ext_active(NULL, T->cur, T->cur);
     if (panel_poll() == 2 && E.panel_view == 0) {	/* the shell ended: its panel closes, like VS Code's */
       E.panel = 0;
       if (E.focus == F_PANEL) E.focus = F_EDITOR;

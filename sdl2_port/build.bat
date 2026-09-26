@@ -78,6 +78,9 @@ for %%F in (..\*.c) do (
   if /i not "!F!"=="eterm.c" if /i not "!F!"=="edraw.c" if /i not "!F!"=="mos.c" if /i not "!F!"=="tpty.c" set SRC=!SRC! %%F
 )
 set SRC=%SRC% esdl.c emos.c etpty.c tfont.c tfont_ed.c tshape.c
+rem the extension host script as C strings (..\ehost_js.h): made again when node is there
+where node >nul 2>nul && node ..\mme-exthost.js --emit-header > ..\ehost_js.tmp && move /y ..\ehost_js.tmp ..\ehost_js.h >nul
+if exist ..\ehost_js.tmp del ..\ehost_js.tmp
 if not exist %OUT% mkdir %OUT%
 if not exist %OBJ% mkdir %OBJ%
 

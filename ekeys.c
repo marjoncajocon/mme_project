@@ -372,6 +372,13 @@ static int add_json (const Json *e) {
 }
 
 
+/* an extension's contributes.keybindings entry: before the user's, which win over it */
+static void add_ext (int cmd, const char *key, const char *when) {
+  int k1, k2 = 0;
+  if ((k1 = key_parse(key, &k2)) != 0) add(cmd, k1, k2, 0, when, NULL);
+}
+
+
 /* reads keybindings.json; -1 when it is not good JSON */
 int keys_load (void) {
   char *f = keys_path(), *s;
@@ -379,6 +386,7 @@ int keys_load (void) {
   Json *j;
   if (f == NULL) {
     clear_all();
+    ehost_keys(add_ext);
     show_keys();
     return 0;
   }
@@ -386,6 +394,7 @@ int keys_load (void) {
   free(f);
   if (s == NULL) {
     clear_all();
+    ehost_keys(add_ext);
     show_keys();
     return 0;
   }
@@ -396,6 +405,7 @@ int keys_load (void) {
     return -1;
   }
   clear_all();
+  ehost_keys(add_ext);
   for (i = 0; i < j->n; i++) add_json(j->kid[i]);
   json_free(j);
   show_keys();

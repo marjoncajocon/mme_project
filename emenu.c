@@ -412,6 +412,7 @@ static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
 
 
 const char *cmd_name (int cmd) {
+  if (cmd >= CMD_N) return ehost_cmd_title(cmd);	/* an extension's */
   return (cmd > 0 && cmd < CMD_N) ? names[cmd] : "";
 }
 
@@ -435,6 +436,7 @@ void cmd_set_keys (int cmd, const char *k) {
 
 
 const char *cmd_id (int cmd) {
+  if (cmd >= CMD_N) return ehost_cmd_id(cmd);	/* an extension's */
   return (cmd > 0 && cmd < CMD_N) ? ids[cmd] : "";
 }
 
@@ -443,7 +445,7 @@ int cmd_by_id (const char *id) {
   int c;
   for (c = 1; c < CMD_N; c++)
     if (strcmp(ids[c], id) == 0) return c;
-  return CMD_NONE;
+  return ehost_cmd_by_id(id);	/* an extension's, or CMD_NONE */
 }
 
 /* }================================================================== */

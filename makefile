@@ -13,12 +13,16 @@ ZIG= zig
 
 BASE= mutil.c mpath.c mos.c
 TSRC= tpty.c tvt.c tgrid.c
-SRC= mme.c ethread.c ejson.c econfig.c elsp.c etheme.c ebuf.c eterm.c edraw.c emenu.c eside.c esearch.c esearched.c emdiff.c egit.c esyntax.c epanel.c ekeys.c esnip.c eext.c egitlog.c equick.c emerge.c eregex.c esettings.c ewelcome.c efiles.c eemmet.c edebug.c etask.c eout.c ehistory.c emd.c ehex.c eimage.c eworkspace.c eimport.c evscode.c etest.c eonig.c etm.c eeditorconfig.c echat.c evim.c enb.c ewindows.c egithub.c eremote.c esync.c eports.c eaccess.c $(TSRC) $(BASE)
+SRC= mme.c ethread.c ejson.c econfig.c elsp.c etheme.c ebuf.c eterm.c edraw.c emenu.c eside.c esearch.c esearched.c emdiff.c egit.c esyntax.c epanel.c ekeys.c esnip.c eext.c egitlog.c equick.c emerge.c eregex.c esettings.c ewelcome.c efiles.c eemmet.c edebug.c etask.c eout.c ehistory.c emd.c ehex.c eimage.c eworkspace.c eimport.c evscode.c etest.c eonig.c etm.c eeditorconfig.c echat.c evim.c enb.c ewindows.c egithub.c eremote.c esync.c eports.c eaccess.c ehost.c $(TSRC) $(BASE)
 
 all: mme
 
-mme: $(SRC) mme.h mmc.h mterm.h enb_kernel.h
+mme: $(SRC) mme.h mmc.h mterm.h enb_kernel.h ehost_js.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o mme $(SRC) -lm -lpthread
+
+# the extension host script as C strings for ehost.c; kept as it is when node is not there
+ehost_js.h: mme-exthost.js
+	-node mme-exthost.js --emit-header > ehost_js.tmp && mv ehost_js.tmp ehost_js.h
 
 # static musl: one program that runs on any Linux, Android (Termux) too
 cross: $(SRC) mme.h mmc.h

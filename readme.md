@@ -73,6 +73,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `ejson.c` | JSON: settings.json and the language servers' messages |
 | `econfig.c` | settings.json: VS Code's settings, by VS Code's names |
 | `eext.c` | extensions: the Extensions view, Install from VSIX, VS Code's; their themes, snippets, languages |
+| `ehost.c` | the extension host: extensions' code run by node (`mme-exthost.js`, as C strings in `ehost_js.h`), spoken to as a language server |
 | `eregex.c` | regular expressions for Find, Replace and Search (`.*`) |
 | `etm.c` | TextMate grammars: VS Code's own highlighting, from VS Code and its extensions |
 | `eonig.c` | regular expressions as the grammars write them (Oniguruma's: lookbehind, `\G`, `(?x)` ...) |
@@ -648,15 +649,37 @@ With no file open the editor shows the keys to start with.
   (`~/.vscode/extensions`, a portable VS Code's `data/extensions`) are used
   too, read only (`mme.extensions.useVSCodeExtensions`).
 
-  What an extension can do in mme: its **color themes** (Ctrl+K Ctrl+T lists
-  them; VS Code's colors and token colors are put on mme's), its **snippets**,
-  and its **languages** (file extensions, and the comments Ctrl+/ uses). What
-  it cannot: a VS Code extension's code is JavaScript that runs in VS Code's
-  extension host (Node and the `vscode` API), which mme does not have, so its
-  commands, views, debuggers, language features written in JavaScript, file
-  icon themes and TextMate grammars do nothing here (its page says which it
-  has). A language server an extension downloads can still be used by naming
-  it in `mme.languageServers`.
+  Every extension gives mme its **color themes** (Ctrl+K Ctrl+T lists them;
+  VS Code's colors and token colors are put on mme's), its **snippets**, its
+  **languages** (file extensions, the comments Ctrl+/ uses) and its TextMate
+  grammars.
+
+  **Its code runs too** - in mme's **extension host**, as in VS Code: an
+  extension is JavaScript written against the `vscode` API, so mme runs
+  `mme-exthost.js` with **node** (Node 18 or later: `mme.extensions.nodePath`,
+  else the PATH) and that script gives the extensions their `vscode` module.
+  mme talks to it as to a language server, so what the extensions provide works
+  like any server's: completion, hover, go to definition, references, signature
+  help, formatting, code actions, code lens, inlay hints, rename, symbols,
+  folding, document links, colors and diagnostics - and the language servers
+  the extensions start themselves (`vscode-languageclient`: YAML, Go, Dart...)
+  just work. Their **commands** are in the Command Palette ("Go: Current
+  GOROOT"), with their **keybindings**; their **status bar items**, **output
+  channels** (Output view), messages with buttons, quick picks, input boxes,
+  progress and **settings** (in the Settings editor under Extensions) are mme's
+  own. Which extensions run: those installed with Install from VSIX (when they
+  have code), and those of VS Code's named in **`mme.extensions.run`**
+  (`["redhat.vscode-yaml", "golang.go"]`, or Enter on one in the Extensions view:
+  Run This Extension). When a running extension serves a language, mme does not
+  start its own server for it (the extension starts its own).
+
+  Not there yet (Output > Extension Host lists every `[missing]` API an
+  extension asked for): **webviews** (an extension's HTML panels - mme has no
+  browser engine), tree views, debug adapters and task providers of an
+  extension, test controllers, notebooks' kernels, semantic tokens and the
+  language model APIs. Microsoft's own extensions (Pylance, C/C++, Python,
+  debugpy, C# Dev Kit) are licensed for Microsoft's VS Code only: mme runs them
+  if named, but their licence does not allow it.
 - **Explorer** — the folder tree, with a scrollbar at its right edge (every
   list of the side bar has one). Enter opens (Space only shows), Left /
   Right fold, typing a letter jumps, F5 reads the folder again. Changed files

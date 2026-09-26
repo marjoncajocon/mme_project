@@ -18,6 +18,7 @@
 **   ejson.c   JSON          econfig.c settings.json   etheme.c color themes
 **   ekeys.c   keybindings.json          esnip.c   snippets
 **   eext.c    extensions: from a .vsix, VS Code's; their themes, snippets, languages
+**   ehost.c   the extension host: extensions' code, run by node (mme-exthost.js)
 **   ehistory.c Local History (the Timeline)   emd.c     the Markdown preview
 **   evim.c    Vim mode: VSCodeVim's keys in the editor
 **   echat.c   Chat and Inline Chat: Claude, through curl
@@ -242,6 +243,8 @@ int settings_lang (const char *lang);	/* opt, eopt, vopt for a language's files 
 const char *settings_lang_now (void);	/* the language they are read for; "": none */
 const Json *settings_get (const char *key);	/* "mme\\.debugAdapters"; NULL */
 #define INLINE_LANG	"*inline"	/* the reserved key of the inline-completion server */
+#define EXT_LANG	"*ext"	/* and of the extension host (ehost.c), bound to every document */
+const Json *settings_all (void);	/* settings.json as a whole, or NULL */
 const char *settings_server (const char *lang);	/* the language server's command */
 void settings_put (const char *key, const char *value);	/* "key": "value" in the file */
 const char *term_profile_setting (void);	/* "terminal.integrated.defaultProfile.windows" ... */
@@ -1269,6 +1272,34 @@ void ext_wheel (int d);
 int ext_idle (void);	/* 1: something changed */
 void ext_show (void);
 void ext_install_vsix (const char *path);
+size_t ext_count (void);	/* the extensions found: mme-data's and VS Code's */
+unsigned ext_generation (void);	/* changes when they are read again */
+const char *ext_id_at (size_t i);	/* publisher.name, lower case */
+const char *ext_dir_at (size_t i);
+int ext_is_vscode (size_t i);	/* VS Code's: read only, run only when mme.extensions.run names it */
+
+/* ehost.c: the extension host */
+const char *ehost_command (void);	/* the host's command line (node mme-exthost.js); "": nothing to run */
+int ehost_serves (const char *lang);	/* a running extension answers for this language: mme's own server does not start */
+void ehost_reset (void);	/* mme.extensions.run changed: worked out again */
+void ehost_idle (void);	/* the main loop: installed, uninstalled ones start the host again */
+const char *ehost_state (const char *id);	/* "running", "error", "starting"; NULL: it does not run */
+int ehost_message (const char *method, const Json *params);	/* elsp.c: an mme/... notification of the host */
+int ehost_request (const char *method, const Json *params, Buf *result);	/* elsp.c: an mme/... request; its result as JSON */
+int ehost_ncmd (void);	/* the extensions' commands: CMD_N .. CMD_N + ehost_ncmd() - 1 */
+int ehost_listed (int cmd);	/* in the Command Palette */
+const char *ehost_cmd_title (int cmd);	/* "Category: Title" */
+const char *ehost_cmd_id (int cmd);
+int ehost_cmd_by_id (const char *id);	/* CMD_NONE: not an extension's */
+void ehost_run (int cmd);
+void ehost_keys (void (*add) (int cmd, const char *key, const char *when));	/* their contributes.keybindings */
+void ehost_status (void);	/* their status bar items, by status_add */
+void settings_ext_clear (void);	/* esettings.c: the extensions' settings go */
+void settings_ext_add (const char *key, const char *type, const Json *def, const Json *en, const char *desc);	/* one of them, under Extensions */
+void mme_command (int cmd);	/* mme.c: run_command */
+void mme_lsp_reopen (void);	/* mme.c: every open file to lsp_open again */
+void mme_settings_changed (void);	/* mme.c: settings.json written: applied */
+int mme_save_path (const char *path);	/* mme.c: the open file saved; 0 done */
 const char *const *ext_snippets (const char *lang, size_t *n);	/* snippet files */
 const char *ext_lang_for (const char *path);	/* a language id, or NULL */
 const char *ext_lang_name (const char *id);
@@ -1477,6 +1508,7 @@ const char *out_name (int i);
 int out_current (void);
 void out_select (int i);
 void out_clear (void);
+void out_clear_chan (const char *name);	/* that channel emptied */
 void out_draw (int x, int y, int w, int h, int focus);
 void out_key (int k);
 void out_wheel (int d);
@@ -1690,6 +1722,11 @@ int lsp_progress_count (void);	/* $/progress running now */
 int lsp_progress_text (int i, char *buf, size_t n);	/* its text; its percentage, -1 none */
 void lsp_task_diags (const char *path, const Diag *v, size_t n);	/* a task's problems in a file */
 void lsp_task_clear (void);
+int lsp_ext_command (const char *id, const char *args);	/* the extension host runs it; 0: no host */
+void lsp_ext_saved (Doc *d);	/* the host told: the file was saved */
+void lsp_ext_settings (void);	/* the host told: settings.json changed */
+int lsp_running (const char *lang);	/* a server of lang (EXT_LANG ...) runs */
+void lsp_ext_active (Doc *d, Pos anchor, Pos cur);	/* the host told: the editor in front (NULL: none) */
 unsigned lsp_task_gen (void);	/* counts lsp_task_clear: what was put in since went */
 
 /* mme.c: where the answers go */
