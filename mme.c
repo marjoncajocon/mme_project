@@ -6157,6 +6157,16 @@ static void open_folder (const char *dir) {
     open_workspace(dir);
     return;
   }
+  {	/* open in another window: that one comes to the front, as VS Code does */
+    char *real = os_realpath(dir);
+    long other = win_with(real ? real : dir);
+    free(real);
+    if (other && term_can_raise()) {
+      win_ask(other, "focus");
+      toast(0, "'%s' is open in another window.", path_basename(dir));
+      return;
+    }
+  }
   search_stop();	/* the workers were walking the folder being left */
   files_index_stop();
   ws_forget();
@@ -6170,6 +6180,7 @@ static void open_folder (const char *dir) {
   E.view = VIEW_FILES;
   E.focus = F_SIDE;
   if (T->real) side_reveal(T->real);
+  win_register(side_root(), term_can_raise());
 }
 
 
@@ -9463,6 +9474,89 @@ static Tab *tab_of (const char *path, Group **in) {
 }
 
 
+/*
+** {==================================================================
+** Chat's agent mode: files as the editor has them, edits into its tabs
+** (not saved: the user looks, undoes, saves)
+** ===================================================================
+*/
+
+static Pos pos_at (const char *s, size_t at) {	/* byte at of a text: its line and column */
+  Pos p;
+  size_t i;
+  p.y = p.x = 0;
+  for (i = 0; i < at; i++) {
+    if (s[i] == '\n') {
+      p.y++;
+      p.x = 0;
+    }
+    else p.x++;
+  }
+  return p;
+}
+
+
+/* old_text (once in the file) made new_text, in its tab (opened when it is not); 0 done, else err says why */
+int agent_edit (const char *path, const char *old_text, const char *new_text, char *err, size_t n) {
+  Tab *t = tab_of(path, NULL);
+  char *text;
+  const char *hit;
+  size_t len, ol = strlen(old_text);
+  Pos a, b;
+  if (t == NULL) {	/* in a tab: the edit shows, and can be undone */
+    if (open_file(path, 0) != 0) {
+      snprintf(err, n, "%s could not be opened", path);
+      return -1;
+    }
+    t = T;
+  }
+  if (t->page || t->md) {
+    snprintf(err, n, "%s is not a text file", path);
+    return -1;
+  }
+  text = open_doc_text(path, &len);
+  if (text == NULL || ol == 0 || (hit = strstr(text, old_text)) == NULL) {
+    snprintf(err, n, "old_text was not found in %s (it must match the file exactly, spaces too)", path);
+    free(text);
+    return -1;
+  }
+  if (strstr(hit + 1, old_text)) {
+    snprintf(err, n, "old_text is in %s more than once: give more of the lines around it", path);
+    free(text);
+    return -1;
+  }
+  a = pos_at(text, (size_t)(hit - text));
+  b = pos_at(text, (size_t)(hit - text) + ol);
+  free(text);
+  doc_group(t->doc);
+  doc_delete(t->doc, a, b);
+  doc_insert(t->doc, a, new_text, strlen(new_text));
+  doc_group(t->doc);
+  t->cur = t->anchor = doc_clamp(t->doc, a);
+  t->sel = 0;
+  return 0;
+}
+
+
+/* a new file, in a tab of its own, not saved yet; 0 done */
+int agent_create (const char *path, const char *text, char *err, size_t n) {
+  OsStat st;
+  if ((os_stat(path, &st) == 0 && st.exists) || tab_of(path, NULL)) {
+    snprintf(err, n, "%s is there already: change it with edit_file", path);
+    return -1;
+  }
+  tab_new();
+  T->doc->path = xstrdup(path);
+  doc_set_text(T->doc, text, strlen(text));
+  T->doc->changes = T->doc->saved + 1;
+  T->sx = syntax_detect(path, T->doc);
+  E.focus = F_EDITOR;
+  return 0;
+}
+
+/* }================================================================== */
+
+
 static size_t units_to_x (const Row *r, size_t c, int utf16) {
   size_t i = 0, u = 0, len;
   if (!utf16) return c < r->len ? c : r->len;
@@ -10326,6 +10420,16 @@ static void copilot_status (void) {
 
 
 /* a URL in the system's browser */
+void browse (const char *url) {
+  open_url(url);
+}
+
+
+int open_path (const char *path) {
+  return open_file(path, 0);
+}
+
+
 static void open_url (const char *url) {
   char *argv[4];
   int io[3], null;
@@ -16613,7 +16717,11 @@ static void run_command (int cmd) {
       else if (HAS_DOC) close_tab(G->active);
       if (!HAS_DOC && !HAS_DIFF && g_ngrp > 1) close_group();	/* its last tab: the group goes */
       break;
-    case CMD_QUIT: {	/* every group asks for its files, unless hot exit keeps them */
+    case CMD_QUIT:	/* Exit: every window closes, as VS Code's (each asks about its own files) */
+      win_ask_all("quit");
+      run_command(CMD_CLOSE_WINDOW);
+      break;
+    case CMD_CLOSE_WINDOW: {	/* this window: every group asks for its files, unless hot exit keeps them */
       int g, keep = g_gcur, ok = 1;
       if (!panel_confirm_exit()) break;	/* terminal.integrated.confirmOnExit */
       if (opt.hot_exit && g_session) {	/* files.hotExit: no questions, all comes back next time */
@@ -16742,7 +16850,7 @@ static void run_command (int cmd) {
       toast(0, "Next edit suggestions %s", opt.next_edit ? "on" : "off");
       break;
     case CMD_CHAT_OPEN: case CMD_CHAT_NEW: case CMD_CHAT_CLEAR: case CMD_CHAT_TOGGLE: case CMD_CHAT_STOP:
-    case CMD_CHAT_CONTEXT: case CMD_CHAT_SET_KEY: case CMD_INLINE_CHAT: {
+    case CMD_CHAT_CONTEXT: case CMD_CHAT_SET_KEY: case CMD_INLINE_CHAT: case CMD_CHAT_MODEL: case CMD_CHAT_AGENT: {
       int f = chat_command(cmd);
       if (f == 1) E.focus = F_CHAT;
       else if (f == 2 || (E.focus == F_CHAT && !chat_shown())) E.focus = F_EDITOR;
@@ -16774,11 +16882,21 @@ static void run_command (int cmd) {
     case CMD_NEW_WINDOW:	/* VS Code's New Window: one with no folder yet, its own mme */
       if (term_new_window("--new-window") != 0) toast(1, "New Window: mme cannot open a window here (run mme-sdl, or mme in mmc-term or Windows Terminal).");
       break;
-    case CMD_DUP_WINDOW:	/* the folder (the workspace) in another window too */
-      if (term_new_window(ws_active() ? ws_file() : side_root()) != 0)
+    case CMD_DUP_WINDOW: {	/* the folder (the workspace) in another window too */
+      char *arg = (char *)xmalloc(strlen(ws_active() ? ws_file() : side_root()) + 16);
+      int r;
+      sprintf(arg, "--duplicate=%s", ws_active() ? ws_file() : side_root());
+      r = term_new_window(arg);
+      free(arg);
+      if (r != 0)
         toast(1, "New Window: mme cannot open a window here (run mme-sdl, or mme in mmc-term or Windows Terminal).");
       break;
-    case CMD_CLOSE_WINDOW: run_command(CMD_QUIT); break;	/* this window: each is its own mme */
+    }
+    case CMD_REMOTE_CONNECT: remote_connect(); break;
+    case CMD_GH_PRS: case CMD_GH_ISSUES: case CMD_GH_CREATE_PR: case CMD_GH_CREATE_ISSUE: case CMD_GH_SIGNIN:
+    case CMD_GH_SIGNOUT:
+      gh_command(cmd);
+      break;
     case CMD_NB_NEW:	/* VS Code's New Jupyter Notebook: Untitled-1.ipynb, its path asked when saved */
       tab_new();
       T->page = PAGE_NOTEBOOK;
@@ -19812,20 +19930,27 @@ static void help_tips_md (Buf *b) {
 
 /* the page in mme-data/help/<name>, made again and shown in the Markdown preview */
 static void help_page (const char *name, void (*make) (Buf *b)) {
-  char *dir = data_path("help"), *f;
   Buf b;
+  buf_init(&b);
+  make(&b);
+  buf_putc(&b, '\0');
+  md_page("help", name, b.s);
+  buf_free(&b);
+}
+
+
+/* text as mme-data/sub/name, its Markdown preview in front (the help pages, GitHub's descriptions) */
+void md_page (const char *sub, const char *name, const char *text) {
+  char *dir = data_path(sub), *f;
   int fd, i;
   Tab *src;
   mkdir_p(dir);
   f = path_join(dir, name);
   free(dir);
-  buf_init(&b);
-  make(&b);
   if ((fd = os_open(f, OS_WRITE)) >= 0) {
-    os_write(fd, b.s, b.len);
+    os_write(fd, text, strlen(text));
     os_close(fd);
   }
-  buf_free(&b);
   for (i = 0; i < G->ntab; i++) {	/* its preview is open: to the front, with the new text */
     Tab *t = G->tab[i];
     if (t->md && t->doc->path && m_fncmp(t->doc->path, f) == 0) {
@@ -21228,6 +21353,7 @@ static long split_line (char *arg) {
 
 
 static void cleanup (void) {
+  win_unregister();
   nb_shutdown();
   test_shutdown();
   dbg_shutdown();
@@ -21240,6 +21366,7 @@ static void cleanup (void) {
 
 int main (int argc, char **argv) {
   long line = 0;
+  int dup = 0;
   OsStat st;
   os_init();
   os_args(&argc, &argv);
@@ -21259,6 +21386,11 @@ int main (int argc, char **argv) {
   if (argc > 1 && (strcmp(argv[1], "-v") == 0 || strcmp(argv[1], "--version") == 0)) {
     fd_puts(1, MME_NAME " " MME_VERSION "\n");
     return 0;
+  }
+  if (argc > 1 && strncmp(argv[1], "--remote=", 9) == 0) return remote_main(argv[1] + 9);	/* Remote-SSH: a window over ssh */
+  if (argc > 1 && strncmp(argv[1], "--duplicate=", 12) == 0) {	/* Duplicate As Workspace: the folder again, on purpose */
+    dup = 1;
+    argv[1] += 12;
   }
   if (argc > 1 && strcmp(argv[1], "--new-window") != 0) line = split_line(argv[1]);
   if (argc > 1 && strcmp(argv[1], "--new-window") == 0) {	/* New Window: no folder yet, the Welcome page to open one */
@@ -21326,11 +21458,19 @@ int main (int argc, char **argv) {
   profile_follow();	/* the profile the folder was last used with */
   apply_settings(0);	/* the folder's .vscode/settings.json, a workspace's settings */
   git_refresh();
+  if (g_session && !dup && term_can_raise()) {	/* the folder is open in another window: that one comes to the front */
+    long other = win_with(ws_active() ? ws_file() : side_root());
+    if (other) {
+      win_ask(other, "focus");
+      return 0;
+    }
+  }
   if (term_open() != 0) {
     fd_puts(2, MME_NAME ": not a terminal\n");
     return 1;
   }
   atexit(cleanup);
+  win_register(g_session ? (ws_active() ? ws_file() : side_root()) : "", term_can_raise());	/* the other windows see this one */
   ui_background = background;
   check_size();
   layout();
@@ -21356,6 +21496,10 @@ int main (int argc, char **argv) {
     lsp_poll();
     dbg_poll();
     nb_poll();
+    switch (win_poll()) {	/* another window asked: Exit, or this folder is wanted */
+      case 'q': run_command(CMD_CLOSE_WINDOW); break;
+      case 'f': term_raise(); break;
+    }
     nav_track();
     cursor_record();	/* Ctrl+U: the cursors as they were */
     mru_track();

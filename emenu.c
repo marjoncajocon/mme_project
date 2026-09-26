@@ -149,7 +149,11 @@ static const char *const names[CMD_N] = {
   "Workspaces: Manage Workspace Trust", "Developer: Toggle Screencast Mode",
   "New Window", "Workspaces: Duplicate As Workspace in New Window", "Close Window",
   "Notebook: Run All", "Notebook: Restart Kernel", "Notebook: Interrupt Kernel", "Notebook: Clear All Outputs",
-  "Create: New Jupyter Notebook"
+  "Create: New Jupyter Notebook",
+  "GitHub Pull Requests: Pull Requests", "GitHub Issues: Issues", "GitHub Pull Requests: Create Pull Request",
+  "GitHub Issues: Create Issue", "GitHub: Sign In", "GitHub: Sign Out",
+  "Remote-SSH: Connect to Host...",
+  "Chat: Change Model...", "Chat: Toggle Agent Mode"
 };
 
 static const char *const keys[CMD_N] = {
@@ -217,7 +221,10 @@ static const char *const keys[CMD_N] = {
   "", "", "",
   "", "",
   "Ctrl+Shift+N", "", "Ctrl+Shift+W",
-  "", "", "", "", ""
+  "", "", "", "", "",
+  "", "", "", "", "", "",
+  "",
+  "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -382,7 +389,10 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "workbench.trust.manage", "workbench.action.toggleScreencastMode",
   "workbench.action.newWindow", "workbench.action.duplicateWorkspaceInNewWindow", "workbench.action.closeWindow",
   "notebook.execute", "jupyter.restartkernel", "jupyter.interruptkernel", "notebook.clearAllOutputs",
-  "ipynb.newUntitledIpynb"
+  "ipynb.newUntitledIpynb",
+  "github.pullRequests.list", "github.issues.list", "pr.create", "issue.createIssue", "github.signIn", "github.signOut",
+  "opensshremotes.openEmptyWindow",
+  "workbench.action.chat.changeModel", "workbench.action.chat.toggleAgentMode"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

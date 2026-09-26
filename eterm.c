@@ -232,6 +232,15 @@ int term_cell_px (int *w, int *h) {
 }
 
 
+int term_can_raise (void) {	/* a terminal's window is the terminal's */
+  return 0;
+}
+
+
+void term_raise (void) {
+}
+
+
 /*
 ** New Window: mme again in a new window of the terminal it runs in -
 ** mmc-term (it says MMC_TERM; it is two folders over the shell's usr/bin),

@@ -863,6 +863,28 @@ SCENARIOS = [
          "streams in as Markdown: bold, a list, and a C code block in C's colors "
          "with Copy, Insert and Apply on its top row; the thinking block is not shown",
          stub_claude="ok"),
+    Scen("chat-agent-edit", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:" + CTRL_SHIFT_P, "w:300", "k:chat: toggle agent", "w:400", "k:\r",
+          "w:500", "k:Mark the file as changed", "k:|", "w:3000", "d", "k:\r", "w:3000", "d"],
+         "Agent mode: the model reads edit.c (a step in the answer), asks to edit it (Allow / Allow All / "
+         "Deny), Allow puts the edit in the editor unsaved, and the answer says what it did",
+         stub_claude="ok"),
+    Scen("chat-agent-deny", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:" + CTRL_SHIFT_P, "w:300", "k:chat: toggle agent", "w:400", "k:\r",
+          "w:500", "k:Mark the file as changed", "k:|", "w:3000", "k:\x1b", "w:3000", "d"],
+         "Agent mode: Esc on the edit's question denies it; the model is told, the file stays as it was",
+         stub_claude="ok"),
+    Scen("chat-openai", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:hello", "k:|", "w:3000", "d"],
+         "mme.chat.provider openai: the question goes to chat/completions with a bearer token and the "
+         "system prompt as the first message; the answer streams in; the model's name is in the box and on the answer",
+         stub_claude="openai"),
+    Scen("chat-change-model", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:" + CTRL_SHIFT_P, "w:300", "k:chat: change model", "w:400", "k:\r",
+          "w:2500", "d", "k:`[B", "k:\r", "w:800", "d"],
+         "Chat: Change Model lists the provider's models (its /v1/models), the current one marked; "
+         "another picked is the one in the box",
+         stub_claude="ok"),
     Scen("chat-two-turns", "lang/edit.c",
          ["w:1500", "k:" + CTRL_ALT_I, "w:700", "k:first|", "w:3500",
           "k:second|", "w:3500", "d"],
@@ -1195,6 +1217,9 @@ def run_once(scen, use_prof):
     if scen.stub_claude:
         stub, url = start_stub_claude(scen.stub_claude)
         extra = {"mme.chat.baseUrl": url, "mme.chat.apiKey": STUB_CLAUDE_KEY}
+        if scen.stub_claude == "openai":	# the same stub as an OpenAI-compatible API
+            extra = {"mme.chat.provider": "openai", "mme.chat.openai.baseUrl": url + "/v1",
+                     "mme.chat.openai.apiKey": "sk-openai-test", "mme.chat.model": "gpt-test"}
     try:
         return run_once_(scen, use_prof, extra)
     finally:
@@ -1209,7 +1234,7 @@ def run_once_(scen, use_prof, extra):
     env = dict(os.environ)
     # the user's own Anthropic key must never reach a scenario: a chat that
     # found one would talk to the real API, and spend money doing it
-    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
+    for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL"):
         env.pop(k, None)
     log = os.path.join(work, "tick.log")
     env["MME_TICKLOG"] = log

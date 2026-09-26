@@ -402,6 +402,26 @@ void term_ask_pixels (void);	/* XTSMGRAPHICS: how many pixels a cell is (the ans
 int term_cell_px (int *w, int *h);	/* 0: the terminal has not said */
 int term_new_window (const char *arg);	/* mme again in a window of its own (a terminal's, mme-sdl's), with arg: a folder, "--new-window"; -1: cannot */
 int spawn_detached (char **argv);	/* mme.c: argv[0] (a whole path) started on its own, nothing waited for; 0 started */
+void gh_command (int cmd);	/* egithub.c: CMD_GH_* (GitHub's pull requests and issues) */
+int agent_edit (const char *path, const char *old_text, const char *new_text, char *err, size_t n);	/* mme.c: in its tab, unsaved; 0 done */
+int agent_create (const char *path, const char *text, char *err, size_t n);	/* mme.c: a new file's tab, unsaved; 0 done */
+void remote_connect (void);	/* eremote.c: Remote-SSH: Connect to Host... */
+int remote_main (const char *spec);	/* the window of mme --remote=host::folder */
+extern int remote_mode;	/* this window is a remote one */
+extern int remote_close;	/* its x was pressed: 1 asked the remote mme, 2 the window goes */
+void md_page (const char *dir, const char *name, const char *text);	/* mme.c: text as mme-data/dir/name, its Markdown preview in front */
+void browse (const char *url);	/* mme.c: the system's browser */
+int open_path (const char *path);	/* mme.c: a file in an editor (its own, as open_file) */
+int term_can_raise (void);	/* the window can bring itself to the front (mme-sdl; a terminal cannot) */
+void term_raise (void);
+
+/* ewindows.c - the windows know each other: Exit closes all, a folder open in one is not opened in another */
+void win_register (const char *folder, int front);	/* this window, its folder ("": none) */
+void win_unregister (void);
+long win_with (const char *folder);	/* the other window showing folder (and able to come to the front); 0 none */
+void win_ask (long pid, const char *what);	/* "quit", "focus" */
+void win_ask_all (const char *what);
+int win_poll (void);	/* asked of this window: 'q' quit, 'f' focus; 0 */
 
 /* a typed character that goes into text: not a control key, no Ctrl or Alt */
 #define IS_TEXT(k)	((k) >= 32 && (k) < K_UP && (k) != 127)
@@ -647,6 +667,9 @@ enum {
   CMD_TRUST_MANAGE, CMD_SCREENCAST,
   CMD_NEW_WINDOW, CMD_DUP_WINDOW, CMD_CLOSE_WINDOW,
   CMD_NB_RUN_ALL, CMD_NB_RESTART, CMD_NB_INTERRUPT, CMD_NB_CLEAR, CMD_NB_NEW,	/* enb.c */
+  CMD_GH_PRS, CMD_GH_ISSUES, CMD_GH_CREATE_PR, CMD_GH_CREATE_ISSUE, CMD_GH_SIGNIN, CMD_GH_SIGNOUT,	/* egithub.c */
+  CMD_REMOTE_CONNECT,	/* eremote.c */
+  CMD_CHAT_MODEL, CMD_CHAT_AGENT,	/* echat.c: Change Model, Toggle Agent Mode */
   CMD_N
 };
 

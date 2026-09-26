@@ -1116,7 +1116,7 @@ static void font_settings (void);
 */
 static void tb_update (void) {
   int menu = S.cols > 2 && S.front[1].ch == 0xF121;	/* the app's icon at row 0: mme's menu bar */
-  int want = W.custom && menu;
+  int want = W.custom && menu && !remote_mode;	/* a remote window: the remote mme's menus are not ours to drag by */
   if (want == W.borderless) return;
   W.borderless = want;
   W.tb_hover = W.tb_press = -1;
@@ -1464,6 +1464,18 @@ int term_cell_px (int *w, int *h) {	/* the image preview's pictures: a cell's pi
   *w = W.cw;
   *h = W.ch;
   return 1;
+}
+
+
+int term_can_raise (void) {
+  return 1;
+}
+
+
+void term_raise (void) {	/* another window asked (the folder is open here): this one to the front */
+  if (W.win == NULL) return;
+  if (SDL_GetWindowFlags(W.win) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(W.win);
+  SDL_RaiseWindow(W.win);
 }
 
 
@@ -1892,10 +1904,15 @@ static void wheel_push (int d, int n, int mods) {
 static int g_drops;	/* the files of this drop pasted so far */
 
 
-/* the window's x (the system's, or the title bar's): File > Exit, which asks about unsaved files */
+/* the window's x (the system's, or the title bar's): Close Window, which asks about unsaved files */
 static void quit_request (void) {
+  if (remote_mode && ++remote_close >= 2) return;	/* a remote window: the second x ends it (remote_main) */
+  if (remote_mode) {	/* the first: the remote mme is asked to close (its unsaved files) */
+    push('w' | KM_CTRL | KM_SHIFT);
+    return;
+  }
   if (when_ctx("terminalFocus") == NULL) push(K_ESC);	/* a question, a list open: it goes first (the shell keeps its line) */
-  push(CTRL('q'));
+  push('w' | KM_CTRL | KM_SHIFT);	/* Ctrl+Shift+W: this window only (Ctrl+Q, Exit, closes them all) */
 }
 
 

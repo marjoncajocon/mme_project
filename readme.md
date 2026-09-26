@@ -59,6 +59,9 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `equick.c` | quick diff (the gutter's changes against the index) and merge conflicts |
 | `emerge.c` | the merge editor: Incoming and Current over the Result, three panes |
 | `enb.c` | Jupyter notebooks (.ipynb): the notebook editor, its cells and outputs, a kernel (`enb_kernel.h`: mme-kernel.py) |
+| `ewindows.c` | the windows know each other: Exit closes them all, a folder open in one comes to the front there |
+| `egithub.c` | GitHub pull requests and issues (REST API through curl): lists, descriptions, checkout, comments, create |
+| `eremote.c` | Remote-SSH: a window whose mme runs on another machine over ssh (installed there when needed) |
 | `esyntax.c` | syntax highlighting in VS Code's Dark+ colors, for about sixty languages, with VS Code's language ids |
 | `eemmet.c` | Emmet: HTML and CSS abbreviations, as VS Code expands them |
 | `epanel.c` | the panel: the integrated terminals, split, links, find, profiles |
@@ -690,6 +693,41 @@ With no file open the editor shows the keys to start with.
   "Searching N files" show while it goes on, and typing again starts it over.
   The editor draws and answers keys throughout; the results settle into the
   folder's order once the walk is over.
+- **Windows** — New Window (Ctrl+Shift+N), Duplicate As Workspace in New
+  Window, Close Window (Ctrl+Shift+W); each window is its own mme (mme-sdl's
+  own process; in a terminal, a new mmc-term or Windows Terminal window).
+  Exit (Ctrl+Q) closes every window, each asking about its own files; a
+  folder open in one window comes to the front there instead of opening
+  again (mme-sdl), from the command line or Open Folder. The windows keep
+  mme-data/windows/<pid>, and ask each other through <pid>.ask.
+- **GitHub** — "GitHub Pull Requests: Pull Requests" and "GitHub Issues:
+  Issues" list the repository's open ones (origin's owner/name); each has
+  Checkout (the pull request's head into a branch), Open Description (the
+  body and comments as a Markdown preview), Open Changes (its diff), Add
+  Comment, Open on GitHub; an issue has Start Working on Issue (a branch
+  issue-N-its-title). "Create Pull Request" pushes the branch and opens one
+  into the base asked; "Create Issue". The token: GH_TOKEN / GITHUB_TOKEN,
+  else "GitHub: Sign In" (a personal access token, kept in mme-data), else
+  Git's credential helper (asked quietly), else `gh auth token`; a public
+  repository is read without one. github-enterprise.uri is GitHub
+  Enterprise.
+- **Remote-SSH** — "Remote-SSH: Connect to Host..." (~/.ssh/config's hosts,
+  or user@host) and a folder there open a window whose mme runs on that
+  machine over ssh: its files, search, git, language servers and terminal
+  are the host's. The first time, the build for the host (uname -sm) is
+  copied to ~/.mme-server/mme (`build cross` makes them, into
+  mme-server/ next to mme); passwords are asked in that window. The remote
+  mme's Exit closes it; the window's x asks it to close (twice: at once).
+- **Chat: models and agent mode** — mme.chat.provider "openai" talks to an
+  OpenAI-compatible API (mme.chat.openai.baseUrl: OpenAI, OpenRouter, Ollama,
+  LM Studio; mme.chat.openai.apiKey or OPENAI_API_KEY; none for a local one).
+  "Chat: Change Model..." (or a click on the model's name in the box) lists
+  the models of both providers (their /models). Agent mode ("Chat: Toggle
+  Agent Mode", or the Ask / Agent chip in the box) gives the model tools:
+  read_file, list_dir, search_text, edit_file, create_file, run_command. Each
+  step shows in the answer; the edits go into the editor unsaved (look, undo,
+  save), and an edit or a command is asked about first (Allow, Allow All for
+  this chat, Deny); at most 25 rounds of tools an answer.
 - **Jupyter notebooks** — a `.ipynb` opens in VS Code's notebook editor:
   Markdown cells drawn, code cells in the language's colors with `[n]`, their
   outputs under them (text, errors in red, pictures: plots show as themselves

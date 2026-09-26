@@ -18,7 +18,7 @@ if not defined MME_DEST set MME_DEST=D:\mmc-shell\usr\bin
 set CFLAGS=-std=c11 -O2 -s -Wall -Wextra -pedantic
 set BASE=mutil.c mpath.c mos.c
 set TSRC=tpty.c tvt.c tgrid.c
-set SRC=mme.c ethread.c ejson.c econfig.c elsp.c etheme.c ebuf.c eterm.c edraw.c emenu.c eside.c esearch.c esearched.c emdiff.c egit.c esyntax.c epanel.c ekeys.c esnip.c eext.c egitlog.c equick.c emerge.c eregex.c esettings.c ewelcome.c efiles.c eemmet.c edebug.c etask.c eout.c ehistory.c emd.c ehex.c eimage.c eworkspace.c eimport.c evscode.c etest.c eonig.c etm.c eeditorconfig.c echat.c evim.c enb.c %TSRC% %BASE%
+set SRC=mme.c ethread.c ejson.c econfig.c elsp.c etheme.c ebuf.c eterm.c edraw.c emenu.c eside.c esearch.c esearched.c emdiff.c egit.c esyntax.c epanel.c ekeys.c esnip.c eext.c egitlog.c equick.c emerge.c eregex.c esettings.c ewelcome.c efiles.c eemmet.c edebug.c etask.c eout.c ehistory.c emd.c ehex.c eimage.c eworkspace.c eimport.c evscode.c etest.c eonig.c etm.c eeditorconfig.c echat.c evim.c enb.c ewindows.c egithub.c eremote.c %TSRC% %BASE%
 
 if "%1"=="" goto native
 if "%1"=="cross" goto cross
@@ -53,6 +53,12 @@ echo arm-linux (older 32 bit Android phones)
 %ZIG% cc %CFLAGS% -target arm-linux-musleabihf -static -o dist\mme-arm-linux %SRC% || exit /b 1
 if exist dist\*.pdb del dist\*.pdb
 echo done, see dist\
+rem Remote-SSH copies these to a host that has no mme: next to the installed one
+if "%MME_DEST%"=="" exit /b 0
+if not exist "%MME_DEST%" exit /b 0
+if not exist "%MME_DEST%\mme-server" mkdir "%MME_DEST%\mme-server"
+for %%F in (dist\mme-*-linux dist\mme-*-macos) do copy /y "%%F" "%MME_DEST%\mme-server\" >nul
+echo copied the Linux and macOS builds to %MME_DEST%\mme-server (Remote-SSH)
 exit /b 0
 
 :install

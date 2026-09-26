@@ -20,6 +20,18 @@
 ** the body go to curl's stdin as a config file (curl -K -), and nothing of
 ** it is written to disk or to OUTPUT. Each question sends the whole talk
 ** again: the API remembers nothing between requests.
+**
+** mme.chat.provider "openai" talks to an OpenAI-compatible API instead
+** (OpenAI, OpenRouter, a local Ollama or LM Studio: mme.chat.openai.baseUrl):
+** POST {baseUrl}/chat/completions, its stream read the same way. Chat:
+** Change Model lists the models of both (their /models) to pick from.
+**
+** Agent mode (Chat: Toggle Agent Mode, or the chip in the box) gives the
+** model tools, as Copilot's agent mode: read_file, list_dir, search_text,
+** edit_file, create_file, run_command. It calls them, sees what they
+** returned, and goes on, up to AGENT_STEPS times. The edits go into the
+** editor's tabs, not saved (look, undo, save them); an edit and a command
+** are asked about first (Allow, Allow All for this chat, Deny).
 */
 
 #include "mme.h"
@@ -34,6 +46,12 @@
 #define CHAT_MAX_TOKENS	64000	/* streamed: room for a long answer */
 #define INPUT_ROWS	8	/* the box to type in grows to this many rows */
 #define NEAR_LINES	400	/* Inline Chat sends this many lines around the selection */
+#define CHAT_MODEL_OPENAI	"gpt-5"	/* mme.chat.model's default with the OpenAI provider */
+#define CHAT_URL_OPENAI	"https://api.openai.com/v1"	/* mme.chat.openai.baseUrl's, and $OPENAI_BASE_URL's */
+#define AGENT_STEPS	25	/* the agent's tool calls in a row, at most */
+#define MAX_TOOLS	16	/* in one answer */
+
+enum { PV_ANTHROPIC, PV_OPENAI };
 
 #define ICON_ACCOUNT	0xEB99	/* codicon account: the user's turn */
 #define ICON_SPARKLE	0xEC10	/* codicon sparkle: Claude's */
@@ -53,6 +71,19 @@ static const char sys_chat[] =
   "editor offers to insert a block at the cursor or to put it in place of the selection. A message "
   "may begin with an <attachment>: the part of the user's file that they have selected, or the "
   "lines their editor shows. The view is narrow, so be brief.";
+
+static const char *who_name (void);	/* "Claude", or the model's name */
+
+
+static const char sys_agent[] =
+  "You are Claude, a coding agent in mme, a text editor for the terminal that looks and works like "
+  "VS Code. You work in the user's workspace: the folder open in the editor; paths are relative to it. "
+  "Use the tools to look before you change anything: list_dir, search_text and read_file. Change "
+  "files with edit_file (old_text must be copied exactly from the file, with enough lines to be found "
+  "once) or create_file; your edits go into the editor unsaved, for the user to look at, undo or save. "
+  "run_command runs a shell command in the workspace and returns its output. The user may deny a "
+  "tool call: then do something else, or ask. When the work is done, say in a few words what you "
+  "changed. Answer in Markdown; the view is narrow, so be brief.";
 
 static const char sys_inline[] =
   "You are Claude, editing code in the user's text editor. The user's file comes with the place to "
@@ -86,6 +117,12 @@ typedef struct Hit {	/* a place of the view the mouse can use */
 
 enum { HIT_COPY, HIT_INSERT, HIT_APPLY, HIT_KEY };
 
+typedef struct ToolCall {	/* one the model asked for */
+  char id[128];
+  char name[64];
+  Buf args;	/* its input: JSON, as it streamed in */
+} ToolCall;
+
 static struct {
   Turn *t;
   size_t n, cap;
@@ -104,6 +141,11 @@ static struct {
   int no_ctx;	/* the implicit context left out (its chip clicked) */
   int shown;	/* the secondary side bar is open */
   char *last;	/* the last question: Up in an empty box brings it back */
+  int agent;	/* agent mode: the model has tools */
+  int allow_all;	/* Allow All: this chat's edits and commands are not asked about */
+  int steps;	/* the tool rounds of this answer */
+  Buf tail;	/* this answer's tool calls and results, as messages after the talk's ("{...}, {...}") */
+  int model_x0, model_x1, agent_x0, agent_x1;	/* the model's name and the mode's chip, for the mouse */
   /* where things were drawn, for the mouse */
   int x, y, w, h;
   int new_x, close_x;
@@ -253,7 +295,7 @@ static void build_doc (int busy) {
       }
     }
     else if (t->who == TU_CLAUDE) {
-      buf_puts(&b, "\xEE\xB0\x90 **Claude**\n\n");	/* codicon sparkle */
+      buf_printf(&b, "\xEE\xB0\x90 **%s**\n\n", who_name());	/* codicon sparkle */
       line += 2;
       if (t->text.len == 0 && busy && i + 1 == C.n) {
         buf_printf(&b, "*%s Working...*\n", ui_spinner());
@@ -306,6 +348,11 @@ static struct {
   Buf answer;	/* Inline Chat's code */
   char *error;	/* an error event's message */
   long long t0;
+  int pv;	/* PV_*: whose API it is */
+  ToolCall tc[MAX_TOOLS];	/* the tools the answer calls */
+  int ntc;
+  int blk[64];	/* Anthropic: a content block's index -> its tool call + 1 (0: text) */
+  Buf it_text;	/* the text of this answer alone (the agent's round) */
 } J;
 
 /* Inline Chat's request: what it is for, and what it replaces */
@@ -323,17 +370,50 @@ static const char *cfg (const char *key, const char *def) {
 }
 
 
-static const char *model (void) {
-  const char *m = cfg("mme\\.chat\\.model", CHAT_MODEL);
-  return *m ? m : CHAT_MODEL;
+static int provider (void) {	/* mme.chat.provider */
+  return strcmp(cfg("mme\\.chat\\.provider", "anthropic"), "openai") == 0 ? PV_OPENAI : PV_ANTHROPIC;
 }
 
 
-/* mme.chat.apiKey, else $ANTHROPIC_API_KEY, else $ANTHROPIC_AUTH_TOKEN (sent as a bearer token); NULL: none */
-static char *api_key (int *bearer) {
+static const char *model (void) {
+  const char *def = provider() == PV_OPENAI ? CHAT_MODEL_OPENAI : CHAT_MODEL;
+  const char *m = cfg("mme\\.chat\\.model", def);
+  return *m ? m : def;
+}
+
+
+static const char *who_name (void) {	/* the other side of the talk, as the view names it */
+  return provider() == PV_OPENAI ? model() : "Claude";
+}
+
+
+static char *base_url_pv (int pv);
+
+
+/*
+** Anthropic: mme.chat.apiKey, else $ANTHROPIC_API_KEY, else
+** $ANTHROPIC_AUTH_TOKEN (sent as a bearer token). OpenAI: mme.chat.openai.apiKey,
+** else $OPENAI_API_KEY (a bearer token); "" for a local server (Ollama wants
+** none). NULL: none.
+*/
+static char *api_key_pv (int pv, int *bearer) {
   const char *s = cfg("mme\\.chat\\.apiKey", "");
   char *e;
   *bearer = 0;
+  if (pv == PV_OPENAI) {
+    char *u;
+    int local;
+    *bearer = 1;
+    s = cfg("mme\\.chat\\.openai\\.apiKey", "");
+    if (*s) return xstrdup(s);
+    e = os_getenv("OPENAI_API_KEY");
+    if (e && *e) return e;
+    free(e);
+    u = base_url_pv(pv);
+    local = strstr(u, "://localhost") || strstr(u, "://127.0.0.1") || strstr(u, "://[::1]");
+    free(u);
+    return local ? xstrdup("") : NULL;
+  }
   if (*s) return xstrdup(s);
   e = os_getenv("ANTHROPIC_API_KEY");
   if (e && *e) return e;
@@ -348,6 +428,11 @@ static char *api_key (int *bearer) {
 }
 
 
+static char *api_key (int *bearer) {
+  return api_key_pv(provider(), bearer);
+}
+
+
 static int has_key (void) {
   int bearer;
   char *k = api_key(&bearer);
@@ -357,22 +442,28 @@ static int has_key (void) {
 }
 
 
-/* mme.chat.baseUrl, else $ANTHROPIC_BASE_URL, else Anthropic's; no / at the end */
-static char *base_url (void) {
-  const char *s = cfg("mme\\.chat\\.baseUrl", "");
+/* mme.chat.baseUrl, else $ANTHROPIC_BASE_URL, else Anthropic's (OpenAI: its own three); no / at the end */
+static char *base_url_pv (int pv) {
+  int oa = pv == PV_OPENAI;
+  const char *s = oa ? cfg("mme\\.chat\\.openai\\.baseUrl", "") : cfg("mme\\.chat\\.baseUrl", "");
   char *u;
   size_t n;
   if (*s) u = xstrdup(s);
   else {
-    u = os_getenv("ANTHROPIC_BASE_URL");
+    u = os_getenv(oa ? "OPENAI_BASE_URL" : "ANTHROPIC_BASE_URL");
     if (u == NULL || *u == '\0') {
       free(u);
-      u = xstrdup(CHAT_URL);
+      u = xstrdup(oa ? CHAT_URL_OPENAI : CHAT_URL);
     }
   }
   n = strlen(u);
   while (n > 0 && u[n - 1] == '/') u[--n] = '\0';
   return u;
+}
+
+
+static char *base_url (void) {
+  return base_url_pv(provider());
 }
 
 
@@ -416,6 +507,7 @@ static void wipe_buf (Buf *b) {	/* it held the key */
 
 
 static void job_close (void) {
+  int i;
   if (J.out >= 0) os_close(J.out);
   if (J.err >= 0) os_close(J.err);
   J.out = J.err = -1;
@@ -423,6 +515,9 @@ static void job_close (void) {
   buf_free(&J.body);
   buf_free(&J.errs);
   buf_free(&J.answer);
+  buf_free(&J.it_text);
+  for (i = 0; i < J.ntc; i++) buf_free(&J.tc[i].args);
+  J.ntc = 0;
   free(J.error);
   J.error = NULL;
   J.on = 0;
@@ -452,17 +547,32 @@ static int job_start (const char *body, size_t n, int inl, int nmsg) {
   fb = json_bool(settings_get("mme\\.chat\\.fallbacks"), 1);
   buf_init(&cfgb);
   buf_init(&h);
-  buf_printf(&h, "%s/v1/messages", url);
-  cfg_put(&cfgb, "url", h.s, h.len);
-  h.len = 0;
-  buf_printf(&h, bearer ? "Authorization: Bearer %s" : "x-api-key: %s", key);
-  cfg_put(&cfgb, "header", h.s, h.len);
-  wipe_buf(&h);
-  memset(key, 0, strlen(key));
-  free(key);
-  cfg_put(&cfgb, "header", "anthropic-version: 2023-06-01", 29);
-  cfg_put(&cfgb, "header", "content-type: application/json", 30);
-  if (fb) cfg_put(&cfgb, "header", "anthropic-beta: server-side-fallback-2026-07-01", 47);
+  if (provider() == PV_OPENAI) {	/* an OpenAI-compatible API: chat/completions, a bearer token (none: a local one) */
+    buf_printf(&h, "%s/chat/completions", url);
+    cfg_put(&cfgb, "url", h.s, h.len);
+    h.len = 0;
+    if (*key) {
+      buf_printf(&h, "Authorization: Bearer %s", key);
+      cfg_put(&cfgb, "header", h.s, h.len);
+    }
+    wipe_buf(&h);
+    memset(key, 0, strlen(key));
+    free(key);
+    cfg_put(&cfgb, "header", "content-type: application/json", 30);
+  }
+  else {
+    buf_printf(&h, "%s/v1/messages", url);
+    cfg_put(&cfgb, "url", h.s, h.len);
+    h.len = 0;
+    buf_printf(&h, bearer ? "Authorization: Bearer %s" : "x-api-key: %s", key);
+    cfg_put(&cfgb, "header", h.s, h.len);
+    wipe_buf(&h);
+    memset(key, 0, strlen(key));
+    free(key);
+    cfg_put(&cfgb, "header", "anthropic-version: 2023-06-01", 29);
+    cfg_put(&cfgb, "header", "content-type: application/json", 30);
+    if (fb) cfg_put(&cfgb, "header", "anthropic-beta: server-side-fallback-2026-07-01", 47);
+  }
   cfg_put(&cfgb, "data-binary", body, n);
   argv[a++] = exe;
   argv[a++] = (char *)"-sS";	/* no progress, but its errors */
@@ -523,23 +633,93 @@ static int job_start (const char *body, size_t n, int inl, int nmsg) {
   J.err = err[0];
   J.head = 1;
   J.t0 = os_now_us();
-  out_log("Chat", "POST %s/v1/messages (%s, %d message%s%s)", url, model(), nmsg, nmsg == 1 ? "" : "s",
-          inl ? ", Inline Chat" : "");
+  J.pv = provider();
+  out_log("Chat", "POST %s%s (%s, %d message%s%s%s)", url, J.pv == PV_OPENAI ? "/chat/completions" : "/v1/messages",
+          model(), nmsg, nmsg == 1 ? "" : "s", inl ? ", Inline Chat" : "", C.agent && !inl ? ", agent" : "");
   free(exe);
   free(url);
   return 0;
 }
 
 
-/* the request's body: the model, the system prompt, then the messages (added by body_msg) */
-static void body_start (Buf *b, const char *system) {
+/* the agent's tools: name, what it does, its input's properties, which of them it must have */
+static const struct {
+  const char *name, *desc, *props, *req;
+} tools[] = {
+  {"read_file", "Read a file of the workspace (as the editor has it, unsaved changes too). Lines are counted from 1.",
+   "{\"path\": {\"type\": \"string\", \"description\": \"relative to the workspace\"}, "
+   "\"start_line\": {\"type\": \"integer\"}, \"end_line\": {\"type\": \"integer\"}}", "[\"path\"]"},
+  {"list_dir", "List a folder of the workspace: its files, and its folders (ending in /).",
+   "{\"path\": {\"type\": \"string\", \"description\": \"relative to the workspace; . is its top\"}}", "[\"path\"]"},
+  {"search_text", "Search the workspace's files for a text (exactly, not a regular expression): path:line: the line.",
+   "{\"query\": {\"type\": \"string\"}, \"path\": {\"type\": \"string\", \"description\": \"a folder to search in, . by default\"}}",
+   "[\"query\"]"},
+  {"edit_file", "Replace old_text (copied exactly from the file, found once in it) with new_text. The edit goes into the editor, unsaved.",
+   "{\"path\": {\"type\": \"string\"}, \"old_text\": {\"type\": \"string\"}, \"new_text\": {\"type\": \"string\"}}",
+   "[\"path\", \"old_text\", \"new_text\"]"},
+  {"create_file", "Create a new file with this content, in the editor (unsaved).",
+   "{\"path\": {\"type\": \"string\"}, \"content\": {\"type\": \"string\"}}", "[\"path\", \"content\"]"},
+  {"run_command", "Run a shell command in the workspace (cmd.exe on Windows, sh elsewhere); its output and exit code come back. At most 60 seconds.",
+   "{\"command\": {\"type\": \"string\"}}", "[\"command\"]"}
+};
+
+
+static void put_tools (Buf *b, int pv) {
+  size_t i;
+  buf_puts(b, ", \"tools\": [");
+  for (i = 0; i < sizeof(tools) / sizeof(tools[0]); i++) {
+    if (i) buf_puts(b, ", ");
+    if (pv == PV_OPENAI) buf_puts(b, "{\"type\": \"function\", \"function\": {\"name\": ");
+    else buf_puts(b, "{\"name\": ");
+    json_put_str(b, tools[i].name, strlen(tools[i].name));
+    buf_puts(b, ", \"description\": ");
+    json_put_str(b, tools[i].desc, strlen(tools[i].desc));
+    buf_printf(b, ", \"%s\": {\"type\": \"object\", \"properties\": %s, \"required\": %s}}", pv == PV_OPENAI ? "parameters" : "input_schema",
+               tools[i].props, tools[i].req);
+    if (pv == PV_OPENAI) buf_putc(b, '}');
+  }
+  buf_putc(b, ']');
+}
+
+
+/* a system prompt for the provider: "You are Claude" only to Claude */
+static void put_system (Buf *b, const char *system) {
+  if (provider() == PV_OPENAI && strncmp(system, "You are Claude, ", 16) == 0) {
+    Buf t;
+    buf_init(&t);
+    buf_puts(&t, "You are an AI assistant, ");
+    buf_puts(&t, system + 16);
+    json_put_str(b, t.s, t.len);
+    buf_free(&t);
+  }
+  else json_put_str(b, system, strlen(system));
+}
+
+
+/*
+** The request's body: the model, the system prompt, the tools (agent),
+** then the messages (added by body_msg). 1: the next message is the first
+** (OpenAI's system prompt is a message of its own, before them)
+*/
+static int body_start (Buf *b, const char *system, int agent) {
   const char *m = model();
+  int pv = provider();
   buf_puts(b, "{\"model\": ");
   json_put_str(b, m, strlen(m));
+  if (pv == PV_OPENAI) {
+    buf_puts(b, ", \"stream\": true");
+    if (agent) put_tools(b, pv);
+    buf_puts(b, ", \"messages\": [{\"role\": \"system\", \"content\": ");
+    put_system(b, system);
+    buf_putc(b, '}');
+    return 0;
+  }
   buf_printf(b, ", \"max_tokens\": %d, \"stream\": true, \"system\": ", CHAT_MAX_TOKENS);
   json_put_str(b, system, strlen(system));
   if (json_bool(settings_get("mme\\.chat\\.fallbacks"), 1)) buf_puts(b, ", \"fallbacks\": \"default\"");	/* a refusal is answered by another model */
+  if (agent) put_tools(b, pv);
   buf_puts(b, ", \"messages\": [");
+  return 1;
 }
 
 
@@ -558,12 +738,13 @@ static void body_msg (Buf *b, int *first, const char *role, const char *s, size_
 ** stopped answer) too, and two turns of one side in a row made one, so the
 ** roles take turns as the API wants. It ends on the user's question.
 */
-static int body_talk (Buf *b) {
+static int body_talk (Buf *b, int first, int skip_last) {	/* skip_last: the answer the agent is working on (C.tail has it) */
   size_t i;
-  int first = 1, count = 0, role = -1;
+  int count = 0, role = -1;
   Buf m;
   buf_init(&m);
   for (i = 0; i < C.n; i++) {
+    if (skip_last && i + 1 == C.n && C.t[i].who == TU_CLAUDE) break;
     const Turn *t = &C.t[i];
     const char *s = t->who == TU_USER ? t->sent : t->text.s;
     size_t n = t->who == TU_USER ? strlen(t->sent) : t->text.len;
@@ -582,6 +763,10 @@ static int body_talk (Buf *b) {
     count++;
   }
   buf_free(&m);
+  if (C.tail.len) {	/* the agent's rounds: its tool calls, and what they returned */
+    buf_puts(b, ", ");
+    buf_putn(b, C.tail.s, C.tail.len);
+  }
   buf_puts(b, "]}");
   return count;
 }
@@ -634,11 +819,17 @@ static void curl_error (char *out, size_t n) {
 
 
 static void inline_done (const char *text, size_t n);
+static void agent_round (void);
 
 /* curl is done: what came is put where it belongs, or what went wrong is told */
 static void job_finish (void) {
   char msg[700];
   int code = os_wait(J.proc), inl = J.inl;
+  if (!inl && C.agent && J.status == 200 && !J.error && J.ntc > 0 && strcmp(J.stop, "tool_use") == 0) {	/* tools to run */
+    out_log("Chat", "HTTP 200, %d tool call%s, %lld ms", J.ntc, J.ntc == 1 ? "" : "s", (os_now_us() - J.t0) / 1000);
+    agent_round();
+    return;
+  }
   Turn *t = C.n && C.t[C.n - 1].who == TU_CLAUDE ? &C.t[C.n - 1] : NULL;
   msg[0] = '\0';
   if (J.status == 0) curl_error(msg, sizeof(msg));
@@ -692,7 +883,55 @@ static void job_cancel (void) {
 }
 
 
-/* one event's data: the text grows, the stop reason is kept */
+static void grow_text (const char *s, size_t n) {	/* the answer's text, as it comes */
+  if (J.inl) buf_putn(&J.answer, s, n);
+  else if (C.n && C.t[C.n - 1].who == TU_CLAUDE) {
+    buf_putn(&C.t[C.n - 1].text, s, n);
+    buf_putn(&J.it_text, s, n);
+    C.stale = 1;
+  }
+}
+
+
+/* an OpenAI-compatible API's event: choices[0].delta's content and tool calls, its finish_reason */
+static void on_data_openai (const Json *j) {
+  const Json *ch = json_get(j, "choices"), *c0, *tc;
+  const char *fin;
+  size_t i;
+  if (json_get(j, "error")) {
+    free(J.error);
+    J.error = xstrdup(json_str(json_get(j, "error.message"), "error"));
+    return;
+  }
+  if (ch == NULL || ch->type != J_ARR || ch->n == 0) return;
+  c0 = ch->kid[0];
+  {
+    const Json *tx = json_get(c0, "delta.content");
+    if (tx && tx->type == J_STR) grow_text(tx->str, tx->len);
+  }
+  tc = json_get(c0, "delta.tool_calls");
+  for (i = 0; tc && tc->type == J_ARR && i < tc->n; i++) {
+    const Json *t = tc->kid[i];
+    int k = (int)json_num(json_get(t, "index"), (double)i);
+    const char *id = json_str(json_get(t, "id"), NULL), *name = json_str(json_get(t, "function.name"), NULL);
+    const Json *a = json_get(t, "function.arguments");
+    if (k < 0 || k >= MAX_TOOLS) continue;
+    while (J.ntc <= k) {
+      memset(&J.tc[J.ntc], 0, sizeof(ToolCall));
+      buf_init(&J.tc[J.ntc].args);
+      J.ntc++;
+    }
+    if (id) snprintf(J.tc[k].id, sizeof(J.tc[k].id), "%s", id);
+    if (name) snprintf(J.tc[k].name, sizeof(J.tc[k].name), "%s", name);
+    if (a && a->type == J_STR) buf_putn(&J.tc[k].args, a->str, a->len);
+  }
+  fin = json_str(json_get(c0, "finish_reason"), NULL);
+  if (fin) snprintf(J.stop, sizeof(J.stop), "%s", strcmp(fin, "length") == 0 ? "max_tokens" : strcmp(fin, "tool_calls") == 0 ? "tool_use"
+                    : strcmp(fin, "content_filter") == 0 ? "refusal" : "end_turn");
+}
+
+
+/* one event's data: the text grows, the tool calls fill in, the stop reason is kept */
 static void on_data (const char *s, size_t n) {
   Json *j;
   const char *type;
@@ -700,18 +939,35 @@ static void on_data (const char *s, size_t n) {
     s++;
     n--;
   }
+  if (n == 6 && memcmp(s, "[DONE]", 6) == 0) return;	/* OpenAI's last */
   if ((j = json_parse(s, n)) == NULL) return;
+  if (J.pv == PV_OPENAI) {
+    on_data_openai(j);
+    json_free(j);
+    return;
+  }
   type = json_str(json_get(j, "type"), "");
+  if (strcmp(type, "content_block_start") == 0 && strcmp(json_str(json_get(j, "content_block.type"), ""), "tool_use") == 0) {
+    int bi = (int)json_num(json_get(j, "index"), 0);
+    if (J.ntc < MAX_TOOLS && bi >= 0 && bi < 64) {	/* a tool call: its input streams in as JSON */
+      ToolCall *t = &J.tc[J.ntc];
+      memset(t, 0, sizeof(*t));
+      buf_init(&t->args);
+      snprintf(t->id, sizeof(t->id), "%s", json_str(json_get(j, "content_block.id"), ""));
+      snprintf(t->name, sizeof(t->name), "%s", json_str(json_get(j, "content_block.name"), ""));
+      J.blk[bi] = ++J.ntc;
+    }
+  }
+  else if (strcmp(type, "content_block_delta") == 0 && strcmp(json_str(json_get(j, "delta.type"), ""), "input_json_delta") == 0) {
+    int bi = (int)json_num(json_get(j, "index"), 0);
+    const Json *pj = json_get(j, "delta.partial_json");
+    if (bi >= 0 && bi < 64 && J.blk[bi] > 0 && pj && pj->type == J_STR) buf_putn(&J.tc[J.blk[bi] - 1].args, pj->str, pj->len);
+  }
+  else
   if (strcmp(type, "content_block_delta") == 0 &&
       strcmp(json_str(json_get(j, "delta.type"), ""), "text_delta") == 0) {	/* thinking_delta, signature_delta: not shown */
     const Json *tx = json_get(j, "delta.text");
-    if (tx && tx->type == J_STR) {
-      if (J.inl) buf_putn(&J.answer, tx->str, tx->len);
-      else if (C.n && C.t[C.n - 1].who == TU_CLAUDE) {
-        buf_putn(&C.t[C.n - 1].text, tx->str, tx->len);
-        C.stale = 1;
-      }
-    }
+    if (tx && tx->type == J_STR) grow_text(tx->str, tx->len);
   }
   else if (strcmp(type, "message_delta") == 0) {
     const char *r = json_str(json_get(j, "delta.stop_reason"), NULL);
@@ -821,6 +1077,407 @@ int chat_idle (void) {
 
 /*
 ** {==================================================================
+** The agent: the tools the model calls, then the talk goes on
+** ===================================================================
+*/
+
+/* a path of the workspace (relative to it, or in it): the file's; NULL (and why) when it is outside */
+static char *ws_path (const char *p, char *why, size_t n) {
+  const char *root = side_root(), *q;
+  char *full;
+  size_t rl = strlen(root);
+  if (p == NULL || *p == '\0') p = ".";
+  for (q = p; *q; q++)	/* no way out of the workspace */
+    if (q[0] == '.' && q[1] == '.' && (q == p || q[-1] == '/' || q[-1] == '\\') && (q[2] == '\0' || q[2] == '/' || q[2] == '\\')) {
+      snprintf(why, n, "%s leaves the workspace", p);
+      return NULL;
+    }
+  if (path_is_sep(p[0]) || (p[0] && p[1] == ':')) {
+    if (m_fnncmp(p, root, rl) != 0 || (p[rl] && !path_is_sep(p[rl]))) {
+      snprintf(why, n, "%s is not in the workspace", p);
+      return NULL;
+    }
+    return xstrdup(p);
+  }
+  if (strcmp(p, ".") == 0 || strcmp(p, "./") == 0) return xstrdup(root);
+  full = path_join(root, p[0] == '.' && (p[1] == '/' || p[1] == '\\') ? p + 2 : p);
+  return full;
+}
+
+
+/* a file's text: the editor's (unsaved changes too), else the disk's; NULL: none */
+static char *file_text (const char *path, size_t *len) {
+  char *s = open_doc_text(path, len);
+  if (s == NULL) s = read_file(path, len);
+  return s;
+}
+
+
+static void tool_read (const Json *a, Buf *out) {
+  char why[300], *path = ws_path(json_str(json_get(a, "path"), ""), why, sizeof(why)), *s;
+  size_t len = 0, i, line = 1, lines;
+  int from = (int)json_num(json_get(a, "start_line"), 1), to = (int)json_num(json_get(a, "end_line"), 0);
+  if (path == NULL) {
+    buf_puts(out, why);
+    return;
+  }
+  s = file_text(path, &len);
+  free(path);
+  if (s == NULL) {
+    buf_printf(out, "Error: %s could not be read.", json_str(json_get(a, "path"), ""));
+    return;
+  }
+  lines = len ? 1 : 0;
+  for (i = 0; i < len; i++)
+    if (s[i] == '\n' && i + 1 < len) lines++;
+  if (from < 1) from = 1;
+  if (to <= 0 || (size_t)to > lines) to = (int)lines;
+  if (to - from > 2000) to = from + 2000;
+  buf_printf(out, "Lines %d-%d of %lu:\n", from, to, (unsigned long)lines);
+  for (i = 0; i < len && (int)line <= to; i++) {
+    if ((int)line >= from && out->len < 100000) buf_putc(out, s[i]);
+    if (s[i] == '\n') line++;
+  }
+  free(s);
+}
+
+
+static void tool_list (const Json *a, Buf *out) {
+  char why[300], *dir = ws_path(json_str(json_get(a, "path"), "."), why, sizeof(why));
+  Vec v;
+  size_t i;
+  if (dir == NULL) {
+    buf_puts(out, why);
+    return;
+  }
+  vec_init(&v);
+  if (os_listdir(dir, &v) != 0) buf_printf(out, "Error: %s is not a folder.", json_str(json_get(a, "path"), "."));
+  vec_sort(&v);
+  for (i = 0; i < v.n && i < 500; i++) {
+    char *f = path_join(dir, v.v[i]);
+    OsStat st;
+    int d = os_stat(f, &st) == 0 && st.is_dir;
+    buf_printf(out, "%s%s\n", v.v[i], d ? "/" : "");
+    free(f);
+  }
+  if (v.n == 0) buf_puts(out, "(empty)");
+  vec_free(&v);
+  free(dir);
+}
+
+
+static void search_in (const char *dir, const char *root, const char *q, Buf *out, int *hits, int *files, int depth) {
+  Vec v;
+  size_t i, rl = strlen(root);
+  if (depth > 12 || *hits >= 100 || *files > 5000) return;
+  vec_init(&v);
+  if (os_listdir(dir, &v) != 0) return;
+  vec_sort(&v);
+  for (i = 0; i < v.n && *hits < 100; i++) {
+    char *f;
+    OsStat st;
+    if (v.v[i][0] == '.' || strcmp(v.v[i], "node_modules") == 0) continue;	/* .git, .venv ... */
+    f = path_join(dir, v.v[i]);
+    if (os_stat(f, &st) != 0) {
+      free(f);
+      continue;
+    }
+    if (st.is_dir) search_in(f, root, q, out, hits, files, depth + 1);
+    else if (st.size < 512 * 1024) {
+      size_t len = 0, k, ls = 0;
+      char *s = file_text(f, &len);
+      long line = 1;
+      (*files)++;
+      if (s && !memchr(s, '\0', len < 8000 ? len : 8000)) {	/* a binary file: not searched */
+        for (k = 0; k <= len && *hits < 100; k++) {
+          if (k == len || s[k] == '\n') {
+            char save = k < len ? s[k] : '\0';
+            if (k < len) s[k] = '\0';
+            if (strstr(s + ls, q)) {
+              const char *rel = f + (strlen(f) > rl && m_fnncmp(f, root, rl) == 0 ? rl + 1 : 0);
+              buf_printf(out, "%s:%ld: %.200s\n", rel, line, s + ls);
+              (*hits)++;
+            }
+            if (k < len) s[k] = save;
+            ls = k + 1;
+            line++;
+          }
+        }
+      }
+      free(s);
+    }
+    free(f);
+  }
+  vec_free(&v);
+}
+
+
+static int tool_search (const Json *a, Buf *out) {
+  char why[300], *dir = ws_path(json_str(json_get(a, "path"), "."), why, sizeof(why));
+  const char *q = json_str(json_get(a, "query"), "");
+  int hits = 0, files = 0;
+  if (dir == NULL) {
+    buf_puts(out, why);
+    return 0;
+  }
+  if (*q) search_in(dir, side_root(), q, out, &hits, &files, 0);
+  if (hits == 0) buf_printf(out, "No results (%d files searched).", files);
+  else if (hits >= 100) buf_puts(out, "(the first 100 results)");
+  free(dir);
+  return hits;
+}
+
+
+/* Allow, Allow All (this chat), Deny: 1 allowed */
+static int approve (const char *what, const char *detail) {
+  static const char *const bt[] = {"Allow", "Allow All", "Deny"};
+  int r;
+  if (C.allow_all) return 1;
+  r = dialog(what, detail, bt, 3);
+  if (r == 1) C.allow_all = 1;
+  return r == 0 || r == 1;
+}
+
+
+/* a shell command in the workspace, its output (at most 16 KB) and exit code; 60 seconds at most */
+static void run_shell (const char *cmd, Buf *out) {
+  char *argv[5], *sh, *cwd;
+  int fds[2], io[3], null, code = -1, done = 0;
+  OsProc proc;
+  long pid;
+  long long end = os_now_us() + 60000000;
+  char chunk[4096];
+#ifdef _WIN32
+  sh = os_getenv("ComSpec");
+  if (sh == NULL) sh = xstrdup("C:\\Windows\\System32\\cmd.exe");
+  argv[0] = sh;
+  argv[1] = (char *)"/d";
+  argv[2] = (char *)"/c";
+  argv[3] = (char *)cmd;
+  argv[4] = NULL;
+  null = os_open("NUL", OS_READ);
+#else
+  sh = xstrdup("/bin/sh");
+  argv[0] = sh;
+  argv[1] = (char *)"-c";
+  argv[2] = (char *)cmd;
+  argv[3] = NULL;
+  null = os_open("/dev/null", OS_READ);
+#endif
+  if (os_pipe(fds) != 0) {
+    buf_puts(out, "Error: the command could not be started.");
+    free(sh);
+    return;
+  }
+  io[0] = null;
+  io[1] = fds[1];
+  io[2] = fds[1];
+  cwd = os_getcwd();
+  os_chdir(side_root());
+  if (os_spawn(sh, argv, NULL, io, 3, &proc, &pid) != 0) {
+    buf_puts(out, "Error: the command could not be started.");
+    os_close(fds[0]);
+    os_close(fds[1]);
+    if (null >= 0) os_close(null);
+    if (cwd) os_chdir(cwd);
+    free(cwd);
+    free(sh);
+    return;
+  }
+  if (cwd) os_chdir(cwd);
+  free(cwd);
+  os_close(fds[1]);
+  if (null >= 0) os_close(null);
+  while (!done) {
+    int r = os_wait_readable(fds[0], 200);
+    if (r == 1) {
+      long n = os_read(fds[0], chunk, sizeof(chunk));
+      if (n <= 0) done = 1;
+      else if (out->len < 16384) buf_putn(out, chunk, (size_t)n);
+    }
+    else if (r < 0) done = 1;
+    if (!done && os_now_us() > end) {
+      os_kill(pid, 9);
+      buf_puts(out, "\n(stopped after 60 seconds)");
+      done = 1;
+    }
+  }
+  os_close(fds[0]);
+  code = os_wait(proc);
+  buf_printf(out, "\n(exit code %d)", code);
+  free(sh);
+}
+
+
+/* a step of the agent, in the answer the user reads */
+static void step_note (const char *fmt, const char *a, const char *b) {
+  Turn *t = C.n && C.t[C.n - 1].who == TU_CLAUDE ? &C.t[C.n - 1] : NULL;
+  if (t == NULL) return;
+  if (t->text.len && t->text.s[t->text.len - 1] != '\n') buf_putc(&t->text, '\n');
+  buf_puts(&t->text, "\n> ");
+  buf_printf(&t->text, fmt, a ? a : "", b ? b : "");
+  buf_puts(&t->text, "\n\n");
+  C.stale = 1;
+}
+
+
+/* one tool call run: what it returned into out */
+static void run_tool (const ToolCall *tc, Buf *out) {
+  Json *a = json_parse(tc->args.s ? tc->args.s : "{}", tc->args.len);
+  const char *path = json_str(json_get(a, "path"), "");
+  char err[400], what[600];
+  if (strcmp(tc->name, "read_file") == 0) {
+    tool_read(a, out);
+    step_note("**Read** `%s`", path, NULL);
+  }
+  else if (strcmp(tc->name, "list_dir") == 0) {
+    tool_list(a, out);
+    step_note("**Listed** `%s`", *path ? path : ".", NULL);
+  }
+  else if (strcmp(tc->name, "search_text") == 0) {
+    char n[32];
+    snprintf(n, sizeof(n), "%d", tool_search(a, out));
+    step_note("**Searched** for `%s`: %s results", json_str(json_get(a, "query"), ""), n);
+  }
+  else if (strcmp(tc->name, "edit_file") == 0 || strcmp(tc->name, "create_file") == 0) {
+    int create = tc->name[0] == 'c';
+    char *full = ws_path(path, err, sizeof(err));
+    snprintf(what, sizeof(what), "%s wants to %s %s", who_name(), create ? "create" : "edit", path);
+    if (full == NULL) buf_puts(out, err);
+    else if (!approve(what, create ? "The new file opens in the editor, not saved." : "The change goes into the editor, not saved: look, undo (Ctrl+Z) or save it.")) {
+      buf_puts(out, "The user denied this edit.");
+      step_note("**Denied**: %s `%s`", create ? "create" : "edit", path);
+    }
+    else if ((create ? agent_create(full, json_str(json_get(a, "content"), ""), err, sizeof(err))
+                     : agent_edit(full, json_str(json_get(a, "old_text"), ""), json_str(json_get(a, "new_text"), ""), err, sizeof(err))) != 0) {
+      buf_printf(out, "Error: %s", err);
+      step_note("**Could not %s** `%s`", create ? "create" : "edit", path);
+    }
+    else {
+      buf_printf(out, "%s %s (in the editor, not saved yet).", create ? "Created" : "Edited", path);
+      step_note(create ? "**Created** `%s` (not saved)" : "**Edited** `%s` (not saved)", path, NULL);
+    }
+    free(full);
+  }
+  else if (strcmp(tc->name, "run_command") == 0) {
+    const char *cmd = json_str(json_get(a, "command"), "");
+    snprintf(what, sizeof(what), "%s wants to run a command in the workspace", who_name());
+    if (!*cmd) buf_puts(out, "Error: no command.");
+    else if (!approve(what, cmd)) {
+      buf_puts(out, "The user denied running this command.");
+      step_note("**Denied**: `%s`", cmd, NULL);
+    }
+    else {
+      toast(0, "Chat: running %s", cmd);
+      if (ui_background) ui_background();
+      toast_draw();
+      scr_flush();
+      run_shell(cmd, out);
+      toast(0, "%s", "");
+      step_note("**Ran** `%s`", cmd, NULL);
+    }
+  }
+  else buf_printf(out, "Error: there is no tool called %s.", tc->name);
+  json_free(a);
+}
+
+
+/*
+** The answer asked for tools: they run, the round goes into C.tail (the
+** model's text and calls, then their results, each API's way), and the
+** talk is sent again to go on.
+*/
+static void agent_round (void) {
+  int i, n = J.ntc, pv = J.pv;
+  ToolCall tc[MAX_TOOLS];
+  Buf text, body;
+  int nmsg;
+  for (i = 0; i < n; i++) {	/* kept: job_close frees J's */
+    tc[i] = J.tc[i];
+    buf_init(&J.tc[i].args);
+  }
+  text = J.it_text;
+  buf_init(&J.it_text);
+  job_close();
+  if (C.tail.len) buf_puts(&C.tail, ", ");
+  if (pv == PV_OPENAI) {	/* {"role": "assistant", "content", "tool_calls"}, then a {"role": "tool"} each */
+    buf_puts(&C.tail, "{\"role\": \"assistant\", \"content\": ");
+    if (text.len) json_put_str(&C.tail, text.s, text.len);
+    else buf_puts(&C.tail, "null");
+    buf_puts(&C.tail, ", \"tool_calls\": [");
+    for (i = 0; i < n; i++) {
+      buf_printf(&C.tail, "%s{\"id\": ", i ? ", " : "");
+      json_put_str(&C.tail, tc[i].id, strlen(tc[i].id));
+      buf_puts(&C.tail, ", \"type\": \"function\", \"function\": {\"name\": ");
+      json_put_str(&C.tail, tc[i].name, strlen(tc[i].name));
+      buf_puts(&C.tail, ", \"arguments\": ");
+      json_put_str(&C.tail, tc[i].args.s ? tc[i].args.s : "{}", tc[i].args.len ? tc[i].args.len : 2);
+      buf_puts(&C.tail, "}}");
+    }
+    buf_puts(&C.tail, "]}");
+  }
+  else {	/* {"role": "assistant", "content": [text, tool_use...]} */
+    buf_puts(&C.tail, "{\"role\": \"assistant\", \"content\": [");
+    if (text.len) {
+      buf_puts(&C.tail, "{\"type\": \"text\", \"text\": ");
+      json_put_str(&C.tail, text.s, text.len);
+      buf_puts(&C.tail, "}, ");
+    }
+    for (i = 0; i < n; i++) {
+      Json *in = json_parse(tc[i].args.s ? tc[i].args.s : "{}", tc[i].args.len);
+      buf_printf(&C.tail, "%s{\"type\": \"tool_use\", \"id\": ", i ? ", " : "");
+      json_put_str(&C.tail, tc[i].id, strlen(tc[i].id));
+      buf_puts(&C.tail, ", \"name\": ");
+      json_put_str(&C.tail, tc[i].name, strlen(tc[i].name));
+      buf_puts(&C.tail, ", \"input\": ");
+      if (in && in->type == J_OBJ) json_write(&C.tail, in);
+      else buf_puts(&C.tail, "{}");
+      buf_puts(&C.tail, "}");
+      json_free(in);
+    }
+    buf_puts(&C.tail, "]}, {\"role\": \"user\", \"content\": [");
+  }
+  for (i = 0; i < n; i++) {	/* each runs; what it returned goes back */
+    Buf out;
+    buf_init(&out);
+    run_tool(&tc[i], &out);
+    if (pv == PV_OPENAI) {
+      buf_puts(&C.tail, ", {\"role\": \"tool\", \"tool_call_id\": ");
+      json_put_str(&C.tail, tc[i].id, strlen(tc[i].id));
+      buf_puts(&C.tail, ", \"content\": ");
+      json_put_str(&C.tail, out.s ? out.s : "", out.len);
+      buf_putc(&C.tail, '}');
+    }
+    else {
+      buf_printf(&C.tail, "%s{\"type\": \"tool_result\", \"tool_use_id\": ", i ? ", " : "");
+      json_put_str(&C.tail, tc[i].id, strlen(tc[i].id));
+      buf_puts(&C.tail, ", \"content\": ");
+      json_put_str(&C.tail, out.s ? out.s : "", out.len);
+      buf_putc(&C.tail, '}');
+    }
+    buf_free(&out);
+    buf_free(&tc[i].args);
+  }
+  if (pv != PV_OPENAI) buf_puts(&C.tail, "]}");
+  buf_free(&text);
+  if (++C.steps >= AGENT_STEPS) {
+    note("The agent stopped after 25 rounds of tools: ask again to go on.");
+    buf_free(&C.tail);
+    buf_init(&C.tail);
+    return;
+  }
+  buf_init(&body);
+  nmsg = body_talk(&body, body_start(&body, sys_agent, 1), 1);
+  if (job_start(body.s, body.len, 0, nmsg) != 0) note("curl could not be started.");
+  buf_free(&body);
+  C.stale = 1;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
 ** Asking
 ** ===================================================================
 */
@@ -850,6 +1507,9 @@ static const char no_key_msg[] =
 static const char no_key_md[] =	/* the same, for the talk: the names as code, so _ is no italics */
   "Chat needs an Anthropic API key: put it in settings.json as `mme.chat.apiKey` "
   "(**Chat: Set API Key...** does it), or set `ANTHROPIC_API_KEY` in the environment.";
+static const char no_key_openai_md[] =
+  "Chat needs an API key for the OpenAI-compatible provider: `mme.chat.openai.apiKey` in settings.json "
+  "(**Chat: Change Model...** can set it up), or `OPENAI_API_KEY` in the environment.";
 
 
 /* Enter in the box: the question, with its context, goes */
@@ -867,7 +1527,7 @@ static void send_question (void) {
   }
   if (n == 0 || J.on) return;
   if (!has_key()) {
-    note(no_key_md);
+    note(provider() == PV_OPENAI ? no_key_openai_md : no_key_md);
     return;
   }
   u = turn_add(TU_USER, s, n);
@@ -898,9 +1558,11 @@ static void send_question (void) {
   C.at = 0;
   C.in_top = 0;
   turn_add(TU_CLAUDE, NULL, 0);
+  buf_free(&C.tail);
+  buf_init(&C.tail);
+  C.steps = 0;
   buf_init(&body);
-  body_start(&body, sys_chat);
-  nmsg = body_talk(&body);
+  nmsg = body_talk(&body, body_start(&body, C.agent ? sys_agent : sys_chat, C.agent), 0);
   if (job_start(body.s, body.len, 0, nmsg) != 0) {
     C.t[C.n - 1].who = TU_NOTE;
     buf_puts(&C.t[C.n - 1].text, "curl could not be started: Chat runs it to reach Claude.");
@@ -913,6 +1575,9 @@ static void send_question (void) {
 static void new_chat (void) {
   if (J.on && !J.inl) job_cancel();
   talk_clear();
+  C.allow_all = 0;	/* Allow All was for that chat */
+  buf_free(&C.tail);
+  buf_init(&C.tail);
   C.in.len = 0;
   C.at = 0;
   C.in_top = 0;
@@ -1053,7 +1718,7 @@ static void inline_send (const EdCtx *c, const char *prompt) {
   buf_puts(&q, c->sel ? "\n\nReply with only the code that replaces the selection."
                       : "\n\nReply with only the code to insert at <cursor/>.");
   buf_init(&body);
-  body_start(&body, sys_inline);
+  first = body_start(&body, sys_inline, 0);
   body_msg(&body, &first, "user", q.s, q.len);
   buf_puts(&body, "]}");
   IC.doc = d;
@@ -1327,7 +1992,7 @@ static void draw_welcome (int x, int y, int w, int h) {
   int r = y + (h > 12 ? h / 4 : 1), end = y + h;
   scr_put_rgb(x + w / 2, r, ICON_SPARKLE, CLAUDE_RGB, ui_color(C_SIDE_BG), 0);
   r += 2;
-  if (r < end) put_center(x, r++, w, "Ask Claude", S_SIDE_TITLE);
+  if (r < end) put_center(x, r++, w, provider() == PV_OPENAI ? "Ask" : "Ask Claude", S_SIDE_TITLE);
   r++;
   if (r < end)
     r += put_wrapped(x + 2, r, w - 4, end - r, "Claude can make mistakes, so check what it writes.", S_SIDE_DIM);
@@ -1475,7 +2140,9 @@ void chat_draw (int x, int y, int w, int h, int focus) {
   }
   C.in_y = i;
   C.in_rows = rows;
-  if (C.in.len == 0) scr_putsw(x + 3, i, iw, "Ask Claude", S_INPUT_HINT);
+  if (C.in.len == 0)
+    scr_putsw(x + 3, i, iw, C.agent ? "Describe what to build or change" : provider() == PV_OPENAI ? "Ask a question" : "Ask Claude",
+              S_INPUT_HINT);
   else {
     int r;
     for (r = 0; r < rows && C.in_top + r < nrows && C.in_top + r < 64; r++) {
@@ -1486,12 +2153,21 @@ void chat_draw (int x, int y, int w, int h, int focus) {
     }
   }
   i += rows;
-  {	/* the model, and send (or stop while it answers) */
-    const char *m = model();
-    int mw = (int)str_cols(m);
+  {	/* the mode (Ask, Agent), the model (click: Change Model), and send (or stop while it answers) */
+    const char *m = model(), *mode = C.agent ? "Agent" : "Ask";
+    int mw = (int)str_cols(m), dw = (int)strlen(mode);
     C.send_x = x + w - 4;
     C.send_y = i;
-    if (x + w - 6 - mw > x + 3) scr_putsw(x + w - 6 - mw, i, mw, m, S_INPUT_HINT);
+    C.agent_x0 = x + 3;
+    C.agent_x1 = x + 3 + dw + 2;
+    scr_putsw(C.agent_x0, i, dw + 2, mode, C.agent ? S_INPUT_ON : S_INPUT_HINT);
+    scr_put(C.agent_x0 + dw + 1, i, 0xEAB4, S_INPUT_HINT);	/* chevron-down */
+    C.model_x0 = C.model_x1 = -1;
+    if (x + w - 6 - mw > C.agent_x1 + 1) {
+      C.model_x0 = x + w - 6 - mw;
+      C.model_x1 = x + w - 6;
+      scr_putsw(C.model_x0, i, mw, m, S_INPUT_HINT);
+    }
     if (busy) scr_put_rgb(C.send_x, i, ICON_STOP, 0xF14C4C, ui_color(C_INPUT_BG), 0);
     else scr_put(C.send_x, i, ICON_SEND, C.in.len ? S_INPUT_ON : S_INPUT_HINT);
   }
@@ -1676,6 +2352,14 @@ int chat_mouse (const Mouse *m) {
     C.no_ctx = !C.no_ctx;
     return 1;
   }
+  if (m->y == C.send_y && m->x >= C.agent_x0 && m->x < C.agent_x1) {	/* Ask / Agent */
+    chat_command(CMD_CHAT_AGENT);
+    return 1;
+  }
+  if (m->y == C.send_y && m->x >= C.model_x0 && m->x < C.model_x1) {	/* the model: another */
+    chat_command(CMD_CHAT_MODEL);
+    return 1;
+  }
   if (m->y == C.send_y && m->x >= C.send_x - 1 && m->x <= C.send_x + 1) {
     if (J.on && !J.inl) job_cancel();
     else send_question();
@@ -1713,6 +2397,176 @@ int chat_mouse (const Mouse *m) {
 ** The secondary side bar, and the commands
 ** ===================================================================
 */
+
+/* GET url with curl, its config (the key) on its stdin; 0 and the body in out */
+static int curl_get (const char *url, const char *h1, const char *h2, Buf *out) {
+  char *exe = curl_exe(), *argv[7];
+  int in[2], o[2], io[3], null, r;
+  OsProc proc;
+  long pid;
+  Buf cf;
+  char chunk[8192];
+  long n;
+  if (exe == NULL) return -1;
+  buf_init(&cf);
+  cfg_put(&cf, "url", url, strlen(url));
+  if (h1) cfg_put(&cf, "header", h1, strlen(h1));
+  if (h2) cfg_put(&cf, "header", h2, strlen(h2));
+  argv[0] = exe;
+  argv[1] = (char *)"-sS";
+  argv[2] = (char *)"--max-time";
+  argv[3] = (char *)"15";
+  argv[4] = (char *)"-K";
+  argv[5] = (char *)"-";
+  argv[6] = NULL;
+  if (os_pipe(in) != 0) {
+    wipe_buf(&cf);
+    free(exe);
+    return -1;
+  }
+  if (os_pipe(o) != 0) {
+    os_close(in[0]);
+    os_close(in[1]);
+    wipe_buf(&cf);
+    free(exe);
+    return -1;
+  }
+#ifdef _WIN32
+  null = os_open("NUL", OS_WRITE);
+#else
+  null = os_open("/dev/null", OS_WRITE);
+#endif
+  io[0] = in[0];
+  io[1] = o[1];
+  io[2] = null;
+  r = os_spawn(exe, argv, NULL, io, 3, &proc, &pid);
+  os_close(in[0]);
+  os_close(o[1]);
+  if (null >= 0) os_close(null);
+  if (r != 0) {
+    os_close(in[1]);
+    os_close(o[0]);
+    wipe_buf(&cf);
+    free(exe);
+    return -1;
+  }
+  os_write(in[1], cf.s, cf.len);
+  os_close(in[1]);
+  wipe_buf(&cf);
+  while ((n = os_read(o[0], chunk, sizeof(chunk))) > 0) buf_putn(out, chunk, (size_t)n);
+  os_close(o[0]);
+  r = os_wait(proc);
+  free(exe);
+  return r;
+}
+
+
+/* the models a provider offers (its /models), into ids */
+static void list_models (int pv, Vec *ids) {
+  int bearer;
+  char *key = api_key_pv(pv, &bearer), *url = base_url_pv(pv), h1[600], *u;
+  Buf out;
+  Json *j;
+  const Json *d;
+  size_t i;
+  if (key == NULL) {
+    free(url);
+    return;
+  }
+  u = (char *)xmalloc(strlen(url) + 32);
+  sprintf(u, pv == PV_OPENAI ? "%s/models" : "%s/v1/models?limit=100", url);
+  if (pv == PV_OPENAI) snprintf(h1, sizeof(h1), *key ? "Authorization: Bearer %s" : "Accept: application/json", key);
+  else snprintf(h1, sizeof(h1), bearer ? "Authorization: Bearer %s" : "x-api-key: %s", key);
+  memset(key, 0, strlen(key));
+  free(key);
+  buf_init(&out);
+  if (curl_get(u, h1, pv == PV_OPENAI ? NULL : "anthropic-version: 2023-06-01", &out) == 0 &&
+      (j = json_parse(out.s ? out.s : "", out.len)) != NULL) {
+    d = json_get(j, "data");
+    for (i = 0; d && d->type == J_ARR && i < d->n && i < 200; i++) {
+      const char *id = json_str(json_get(d->kid[i], "id"), NULL);
+      if (id) vec_push(ids, xstrdup(id));
+    }
+    json_free(j);
+  }
+  memset(h1, 0, sizeof(h1));
+  buf_free(&out);
+  free(u);
+  free(url);
+}
+
+
+/*
+** Chat: Change Model: the models of Anthropic and of the OpenAI-compatible
+** provider (those that have a key), the one in use first; a name typed is
+** a model of the provider in use. The last item sets up the OpenAI one.
+*/
+static void change_model (void) {
+  Vec m[2];
+  Pick p;
+  int pv, r, n = 0, start = 0, cur = provider(), k;
+  size_t i;
+  char *oa = base_url_pv(PV_OPENAI);
+  int map_pv[512];
+  const char *map_id[512];
+  vec_init(&m[0]);
+  vec_init(&m[1]);
+  toast(0, "Chat: asking for the models...");
+  if (ui_background) ui_background();
+  toast_draw();
+  scr_flush();
+  list_models(PV_ANTHROPIC, &m[0]);
+  list_models(PV_OPENAI, &m[1]);
+  toast(0, "%s", "");
+  pick_init(&p, "Select a model (or type its name)");
+  for (k = 0; k < 2; k++) {
+    pv = k == 0 ? cur : !cur;	/* the provider in use first */
+    if (m[pv].n == 0 && pv == cur) vec_push(&m[pv], xstrdup(model()));	/* nothing listed: at least the one in use */
+    for (i = 0; i < m[pv].n && n < 510; i++) {
+      char detail[300];
+      int now = pv == cur && strcmp(m[pv].v[i], model()) == 0;
+      snprintf(detail, sizeof(detail), "%s%s", pv == PV_OPENAI ? "OpenAI-compatible" : "Anthropic", now ? " \xC2\xB7 current" : "");
+      if (now) start = n;
+      pick_add(&p, m[pv].v[i], detail, pv == PV_OPENAI ? 0xEA79 : ICON_SPARKLE);
+      map_pv[n] = pv;
+      map_id[n] = m[pv].v[i];
+      n++;
+    }
+  }
+  pick_add(&p, "Set Up an OpenAI-Compatible Provider...", oa, 0xEB52);	/* settings-gear */
+  p.start = start;
+  r = pick_run(&p);
+  if (r >= 0 && r < n) {
+    settings_put("mme.chat.provider", map_pv[r] == PV_OPENAI ? "openai" : "anthropic");
+    settings_put("mme.chat.model", map_id[r]);
+    settings_load();
+    toast(0, "Chat: %s (%s)", map_id[r], map_pv[r] == PV_OPENAI ? "OpenAI-compatible" : "Anthropic");
+  }
+  else if (r == n) {	/* the OpenAI-compatible provider: its URL, its key */
+    char *u = ask_text("OpenAI-compatible API: its base URL (OpenAI, OpenRouter, http://localhost:11434/v1 for Ollama)", oa), *key;
+    if (u && *u) {
+      settings_put("mme.chat.openai.baseUrl", u);
+      key = ask_text("Its API key (Enter with none for a local server)", NULL);
+      if (key && *key) settings_put("mme.chat.openai.apiKey", key);
+      if (key) memset(key, 0, strlen(key));
+      free(key);
+      settings_put("mme.chat.provider", "openai");
+      settings_load();
+      toast(0, "Chat: the OpenAI-compatible provider is set up; Chat: Change Model picks its model");
+    }
+    free(u);
+  }
+  else if (r == PICK_TEXT && p.text[0]) {
+    settings_put("mme.chat.model", p.text);
+    settings_load();
+    toast(0, "Chat: %s", p.text);
+  }
+  pick_free(&p);
+  vec_free(&m[0]);
+  vec_free(&m[1]);
+  free(oa);
+}
+
 
 int chat_shown (void) {
   return C.shown;
@@ -1764,6 +2618,13 @@ int chat_command (int cmd) {
     case CMD_INLINE_CHAT:
       inline_start();
       return 2;
+    case CMD_CHAT_AGENT:
+      C.agent = !C.agent;
+      toast(0, "Chat: %s mode%s", C.agent ? "Agent" : "Ask", C.agent ? " (it may read, search, edit files and run commands; edits and commands are asked about)" : "");
+      return C.shown ? 1 : 0;
+    case CMD_CHAT_MODEL:
+      change_model();
+      return C.shown ? 1 : 0;
   }
   return 0;
 }
