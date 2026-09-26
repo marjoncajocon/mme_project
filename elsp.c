@@ -36,6 +36,7 @@ typedef struct Prog {	/* a $/progress that runs: "Loading packages..." */
   char title[96];
   char msg[128];
   int pct;	/* -1: not said */
+  int cancellable;	/* window/workDoneProgress/cancel stops it (Codeium's sign in: its manual token) */
 } Prog;
 
 typedef struct Srv {
@@ -809,6 +810,32 @@ int lsp_progress_count (void) {
 }
 
 
+/* the i-th, when it can be cancelled: it is (window/workDoneProgress/cancel); 0: it cannot */
+int lsp_progress_cancel (int i, int now) {
+  int k;
+  for (k = 0; k < g_nsrv; k++) {
+    Srv *s = g_srv[k];
+    if (s->gone || s->dead) continue;
+    if (i < s->nprog) {
+      const Prog *p = &s->prog[s->nprog - 1 - i];
+      Buf b;
+      if (!p->cancellable) return 0;
+      if (!now) return 1;
+      buf_init(&b);
+      buf_puts(&b, "{\"token\":");
+      json_put_str(&b, p->token, strlen(p->token));
+      buf_puts(&b, "}");
+      buf_putc(&b, '\0');
+      notify(s, "window/workDoneProgress/cancel", b.s);
+      buf_free(&b);
+      return 1;
+    }
+    i -= s->nprog;
+  }
+  return 0;
+}
+
+
 /* the i-th: "gopls: Loading packages... (42%)" in buf; its percentage, -1 not said */
 int lsp_progress_text (int i, char *buf, size_t n) {
   int k;
@@ -854,6 +881,7 @@ static void progress (Srv *s, const Json *params) {
     snprintf(p->title, sizeof(p->title), "%s", json_str(json_get(v, "title"), ""));
     snprintf(p->msg, sizeof(p->msg), "%s", json_str(json_get(v, "message"), ""));
     p->pct = json_get(v, "percentage") ? inum(json_get(v, "percentage"), -1) : -1;
+    p->cancellable = json_bool(json_get(v, "cancellable"), 0);
     out_log(s->chan, "[info] %s %s", p->title, p->msg);
   }
   else if (strcmp(kind, "report") == 0 && at >= 0) {

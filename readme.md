@@ -681,7 +681,10 @@ With no file open the editor shows the keys to start with.
   not signed in, out of its quota) Copilot is asked at once. To give the ghost
   text back to Copilot for good, Disable the extension in the Extensions view
   (`mme.extensions.disabled`; Enable brings it back). Their chat panels are
-  webviews and do not show. Start mme-sdl from mmc-shell (`mme-sdl .`) and the extensions get the
+  webviews and do not show. Codeium (Windsurf) signs in through its own
+  authentication provider: its link can't come back to mme, so click its
+  "Signing in..." progress in the status bar and Cancel - it then gives a token
+  page, and asks for the token. Start mme-sdl from mmc-shell (`mme-sdl .`) and the extensions get the
   shell's PATH (node, go, ...).
 
   Not there yet (Output > Extension Host lists every `[missing]` API an

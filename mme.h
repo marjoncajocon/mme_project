@@ -1721,6 +1721,7 @@ int lsp_state (const char *lang, char *name, size_t n);	/* LS_*; name: the progr
 void lsp_restart (const char *lang);
 const char *lsp_channel (const char *lang);	/* its OUTPUT channel, NULL none */
 int lsp_progress_count (void);	/* $/progress running now */
+int lsp_progress_cancel (int i, int now);	/* it can be cancelled (now: it is); 0: it cannot */
 int lsp_progress_text (int i, char *buf, size_t n);	/* its text; its percentage, -1 none */
 void lsp_task_diags (const char *path, const Diag *v, size_t n);	/* a task's problems in a file */
 void lsp_task_clear (void);

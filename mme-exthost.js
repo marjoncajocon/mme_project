@@ -1132,7 +1132,10 @@ const enums = {
 // ----------------------------------------------------------------- settings
 
 let settings = {};	// mme's settings.json, flat ("yaml.schemas": {...})
-const defaults = {};	// the running extensions' contributes.configuration defaults
+const defaults = {	// the running extensions' contributes.configuration defaults, and VS Code's own they read (Codeium: http.proxy)
+  'http.proxy': '', 'http.proxyAuthorization': null, 'http.proxyStrictSSL': true, 'http.proxySupport': 'override',
+  'http.systemCertificates': true, 'http.noProxy': [],
+};
 const onDidChangeConfiguration = new EventEmitter();
 
 function settingValue (key) {
@@ -1188,6 +1191,9 @@ function getConfiguration (section) {
   const whole = section ? settingValue(section) : undefined;
   if (whole && typeof whole === 'object')
     for (const k of Object.keys(whole)) if (!(k in cfg)) cfg[k] = clone(whole[k]);
+  if (!section)	// getConfiguration().http: every section, asked when read
+    for (const top of new Set([...Object.keys(defaults), ...Object.keys(settings)].map((k) => k.split('.')[0])))
+      if (!(top in cfg)) Object.defineProperty(cfg, top, {get: () => clone(settingValue(top)), enumerable: true});
   return cfg;
 }
 
@@ -1447,13 +1453,16 @@ registerCommand('_mme.statusBar', (key) => {
 });
 
 let nextProgress = 1;
+const progressCancels = new Map();	// token -> its CancellationTokenSource, while it runs
 async function withProgress (options, task) {
   const token = 'hp' + nextProgress++;
   const cts = new CancellationTokenSource();
   let pct = 0;
   const title = options && options.title ? String(options.title) : '';
+  const cancellable = !!(options && options.cancellable);
   await request('window/workDoneProgress/create', {token}).catch(() => {});
-  notify('$/progress', {token, value: {kind: 'begin', title, cancellable: false}});
+  if (cancellable) progressCancels.set(token, cts);
+  notify('$/progress', {token, value: {kind: 'begin', title: cancellable && !/cancel/i.test(title) ? title + ' (click to cancel)' : title, cancellable}});
   const progress = {report (v) {
     if (v.increment) pct = Math.min(100, pct + v.increment);
     notify('$/progress', {token, value: {kind: 'report', message: v.message ? String(v.message) : undefined, percentage: pct || undefined}});
@@ -1461,6 +1470,7 @@ async function withProgress (options, task) {
   try {
     return await task(progress, cts.token);
   } finally {
+    progressCancels.delete(token);
     notify('$/progress', {token, value: {kind: 'end'}});
   }
 }
@@ -2372,6 +2382,37 @@ let dataDir = '';
 let appRoot = '';
 const onDidChangeExtensions = new EventEmitter();
 
+// vscode.authentication: the providers extensions register (Codeium's sign in), asked for their sessions
+const authProviders = new Map();	// id -> {label, provider}
+const onDidChangeSessions = new EventEmitter();
+const authentication = {
+  registerAuthenticationProvider (id, label, provider) {
+    authProviders.set(id, {label, provider});
+    const sub = provider.onDidChangeSessions ? provider.onDidChangeSessions(() => onDidChangeSessions.fire({provider: {id, label}})) : null;
+    return new Disposable(() => {
+      authProviders.delete(id);
+      if (sub) sub.dispose();
+    });
+  },
+  async getSession (id, scopes, options) {
+    const p = authProviders.get(id);
+    const o = options || {};
+    if (!p) {	// VS Code's own (github, microsoft): none here
+      said('authentication.getSession ' + id);
+      return undefined;
+    }
+    const list = o.forceNewSession ? [] : await p.provider.getSessions(scopes || [], {});
+    if (list && list.length) return list[0];
+    if (o.createIfNone || o.forceNewSession) return p.provider.createSession(scopes || [], {});
+    return undefined;
+  },
+  async getAccounts (id) {
+    const p = authProviders.get(id);
+    return p ? (await p.provider.getSessions([], {}) || []).map((x) => x.account) : [];
+  },
+  onDidChangeSessions: onDidChangeSessions.event,
+};
+
 function stubEvent (name) {
   return () => {
     return new Disposable(() => {});
@@ -2669,7 +2710,7 @@ const vscodeApi = spare({
   ...enums,
   window, workspace, languages, commands: commandsNs, env, extensions: extensionsNs, tasks, debug, l10n,
   scm: spare({createSourceControl: undefined, inputBox: undefined}, 'scm'),
-  comments: spare({}, 'comments'), authentication: spare({onDidChangeSessions: stubEvent()}, 'authentication'),
+  comments: spare({}, 'comments'), authentication: spare(authentication, 'authentication'),
   notebooks: spare({}, 'notebooks'), tests: spare({}, 'tests'), chat: spare({}, 'chat'), lm: spare({tools: []}, 'lm'),
 }, '');
 
@@ -3011,6 +3052,11 @@ async function dispatch (msg) {
     case 'textDocument/didOpen': didOpen(params); break;
     case 'textDocument/didChange': didChange(params); break;
     case 'textDocument/didSave': didSave(params); break;
+    case 'window/workDoneProgress/cancel': {	// the progress item clicked: Cancel
+      const c = params && progressCancels.get(params.token);
+      if (c) c.cancel();
+      break;
+    }
     case 'textDocument/didClose': didClose(params); break;
     case 'workspace/didChangeConfiguration': settingsChanged(params && params.settings); break;
     case 'mme/activeEditor': activeEditorChanged(params); break;

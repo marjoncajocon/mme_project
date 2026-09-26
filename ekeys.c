@@ -70,8 +70,8 @@ static int parse_one (const char *s, size_t n) {
     }
   }
   if (key == 0) return 0;
-  if ((mods & KM_CTRL) && !(mods & KM_SHIFT) && key >= 'a' && key <= 'z')
-    return CTRL(key) | (mods & KM_ALT);
+  if ((mods & KM_CTRL) && !(mods & KM_SHIFT) && key >= 'a' && key <= 'z' && key != 'i' && key != 'm')
+    return CTRL(key) | (mods & KM_ALT);	/* not ctrl+i, ctrl+m: their codes are Tab's, Enter's (Supermaven's ctrl+i took Tab) */
   if (key < K_UP && !(mods & (KM_CTRL | KM_ALT))) {	/* a plain character: shift is in it */
     if ((mods & KM_SHIFT) && key >= 'a' && key <= 'z') return key - 32;
     return key;

@@ -10398,6 +10398,25 @@ static void restart_server (void) {
 ** front, how it is, and what can be done: restart it, see its output,
 ** change which program it is.
 */
+/* the progress item clicked while it can be cancelled (Codeium's sign in); 0: it cannot, the language status then */
+static int progress_cancel_ask (void) {
+  char t[200];
+  Pick p;
+  int r;
+  if (lsp_progress_count() == 0 || !lsp_progress_cancel(0, 0)) return 0;
+  lsp_progress_text(0, t, sizeof(t));
+  pick_init(&p, NULL);
+  p.keep_order = 1;
+  p.title = t;
+  pick_add(&p, "Cancel", NULL, 0xEA76);	/* codicon close */
+  pick_add(&p, "Language Status", NULL, 0xEA74);
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r == 0) lsp_progress_cancel(0, 1);
+  return r != 1;
+}
+
+
 static void lang_status (void) {
   static const char *const what[] = {"No language server", "Not started", "Not found", "Starting...",
                                      "Running", "Working...", "Stopped"};
@@ -17833,7 +17852,7 @@ static void run_command (int cmd) {
     case CMD_NOTIF_FOCUS: if (!toast_focus()) note_center(); break;
     case CMD_NOTIF_ACCEPT: toast_accept(); break;
     case CMD_NOTIF_CLEAR: toast_clear_all(); break;
-    case CMD_LSP_STATUS: lang_status(); break;
+    case CMD_LSP_STATUS: if (!progress_cancel_ask()) lang_status(); break;
     case CMD_LSP_RESTART: restart_server(); break;
     case CMD_EXP_NEW_FILE: explorer_cmd(FC_NEW_FILE); break;
     case CMD_EXP_OPEN_SIDE: explorer_cmd(FC_OPEN_SIDE); break;
