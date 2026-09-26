@@ -803,6 +803,18 @@ SCENARIOS = [
          "the status bar carries a GitHub Copilot item, and it is drawn dim while "
          "the inline-completion server says nobody is signed in",
          inline_lsp="out"),
+    # ------------------------------------------------------------------ menus in a small window
+    Scen("menu-short-window", "lang/edit.c",
+         ["w:1500"] + click(5, 1) + ["w:500", "r:120,14", "w:800", "d",
+          "k:" + UP, "w:400", "d", "k:" + DOWN, "w:400", "k:`[<65;6;8M", "w:400", "d"],
+         "the File menu opened and the window made lower than it: the rows that fit show "
+         "with a scrollbar at its right edge; Up (to Exit, the last item) scrolls it to the "
+         "end, Down (to New File) back to the top, and the wheel scrolls it"),
+    Scen("menu-popup-short-window", "lang/edit.c",
+         ["w:2000", "r:120,6", "w:800", "k:`[<2;60;6M", "k:`[<2;60;6m", "w:700", "d",
+          "k:" + UP, "w:400", "d"],
+         "the status bar's right-click menu in a window lower than the menu: it fits the "
+         "window with a scrollbar, and Up (to its last item) scrolls it to the end"),
     Scen("copilot-status-menu", "lang/edit.c",
          ["w:3000"] + click(116, 30) + ["w:900", "d"],
          "a click on the Copilot status item opens its menu, and the menu offers "

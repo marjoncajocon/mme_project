@@ -573,7 +573,46 @@ void menubar_draw (int open) {
 
 static struct {
   int x, y, w, h;	/* the open menu on the screen */
+  int top, vis;	/* its first item shown, how many show (a window too low for all of them) */
 } g_drop;
+
+
+/*
+** A menu taller than the window, VS Code's way: as many of its rows as fit
+** show, from row y (moved up when it can) to the row 'bottom' (excluded);
+** the rest scroll. The rows it shows.
+*/
+static int menu_place (int n, int *y, int ymin, int bottom) {
+  int h = n + 2;
+  if (h > bottom - ymin) h = bottom - ymin;
+  if (h < 3) h = 3;
+  if (*y + h > bottom) *y = bottom - h;
+  if (*y < ymin) *y = ymin;
+  return h - 2;
+}
+
+
+/* the first item shown: follow keeps the selected one in view (the keys), else the wheel's place stays */
+static void menu_scroll (int n, int vis, int sel, int follow, int *top) {
+  if (follow && sel >= 0) {
+    if (sel < *top) *top = sel;
+    if (sel >= *top + vis) *top = sel - vis + 1;
+  }
+  if (*top > n - vis) *top = n - vis;
+  if (*top < 0) *top = 0;
+}
+
+
+/* a slim scrollbar in the menu's right edge when not every item shows */
+static void menu_bar (int x, int y, int w, int n, int vis, int top) {
+  int len, at, i;
+  if (vis >= n || vis < 1) return;
+  len = vis * vis / n;
+  if (len < 1) len = 1;
+  at = top * (vis - len) / (n - vis);
+  for (i = 0; i < len; i++)	/* a half block, like the panes' */
+    scr_put_rgb(x + w - 1, y + 1 + at + i, 0x2590, ui_color(C_THUMB), ui_color(C_MENU_BG), 0);
+}
 
 
 static int count (const int *cmd) {
@@ -583,7 +622,7 @@ static int count (const int *cmd) {
 }
 
 
-static void drop_draw (int m, int sel) {
+static void drop_draw (int m, int sel, int follow) {
   const int *cmd = menus[m].cmd;
   int n = count(cmd), i, w = 24;
   for (i = 0; i < n; i++) {
@@ -595,10 +634,13 @@ static void drop_draw (int m, int sel) {
   if (g_drop.x < 0) g_drop.x = 0;
   g_drop.y = 1;
   g_drop.w = w;
-  g_drop.h = n + 2;
+  g_drop.vis = menu_place(n, &g_drop.y, 1, scr_rows());
+  g_drop.h = g_drop.vis + 2;
+  menu_scroll(n, g_drop.vis, sel, follow, &g_drop.top);
   scr_box(g_drop.x, g_drop.y, w, g_drop.h, S_MENU);
-  for (i = 0; i < n; i++) {
-    int y = g_drop.y + 1 + i, on = (i == sel);
+  menu_bar(g_drop.x, g_drop.y, w, n, g_drop.vis, g_drop.top);
+  for (i = g_drop.top; i < n && i < g_drop.top + g_drop.vis; i++) {
+    int y = g_drop.y + 1 + i - g_drop.top, on = (i == sel);
     if (cmd[i] == 0) {
       int x;
       for (x = g_drop.x + 1; x < g_drop.x + w - 1; x++) scr_put(x, y, 0x2500, S_MENU_LINE);
@@ -653,12 +695,8 @@ int popup_width (const char *const *label, const int *flags, int n) {
 ** item (MF_CHECK), dim ones (MF_OFF) cannot be picked, MF_LINE is a line,
 ** MF_SUB has the submenu's arrow (Right picks it too). The index picked, -1.
 */
-int popup_list (int x, int y, const char *const *label, const int *flags, int n) {
-  int w = popup_width(label, flags, n), h = n + 2, sel = pl_step(flags, n, -1, 1), i;
-  if (x + w > scr_cols()) x = scr_cols() - w;
-  if (y + h > scr_rows()) y = scr_rows() - h;
-  if (x < 0) x = 0;
-  if (y < 0) y = 0;
+int popup_list (int x0, int y0, const char *const *label, const int *flags, int n) {
+  int w = popup_width(label, flags, n), h, sel = pl_step(flags, n, -1, 1), i, x, y, vis, top = 0, follow = 1;
   int said = -1;
   for (;;) {
     int k, code;
@@ -667,9 +705,18 @@ int popup_list (int x, int y, const char *const *label, const int *flags, int n)
       said = sel;
     }
     ui_background();
+    x = x0;	/* placed again every time: the window may have changed its size */
+    y = y0;
+    if (x + w > scr_cols()) x = scr_cols() - w;
+    if (x < 0) x = 0;
+    vis = menu_place(n, &y, 0, scr_rows());
+    h = vis + 2;
+    menu_scroll(n, vis, sel, follow, &top);
+    follow = 0;
     scr_box(x, y, w, h, S_MENU);
-    for (i = 0; i < n; i++) {
-      int ry = y + 1 + i, on = (i == sel), cx, st = flags[i] & MF_OFF ? S_MENU_KEY : on ? S_MENU_SEL : S_MENU;
+    menu_bar(x, y, w, n, vis, top);
+    for (i = top; i < n && i < top + vis; i++) {
+      int ry = y + 1 + i - top, on = (i == sel), cx, st = flags[i] & MF_OFF ? S_MENU_KEY : on ? S_MENU_SEL : S_MENU;
       if (flags[i] & MF_LINE) {
         for (cx = x + 1; cx < x + w - 1; cx++) scr_put(cx, ry, 0x2500, S_MENU_LINE);
         continue;
@@ -685,16 +732,19 @@ int popup_list (int x, int y, const char *const *label, const int *flags, int n)
     if (k == K_NONE) continue;
     code = KEY_CODE(k);
     if (code == K_ESC || code == K_LEFT) return -1;
-    if (code == K_UP && sel >= 0) sel = pl_step(flags, n, sel, -1);
-    else if (code == K_DOWN && sel >= 0) sel = pl_step(flags, n, sel, 1);
+    if (code == K_UP && sel >= 0) sel = pl_step(flags, n, sel, -1), follow = 1;
+    else if (code == K_DOWN && sel >= 0) sel = pl_step(flags, n, sel, 1), follow = 1;
     else if ((code == K_ENTER || code == ' ') && sel >= 0) return sel;
     else if (code == K_RIGHT && sel >= 0 && (flags[sel] & MF_SUB)) return sel;
     else if (code == K_MOUSE) {
       Mouse *mo = &term_mouse;
       int inside = mo->x >= x && mo->x < x + w && mo->y > y && mo->y < y + h - 1;
-      if (mo->wheel) continue;
+      if (mo->wheel) {	/* a menu too tall for the window scrolls */
+        top += mo->wheel * 3;
+        continue;
+      }
       if (inside) {
-        int it = mo->y - y - 1;
+        int it = top + mo->y - y - 1;
         if (flags[it] & (MF_OFF | MF_LINE)) continue;
         sel = it;
         if (mo->button == 0 && !mo->press && !mo->drag) return it;	/* the button came up here */
@@ -705,17 +755,13 @@ int popup_list (int x, int y, const char *const *label, const int *flags, int n)
 }
 
 
-int menu_popup (int x, int y, const int *cmd, const char *const *label) {
-  int n = count(cmd), i, w = 20, h = n + 2, sel = step(cmd, -1, 1);
+int menu_popup (int x0, int y0, const int *cmd, const char *const *label) {
+  int n = count(cmd), i, w = 20, h, sel = step(cmd, -1, 1), x, y, vis, top = 0, follow = 1;
   for (i = 0; i < n; i++) {
     const char *s = label && label[i] ? label[i] : names[cmd[i]];
     int need = (int)str_cols(s) + (int)strlen(keys[cmd[i]]) + 8;
     if (cmd[i] && need > w) w = need;
   }
-  if (x + w > scr_cols()) x = scr_cols() - w;
-  if (y + h > scr_rows()) y = scr_rows() - h;
-  if (x < 0) x = 0;
-  if (y < 0) y = 0;
   int said = -1;
   for (;;) {
     int k, code;
@@ -724,9 +770,18 @@ int menu_popup (int x, int y, const int *cmd, const char *const *label) {
       said = sel;
     }
     ui_background();
+    x = x0;	/* placed again every time: the window may have changed its size */
+    y = y0;
+    if (x + w > scr_cols()) x = scr_cols() - w;
+    if (x < 0) x = 0;
+    vis = menu_place(n, &y, 0, scr_rows());
+    h = vis + 2;
+    menu_scroll(n, vis, sel, follow, &top);
+    follow = 0;
     scr_box(x, y, w, h, S_MENU);
-    for (i = 0; i < n; i++) {
-      int ry = y + 1 + i, on = (i == sel), cx;
+    menu_bar(x, y, w, n, vis, top);
+    for (i = top; i < n && i < top + vis; i++) {
+      int ry = y + 1 + i - top, on = (i == sel), cx;
       const char *s = label && label[i] ? label[i] : names[cmd[i]];
       if (cmd[i] == 0) {
         for (cx = x + 1; cx < x + w - 1; cx++) scr_put(cx, ry, 0x2500, S_MENU_LINE);
@@ -743,15 +798,18 @@ int menu_popup (int x, int y, const int *cmd, const char *const *label) {
     if (k == K_NONE) continue;
     code = KEY_CODE(k);
     if (code == K_ESC) return CMD_NONE;
-    if (code == K_UP) sel = step(cmd, sel, -1);
-    else if (code == K_DOWN) sel = step(cmd, sel, 1);
+    if (code == K_UP) sel = step(cmd, sel, -1), follow = 1;
+    else if (code == K_DOWN) sel = step(cmd, sel, 1), follow = 1;
     else if (code == K_ENTER || code == ' ') return cmd[sel];
     else if (code == K_MOUSE) {
       Mouse *mo = &term_mouse;
       int inside = mo->x >= x && mo->x < x + w && mo->y > y && mo->y < y + h - 1;
-      if (mo->wheel) continue;
+      if (mo->wheel) {	/* a menu too tall for the window scrolls */
+        top += mo->wheel * 3;
+        continue;
+      }
       if (inside) {
-        int it = mo->y - y - 1;
+        int it = top + mo->y - y - 1;
         if (cmd[it] == 0) continue;
         sel = it;
         if (mo->button == 0 && !mo->press && !mo->drag) return cmd[it];	/* the button came up here */
@@ -763,7 +821,8 @@ int menu_popup (int x, int y, const int *cmd, const char *const *label) {
 
 
 int menu_run (int m) {
-  int sel = step(menus[m].cmd, -1, 1), said_m = -1, said = -1;
+  int sel = step(menus[m].cmd, -1, 1), said_m = -1, said = -1, follow = 1;
+  g_drop.top = 0;
   for (;;) {
     const int *cmd = menus[m].cmd;
     int k, code;
@@ -776,7 +835,8 @@ int menu_run (int m) {
     }
     ui_background();
     menubar_draw(m);
-    drop_draw(m, sel);
+    drop_draw(m, sel, follow);
+    follow = 0;
     scr_cursor(0, -1);
     scr_pointer(PTR_POINTER);	/* every row of a menu, a picker or a dialog is clickable */
     scr_flush();
@@ -784,20 +844,26 @@ int menu_run (int m) {
     if (k == K_NONE) continue;
     code = KEY_CODE(k);
     if (code == K_ESC || code == K_F10) return CMD_NONE;
-    if (code == K_UP) sel = step(cmd, sel, -1);
-    else if (code == K_DOWN) sel = step(cmd, sel, 1);
+    if (code == K_UP) sel = step(cmd, sel, -1), follow = 1;
+    else if (code == K_DOWN) sel = step(cmd, sel, 1), follow = 1;
     else if (code == K_LEFT || code == K_RIGHT) {
       m = (m + (code == K_LEFT ? NMENU - 1 : 1)) % NMENU;
       sel = step(menus[m].cmd, -1, 1);
+      g_drop.top = 0;
+      follow = 1;
     }
     else if (code == K_ENTER || code == ' ') return cmd[sel];
     else if (code == K_MOUSE) {
       Mouse *mo = &term_mouse;
       int inside = mo->x >= g_drop.x && mo->x < g_drop.x + g_drop.w &&
                    mo->y > g_drop.y && mo->y < g_drop.y + g_drop.h - 1;
-      if (mo->wheel || mo->button != 0) continue;
+      if (mo->wheel) {	/* a menu too tall for the window scrolls */
+        g_drop.top += mo->wheel * 3;
+        continue;
+      }
+      if (mo->button != 0) continue;
       if (inside) {
-        int i = mo->y - g_drop.y - 1;
+        int i = g_drop.top + mo->y - g_drop.y - 1;
         if (cmd[i] == 0) continue;
         sel = i;
         if (!mo->press && !mo->drag) return cmd[i];	/* the button came up here */
@@ -807,6 +873,8 @@ int menu_run (int m) {
         if (hit < 0 || hit == m) return CMD_NONE;
         m = hit;
         sel = step(menus[m].cmd, -1, 1);
+        g_drop.top = 0;
+        follow = 1;
       }
       else if (mo->press && !mo->drag) return CMD_NONE;	/* a click outside closes */
     }
@@ -818,8 +886,8 @@ int menu_run (int m) {
 ** label[i] NULL is a line between groups, keys[] may be NULL. The item
 ** picked, or -1.
 */
-int context_menu (int x, int y, const char *const *label, const char *const *keys, int n) {
-  int sel = -1, i, w = 20, h = n + 2;
+int context_menu (int x0, int y0, const char *const *label, const char *const *keys, int n) {
+  int sel = -1, i, w = 20, h, x, y, vis, top = 0, follow = 1;
   for (i = n - 1; i >= 0; i--)	/* the first item selected, for the keys */
     if (label[i]) sel = i;
   for (i = 0; i < n; i++)
@@ -827,10 +895,6 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
       int need = (int)str_cols(label[i]) + (keys && keys[i] ? (int)strlen(keys[i]) : 0) + 8;
       if (need > w) w = need;
     }
-  if (x + w > scr_cols()) x = scr_cols() - w;
-  if (y + h > scr_rows() - 1) y = scr_rows() - 1 - h;
-  if (x < 0) x = 0;
-  if (y < 1) y = 1;
   int said = -1;
   for (;;) {
     int k, code;
@@ -839,9 +903,18 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
       said = sel;
     }
     ui_background();
+    x = x0;	/* placed again every time: the window may have changed its size */
+    y = y0;
+    if (x + w > scr_cols()) x = scr_cols() - w;
+    if (x < 0) x = 0;
+    vis = menu_place(n, &y, 1, scr_rows() - 1);	/* over the status bar only when it must */
+    h = vis + 2;
+    menu_scroll(n, vis, sel, follow, &top);
+    follow = 0;
     scr_box(x, y, w, h, S_MENU);
-    for (i = 0; i < n; i++) {
-      int ry = y + 1 + i, on = i == sel;
+    menu_bar(x, y, w, n, vis, top);
+    for (i = top; i < n && i < top + vis; i++) {
+      int ry = y + 1 + i - top, on = i == sel;
       if (label[i] == NULL) {
         int cx;
         for (cx = x + 1; cx < x + w - 1; cx++) scr_put(cx, ry, 0x2500, S_MENU_LINE);
@@ -865,14 +938,18 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
         sel = sel < 0 ? (d > 0 ? 0 : n - 1) : (sel + d + n) % n;
         if (label[sel]) break;
       }
+      follow = 1;
     }
     else if ((code == K_ENTER || code == ' ') && sel >= 0) return sel;
     else if (code == K_MOUSE) {
       Mouse *m = &term_mouse;
       int inside = m->x >= x && m->x < x + w && m->y > y && m->y < y + h - 1;
-      if (m->wheel) continue;
+      if (m->wheel) {	/* a menu too tall for the window scrolls */
+        top += m->wheel * 3;
+        continue;
+      }
       if (inside) {
-        int at = m->y - y - 1;
+        int at = top + m->y - y - 1;
         if (label[at] == NULL) continue;
         sel = at;
         if (!m->press && !m->drag && m->button != 3) return at;	/* let go here */

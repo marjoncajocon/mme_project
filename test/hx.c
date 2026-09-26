@@ -7,6 +7,7 @@
 **              bytes over 127 (argv is the ANSI code page), so text that is
 **              not ASCII goes in this way
 **   w:<ms>     wait
+**   r:<c>,<r>  the terminal resized to c columns and r rows (a window made smaller)
 **   d          dump the screen as text
 **   c:<row>    the row with a {rrggbb} marker where the text colour changes
 **   b:<row>    the row with a [rrggbb] marker where the BACKGROUND changes
@@ -157,6 +158,13 @@ int main (int argc, char **argv) {
       }
       pty_write(p, keys, n);
       pump(250);
+    }
+    else if (argv[i][0] == 'r') {	/* r:cols,rows: the terminal made that size (a window resized) */
+      const char *q = strchr(argv[i] + 2, ',');
+      int cols = atoi(argv[i] + 2), rows = q ? atoi(q + 1) : 30;
+      grid_resize(g, cols, rows);
+      pty_resize(p, cols, rows);
+      pump(600);
     }
     else if (argv[i][0] == 'w') pump(atoi(argv[i] + 2));
     else if (argv[i][0] == 'd') dump();
