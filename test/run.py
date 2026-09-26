@@ -849,6 +849,11 @@ SCENARIOS = [
          "an extension's inline completion provider (registerInlineCompletionItemProvider, what "
          "Supermaven and Blackbox use) gives the ghost text: dim after \"gho\", and Tab puts it in",
          exts=[("acme.demo", "acme.demo")]),
+    Scen("ext-host-ghost-fallback", "lang/edit.c",
+         ["w:5000", "k:" + DOWN * 11, "w:2500", "d"] + arows(14),
+         "an extension that gives ghost text for C (the demo's) has nothing on the blank line 12, so the "
+         "server's (Copilot's place: the stub) is asked at once and its continuation shows, as in lsp-inline-ghost",
+         stub_lsp=("c",), exts=[("acme.demo", "acme.demo")]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

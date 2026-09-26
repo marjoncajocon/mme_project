@@ -1280,6 +1280,7 @@ int ext_is_vscode (size_t i);	/* VS Code's: read only, run only when mme.extensi
 
 /* ehost.c: the extension host */
 const char *ehost_command (void);	/* the host's command line (node mme-exthost.js); "": nothing to run */
+int ehost_disabled (const char *id);	/* in mme.extensions.disabled: its code does not run */
 int ehost_inline (const char *lang);	/* an extension gives ghost text for it: asked instead of Copilot */
 int ehost_serves (const char *lang);	/* a running extension answers for this language: mme's own server does not start */
 void ehost_reset (void);	/* mme.extensions.run changed: worked out again */

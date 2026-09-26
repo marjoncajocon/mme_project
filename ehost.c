@@ -54,8 +54,8 @@ static int g_opened;	/* the open files were given to the host since it had somet
 static void forget (void);
 
 
-static int in_run_list (const char *id) {
-  const Json *list = settings_get("mme\\.extensions\\.run");
+static int in_list (const char *key, const char *id) {
+  const Json *list = settings_get(key);
   size_t i;
   if (list == NULL || list->type != J_ARR) return 0;
   for (i = 0; i < list->n; i++) {
@@ -63,6 +63,17 @@ static int in_run_list (const char *id) {
     if (m_stricmp(s, id) == 0) return 1;
   }
   return 0;
+}
+
+
+static int in_run_list (const char *id) {
+  return in_list("mme\\.extensions\\.run", id);
+}
+
+
+/* mme.extensions.disabled: its code does not run, wherever it is installed (its themes, snippets still do) */
+int ehost_disabled (const char *id) {
+  return in_list("mme\\.extensions\\.disabled", id);
 }
 
 
@@ -113,6 +124,7 @@ static void work_out (void) {
   n = ext_count();
   for (i = 0; i < n; i++) {
     const char *id = ext_id_at(i), *dir = ext_dir_at(i);
+    if (ehost_disabled(id)) continue;	/* Disable in the Extensions view */
     if (!in_run_list(id) && ext_is_vscode(i)) continue;	/* VS Code's run only when named */
     if (!read_pkg(dir)) continue;	/* no code: eext.c has all of it already */
     g_run = (HExt *)xrealloc(g_run, (g_nrun + 1) * sizeof(HExt));

@@ -284,6 +284,8 @@ static const Setting set[] = {
    "Font size in pixels of the workbench (mme-sdl): the menus, the side bar, the tabs, the panel, the status bar. The code editor has #editor.fontSize#. Ctrl+= and Ctrl+- zoom both."},
   {"mme.extensions.run", C_EXT, ST_OBJ, 0, "[]", NULL,
    "The VS Code extensions whose code runs in mme's extension host (node), by id: [\"redhat.vscode-yaml\", \"golang.go\"]. Those installed with Install from VSIX run by themselves. An extension's themes, snippets and grammars work either way; webviews do not. Microsoft's own extensions (Pylance, C/C++, Python) are licensed for Microsoft's VS Code only."},
+  {"mme.extensions.disabled", C_EXT, ST_OBJ, 0, "[]", NULL,
+   "Extensions whose code does not run, by id, wherever they are installed (Disable in the Extensions view): [\"supermaven.supermaven\"] gives the ghost text back to Copilot. Their themes and snippets still work."},
   {"mme.extensions.nodePath", C_EXT, ST_STR, 0, "\"\"", NULL,
    "The node program that runs the extensions' code. Empty: node from the PATH."},
   {"window.titleBarStyle", C_LOOK, ST_ENUM, 0, "\"custom\"", "custom|native",

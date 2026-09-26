@@ -5703,9 +5703,11 @@ static void apply_settings (int report) {
   {	/* which extensions run: when it changed, the extension host starts again with the new ones */
     Buf b;
     const Json *run = settings_get("mme\\.extensions\\.run"), *node = settings_get("mme\\.extensions\\.nodePath");
+    const Json *off = settings_get("mme\\.extensions\\.disabled");
     buf_init(&b);
     if (run) json_write(&b, run);
     if (node) json_write(&b, node);
+    if (off) json_write(&b, off);
     buf_putc(&b, '\0');
     if (run_was == NULL || strcmp(run_was, b.s) != 0) {
       int again = run_was != NULL;

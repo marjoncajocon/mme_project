@@ -677,8 +677,11 @@ With no file open the editor shows the keys to start with.
   (Supermaven, Blackbox ... through `registerInlineCompletionItemProvider`) is
   asked for the ghost text instead of Copilot (`mme.inlineCompletionServer`)
   while it runs, for the languages it covers; Tab, Ctrl+Right, Alt+] / Alt+[ and
-  Esc work on it as on Copilot's. Their chat panels are webviews and do not
-  show. Start mme-sdl from mmc-shell (`mme-sdl .`) and the extensions get the
+  Esc work on it as on Copilot's; where the extension has nothing (toggled off,
+  not signed in, out of its quota) Copilot is asked at once. To give the ghost
+  text back to Copilot for good, Disable the extension in the Extensions view
+  (`mme.extensions.disabled`; Enable brings it back). Their chat panels are
+  webviews and do not show. Start mme-sdl from mmc-shell (`mme-sdl .`) and the extensions get the
   shell's PATH (node, go, ...).
 
   Not there yet (Output > Extension Host lists every `[missing]` API an

@@ -1519,6 +1519,7 @@ static struct {
   Srv *asked;	/* who it went to */
   unsigned long edits;	/* the text it was asked about */
   Pos at;	/* and where */
+  int invoked;	/* asked for (Alt+\), not after a rest: the fallback is asked the same way */
 } g_inl;
 
 
@@ -1563,8 +1564,23 @@ int lsp_inline_able (const Doc *d) {
 }
 
 
+/* the one asked when an extension's ghost text (Supermaven ...) has nothing: Copilot, or the language's own server */
+static LDoc *inline_fallback (const Doc *d) {
+  LDoc *l = ldoc_inline_only(d);
+  if (l != NULL && l->s->can_inline && l->s->ready && !l->s->dead) return l;
+  l = ldoc(d);
+  return (l != NULL && !is_ext(l->s) && l->s->can_inline && l->s->ready && !l->s->dead) ? l : NULL;
+}
+
+
+static void inline_ask (LDoc *l, Doc *d, Pos at, int invoked);
+
 void lsp_inline (Doc *d, Pos at, int invoked) {
-  LDoc *l = ldoc_inline(d);
+  inline_ask(ldoc_inline(d), d, at, invoked);
+}
+
+
+static void inline_ask (LDoc *l, Doc *d, Pos at, int invoked) {
   Buf q;
   if (l == NULL || !l->s->ready || l->s->dead) return;
   if (!l->opened) did_open(l);	/* synced(), but for whichever server answers these */
@@ -1581,6 +1597,7 @@ void lsp_inline (Doc *d, Pos at, int invoked) {
   g_inl.asked = l->s;
   g_inl.edits = d->edits;
   g_inl.at = at;
+  g_inl.invoked = invoked;
   buf_free(&q);
 }
 
@@ -1593,6 +1610,11 @@ static void inlines (Srv *s, Doc *d, const Json *res) {
   inline_forget();
   if (items && items->type == J_OBJ) items = json_get(items, "items");
   if (items == NULL || items->type != J_ARR || items->n == 0) {
+    LDoc *fb;
+    if (is_ext(s) && d->edits == g_inl.edits && (fb = inline_fallback(d)) != NULL) {	/* the extension has nothing here: Copilot is asked */
+      inline_ask(fb, d, g_inl.at, g_inl.invoked);
+      return;
+    }
     on_inline(d, g_inl.edits, g_inl.at, NULL, 0);
     return;
   }

@@ -384,7 +384,7 @@ class Uri {
     const drive = /^\/([a-zA-Z]):(.*)$/.exec(p);
     if (drive) s += '/' + drive[1].toLowerCase() + (skipEncoding ? ':' : '%3A') + enc(drive[2], true);
     else s += enc(p, true);
-    if (this.query) s += '?' + enc(this.query, false);
+    if (this.query) s += '?' + (skipEncoding ? this.query : pctEncode(this.query, true).replace(/%(3D|26|2B|2C|3B|3A|40)/g, (m, h) => String.fromCharCode(parseInt(h, 16))));	// = & + , ; : @ stay, as VS Code's
     if (this.fragment) s += '#' + enc(this.fragment, false);
     return s;
   }
@@ -1845,7 +1845,7 @@ function languagesChanged () {
       const sels = Array.isArray(p.selector) ? p.selector : [p.selector];
       for (const s of sels) {
         const l = typeof s === 'string' ? s : s && s.language;
-        if (l && l !== '*' && p.kind !== 'diagnostics') langs.add(l);
+        if (l && l !== '*' && p.kind !== 'inlineCompletion') langs.add(l);	// ghost text alone does not take a language from its server
       }
     }
     const list = [...langs].sort();

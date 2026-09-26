@@ -1433,7 +1433,7 @@ void ext_draw (int x, int y, int w, int h, int focus) {
     cx = x + 3;
     cx += scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
     {	/* its code in the extension host: how it is */
-      const char *hs = ehost_state(it->id);
+      const char *hs = ehost_disabled(it->id) ? "disabled" : ehost_state(it->id);
       if (hs) {
         char tag[32];
         snprintf(tag, sizeof(tag), "  %s", strcmp(hs, "error") == 0 ? "failed" : hs);
@@ -1499,12 +1499,25 @@ static void pick_ext_theme (const Ext *e) {
 }
 
 
-/* mme.extensions.run with id in it (on) or not: the extension host starts again with it */
-static void set_run (const char *id, int on) {
-  const Json *list = settings_get("mme\\.extensions\\.run");
+/* the list setting key with id in it (on) or not: the extension host starts again with it */
+static void set_in (const char *key, const char *id, int on) {
+  char esc[128], *q;
+  const Json *list;
   Buf b;
   size_t i;
   int n = 0;
+  snprintf(esc, sizeof(esc), "%s", key);	/* "mme.extensions.run" looked up as "mme\\.extensions\\.run" */
+  {
+    Buf k;
+    buf_init(&k);
+    for (q = esc; *q; q++) {
+      if (*q == '.') buf_putc(&k, '\\');
+      buf_putc(&k, *q);
+    }
+    buf_putc(&k, '\0');
+    list = settings_get(k.s);
+    buf_free(&k);
+  }
   buf_init(&b);
   buf_putc(&b, '[');
   for (i = 0; list && list->type == J_ARR && i < list->n; i++) {
@@ -1519,10 +1532,21 @@ static void set_run (const char *id, int on) {
   }
   buf_putc(&b, ']');
   buf_putc(&b, '\0');
-  settings_put_json("mme.extensions.run", b.s);
+  settings_put_json(key, b.s);
   buf_free(&b);
   mme_settings_changed();
+}
+
+
+static void set_run (const char *id, int on) {
+  set_in("mme.extensions.run", id, on);
   toast(0, on ? "%s: its code runs now (the extension host)" : "%s: its code no longer runs", id);
+}
+
+
+static void set_disabled (const char *id, int off) {
+  set_in("mme.extensions.disabled", id, off);
+  toast(0, off ? "%s: disabled (its code does not run)" : "%s: enabled", id);
 }
 
 
@@ -1530,8 +1554,8 @@ static void set_run (const char *id, int on) {
 static void actions (size_t k) {
   Pick p;
   const Item *it;
-  int acts[6], n = 0, r;
-  enum { A_PAGE, A_UNINSTALL, A_THEME, A_RUN, A_STOP };
+  int acts[8], n = 0, r;
+  enum { A_PAGE, A_UNINSTALL, A_THEME, A_RUN, A_STOP, A_DISABLE, A_ENABLE };
   if (k >= g_nitem) return;
   it = &g_item[k];
   pick_init(&p, it->display);
@@ -1540,7 +1564,15 @@ static void actions (size_t k) {
     acts[n++] = A_THEME;
     pick_add(&p, "Set Color Theme", NULL, 0xEB5C);
   }
-  if (g_ext[it->ext].vscode) {	/* VS Code's run only when named in mme.extensions.run */
+  if (ehost_disabled(it->id)) {	/* its code turned off: on again */
+    acts[n++] = A_ENABLE;
+    pick_add(&p, "Enable", "its code runs again", 0xEB2C);
+  }
+  else if (!g_ext[it->ext].vscode && ehost_state(it->id) != NULL) {	/* mme-data's run by themselves: Disable turns it off */
+    acts[n++] = A_DISABLE;
+    pick_add(&p, "Disable", "its code does not run (its themes, snippets still work)", 0xEAD7);
+  }
+  if (g_ext[it->ext].vscode && !ehost_disabled(it->id)) {	/* VS Code's run only when named in mme.extensions.run */
     if (ehost_state(it->id) == NULL) {
       acts[n++] = A_RUN;
       pick_add(&p, "Run This Extension", "its code, in the extension host", 0xEB2C);
@@ -1563,6 +1595,8 @@ static void actions (size_t k) {
     case A_UNINSTALL: press(k); break;
     case A_THEME: pick_ext_theme(&g_ext[it->ext]); break;
     case A_RUN: set_run(it->id, 1); break;
+    case A_DISABLE: set_disabled(it->id, 1); break;
+    case A_ENABLE: set_disabled(it->id, 0); break;
     case A_STOP: set_run(it->id, 0); break;
     default: show_page(it); break;
   }
