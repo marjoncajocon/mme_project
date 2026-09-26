@@ -103,7 +103,16 @@ typedef struct Task {
   char *label, *cmd, *cwd, *source;	/* source: "" for tasks.json's, else "make", "go" ... */
   int build, dflt, test;	/* its group */
   int matcher;
+  char *custom;	/* an extension's CustomExecution: its id, the host runs it */
 } Task;
+
+typedef struct ExtTask {	/* an extension's task (registerTaskProvider), as the host said it */
+  char *id, *label, *source, *cmd, *cwd;
+  int build, dflt, test, matcher, custom;
+} ExtTask;
+
+static ExtTask *g_ext;
+static int g_next, g_ext_got;
 
 static Task *g_task;
 static int g_ntask;
@@ -122,6 +131,7 @@ static void task_add (const char *label, const char *cmd, const char *cwd, const
   t->dflt = dflt;
   t->test = test;
   t->matcher = matcher;
+  t->custom = NULL;
 }
 
 
@@ -132,10 +142,20 @@ static void tasks_free (void) {
     free(g_task[i].cmd);
     free(g_task[i].cwd);
     free(g_task[i].source);
+    free(g_task[i].custom);
   }
   free(g_task);
   g_task = NULL;
   g_ntask = 0;
+}
+
+
+static int matcher_name (const char *s) {
+  if (strcmp(s, "$gcc") == 0) return PM_GCC;
+  if (strcmp(s, "$go") == 0) return PM_GO;
+  if (strncmp(s, "$tsc", 4) == 0) return PM_TSC;
+  if (strcmp(s, "$msCompile") == 0) return PM_MS;
+  return PM_NONE;
 }
 
 
@@ -308,6 +328,77 @@ static void load_tasks (void) {
     task_add("rust: cargo test", "cargo test", NULL, "cargo", 0, 0, 1, PM_GCC);
     task_add("rust: cargo run", "cargo run", NULL, "cargo", 0, 0, 0, PM_GCC);
   }
+  {	/* the extensions' (registerTaskProvider), but not one found above by its name */
+    int i, k, dup;
+    for (i = 0; i < g_next; i++) {
+      const ExtTask *e = &g_ext[i];
+      char *cmd, *cwd;
+      for (dup = 0, k = 0; k < g_ntask && !dup; k++) dup = strcmp(g_task[k].label, e->label) == 0;
+      if (dup) continue;
+      cmd = vs_subst(e->cmd);
+      cwd = e->cwd[0] ? vs_subst(e->cwd) : NULL;
+      task_add(e->label, cmd, cwd, e->source[0] ? e->source : "extension", e->build, e->dflt, e->test, e->matcher);
+      if (e->custom) g_task[g_ntask - 1].custom = xstrdup(e->id);
+      free(cmd);
+      free(cwd);
+    }
+  }
+}
+
+
+static void ext_free (void) {
+  int i;
+  for (i = 0; i < g_next; i++) {
+    free(g_ext[i].id);
+    free(g_ext[i].label);
+    free(g_ext[i].source);
+    free(g_ext[i].cmd);
+    free(g_ext[i].cwd);
+  }
+  free(g_ext);
+  g_ext = NULL;
+  g_next = 0;
+}
+
+
+static void ext_one (ExtTask *e, const Json *t) {
+  const char *g = json_str(json_get(t, "group"), "");
+  e->id = xstrdup(json_str(json_get(t, "id"), ""));
+  e->label = xstrdup(json_str(json_get(t, "label"), ""));
+  e->source = xstrdup(json_str(json_get(t, "source"), ""));
+  e->cmd = xstrdup(json_str(json_get(t, "cmd"), ""));
+  e->cwd = xstrdup(json_str(json_get(t, "cwd"), ""));
+  e->build = strcmp(g, "build") == 0;
+  e->test = strcmp(g, "test") == 0;
+  e->dflt = json_bool(json_get(t, "dflt"), 0);
+  e->matcher = matcher_name(json_str(json_get(t, "matcher"), ""));
+  e->custom = json_bool(json_get(t, "custom"), 0);
+}
+
+
+/* mme/tasks: the extensions' tasks, for Run Task */
+void task_ext_list (const Json *tasks) {
+  size_t i;
+  ext_free();
+  if (tasks && tasks->type == J_ARR && tasks->n) {
+    g_ext = (ExtTask *)xmalloc(tasks->n * sizeof(ExtTask));
+    for (i = 0; i < tasks->n; i++) ext_one(&g_ext[g_next++], tasks->kid[i]);
+  }
+  g_ext_got = 1;
+}
+
+
+static int ext_got (void) {
+  return g_ext_got;
+}
+
+
+/* the extensions' tasks asked for again: the host answers at once, it is waited for a moment */
+static void ask_ext_tasks (void) {
+  if (!lsp_running(EXT_LANG)) return;
+  g_ext_got = 0;
+  lsp_ext_notify("mme/provideTasks", "{}");
+  lsp_ext_wait(2500, ext_got);
 }
 
 /* }================================================================== */
@@ -506,8 +597,47 @@ static void run (const Task *t) {
   R.matcher = t->matcher;
   if (R.line.s == NULL) buf_init(&R.line);
   R.line.len = 0;
+  if (t->custom) {	/* the extension runs it (its output: an Output channel of its own) */
+    Buf b;
+    buf_init(&b);
+    buf_puts(&b, "{\"id\":");
+    json_put_str(&b, t->custom, strlen(t->custom));
+    buf_puts(&b, ",\"label\":");
+    json_put_str(&b, t->label, strlen(t->label));
+    buf_puts(&b, "}");
+    buf_putc(&b, '\0');
+    lsp_ext_notify("mme/runTask", b.s);
+    buf_free(&b);
+    return;
+  }
   R.id = g_next_id++;
   if (on_task_terminal(t->label, t->cmd, t->cwd, R.id) != 0) R.id = 0;
+}
+
+
+/* mme/runTask: an extension's tasks.executeTask: run as one of Run Task's */
+void task_ext_run (const Json *t) {
+  ExtTask e;
+  Task k;
+  char *cmd, *cwd;
+  if (!trust_require("Running tasks")) return;
+  ext_one(&e, t);
+  cmd = vs_subst(e.cmd);
+  cwd = vs_subst(e.cwd[0] ? e.cwd : side_root());
+  memset(&k, 0, sizeof(k));
+  k.label = e.label;
+  k.cmd = cmd;
+  k.cwd = cwd;
+  k.source = e.source;
+  k.matcher = e.matcher;
+  if (e.cmd[0]) run(&k);
+  free(cmd);
+  free(cwd);
+  free(e.id);
+  free(e.label);
+  free(e.source);
+  free(e.cmd);
+  free(e.cwd);
 }
 
 
@@ -515,6 +645,7 @@ static void run (const Task *t) {
 static void run_task_pick (int build) {
   Pick p;
   int i, r, idx[512], n = 0;
+  ask_ext_tasks();
   load_tasks();
   if (build) {	/* the default build task runs at once */
     for (i = 0; i < g_ntask; i++)

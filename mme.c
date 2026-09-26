@@ -13113,6 +13113,12 @@ static void show_view (int v) {
 }
 
 
+/* treeView.reveal: the extensions' views shown */
+void mme_show_trees (void) {
+  show_view(VIEW_TREE);
+}
+
+
 static void save_as (void) {
   char *name = ask_text("Save As: the path of the file", T->doc->path ? T->doc->path : side_root());
   if (name == NULL || *name == '\0') {
@@ -14046,6 +14052,7 @@ int act_badge (int view, int *dot) {
   *dot = 0;
   if (view == VIEW_GIT) return git_count();
   if (view == VIEW_TEST) return test_failed();
+  if (view == VIEW_TREE) return tree_badge();
   if (view == VIEW_DEBUG) *dot = dbg_active();
   return 0;
 }
@@ -21454,6 +21461,11 @@ static void on_mouse (void) {
     }
     if (m->wheel) {
       side_wheel(E.view, m->wheel);
+      return;
+    }
+    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_TREE) {	/* an extension's view: the row's menu */
+      E.focus = F_SIDE;
+      tree_menu(m->y - L.body_y, m->x, m->y + 1);
       return;
     }
     if (m->button == 2 && m->press && !m->drag && E.view == VIEW_DEBUG && m->y > L.body_y + 2) {	/* Run and Debug: a row's menu */

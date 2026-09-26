@@ -29,7 +29,8 @@ static const uint32_t act_icon[VIEW_N] = {
   0xEA68,	/* source-control */
   0xEB91,	/* debug-alt: Run and Debug */
   0xEAE6,	/* extensions */
-  0xEA79	/* beaker: Testing */
+  0xEA79,	/* beaker: Testing */
+  0xEB86	/* list-tree: the extensions' views (only when there are some) */
 };
 
 
@@ -39,6 +40,7 @@ void act_draw (int x, int y, int h, int view, int shown) {
   for (v = 0; v < VIEW_N; v++) {
     int row = y + 1 + v * 2, on = shown && v == view;
     if (row >= y + h) break;
+    if (v == VIEW_TREE && tree_count() == 0) continue;
     if (on) scr_put(opt.side_right ? x + ACT_W - 1 : x, row, 0x258E, S_ACT_BAR);	/* the bar on the side of the editor */
     scr_put(x + 1, row, act_icon[v], on ? S_ACT_ON : S_ACT);
     if (row + 1 < y + h) {	/* VS Code's badge: a number at the icon's foot, white on blue */
@@ -67,7 +69,7 @@ int act_manage_row (int y, int h) {
 
 int act_hit (int y) {
   int v = (y - 1) / 2;
-  if (y < 1 || v >= VIEW_N) return -1;
+  if (y < 1 || v >= VIEW_N || (v == VIEW_TREE && tree_count() == 0)) return -1;
   return v;
 }
 
@@ -86,6 +88,7 @@ void side_draw (int view, int x, int y, int w, int h, int focus, const char *act
   else if (view == VIEW_DEBUG) debug_draw(x, y, w, h, focus);
   else if (view == VIEW_EXT) ext_draw(x, y, w, h, focus);
   else if (view == VIEW_TEST) test_draw(x, y, w, h, focus);
+  else if (view == VIEW_TREE) tree_draw(x, y, w, h, focus);
   else files_draw(x, y, w, h, focus, active);
 }
 
@@ -97,6 +100,7 @@ int side_key (int view, int k, SideAct *act) {
   if (view == VIEW_DEBUG) return debug_key(k, act);
   if (view == VIEW_EXT) return ext_key(k, act);
   if (view == VIEW_TEST) return test_key(k, act);
+  if (view == VIEW_TREE) return tree_key(k, act);
   return files_key(k, act);
 }
 
@@ -108,6 +112,7 @@ void side_click (int view, int row, int col, SideAct *act) {
   else if (view == VIEW_DEBUG) debug_click(row, col, act);
   else if (view == VIEW_EXT) ext_click(row, col, act);
   else if (view == VIEW_TEST) test_click(row, col, act);
+  else if (view == VIEW_TREE) tree_click(row, col, act);
   else files_click(row, col, act);
 }
 
@@ -137,6 +142,7 @@ void side_wheel (int view, int d) {
   else if (view == VIEW_DEBUG) debug_wheel(d);
   else if (view == VIEW_EXT) ext_wheel(d);
   else if (view == VIEW_TEST) test_wheel(d);
+  else if (view == VIEW_TREE) tree_wheel(d);
   else files_wheel(d);
 }
 

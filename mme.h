@@ -1010,7 +1010,7 @@ void merge_mouse (const Mouse *m, PageAct *a);
 ** ===================================================================
 */
 
-enum { VIEW_FILES, VIEW_SEARCH, VIEW_GIT, VIEW_DEBUG, VIEW_EXT, VIEW_TEST, VIEW_N };
+enum { VIEW_FILES, VIEW_SEARCH, VIEW_GIT, VIEW_DEBUG, VIEW_EXT, VIEW_TEST, VIEW_TREE, VIEW_N };	/* VIEW_TREE: the extensions' tree views */
 
 #define ACT_W	4	/* the activity bar's width */
 
@@ -1286,6 +1286,32 @@ int ehost_serves (const char *lang);	/* a running extension answers for this lan
 void ehost_reset (void);	/* mme.extensions.run changed: worked out again */
 void ehost_idle (void);	/* the main loop: installed, uninstalled ones start the host again */
 const char *ehost_state (const char *id);	/* "running", "error", "starting"; NULL: it does not run */
+/* etree.c: the extensions' tree views (createTreeView) in the side bar, filled by the host */
+void tree_views (const Json *views);	/* mme/treeViews */
+void tree_ready (const Json *p);
+void tree_info (const Json *p);
+void tree_items (const Json *p);
+void tree_refresh (const Json *p);
+void tree_reveal (const Json *p);
+int tree_count (void);	/* the views there are; 0: no activity bar icon */
+int tree_badge (void);
+void tree_draw (int x, int y, int w, int h, int focus);
+int tree_key (int k, SideAct *act);
+void tree_click (int row, int col, SideAct *act);
+void tree_menu (int row, int x, int y);	/* the right button */
+void tree_wheel (int d);
+void mme_show_trees (void);	/* mme.c: the view shown (treeView.reveal) */
+void lsp_ext_notify (const char *method, const char *params);	/* elsp.c: a notification to the extension host */
+int lsp_ext_wait (int ms, int (*done) (void));	/* its messages read until done() or ms */
+void task_ext_list (const Json *tasks);	/* etask.c: mme/tasks, the extensions' tasks */
+void test_ext_items (const Json *tests);	/* etest.c: mme/tests, the extensions' test controllers' */
+void test_ext_state (const Json *p);	/* mme/testState */
+void test_ext_output (const Json *p);	/* mme/testOutput */
+void test_ext_end (void);	/* mme/testEnd */
+int ehost_debug_type (const char *type);	/* ehost.c: an extension's debugger has this type */
+Json *ehost_debug_resolve (const char *config);	/* through the extension: {config, adapter} | {error}; NULL no answer */
+void dbg_console (const char *s);	/* edebug.c: text in the DEBUG CONSOLE (debug.activeDebugConsole) */
+void task_ext_run (const Json *task);	/* mme/runTask: tasks.executeTask */
 int ehost_message (const char *method, const Json *params);	/* elsp.c: an mme/... notification of the host */
 int ehost_request (const char *method, const Json *params, Buf *result);	/* elsp.c: an mme/... request; its result as JSON */
 int ehost_ncmd (void);	/* the extensions' commands: CMD_N .. CMD_N + ehost_ncmd() - 1 */

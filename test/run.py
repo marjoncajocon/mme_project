@@ -911,6 +911,38 @@ SCENARIOS = [
          "an extension's custom editor (registerCustomEditorProvider) reopens the file in front in the "
          "browser from the palette; its page's message becomes a WorkspaceEdit, and line 1 changes in mme",
          exts=[("acme.web", "acme.web")], play_browser=True, private=True),
+    Scen("ext-host-tree-view", "lang/plain.txt",
+         ["w:5000"] + click(2, 15) + ["w:2500", "d", "k:" + DOWN + ENTER, "w:1500", "d",
+          "k:" + DOWN + ENTER, "w:1500", "d", "k:`[21;2~", "w:800", "d", "k:" + ENTER, "w:1500", "d"],
+         "an extension's tree view (createTreeView) is a section of the side bar's extension views, whose "
+         "activity bar icon shows only when there is one: its group opens (its children come from the "
+         "extension), a row's command runs (\"Picked apple\"), Shift+F10 is its context menu "
+         "(view/item/context), and Eat It changes the tree the extension refreshes",
+         exts=[("acme.web", "acme.web")]),
+    Scen("ext-host-task-provider", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:run task...", "w:700", "k:" + ENTER, "w:2500", "d",
+          "k:acme", "w:500", "k:" + ENTER, "w:3000", "d"],
+         "an extension's task provider (registerTaskProvider) is asked when Run Task opens: \"acme: say hello\" "
+         "is in the list (source acme), and it runs in mme's task terminal like tasks.json's",
+         exts=[("acme.web", "acme.web")]),
+    Scen("ext-host-test-controller", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:focus on test explorer", "w:700", "k:" + ENTER, "w:2500",
+          "k:" + DOWN + ENTER, "w:800", "d",
+          "k:" + CTRL_SHIFT_P, "k:test: run all tests", "w:700", "k:" + ENTER, "w:2500", "d"],
+         "an extension's test controller (tests.createTestController) is in the Testing view: its file with "
+         "its two tests; Run All runs them through its run profile, one passes and one fails with its message",
+         exts=[("acme.web", "acme.web")]),
+    Scen("ext-host-semantic-tokens", "lang/plain.txt",
+         ["w:6000"] + crows(3, 4),
+         "an extension's semantic tokens (registerDocumentSemanticTokensProvider, with its own legend) color "
+         "the text: \"several\" on each line gets a function's color, the rest stays plain",
+         exts=[("acme.web", "acme.web")]),
+    Scen("ext-host-debug-adapter", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:acme: debug", "w:700", "k:" + ENTER, "w:4000", "d"],
+         "an extension's debugger (contributes.debuggers): debug.startDebugging goes to mme's debugger, the "
+         "extension's configuration provider resolves it (adds its greeting) and its inline adapter (written in "
+         "JavaScript, reached through the host) runs the session: its output is in the DEBUG CONSOLE",
+         exts=[("acme.web", "acme.web")]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

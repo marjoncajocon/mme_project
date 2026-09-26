@@ -134,6 +134,8 @@ static struct {
   int conf_done;
   int cap_cond, cap_hit, cap_log, cap_setvar, cap_goto, cap_excinfo, cap_exc, cap_data;	/* what the adapter can */
   char *exc_title, *exc_desc;	/* stopped on an exception: what it says (the peek) */
+  int ext;	/* an extension's debugger: the host is told when it ends */
+  int noproc;	/* connected to a port only: no adapter process of mme's */
 } D;
 
 static VarList g_vars;	/* VARIABLES: the scopes and their values */
@@ -1198,6 +1200,7 @@ static void end_session (void) {
   free(D.args);
   free(D.request);
   drop_temp(0);
+  if (D.ext) lsp_ext_notify("mme/debugEnded", "{}");	/* onDidTerminateDebugSession */
   memset(&D, 0, sizeof(D));
   D.sock = NO_SOCK;
   D.to = D.from = D.out = -1;
@@ -1234,7 +1237,117 @@ static Json *pick_config (void) {
 }
 
 
+/* launch's arguments: the configuration, and noDebug for Run Without Debugging */
+static void set_args (const Json *cfg, int nodebug) {
+  Buf b;
+  buf_init(&b);
+  json_write(&b, cfg);
+  if (nodebug && b.len > 1 && b.s[b.len - 1] == '}') {
+    b.len--;
+    buf_puts(&b, b.len > 1 ? ",\"noDebug\":true}" : "\"noDebug\":true}");
+  }
+  buf_putc(&b, '\0');
+  free(D.args);
+  D.args = buf_take(&b);
+}
+
+
+static const char initialize_args[] =
+  "{\"clientID\":\"mme\",\"clientName\":\"mme\",\"adapterID\":\"mme\",\"pathFormat\":\"path\","
+  "\"linesStartAt1\":true,\"columnsStartAt1\":true,\"supportsVariableType\":true,"
+  "\"supportsRunInTerminalRequest\":false,\"locale\":\"en\"}";
+
+
+/*
+** An extension's debugger (contributes.debuggers): the host resolves *cfg with the extension's providers and
+** says where the adapter is. 1: *argv (and *cwd) to start; 0: connected to its port, the session is on;
+** -1: it did not start (said), or the extension stopped it.
+*/
+static int ext_adapter (Json **cfg, int nodebug, char ***argv, char **cwd) {
+  Buf b;
+  Json *res;
+  const Json *ad, *c;
+  const char *kind;
+  buf_init(&b);
+  json_write(&b, *cfg);
+  buf_putc(&b, '\0');
+  res = ehost_debug_resolve(b.s);
+  buf_free(&b);
+  if (res == NULL || json_get(res, "error")) {
+    toast(1, "%s", res ? json_str(json_get(res, "error"), "") : "The extension did not start the debug session");
+    json_free(res);
+    return -1;
+  }
+  c = json_get(res, "config");
+  if (c == NULL || c->type != J_OBJ) {	/* the extension stopped it: its own word was said */
+    json_free(res);
+    return -1;
+  }
+  buf_init(&b);	/* its configuration now: what it resolved */
+  json_write(&b, c);
+  json_free(*cfg);
+  *cfg = json_parse(b.s, b.len);
+  buf_free(&b);
+  snprintf(D.type, sizeof(D.type), "%s", json_str(json_get(*cfg, "type"), D.type));
+  snprintf(D.name, sizeof(D.name), "%s", json_str(json_get(*cfg, "name"), D.name));
+  free(D.request);
+  D.request = xstrdup(json_str(json_get(*cfg, "request"), "launch"));
+  set_args(*cfg, nodebug);
+  ad = json_get(res, "adapter");
+  kind = json_str(json_get(ad, "kind"), "");
+  if (strcmp(kind, "server") == 0) {	/* a port (an inline adapter's comes through the host) */
+    int port = (int)json_num(json_get(ad, "port"), 0);
+    long long end = os_now_us() + 5000000;
+    Sock s = NO_SOCK;
+    while (port > 0 && (s = tcp_connect(port)) == NO_SOCK && os_now_us() < end) ;
+    json_free(res);
+    if (s == NO_SOCK) {
+      toast(1, "The debug adapter at port %d could not be reached", port);
+      return -1;
+    }
+    D.on = 1;
+    D.ext = 1;
+    D.noproc = 1;
+    D.nodebug = nodebug;
+    D.sock = s;
+    D.to = D.from = D.out = -1;
+    buf_init(&D.in);
+    buf_init(&D.outline);
+    D.ready = 1;
+    con_print(CC_INFO, "%s", nodebug ? "Running..." : "Starting the debugger...");
+    on_debug(DE_START, NULL, 0);
+    request("initialize", initialize_args, RQ_INIT, 0, NULL);
+    return 0;
+  }
+  if (strcmp(kind, "exec") == 0) {	/* a program: its stdin and stdout */
+    const Json *args = json_get(ad, "args");
+    size_t i, n = args && args->type == J_ARR ? args->n : 0;
+    char **v = (char **)xmalloc((n + 2) * sizeof(char *));
+    const char *cmd = json_str(json_get(ad, "command"), ""), *dir = json_str(json_get(ad, "cwd"), "");
+    char *found = strchr(cmd, '/') || strchr(cmd, '\\') ? NULL : find_program(cmd);
+    v[0] = found ? found : xstrdup(cmd);
+    for (i = 0; i < n; i++) v[i + 1] = xstrdup(json_str(args->kid[i], ""));
+    v[n + 1] = NULL;
+    *argv = v;
+    *cwd = dir[0] ? xstrdup(dir) : NULL;
+    json_free(res);
+    return 1;
+  }
+  toast(1, "The extension's debug adapter is of a kind mme cannot reach (%s)", kind);
+  json_free(res);
+  return -1;
+}
+
+
+/* debug.activeDebugConsole: an extension's words in the DEBUG CONSOLE */
+void dbg_console (const char *s) {
+  con_add(s, strlen(s), CC_OUT);
+}
+
+
 static int dbg_start (int nodebug) {
+  char *xcwd = NULL;
+  int ext = 0;
   if (!trust_require(nodebug ? "Running" : "Debugging")) return -1;	/* Restricted Mode */
   Json *cfg, *m;
   char *cmd, **argv, *root;
@@ -1264,29 +1377,40 @@ static int dbg_start (int nodebug) {
     m->str = xstrdup("internalConsole");
     m->len = strlen(m->str);
   }
-  cmd = adapter_cmd(D.type);
-  if (cmd == NULL) {
-    toast(1, "No debug adapter for type '%s': set mme.debugAdapters in settings.json", D.type);
+  cmd = NULL;
+  argv = NULL;
+  tcp = 0;
+  if (lsp_running(EXT_LANG) && ehost_debug_type(D.type)) {	/* an extension's debugger: it says how */
+    int r2;
+    con_print(CC_INFO, "%s", "Asking the extension for its debug adapter...");
+    r2 = ext_adapter(&cfg, nodebug, &argv, &xcwd);
     json_free(cfg);
-    free(D.request);
-    D.request = NULL;
-    return -1;
-  }
-  {	/* launch's arguments: the configuration, and noDebug for Run Without Debugging */
-    Buf b;
-    buf_init(&b);
-    json_write(&b, cfg);
-    if (nodebug && b.len > 1 && b.s[b.len - 1] == '}') {
-      b.len--;
-      buf_puts(&b, b.len > 1 ? ",\"noDebug\":true}" : "\"noDebug\":true}");
+    if (r2 <= 0) {
+      if (r2 < 0) {
+        free(D.request);
+        D.request = NULL;
+        free(D.args);
+        D.args = NULL;
+      }
+      return r2;
     }
-    buf_putc(&b, '\0');
-    D.args = buf_take(&b);
+    ext = 1;
   }
-  json_free(cfg);
-  argv = split_cmd(cmd);
-  tcp = argv[0] && strstr(path_basename(argv[0]), "dlv") != NULL;	/* dlv dap listens on a port */
-  free(cmd);
+  else {
+    cmd = adapter_cmd(D.type);
+    if (cmd == NULL) {
+      toast(1, "No debug adapter for type '%s': set mme.debugAdapters in settings.json", D.type);
+      json_free(cfg);
+      free(D.request);
+      D.request = NULL;
+      return -1;
+    }
+    set_args(cfg, nodebug);
+    json_free(cfg);
+    argv = split_cmd(cmd);
+    tcp = argv[0] && strstr(path_basename(argv[0]), "dlv") != NULL;	/* dlv dap listens on a port */
+    free(cmd);
+  }
   if (argv[0] == NULL || os_pipe(to) != 0 || os_pipe(from) != 0) {
     toast(1, "The debug adapter could not start");
     for (i = 0; argv[i]; i++) free(argv[i]);
@@ -1301,7 +1425,7 @@ static int dbg_start (int nodebug) {
   io[0] = to[0];
   io[1] = from[1];
   io[2] = tcp ? from[1] : null;
-  root = xstrdup(side_root());
+  root = xcwd ? xcwd : xstrdup(side_root());
   {
     char *cwd = os_getcwd();
     os_chdir(root);
@@ -1326,6 +1450,7 @@ static int dbg_start (int nodebug) {
   for (i = 0; argv[i]; i++) free(argv[i]);
   free(argv);
   D.on = 1;
+  D.ext = ext;
   D.nodebug = nodebug;
   D.sock = NO_SOCK;
   buf_init(&D.in);
@@ -1894,7 +2019,7 @@ int dbg_poll (void) {
     end_session();
     return 1;
   }
-  if (D.in.len == 0 && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
+  if (D.in.len == 0 && !D.noproc && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
     if (D.out >= 0) {	/* its last words */
       while (os_wait_readable(D.out, 0) == 1 && (n = os_read(D.out, chunk, sizeof(chunk))) > 0)
         adapter_output(chunk, (size_t)n);

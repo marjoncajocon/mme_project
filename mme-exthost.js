@@ -1052,7 +1052,25 @@ class ProcessExecution {
 
 class Task {
   constructor (definition, scope, name, source, execution, problemMatchers) {
-    Object.assign(this, {definition, scope, name, source, execution, problemMatchers});
+    if (typeof scope === 'string') {	// the old form: (definition, name, source, execution, problemMatchers)
+      problemMatchers = execution;
+      execution = source;
+      source = name;
+      name = scope;
+      scope = 2;
+    }
+    Object.assign(this, {definition, scope, name, source, execution, problemMatchers: problemMatchers || []});
+    this.group = undefined;
+    this.detail = undefined;
+    this.isBackground = false;
+    this.presentationOptions = {};
+    this.runOptions = {};
+  }
+}
+
+class CustomExecution {
+  constructor (callback) {
+    this.callback = callback;
   }
 }
 
@@ -1111,6 +1129,7 @@ const enums = {
   LogLevel: {Off: 0, Trace: 1, Debug: 2, Info: 3, Warning: 4, Error: 5},
   EnvironmentVariableMutatorType: {Replace: 1, Append: 2, Prepend: 3},
   TaskRevealKind: {Always: 1, Silent: 2, Never: 3},
+  TestRunProfileKind: {Run: 1, Debug: 2, Coverage: 3},
   TaskPanelKind: {Shared: 1, Dedicated: 2, New: 3},
   TaskScope: {Global: 1, Workspace: 2},
   ShellQuoting: {Escape: 1, Strong: 2, Weak: 3},
@@ -1223,6 +1242,7 @@ async function executeCommand (id, ...args) {
     return undefined;
   }
   if (id === 'vscode.open' && args[0]) return showDocument(toUri(args[0]));
+  if (id === 'testing.showMostRecentOutput') return notify('mme/testShowOutput', {});	// mme's Test Results
   if (id === 'vscode.openFolder') return undefined;
   if (id === 'vscode.executeDocumentSymbolProvider' && args[0]) return runProviders('documentSymbol', docFor(args[0]), []);
   const r = await request('mme/executeCommand', {command: id, arguments: args.map(plain)}).catch(() => undefined);
@@ -1303,7 +1323,7 @@ async function showQuickPick (items, options, token) {
 }
 
 function labelText (l) {
-  return String(l || '').replace(/\$\(([\w-]+)\)\s*/g, '');	// $(icon) codicons: not drawn here
+  return iconText(l);	// $(icon) codicons: their glyphs, mme's font has them
 }
 
 async function showInputBox (options, token) {
@@ -1643,7 +1663,7 @@ const fsApi = {
     return {type: s.isDirectory() ? 2 : 1, ctime: s.ctimeMs, mtime: s.mtimeMs, size: s.size};
   },
   async readFile (u) {
-    return new Uint8Array(await fs.promises.readFile(toUri(u).fsPath).catch(() => {
+    return (await fs.promises.readFile(toUri(u).fsPath).catch(() => {	// a Buffer, as VS Code's: its toString() is the text
       throw FileSystemError.FileNotFound(String(u));
     }));
   },
@@ -1841,6 +1861,61 @@ function score (sel, doc) {
     else return 0;
   }
   return s;
+}
+
+// semantic tokens: the host's one legend (VS Code's standard types and modifiers); a provider's are put in it,
+// a type it does not have left out (the positions after it made again, relative to the token before)
+const SEM_TYPES = ['namespace', 'class', 'enum', 'interface', 'struct', 'typeParameter', 'type', 'parameter', 'variable',
+  'property', 'enumMember', 'decorator', 'event', 'function', 'method', 'macro', 'label', 'comment', 'string', 'keyword',
+  'number', 'regexp', 'operator'];
+const SEM_MODS = ['declaration', 'definition', 'readonly', 'static', 'deprecated', 'abstract', 'async', 'modification',
+  'documentation', 'defaultLibrary'];
+
+function semRemap (data, legend) {
+  const types = ((legend && legend.tokenTypes) || []).map((t) => SEM_TYPES.indexOf(t));
+  const mods = ((legend && legend.tokenModifiers) || []).map((m) => SEM_MODS.indexOf(m));
+  const out = [];
+  let line = 0, ch = 0, outLine = 0, outCh = 0;
+  for (let i = 0; i + 4 < data.length; i += 5) {
+    const dl = data[i];
+    line += dl;
+    ch = dl ? data[i + 1] : ch + data[i + 1];
+    const t = types[data[i + 3]];
+    if (t === undefined || t < 0) continue;
+    let m = 0;
+    for (let b = 0, bits = data[i + 4]; bits; b++, bits >>>= 1)
+      if ((bits & 1) && mods[b] >= 0) m |= 1 << mods[b];
+    out.push(line - outLine, line === outLine ? ch - outCh : ch, data[i + 2], t, m);
+    outLine = line;
+    outCh = ch;
+  }
+  return out;
+}
+
+// call and type hierarchy items: kept here, mme gets a handle in data
+const hierCache = new Map();
+let hierSeq = 1;
+function hierToLsp (it, pr) {
+  const h = hierSeq++;
+  hierCache.set(h, {it, pr});
+  if (hierCache.size > 5000) hierCache.delete(hierCache.keys().next().value);
+  return {name: it.name, kind: (it.kind || 0) + 1, detail: it.detail, tags: it.tags, uri: mmeUri(it.uri),
+    range: rangeToLsp(it.range), selectionRange: rangeToLsp(it.selectionRange || it.range), data: {h}};
+}
+
+async function hierPrepare (kind, method, p, tok) {
+  const doc = docFor(p.textDocument.uri);
+  if (!doc) return null;
+  for (const pr of matching(kind, doc)) {
+    try {
+      const r = await pr.provider[method](doc, posFromLsp(p.position), tok);
+      const list = [].concat(r || []);
+      if (list.length) return list.map((it) => hierToLsp(it, pr));
+    } catch (e) {
+      // the next one
+    }
+  }
+  return null;
 }
 
 function matching (kind, doc) {
@@ -2288,6 +2363,60 @@ const handlers = {
       paddingLeft: h.paddingLeft, paddingRight: h.paddingRight,
       tooltip: typeof h.tooltip === 'string' ? h.tooltip : h.tooltip && h.tooltip.value})));
   },
+  async 'textDocument/semanticTokens/full' (p, tok) {	// an extension's (vscode-languageclient's gopls ...), in the host's legend
+    const doc = docFor(p.textDocument.uri);
+    if (!doc) return null;
+    for (const pr of matching('semanticTokens', doc)) {
+      try {
+        const r = await pr.provider.provideDocumentSemanticTokens(doc, tok);
+        if (r && r.data) return {data: semRemap(r.data, pr.meta)};
+      } catch (e) {
+        // the next one, if any
+      }
+    }
+    return null;
+  },
+  async 'textDocument/semanticTokens/range' (p, tok) {
+    const doc = docFor(p.textDocument.uri);
+    if (!doc) return null;
+    for (const pr of matching('semanticTokensRange', doc)) {
+      try {
+        const r = await pr.provider.provideDocumentRangeSemanticTokens(doc, rangeFromLsp(p.range), tok);
+        if (r && r.data) return {data: semRemap(r.data, pr.meta)};
+      } catch (e) {
+        // the whole document's then
+      }
+    }
+    return handlers['textDocument/semanticTokens/full']({textDocument: p.textDocument}, tok);
+  },
+  async 'textDocument/prepareCallHierarchy' (p, tok) {
+    return hierPrepare('callHierarchy', 'prepareCallHierarchy', p, tok);
+  },
+  async 'callHierarchy/incomingCalls' (p, tok) {
+    const k = hierCache.get(p.item && p.item.data && p.item.data.h);
+    if (!k) return null;
+    const r = (await k.pr.provider.provideCallHierarchyIncomingCalls(k.it, tok)) || [];
+    return r.map((c) => ({from: hierToLsp(c.from, k.pr), fromRanges: (c.fromRanges || []).map(rangeToLsp)}));
+  },
+  async 'callHierarchy/outgoingCalls' (p, tok) {
+    const k = hierCache.get(p.item && p.item.data && p.item.data.h);
+    if (!k) return null;
+    const r = (await k.pr.provider.provideCallHierarchyOutgoingCalls(k.it, tok)) || [];
+    return r.map((c) => ({to: hierToLsp(c.to, k.pr), fromRanges: (c.fromRanges || []).map(rangeToLsp)}));
+  },
+  async 'textDocument/prepareTypeHierarchy' (p, tok) {
+    return hierPrepare('typeHierarchy', 'prepareTypeHierarchy', p, tok);
+  },
+  async 'typeHierarchy/supertypes' (p, tok) {
+    const k = hierCache.get(p.item && p.item.data && p.item.data.h);
+    if (!k) return null;
+    return ((await k.pr.provider.provideTypeHierarchySupertypes(k.it, tok)) || []).map((x) => hierToLsp(x, k.pr));
+  },
+  async 'typeHierarchy/subtypes' (p, tok) {
+    const k = hierCache.get(p.item && p.item.data && p.item.data.h);
+    if (!k) return null;
+    return ((await k.pr.provider.provideTypeHierarchySubtypes(k.it, tok)) || []).map((x) => hierToLsp(x, k.pr));
+  },
   async 'textDocument/prepareRename' (p, tok) {
     const doc = docFor(p.textDocument.uri);
     if (!doc) return null;
@@ -2480,6 +2609,947 @@ function reg (kind) {
     return register(kind, selector, provider, m);
   };
 }
+
+// ----------------------------------------------------------------- codicons: $(name) as its glyph
+
+// @vscode/codicons' names and code points (mme's font has them at the same places)
+const CODICONS = [
+  'add:ea60,plus:ea60,gist-new:ea60,repo-create:ea60,lightbulb:ea61,light-bulb:ea61,repo:ea62,repo-delete:ea62,gist-fork:ea63,repo-forked:ea63,git-pull-request:ea64,git-pull-request-abandoned:ea64,record-keys:ea65,keyboard:ea65,tag:ea66,tag-add:ea66,tag-remove:ea66,person:ea67,person-follow:ea67,person-outline:ea67,person-filled:ea67,git-branch:ea68,git-branch-create:ea68,git-branch-delete:ea68,source-control:ea68,mirror:ea69,mirror-public:ea69,star:ea6a,star-add:ea6a,star-delete:ea6a,star-empty:ea6a,comment:ea6b,comment-add:ea6b,alert:ea6c,warning:ea6c,search:ea6d,search-save:ea6d,log-out:ea6e,sign-out:ea6e,log-in:ea6f',
+  'sign-in:ea6f,eye:ea70,eye-unwatch:ea70,eye-watch:ea70,circle-filled:ea71,primitive-dot:ea71,close-dirty:ea71,debug-breakpoint:ea71,debug-breakpoint-disabled:ea71,debug-hint:ea71,primitive-square:ea72,edit:ea73,pencil:ea73,info:ea74,issue-opened:ea74,gist-private:ea75,git-fork-private:ea75,lock:ea75,mirror-private:ea75,close:ea76,remove-close:ea76,x:ea76,repo-sync:ea77,sync:ea77,clone:ea78,desktop-download:ea78,beaker:ea79,microscope:ea79,vm:ea7a,device-desktop:ea7a,file:ea7b,file-text:ea7b,more:ea7c,ellipsis:ea7c,kebab-horizontal:ea7c,mail-reply:ea7d,reply:ea7d,organization:ea7e,organization-filled:ea7e,organization-outline:ea7e',
+  'new-file:ea7f,file-add:ea7f,new-folder:ea80,file-directory-create:ea80,trash:ea81,trashcan:ea81,history:ea82,clock:ea82,folder:ea83,file-directory:ea83,symbol-folder:ea83,logo-github:ea84,mark-github:ea84,github:ea84,terminal:ea85,console:ea85,repl:ea85,zap:ea86,symbol-event:ea86,error:ea87,stop:ea87,variable:ea88,symbol-variable:ea88,array:ea8a,symbol-array:ea8a,symbol-module:ea8b,symbol-package:ea8b,symbol-namespace:ea8b,symbol-object:ea8b,symbol-method:ea8c,symbol-function:ea8c,symbol-constructor:ea8c,symbol-boolean:ea8f,symbol-null:ea8f,symbol-numeric:ea90,symbol-number:ea90,symbol-structure:ea91,symbol-struct:ea91,symbol-parameter:ea92,symbol-type-parameter:ea92',
+  'symbol-key:ea93,symbol-text:ea93,symbol-reference:ea94,go-to-file:ea94,symbol-enum:ea95,symbol-value:ea95,symbol-ruler:ea96,symbol-unit:ea96,activate-breakpoints:ea97,archive:ea98,arrow-both:ea99,arrow-down:ea9a,arrow-left:ea9b,arrow-right:ea9c,arrow-small-down:ea9d,arrow-small-left:ea9e,arrow-small-right:ea9f,arrow-small-up:eaa0,arrow-up:eaa1,bell:eaa2,bold:eaa3,book:eaa4,bookmark:eaa5,debug-breakpoint-conditional-unverified:eaa6,debug-breakpoint-conditional:eaa7,debug-breakpoint-conditional-disabled:eaa7,debug-breakpoint-data-unverified:eaa8,debug-breakpoint-data:eaa9,debug-breakpoint-data-disabled:eaa9,debug-breakpoint-log-unverified:eaaa,debug-breakpoint-log:eaab,debug-breakpoint-log-disabled:eaab,briefcase:eaac,broadcast:eaad,browser:eaae,bug:eaaf,calendar:eab0,case-sensitive:eab1,check:eab2,checklist:eab3',
+  'chevron-down:eab4,chevron-left:eab5,chevron-right:eab6,chevron-up:eab7,chrome-close:eab8,chrome-maximize:eab9,chrome-minimize:eaba,chrome-restore:eabb,circle-outline:eabc,debug-breakpoint-unverified:eabc,circle-slash:eabd,circuit-board:eabe,clear-all:eabf,clippy:eac0,close-all:eac1,cloud-download:eac2,cloud-upload:eac3,code:eac4,collapse-all:eac5,color-mode:eac6,comment-discussion:eac7,credit-card:eac9,dash:eacc,dashboard:eacd,database:eace,debug-continue:eacf,debug-disconnect:ead0,debug-pause:ead1,debug-restart:ead2,debug-start:ead3,debug-step-into:ead4,debug-step-out:ead5,debug-step-over:ead6,debug-stop:ead7,debug:ead8,device-camera-video:ead9,device-camera:eada,device-mobile:eadb,diff-added:eadc,diff-ignored:eadd',
+  'diff-modified:eade,diff-removed:eadf,diff-renamed:eae0,diff:eae1,discard:eae2,editor-layout:eae3,empty-window:eae4,exclude:eae5,extensions:eae6,eye-closed:eae7,file-binary:eae8,file-code:eae9,file-media:eaea,file-pdf:eaeb,file-submodule:eaec,file-symlink-directory:eaed,file-symlink-file:eaee,file-zip:eaef,files:eaf0,filter:eaf1,flame:eaf2,fold-down:eaf3,fold-up:eaf4,fold:eaf5,folder-active:eaf6,folder-opened:eaf7,gear:eaf8,gift:eaf9,gist-secret:eafa,gist:eafb,git-commit:eafc,git-compare:eafd,compare-changes:eafd,git-merge:eafe,github-action:eaff,github-alt:eb00,globe:eb01,grabber:eb02,graph:eb03,gripper:eb04',
+  'heart:eb05,home:eb06,horizontal-rule:eb07,hubot:eb08,inbox:eb09,issue-reopened:eb0b,issues:eb0c,italic:eb0d,jersey:eb0e,json:eb0f,kebab-vertical:eb10,key:eb11,law:eb12,lightbulb-autofix:eb13,link-external:eb14,link:eb15,list-ordered:eb16,list-unordered:eb17,live-share:eb18,loading:eb19,location:eb1a,mail-read:eb1b,mail:eb1c,markdown:eb1d,megaphone:eb1e,mention:eb1f,milestone:eb20,mortar-board:eb21,move:eb22,multiple-windows:eb23,mute:eb24,no-newline:eb25,note:eb26,octoface:eb27,open-preview:eb28,package:eb29,paintcan:eb2a,pin:eb2b,play:eb2c,run:eb2c',
+  'plug:eb2d,preserve-case:eb2e,preview:eb2f,project:eb30,pulse:eb31,question:eb32,quote:eb33,radio-tower:eb34,reactions:eb35,references:eb36,refresh:eb37,regex:eb38,remote-explorer:eb39,remote:eb3a,remove:eb3b,replace-all:eb3c,replace:eb3d,repo-clone:eb3e,repo-force-push:eb3f,repo-pull:eb40,repo-push:eb41,report:eb42,request-changes:eb43,rocket:eb44,root-folder-opened:eb45,root-folder:eb46,rss:eb47,ruby:eb48,save-all:eb49,save-as:eb4a,save:eb4b,screen-full:eb4c,screen-normal:eb4d,search-stop:eb4e,server:eb50,settings-gear:eb51,settings:eb52,shield:eb53,smiley:eb54,sort-precedence:eb55',
+  'split-horizontal:eb56,split-vertical:eb57,squirrel:eb58,star-full:eb59,star-half:eb5a,symbol-class:eb5b,symbol-color:eb5c,symbol-constant:eb5d,symbol-enum-member:eb5e,symbol-field:eb5f,symbol-file:eb60,symbol-interface:eb61,symbol-keyword:eb62,symbol-misc:eb63,symbol-operator:eb64,symbol-property:eb65,wrench:eb65,wrench-subaction:eb65,symbol-snippet:eb66,tasklist:eb67,telescope:eb68,text-size:eb69,three-bars:eb6a,thumbsdown:eb6b,thumbsup:eb6c,tools:eb6d,triangle-down:eb6e,triangle-left:eb6f,triangle-right:eb70,triangle-up:eb71,twitter:eb72,unfold:eb73,unlock:eb74,unmute:eb75,unverified:eb76,verified:eb77,versions:eb78,vm-active:eb79,vm-outline:eb7a,vm-running:eb7b',
+  'watch:eb7c,whitespace:eb7d,whole-word:eb7e,window:eb7f,word-wrap:eb80,zoom-in:eb81,zoom-out:eb82,list-filter:eb83,list-flat:eb84,list-selection:eb85,selection:eb85,list-tree:eb86,debug-breakpoint-function-unverified:eb87,debug-breakpoint-function:eb88,debug-breakpoint-function-disabled:eb88,debug-stackframe-active:eb89,circle-small-filled:eb8a,debug-stackframe-dot:eb8a,debug-stackframe:eb8b,debug-stackframe-focused:eb8b,debug-breakpoint-unsupported:eb8c,symbol-string:eb8d,debug-reverse-continue:eb8e,debug-step-back:eb8f,debug-restart-frame:eb90,debug-alt:eb91,call-incoming:eb92,call-outgoing:eb93,menu:eb94,expand-all:eb95,feedback:eb96,group-by-ref-type:eb97,ungroup-by-ref-type:eb98,account:eb99,bell-dot:eb9a,debug-console:eb9b,library:eb9c,output:eb9d,run-all:eb9e,sync-ignored:eb9f',
+  'pinned:eba0,github-inverted:eba1,server-process:eba2,server-environment:eba3,pass:eba4,issue-closed:eba4,stop-circle:eba5,play-circle:eba6,record:eba7,debug-alt-small:eba8,vm-connect:eba9,cloud:ebaa,merge:ebab,export:ebac,graph-left:ebad,magnet:ebae,notebook:ebaf,redo:ebb0,check-all:ebb1,pinned-dirty:ebb2,pass-filled:ebb3,circle-large-filled:ebb4,circle-large-outline:ebb5,combine:ebb6,gather:ebb6,table:ebb7,variable-group:ebb8,type-hierarchy:ebb9,type-hierarchy-sub:ebba,type-hierarchy-super:ebbb,git-pull-request-create:ebbc,run-above:ebbd,run-below:ebbe,notebook-template:ebbf,debug-rerun:ebc0,workspace-trusted:ebc1,workspace-untrusted:ebc2,workspace-unknown:ebc3,terminal-cmd:ebc4,terminal-debian:ebc5',
+  'terminal-linux:ebc6,terminal-powershell:ebc7,terminal-tmux:ebc8,terminal-ubuntu:ebc9,terminal-bash:ebca,arrow-swap:ebcb,copy:ebcc,person-add:ebcd,filter-filled:ebce,wand:ebcf,debug-line-by-line:ebd0,inspect:ebd1,layers:ebd2,layers-dot:ebd3,layers-active:ebd4,compass:ebd5,compass-dot:ebd6,compass-active:ebd7,azure:ebd8,issue-draft:ebd9,git-pull-request-closed:ebda,git-pull-request-draft:ebdb,debug-all:ebdc,debug-coverage:ebdd,run-errors:ebde,folder-library:ebdf,debug-continue-small:ebe0,beaker-stop:ebe1,graph-line:ebe2,graph-scatter:ebe3,pie-chart:ebe4,bracket:eb0f,bracket-dot:ebe5,bracket-error:ebe6,lock-small:ebe7,azure-devops:ebe8,verified-filled:ebe9,newline:ebea,layout:ebeb,layout-activitybar-left:ebec',
+  'layout-activitybar-right:ebed,layout-panel-left:ebee,layout-panel-center:ebef,layout-panel-justify:ebf0,layout-panel-right:ebf1,layout-panel:ebf2,layout-sidebar-left:ebf3,layout-sidebar-right:ebf4,layout-statusbar:ebf5,layout-menubar:ebf6,layout-centered:ebf7,target:ebf8,indent:ebf9,record-small:ebfa,error-small:ebfb,arrow-circle-down:ebfc,arrow-circle-left:ebfd,arrow-circle-right:ebfe,arrow-circle-up:ebff,layout-sidebar-right-off:ec00,layout-panel-off:ec01,layout-sidebar-left-off:ec02,blank:ec03,heart-filled:ec04,map:ec05,map-filled:ec06,circle-small:ec07,bell-slash:ec08,bell-slash-dot:ec09,comment-unresolved:ec0a,git-pull-request-go-to-changes:ec0b,git-pull-request-new-changes:ec0c',
+].join(',');
+const codicons = new Map(CODICONS.split(',').map((x) => {
+  const [n, h] = x.split(':');
+  return [n, parseInt(h, 16)];
+}));
+
+function iconChar (name) {
+  const cp = codicons.get(String(name || '').replace(/~[\w-]+$/, ''));	// "sync~spin": sync
+  return cp ? String.fromCodePoint(cp) : '';
+}
+
+// a label with $(icon)s: the glyphs in their place ("$(zap) Demo": "<zap> Demo")
+function iconText (s) {
+  return String(s || '').replace(/\$\(([\w-]+(?:~[\w-]+)?)\)/g, (m, n) => iconChar(n));
+}
+
+
+// ----------------------------------------------------------------- when clauses (menus)
+
+// the context keys an extension's menus ask about: view, viewItem, its setContext's, config.*
+function whenHolds (expr, ctx) {
+  if (!expr) return true;
+  const toks = [];
+  const re = /\s*(&&|\|\||==|!=|=~|<=|>=|<|>|!|\(|\)|'[^']*'|"[^"]*"|\/(?:\\\/|[^/])+\/[a-z]*|[^\s&|=!<>()]+)/gy;
+  let m;
+  while ((m = re.exec(expr)) && m[1] !== undefined) toks.push(m[1]);
+  let i = 0;
+  const value = (k) => {
+    if (k === 'true') return true;
+    if (k === 'false') return false;
+    if (/^'.*'$|^".*"$/.test(k)) return k.slice(1, -1);
+    if (/^-?\d+(\.\d+)?$/.test(k)) return Number(k);
+    if (ctx && Object.prototype.hasOwnProperty.call(ctx, k)) return ctx[k];
+    if (Object.prototype.hasOwnProperty.call(contextKeys, k)) return contextKeys[k];
+    if (k.startsWith('config.')) return settingValue(k.slice(7));
+    if (k === 'isWindows') return isWin;
+    if (k === 'isLinux') return process.platform === 'linux';
+    if (k === 'isMac') return process.platform === 'darwin';
+    return undefined;
+  };
+  const term = () => {
+    const t = toks[i++];
+    if (t === '!') return !term();
+    if (t === '(') {
+      const r = or();
+      if (toks[i] === ')') i++;
+      return r;
+    }
+    const v = value(t);
+    const op = toks[i];
+    if (op === '==' || op === '!=') {	// its right side is a literal: "view == my.view"
+      i++;
+      const r = toks[i++] || '';
+      const w = /^'.*'$|^".*"$/.test(r) ? r.slice(1, -1) : r;
+      const eq = String(v) === String(w);
+      return op === '==' ? eq : !eq;
+    }
+    if (op === '=~') {
+      i++;
+      const r = /^\/(.*)\/([a-z]*)$/.exec(toks[i++] || '');
+      try {
+        return !!r && new RegExp(r[1], r[2]).test(String(v === undefined ? '' : v));
+      } catch (e) {
+        return false;
+      }
+    }
+    if (op === '<' || op === '>' || op === '<=' || op === '>=') {
+      i++;
+      const a = Number(v), b = Number(value(toks[i++]));
+      return op === '<' ? a < b : op === '>' ? a > b : op === '<=' ? a <= b : a >= b;
+    }
+    if (op === 'in' || (op === 'not' && toks[i + 1] === 'in')) {
+      const neg = op === 'not';
+      i += neg ? 2 : 1;
+      const list = value(toks[i++]);
+      const has = Array.isArray(list) ? list.includes(v) : list && typeof list === 'object' ? v in list : false;
+      return neg ? !has : has;
+    }
+    return !!v;
+  };
+  const and = () => {
+    let r = term();
+    while (toks[i] === '&&') {
+      i++;
+      r = term() && r;
+    }
+    return r;
+  };
+  const or = () => {
+    let r = and();
+    while (toks[i] === '||') {
+      i++;
+      r = and() || r;
+    }
+    return r;
+  };
+  try {
+    return !!or();
+  } catch (e) {
+    return false;
+  }
+}
+
+// a contributed command's title and icon, for a menu
+function commandInfo (id) {
+  for (const e of exts)
+    for (const c of (e.pkg.contributes && e.pkg.contributes.commands) || [])
+      if (c.command === id) {
+        const t = typeof c.title === 'object' ? c.title.value : c.title;
+        const cat = typeof c.category === 'object' ? c.category.value : c.category;
+        let icon = '';
+        if (typeof c.icon === 'string') icon = iconText(c.icon);
+        return {title: l10nString(e, t) || id, category: l10nString(e, cat) || '', icon};
+      }
+  return {title: id, category: '', icon: ''};
+}
+
+// the entries of a menu ("view/title", "view/item/context") whose when holds: {command, title, icon, inline}
+function menuActions (menu, ctx) {
+  const out = [];
+  for (const e of exts) {
+    const list = (e.pkg.contributes && e.pkg.contributes.menus && e.pkg.contributes.menus[menu]) || [];
+    for (const it of list) {
+      if (!it.command || !whenHolds(it.when, ctx)) continue;
+      const info = commandInfo(it.command);
+      out.push({command: it.command, title: info.title, icon: info.icon, inline: /^inline/.test(it.group || '')});
+    }
+  }
+  return out;
+}
+
+
+// ----------------------------------------------------------------- tree views: in mme's side bar
+
+// every tree view the extensions contribute (not a webview): the side bar's sections
+const builtinContainers = {explorer: 'Explorer', scm: 'Source Control', debug: 'Run and Debug', test: 'Testing'};
+function treeViewList () {
+  const out = [];
+  for (const e of exts) {
+    const c = e.pkg.contributes || {};
+    const titles = {};
+    for (const list of Object.values(c.viewsContainers || {}))
+      for (const vc of list || []) titles[vc.id] = l10nString(e, vc.title);
+    for (const [container, list] of Object.entries(c.views || {}))
+      for (const v of list || [])
+        if (v.id && v.type !== 'webview')
+          out.push({id: v.id, name: l10nString(e, v.name) || v.id, container,
+            title: titles[container] || builtinContainers[container] || l10nString(e, e.pkg.displayName) || e.id, ext: e.id,
+            when: v.when || ''});
+  }
+  return out;
+}
+
+const trees = new Map();	// view id -> {provider, view, byHandle, items}
+
+function treeItemLabel (it, el) {
+  if (it.label && typeof it.label === 'object') return String(it.label.label || '');
+  if (it.label !== undefined) return String(it.label);
+  if (it.resourceUri) return path.basename(toUri(it.resourceUri).fsPath);
+  return typeof el === 'string' ? el : '';
+}
+
+function createTreeView (viewId, options) {
+  const provider = options && options.treeDataProvider;
+  const onExpand = new EventEmitter(), onCollapse = new EventEmitter(), onSel = new EventEmitter();
+  const onVis = new EventEmitter(), onCheck = new EventEmitter();
+  let message = '', title, description, badge;
+  const info = () => notify('mme/treeInfo', {view: viewId, message: message || '', title: title || '', description: description || '',
+    badge: badge && badge.value ? badge.value : 0});
+  const t = {provider, byHandle: new Map(), handleOf: new Map(), items: new Map(), expanded: new Set(), visible: false};
+  const view = {
+    selection: [], visible: false,
+    get message () {
+      return message;
+    },
+    set message (m) {
+      message = typeof m === 'object' && m ? m.value : m;
+      info();
+    },
+    get title () {
+      return title;
+    },
+    set title (s) {
+      title = s;
+      info();
+    },
+    get description () {
+      return description;
+    },
+    set description (s) {
+      description = s;
+      info();
+    },
+    get badge () {
+      return badge;
+    },
+    set badge (b) {
+      badge = b;
+      info();
+    },
+    onDidExpandElement: onExpand.event, onDidCollapseElement: onCollapse.event,
+    onDidChangeSelection: onSel.event, onDidChangeVisibility: onVis.event, onDidChangeCheckboxState: onCheck.event,
+    async reveal (el, o) {	// its parents opened, it selected, as far as getParent says
+      if (!provider || typeof provider.getParent !== 'function') return;
+      const chain = [];
+      let p = el;
+      for (let n = 0; n < 50 && p !== undefined && p !== null; n++) {
+        chain.unshift(p);
+        p = await provider.getParent(p);
+      }
+      let parent = null;
+      for (const x of chain) {
+        await treeChildren(viewId, parent);
+        const h = t.handleOf.get(x);
+        if (h === undefined) return;
+        if (x !== el || (o && o.expand)) {
+          t.expanded.add(h);
+          await treeChildren(viewId, h);
+        }
+        parent = h;
+      }
+      notify('mme/treeReveal', {view: viewId, handle: t.handleOf.get(el), select: !o || o.select !== false});
+    },
+    dispose () {
+      trees.delete(viewId);
+    },
+  };
+  t.view = view;
+  t.fire = {expand: onExpand, collapse: onCollapse, sel: onSel, vis: onVis};
+  trees.set(viewId, t);
+  if (provider && typeof provider.onDidChangeTreeData === 'function')
+    provider.onDidChangeTreeData((e) => {
+      const list = Array.isArray(e) ? e : [e];
+      for (const x of list) {
+        const h = x === undefined || x === null ? null : t.handleOf.get(x);
+        if (h === undefined) continue;	// not shown: nothing to redo
+        notify('mme/treeRefresh', {view: viewId, handle: h});
+      }
+    });
+  notify('mme/treeReady', {view: viewId});	// mme asks for what it shows
+  return view;
+}
+
+function registerTreeDataProvider (viewId, provider) {
+  const v = createTreeView(viewId, {treeDataProvider: provider});
+  return new Disposable(() => v.dispose());
+}
+
+// the children of handle (null: the view's own) as mme draws them: mme/treeItems
+async function treeChildren (viewId, handle) {
+  let t = trees.get(viewId);
+  if (!t) {
+    await activateOn('onView:' + viewId);
+    t = trees.get(viewId);
+  }
+  if (!t || !t.provider) {
+    notify('mme/treeItems', {view: viewId, parent: handle, items: [], message: 'There is no data provider registered that can provide view data.'});
+    return;
+  }
+  const el = handle === null || handle === undefined ? undefined : t.byHandle.get(handle);
+  if (handle !== null && handle !== undefined && el === undefined) return;	// gone since
+  let kids = [];
+  try {
+    kids = (await t.provider.getChildren(el)) || [];
+  } catch (e) {
+    log('[error] ' + viewId + ': getChildren: ' + (e && e.stack ? e.stack : e));
+  }
+  const items = [], seen = new Set();
+  for (const k of kids) {
+    let it;
+    try {
+      it = await t.provider.getTreeItem(k);
+    } catch (e) {
+      continue;
+    }
+    if (!it) continue;
+    const label = treeItemLabel(it, k);
+    let h = it.id !== undefined ? 'id:' + it.id : (handle || '') + '/' + label;
+    for (let n = 2; seen.has(h); n++) h = (it.id !== undefined ? 'id:' + it.id : (handle || '') + '/' + label) + '#' + n;
+    seen.add(h);
+    t.byHandle.set(h, k);
+    t.handleOf.set(k, h);
+    t.items.set(h, it);
+    let icon = '', file = '';
+    if (it.iconPath instanceof ThemeIcon || (it.iconPath && it.iconPath.id && !it.iconPath.scheme)) icon = iconChar(it.iconPath.id);
+    const res = it.resourceUri ? toUri(it.resourceUri).fsPath : '';
+    if (!icon && res) file = res;	// mme gives it the file's icon
+    let desc = it.description;
+    if (desc === true) desc = res ? path.dirname(asRelativePath(res)) : '';
+    const tip = typeof it.tooltip === 'string' ? it.tooltip : it.tooltip && it.tooltip.value ? it.tooltip.value : '';
+    const coll = it.collapsibleState || 0;
+    if (coll === 2) t.expanded.add(h);
+    items.push({handle: h, label: iconText(label), description: desc ? iconText(String(desc)) : '', tooltip: tip, icon, file,
+      folder: !!(res && coll), collapsible: t.expanded.has(h) ? 2 : coll, command: !!it.command,
+      actions: menuActions('view/item/context', {view: viewId, viewItem: it.contextValue || ''})});
+  }
+  notify('mme/treeItems', {view: viewId, parent: handle === undefined ? null : handle, items,
+    message: t.view.message || '', titleActions: handle === null || handle === undefined ? menuActions('view/title', {view: viewId}) : undefined});
+}
+
+async function treeExpand (p) {	// mme opened (or closed) a node, or a view (handle null)
+  const t = trees.get(p.view);
+  const h = p.handle === undefined ? null : p.handle;
+  if (h === null) {
+    if (t && t.visible !== !!p.expanded) {
+      t.visible = t.view.visible = !!p.expanded;
+      t.fire.vis.fire({visible: t.visible});
+    }
+    if (p.expanded) await treeChildren(p.view, null);
+    return;
+  }
+  if (!t) return;
+  const el = t.byHandle.get(h);
+  if (el === undefined) return;
+  if (p.expanded) {
+    t.expanded.add(h);
+    t.fire.expand.fire({element: el});
+    await treeChildren(p.view, h);
+  } else {
+    t.expanded.delete(h);
+    t.fire.collapse.fire({element: el});
+  }
+}
+
+async function treeSelect (p) {	// a row chosen: selection, and the item's command
+  const t = trees.get(p.view);
+  if (!t) return;
+  const el = t.byHandle.get(p.handle), it = t.items.get(p.handle);
+  if (el === undefined) return;
+  t.view.selection = [el];
+  t.fire.sel.fire({selection: [el]});
+  if (it && it.command && p.run) {
+    const c = it.command;
+    try {
+      await (typeof c === 'string' ? executeCommand(c) : executeCommand(c.command, ...(c.arguments || [])));
+    } catch (e) {
+      log('[error] ' + (c.command || c) + ': ' + (e && e.message ? e.message : e));
+    }
+  }
+}
+
+async function treeAction (p) {	// a menu's command on a row (its element) or on the view's title
+  const t = trees.get(p.view);
+  const el = t && p.handle !== null && p.handle !== undefined ? t.byHandle.get(p.handle) : undefined;
+  try {
+    if (el !== undefined) await executeCommand(p.command, el, t.view.selection.length ? t.view.selection : [el]);
+    else await executeCommand(p.command);
+  } catch (e) {
+    log('[error] ' + p.command + ': ' + (e && e.message ? e.message : e));
+    window.showErrorMessage(String(e && e.message ? e.message : e));
+  }
+}
+
+
+// ----------------------------------------------------------------- tasks: the extensions' in mme's Run Task
+
+// registerTaskProvider's tasks go to mme (mme/tasks) as command lines it runs in its task terminal, with its
+// problem matchers; a CustomExecution (the extension writes the terminal itself) runs here, its output in
+// an Output channel. mme asks for them when Run Task opens (mme/provideTasks).
+const taskProviders = new Map();	// type -> provider
+const providedTasks = new Map();	// id -> Task, of the last mme/tasks
+let nextTaskId = 1;
+const onDidStartTask = new EventEmitter(), onDidEndTask = new EventEmitter();
+const onDidStartTaskProcess = new EventEmitter(), onDidEndTaskProcess = new EventEmitter();
+const taskExecutions = [];
+
+function shellQuote (a) {
+  const s = typeof a === 'object' && a ? String(a.value) : String(a);
+  if (s === '' || /[\s"'&|<>^()]/.test(s)) return isWin ? '"' + s.replace(/"/g, '\\"') + '"' : "'" + s.replace(/'/g, "'\\''") + "'";
+  return s;
+}
+
+// a task as mme runs it: {id, label, source, cmd, cwd, group, matcher, custom}
+function taskToMme (t, id) {
+  const ex = t.execution || t.__execution;
+  let cmd = '', cwd = '', custom = false;
+  if (ex instanceof ShellExecution) {
+    cmd = ex.commandLine !== undefined ? String(ex.commandLine) : [ex.command, ...(ex.args || [])].map(shellQuote).join(' ');
+    cwd = ex.options && ex.options.cwd;
+  } else if (ex instanceof ProcessExecution) {
+    cmd = [ex.process, ...(ex.args || [])].map(shellQuote).join(' ');
+    cwd = ex.options && ex.options.cwd;
+  } else if (ex instanceof CustomExecution) custom = true;
+  else return null;
+  const folder = t.scope && t.scope.uri ? t.scope.uri.fsPath : folders[0] ? folders[0].uri.fsPath : '';
+  const pm = [].concat(t.problemMatchers || []).map(String);
+  const matcher = pm.find((m) => /gcc|go|tsc|msCompile/.test(m)) || '';
+  const g = t.group && t.group.id ? t.group.id : '';
+  const label = (t.source ? t.source + ': ' : '') + t.name;
+  return {id, label, source: t.source || (t.definition && t.definition.type) || '', detail: t.detail || '', cmd,
+    cwd: cwd ? String(cwd).replace(/\$\{workspaceFolder\}/g, folder) : folder, group: g, dflt: !!(t.group && t.group.isDefault),
+    matcher, custom};
+}
+
+async function collectTasks (type) {
+  const out = [];
+  for (const [ty, p] of taskProviders) {
+    if (type && ty !== type) continue;
+    try {
+      const list = (await p.provideTasks(new CancellationTokenSource().token)) || [];
+      for (const t of list) out.push(t);
+    } catch (e) {
+      log('[error] task provider ' + ty + ': ' + (e && e.stack ? e.stack : e));
+    }
+  }
+  return out;
+}
+
+async function provideTasksToMme () {	// mme/provideTasks: Run Task is opening
+  await activateOn('onCommand:workbench.action.tasks.runTask');
+  for (const e of exts)
+    for (const d of (e.pkg.contributes && e.pkg.contributes.taskDefinitions) || [])
+      if (d.type) await activateOn('onTaskType:' + d.type);
+  const list = await collectTasks();
+  providedTasks.clear();
+  const items = [];
+  for (const t of list) {
+    const id = 't' + nextTaskId++;
+    const m = taskToMme(t, id);
+    if (!m) continue;
+    providedTasks.set(id, t);
+    items.push(m);
+  }
+  notify('mme/tasks', {tasks: items});
+}
+
+// a CustomExecution: its Pseudoterminal's output in an Output channel named after the task
+async function runCustom (t, label) {
+  const ch = createOutputChannel('Task - ' + label);
+  ch.show(true);
+  let term;
+  try {
+    term = await t.execution.callback(t.definition || {});
+  } catch (e) {
+    ch.appendLine('[error] ' + (e && e.message ? e.message : e));
+    return;
+  }
+  const exec = {task: t, terminate: () => term && term.close && term.close()};
+  taskExecutions.push(exec);
+  onDidStartTask.fire({execution: exec});
+  const done = (code) => {
+    const i = taskExecutions.indexOf(exec);
+    if (i >= 0) taskExecutions.splice(i, 1);
+    ch.appendLine('');
+    ch.appendLine('* The task finished' + (typeof code === 'number' ? ' with exit code ' + code : '') + '.');
+    onDidEndTask.fire({execution: exec});
+    onDidEndTaskProcess.fire({execution: exec, exitCode: code});
+  };
+  if (term.onDidWrite) term.onDidWrite((s) => ch.append(String(s).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r\n/g, '\n')));
+  if (term.onDidClose) term.onDidClose((code) => done(code));
+  try {
+    term.open({columns: 120, rows: 30});
+  } catch (e) {
+    ch.appendLine('[error] ' + (e && e.message ? e.message : e));
+    done(1);
+  }
+}
+
+async function runTaskFromMme (p) {	// mme/runTask {id}: a task mme cannot run itself (CustomExecution)
+  const t = providedTasks.get(p.id);
+  if (t) await runCustom(t, p.label || t.name);
+}
+
+async function executeTask (t) {	// tasks.executeTask: mme runs it as one of its own
+  if (!t.execution && t.__execution) t.execution = t.__execution;
+  const m = taskToMme(t, 't' + nextTaskId++);
+  if (!m) throw new Error('mme runs shell, process and custom tasks only');
+  if (m.custom) {
+    providedTasks.set(m.id, t);
+    runCustom(t, m.label);
+  } else notify('mme/runTask', m);
+  const exec = {task: t, terminate () {}};
+  onDidStartTask.fire({execution: exec});
+  return exec;
+}
+
+
+// ----------------------------------------------------------------- tests: the extensions' in mme's Testing view
+
+// tests.createTestController: its items (a tree: package, file, test, subtest) go to mme flattened, a test
+// being an item with a place in a file (mme/tests); mme runs them through the controller's run profile
+// (mme/testRun) and the TestRun's states come back as mme/testState, its output as mme/testOutput.
+const testControllers = new Map();	// id -> controller
+const testById = new Map();	// "<controller>/<item id>" -> item, of the last mme/tests
+let testSendTimer = null;
+
+function testsChanged () {
+  if (testSendTimer) return;
+  testSendTimer = setTimeout(() => {
+    testSendTimer = null;
+    sendTests();
+  }, 150);
+}
+
+class TestItemCollection {
+  constructor (owner) {
+    this._m = new Map();
+    this._owner = owner;	// the item whose children these are; null: a controller's items
+  }
+  get size () {
+    return this._m.size;
+  }
+  replace (items) {
+    this._m.clear();
+    for (const it of items || []) this._add(it);
+    testsChanged();
+  }
+  forEach (cb, thisArg) {
+    for (const it of [...this._m.values()]) cb.call(thisArg, it, this);
+  }
+  add (it) {
+    this._add(it);
+    testsChanged();
+  }
+  _add (it) {
+    it.parent = this._owner || undefined;
+    this._m.set(it.id, it);
+  }
+  delete (id) {
+    this._m.delete(id);
+    testsChanged();
+  }
+  get (id) {
+    return this._m.get(id);
+  }
+  [Symbol.iterator] () {
+    return this._m.entries();
+  }
+}
+
+class TestItem {
+  constructor (ctrl, id, label, uri) {
+    this.controller = ctrl;
+    this.id = id;
+    this.uri = uri;
+    this.children = new TestItemCollection(this);
+    this.parent = undefined;
+    this.tags = [];
+    this._label = label;
+    this.description = undefined;
+    this.sortText = undefined;
+    this._range = undefined;
+    this.error = undefined;
+    this.busy = false;
+    this.canResolveChildren = false;
+  }
+  get label () {
+    return this._label;
+  }
+  set label (s) {
+    this._label = s;
+    testsChanged();
+  }
+  get range () {
+    return this._range;
+  }
+  set range (r) {
+    this._range = r;
+    testsChanged();
+  }
+}
+
+class TestRunRequest {
+  constructor (include, exclude, profile, continuous, preserveFocus) {
+    Object.assign(this, {include, exclude, profile, continuous: !!continuous, preserveFocus: preserveFocus !== false});
+  }
+}
+
+class TestMessage {
+  constructor (message) {
+    this.message = message;
+  }
+  static diff (message, expected, actual) {
+    const m = new TestMessage(message);
+    m.expectedOutput = expected;
+    m.actualOutput = actual;
+    return m;
+  }
+}
+
+class TestTag {
+  constructor (id) {
+    this.id = id;
+  }
+}
+
+function testGid (it) {
+  return it.controller.id + '/' + it.id;
+}
+
+// every test of every controller, as mme lists them: {id, label, file, line}
+function sendTests () {
+  const out = [];
+  testById.clear();
+  const walk = (it, names) => {
+    const file = it.uri && it.uri.scheme === 'file' ? it.uri.fsPath : '';
+    const isTest = !!it.range;	// a place in a file: a test (a package, a folder, a file is not)
+    const label = String(it.label || it.id);
+    const here = isTest ? [...names, label] : names;
+    if (isTest) {
+      const gid = testGid(it);
+      testById.set(gid, it);
+      out.push({id: gid, label: here.join('/'), file, line: it.range.start.line, controller: it.controller.label || it.controller.id});
+    }
+    it.children.forEach((c) => walk(c, here));
+  };
+  for (const c of testControllers.values()) c.items.forEach((it) => walk(it, []));
+  notify('mme/tests', {tests: out});
+}
+
+let testsDiscovered = false;
+async function discoverTests () {	// mme/testDiscover: the Testing view is shown; every controller looks
+  testsDiscovered = true;
+  for (const c of testControllers.values()) await resolveAll(c);
+  sendTests();
+}
+
+async function resolveAll (c) {
+  if (typeof c.resolveHandler !== 'function') return;
+  try {
+    await c.resolveHandler(undefined);
+  } catch (e) {
+    log('[error] ' + c.id + ': resolveHandler: ' + (e && e.message ? e.message : e));
+  }
+  const queue = [];
+  c.items.forEach((it) => queue.push(it));
+  let n = 0;
+  while (queue.length && n < 400) {	// what can be resolved, resolved: the files' tests come
+    const it = queue.shift();
+    if (it.canResolveChildren && !it._resolved) {
+      it._resolved = true;
+      n++;
+      try {
+        await c.resolveHandler(it);
+      } catch (e) {
+        // an item it cannot open: its children stay unknown
+      }
+    }
+    it.children.forEach((k) => queue.push(k));
+  }
+}
+
+function createTestController (id, label) {
+  const c = {
+    id, label,
+    items: new TestItemCollection(null),
+    resolveHandler: undefined, refreshHandler: undefined,
+    _profiles: [],
+    createTestItem: (tid, tlabel, uri) => new TestItem(c, tid, tlabel, uri),
+    createRunProfile (plabel, kind, runHandler, isDefault, tag, supportsContinuousRun) {
+      const p = {label: plabel, kind, runHandler, isDefault: !!isDefault, tag, supportsContinuousRun: !!supportsContinuousRun,
+        configureHandler: undefined, loadDetailedCoverage: undefined, onDidChangeDefault: stubEvent(),
+        dispose () {
+          const i = c._profiles.indexOf(p);
+          if (i >= 0) c._profiles.splice(i, 1);
+        }};
+      c._profiles.push(p);
+      return p;
+    },
+    createTestRun (request, name, persist) {
+      return createTestRun(c, request, name, persist);
+    },
+    invalidateTestResults () {},
+    dispose () {
+      testControllers.delete(id);
+      testsChanged();
+    },
+  };
+  testControllers.set(id, c);
+  if (testsDiscovered) setTimeout(() => resolveAll(c).then(sendTests), 0);
+  return c;
+}
+
+function messageText (m) {
+  const one = (x) => (x && typeof x === 'object' ? (x.message && x.message.value !== undefined ? x.message.value : x.message) : x);
+  return (Array.isArray(m) ? m.map(one) : [one(m)]).filter((x) => x !== undefined && x !== null).map(String).join('\n');
+}
+
+function messagePlace (m) {
+  const x = Array.isArray(m) ? m.find((y) => y && y.location) : m;
+  const loc = x && x.location;
+  return loc && loc.uri ? {file: loc.uri.fsPath, line: loc.range ? loc.range.start.line : 0} : {};
+}
+
+function createTestRun (c, request, name, persist) {
+  const cts = new CancellationTokenSource();
+  const state = (it, s, extra) => {
+    if (!it) return;
+    notify('mme/testState', Object.assign({id: testGid(it), state: s}, extra || {}));
+  };
+  const onDispose = new EventEmitter();
+  const run = {
+    name, token: cts.token, isPersisted: persist !== false,
+    enqueued: (it) => state(it, 'queued'),
+    started: (it) => state(it, 'started'),
+    skipped: (it) => state(it, 'skipped'),
+    passed: (it, ms) => state(it, 'passed', {ms: typeof ms === 'number' ? Math.round(ms) : -1}),
+    failed: (it, m, ms) => state(it, 'failed', Object.assign({ms: typeof ms === 'number' ? Math.round(ms) : -1, message: messageText(m)}, messagePlace(m))),
+    errored: (it, m, ms) => state(it, 'failed', Object.assign({ms: typeof ms === 'number' ? Math.round(ms) : -1, message: messageText(m)}, messagePlace(m))),
+    appendOutput: (text) => notify('mme/testOutput', {text: String(text).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r\n/g, '\n')}),
+    addCoverage () {},
+    onDidDispose: onDispose.event,
+    end () {
+      notify('mme/testEnd', {});
+      onDispose.fire();
+    },
+  };
+  activeTestRuns.push({run, cts});
+  return run;
+}
+const activeTestRuns = [];
+
+async function runTestsFromMme (p) {	// mme/testRun {ids, kind}: each controller's default profile of that kind
+  const kind = p.kind === 'debug' ? 2 : p.kind === 'coverage' ? 3 : 1;
+  const byCtrl = new Map();
+  for (const id of p.ids || []) {
+    const it = testById.get(id);
+    if (!it) continue;
+    if (!byCtrl.has(it.controller)) byCtrl.set(it.controller, []);
+    byCtrl.get(it.controller).push(it);
+  }
+  for (const [c, items] of byCtrl) {
+    const profile = c._profiles.find((x) => x.kind === kind && x.isDefault) || c._profiles.find((x) => x.kind === kind);
+    if (!profile) {
+      window.showWarningMessage(c.label + ': it cannot ' + (kind === 2 ? 'debug' : kind === 3 ? 'measure coverage of' : 'run') + ' tests');
+      notify('mme/testEnd', {});
+      continue;
+    }
+    const cts = new CancellationTokenSource();
+    activeTestRuns.push({run: null, cts});
+    try {
+      await profile.runHandler(new TestRunRequest(items, [], profile), cts.token);
+    } catch (e) {
+      log('[error] ' + c.id + ': run: ' + (e && e.stack ? e.stack : e));
+      notify('mme/testEnd', {});
+    }
+  }
+}
+
+function cancelTestRuns () {	// mme/testCancel
+  for (const r of activeTestRuns.splice(0)) r.cts.cancel();
+}
+
+
+// ----------------------------------------------------------------- debug adapters: the extensions' in mme's debugger
+
+// A launch configuration of a type an extension contributes (contributes.debuggers) goes through it: mme sends
+// mme/debugResolve, its providers' resolveDebugConfiguration change it, its adapter factory says how to reach the
+// adapter - a program mme starts, a port mme connects to, or one written in JavaScript (an inline adapter),
+// which gets a port here that carries its messages. mme is the DAP client as for its own adapters.
+const net = require('net');
+const debugConfigProviders = [];	// {type, provider, trigger}
+const debugAdapterFactories = new Map();	// type -> factory
+const onDidStartDebugSession = new EventEmitter(), onDidTerminateDebugSession = new EventEmitter();
+const onDidChangeActiveDebugSession = new EventEmitter(), onDidReceiveDebugSessionCustomEvent = new EventEmitter();
+const onDidChangeBreakpoints = new EventEmitter();
+let activeDebugSession, debugBridge = null;
+
+class DebugAdapterNamedPipeServer {
+  constructor (p) {
+    this.path = p;
+  }
+}
+
+class DebugAdapterInlineImplementation {
+  constructor (implementation) {
+    this.implementation = implementation;
+  }
+}
+
+function debuggerTypes () {	// what the extensions contribute: {type, label, ext}
+  const out = [];
+  for (const e of exts)
+    for (const d of (e.pkg.contributes && e.pkg.contributes.debuggers) || [])
+      if (d.type) out.push({type: d.type, label: l10nString(e, d.label) || d.type, ext: e});
+  return out;
+}
+
+// contributes.debuggers' own program (the old way, before factories), as an executable
+function packageExecutable (type) {
+  for (const e of exts)
+    for (const d of (e.pkg.contributes && e.pkg.contributes.debuggers) || []) {
+      if (d.type !== type) continue;
+      const os = isWin ? d.windows : process.platform === 'darwin' ? d.osx : d.linux;
+      const prog = (os && os.program) || d.program, runtime = (os && os.runtime) || d.runtime;
+      const args = (os && os.args) || d.args || [];
+      if (!prog) continue;
+      const file = path.resolve(e.dir, prog);
+      if (!runtime) return new DebugAdapterExecutable(file, args);
+      return new DebugAdapterExecutable(runtime === 'node' ? process.execPath : runtime, [file, ...args]);
+    }
+  return undefined;
+}
+
+function debugSession (config) {
+  const s = {
+    id: crypto.randomUUID(), type: config.type, name: config.name || config.type, workspaceFolder: folders[0],
+    configuration: config, parentSession: undefined,
+    customRequest: async (command) => {
+      said('DebugSession.customRequest ' + command);
+      return undefined;
+    },
+    getDebugProtocolBreakpoint: async () => undefined,
+  };
+  return s;
+}
+
+// an inline adapter: a port on 127.0.0.1; mme's messages go to handleMessage, its onDidSendMessage's come back
+function bridge (impl) {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer((sock) => {
+      let buf = Buffer.alloc(0);
+      const sub = impl.onDidSendMessage((m) => {
+        const body = Buffer.from(JSON.stringify(m), 'utf8');
+        sock.write('Content-Length: ' + body.length + '\r\n\r\n');
+        sock.write(body);
+      });
+      sock.on('data', (d) => {
+        buf = Buffer.concat([buf, d]);
+        for (;;) {
+          const sep = buf.indexOf('\r\n\r\n');
+          if (sep < 0) return;
+          const m = /Content-Length:\s*(\d+)/i.exec(buf.slice(0, sep).toString());
+          const n = m ? +m[1] : 0;
+          if (buf.length < sep + 4 + n) return;
+          const body = buf.slice(sep + 4, sep + 4 + n).toString('utf8');
+          buf = buf.slice(sep + 4 + n);
+          try {
+            impl.handleMessage(JSON.parse(body));
+          } catch (e) {
+            log('[error] the inline debug adapter: ' + (e && e.stack ? e.stack : e));
+          }
+        }
+      });
+      const end = () => {
+        if (sub && sub.dispose) sub.dispose();
+        if (typeof impl.dispose === 'function') impl.dispose();
+        srv.close();
+      };
+      sock.on('close', end);
+      sock.on('error', end);
+    });
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => resolve({srv, port: srv.address().port}));
+  });
+}
+
+async function resolveDebug (p) {	// mme/debugResolve {seq, config}: mme/debugResolved {seq, config, adapter}
+  const seq = p.seq;
+  const answer = (x) => notify('mme/debugResolved', Object.assign({seq}, x));
+  let config = p.config || {};
+  try {
+    await activateOn('onDebug');
+    await activateOn('onDebugResolve:' + config.type);
+    await activateOn('onDebugAdapterProtocolTracker:' + config.type);
+    const folder = folders[0], token = new CancellationTokenSource().token;
+    for (const step of ['resolveDebugConfiguration', 'resolveDebugConfigurationWithSubstitutedVariables'])
+      for (const x of debugConfigProviders) {
+        if ((x.type !== config.type && x.type !== '*') || typeof x.provider[step] !== 'function') continue;
+        config = await x.provider[step](folder, config, token);
+        if (config === undefined || config === null) {	// the extension stopped it (it said why, or it opened launch.json)
+          answer({config: null});
+          return;
+        }
+      }
+    const session = debugSession(config);
+    const factory = debugAdapterFactories.get(config.type);
+    const exe = packageExecutable(config.type);
+    let d = factory ? await factory.createDebugAdapterDescriptor(session, exe) : exe;
+    if (!d) d = exe;
+    let adapter;
+    if (d instanceof DebugAdapterExecutable || (d && d.command)) {
+      const o = d.options || {};
+      adapter = {kind: 'exec', command: d.command, args: (d.args || []).map(String), cwd: o.cwd || '', env: o.env || null};
+    } else if (d instanceof DebugAdapterServer || (d && d.port)) adapter = {kind: 'server', port: d.port, host: d.host || '127.0.0.1'};
+    else if (d instanceof DebugAdapterInlineImplementation || (d && d.implementation)) {
+      debugBridge = await bridge(d.implementation);
+      adapter = {kind: 'server', port: debugBridge.port, host: '127.0.0.1'};
+    } else if (d instanceof DebugAdapterNamedPipeServer) {
+      answer({error: 'a debug adapter on a named pipe is not supported yet'});
+      return;
+    } else {
+      answer({error: 'the extension gives no debug adapter for type "' + config.type + '"'});
+      return;
+    }
+    activeDebugSession = session;
+    answer({config, adapter});
+    onDidStartDebugSession.fire(session);
+    onDidChangeActiveDebugSession.fire(session);
+  } catch (e) {
+    log('[error] debug ' + config.type + ': ' + (e && e.stack ? e.stack : e));
+    answer({error: String(e && e.message ? e.message : e)});
+  }
+}
+
+function debugEnded () {	// mme/debugEnded: the session is over
+  const s = activeDebugSession;
+  activeDebugSession = undefined;
+  if (debugBridge) {
+    try {
+      debugBridge.srv.close();
+    } catch (e) {
+      // closed already
+    }
+    debugBridge = null;
+  }
+  if (s) {
+    onDidTerminateDebugSession.fire(s);
+    onDidChangeActiveDebugSession.fire(undefined);
+  }
+}
+
+async function startDebugging (folder, nameOrConfig) {	// debug.startDebugging: mme's debugger with it
+  const config = typeof nameOrConfig === 'string' ? {name: nameOrConfig} : plain(nameOrConfig);
+  notify('mme/startDebugging', {config});
+  return true;
+}
+
+const debugConsole = {
+  append: (s) => notify('mme/debugConsole', {text: String(s)}),
+  appendLine: (s) => notify('mme/debugConsole', {text: String(s) + '\n'}),
+};
+
 
 // ----------------------------------------------------------------- webviews: in the browser
 
@@ -3170,6 +4240,7 @@ const window = spare({
   },
   createTextEditorDecorationType: () => ({key: 'dec' + nextHandle++, dispose () {}}),
   createWebviewPanel: (a, b, c, d) => createWebviewPanel(a, b, c, d), registerWebviewViewProvider, registerCustomEditorProvider,
+  createTreeView, registerTreeDataProvider,
   registerWebviewPanelSerializer: () => new Disposable(() => {}),	// a panel is not brought back after a restart
   registerUriHandler: () => new Disposable(() => {}),
   tabGroups: {all: [], activeTabGroup: {tabs: [], activeTab: undefined, isActive: true, viewColumn: 1},
@@ -3278,6 +4349,10 @@ const languages = spare({
   registerColorProvider: reg('color'),
   registerLinkedEditingRangeProvider: reg('linkedEditing'),
   registerInlineCompletionItemProvider: reg('inlineCompletion'),
+  registerDocumentSemanticTokensProvider: reg('semanticTokens'),
+  registerDocumentRangeSemanticTokensProvider: reg('semanticTokensRange'),
+  registerCallHierarchyProvider: reg('callHierarchy'),
+  registerTypeHierarchyProvider: reg('typeHierarchy'),
 }, 'languages');
 
 const commandsNs = spare({
@@ -3323,18 +4398,45 @@ const extensionsNs = spare({
 
 const tasks = spare({
   registerTaskProvider: (type, p) => {
-    said('vscode.tasks.registerTaskProvider (' + type + ')');
-    return new Disposable(() => {});
+    taskProviders.set(type, p);
+    return new Disposable(() => taskProviders.delete(type));
   },
-  fetchTasks: async () => [],
-  taskExecutions: [],
-  onDidStartTask: stubEvent(), onDidEndTask: stubEvent(), onDidStartTaskProcess: stubEvent(), onDidEndTaskProcess: stubEvent(),
+  fetchTasks: async (filter) => collectTasks(filter && filter.type),
+  executeTask,
+  get taskExecutions () {
+    return taskExecutions;
+  },
+  onDidStartTask: onDidStartTask.event, onDidEndTask: onDidEndTask.event,
+  onDidStartTaskProcess: onDidStartTaskProcess.event, onDidEndTaskProcess: onDidEndTaskProcess.event,
 }, 'tasks');
 
 const debug = spare({
-  activeDebugSession: undefined, activeDebugConsole: {append () {}, appendLine () {}}, breakpoints: [],
-  onDidStartDebugSession: stubEvent(), onDidTerminateDebugSession: stubEvent(), onDidChangeActiveDebugSession: stubEvent(),
-  onDidReceiveDebugSessionCustomEvent: stubEvent(), onDidChangeBreakpoints: stubEvent(), onDidChangeActiveStackItem: stubEvent(),
+  get activeDebugSession () {
+    return activeDebugSession;
+  },
+  activeDebugConsole: debugConsole, breakpoints: [], activeStackItem: undefined,
+  onDidStartDebugSession: onDidStartDebugSession.event, onDidTerminateDebugSession: onDidTerminateDebugSession.event,
+  onDidChangeActiveDebugSession: onDidChangeActiveDebugSession.event,
+  onDidReceiveDebugSessionCustomEvent: onDidReceiveDebugSessionCustomEvent.event,
+  onDidChangeBreakpoints: onDidChangeBreakpoints.event, onDidChangeActiveStackItem: stubEvent(),
+  registerDebugConfigurationProvider (type, provider, trigger) {
+    const x = {type, provider, trigger: trigger || 1};
+    debugConfigProviders.push(x);
+    return new Disposable(() => {
+      const i = debugConfigProviders.indexOf(x);
+      if (i >= 0) debugConfigProviders.splice(i, 1);
+    });
+  },
+  registerDebugAdapterDescriptorFactory (type, factory) {
+    debugAdapterFactories.set(type, factory);
+    return new Disposable(() => debugAdapterFactories.delete(type));
+  },
+  registerDebugAdapterTrackerFactory: () => new Disposable(() => {}),	// the messages go between mme and the adapter
+  startDebugging,
+  stopDebugging: async () => notify('mme/stopDebugging', {}),
+  addBreakpoints () {},
+  removeBreakpoints () {},
+  asDebugSourceUri: (src) => Uri.file(src.path || ''),
 }, 'debug');
 
 const l10n = {
@@ -3354,13 +4456,13 @@ const vscodeApi = spare({
   ParameterInformation, DocumentHighlight, SymbolInformation, DocumentSymbol, CodeActionKind, CodeAction, CodeLens, InlayHint,
   InlayHintLabelPart, FoldingRange, SelectionRange, DocumentLink, Color, ColorInformation, ColorPresentation, LinkedEditingRanges,
   SemanticTokensLegend, SemanticTokens, SemanticTokensBuilder, CallHierarchyItem, TypeHierarchyItem, ThemeIcon, ThemeColor,
-  RelativePattern, TreeItem, FileSystemError, TaskGroup, ShellExecution, ProcessExecution, Task, DebugAdapterExecutable,
-  DebugAdapterServer, NotebookCellData, NotebookData, LanguageModelError, TextDocument, TextLine,
+  RelativePattern, TreeItem, FileSystemError, TestRunRequest, TestMessage, TestTag, TaskGroup, ShellExecution, ProcessExecution, CustomExecution, Task, DebugAdapterExecutable,
+  DebugAdapterServer, DebugAdapterNamedPipeServer, DebugAdapterInlineImplementation, NotebookCellData, NotebookData, LanguageModelError, TextDocument, TextLine,
   ...enums,
   window, workspace, languages, commands: commandsNs, env, extensions: extensionsNs, tasks, debug, l10n,
   scm: spare({createSourceControl: undefined, inputBox: undefined}, 'scm'),
   comments: spare({}, 'comments'), authentication: spare(authentication, 'authentication'),
-  notebooks: spare({}, 'notebooks'), tests: spare({}, 'tests'), chat: spare({}, 'chat'), lm: spare({tools: []}, 'lm'),
+  notebooks: spare({}, 'notebooks'), tests: spare({createTestController}, 'tests'), chat: spare({}, 'chat'), lm: spare({tools: []}, 'lm'),
 }, '');
 
 
@@ -3475,6 +4577,7 @@ function readExtension (dir) {
   for (const l of c.languages || []) if (l.id) events.push('onLanguage:' + l.id);
   for (const list of Object.values(c.views || {})) for (const v of list || []) if (v.id) events.push('onView:' + v.id);
   for (const ce of c.customEditors || []) if (ce.viewType) events.push('onCustomEditor:' + ce.viewType);
+  for (const td of c.taskDefinitions || []) if (td.type) events.push('onTaskType:' + td.type);
   const props = [];
   const confs = Array.isArray(c.configuration) ? c.configuration : c.configuration ? [c.configuration] : [];
   for (const cf of confs) for (const [k, v] of Object.entries(cf.properties || {})) {
@@ -3619,6 +4722,8 @@ async function start () {
         enum: v.enum, description: l10nString(e, v.markdownDescription || v.description || '') || '', ext: e.id});
   }
   notify('mme/contributions', {commands: cmds, keybindings: keys, configuration: props});
+  notify('mme/treeViews', {views: treeViewList().map((v) => ({id: v.id, name: v.name, title: v.title}))});
+  notify('mme/debuggers', {types: debuggerTypes().map((d) => ({type: d.type, label: d.label}))});
   languagesChanged();
   for (const d of docs.values()) await activateOn('onLanguage:' + d.languageId);
   await activateOn('*');
@@ -3705,6 +4810,16 @@ async function dispatch (msg) {
     case 'textDocument/didOpen': didOpen(params); break;
     case 'textDocument/didChange': didChange(params); break;
     case 'textDocument/didSave': didSave(params); break;
+    case 'mme/treeExpand': treeExpand(params || {}); break;	// the side bar's extension views
+    case 'mme/provideTasks': provideTasksToMme(); break;	// Run Task: the extensions' tasks
+    case 'mme/debugResolve': resolveDebug(params || {}); break;	// a launch configuration of an extension's type
+    case 'mme/debugEnded': debugEnded(); break;
+    case 'mme/testDiscover': discoverTests(); break;	// the Testing view: the extensions' tests
+    case 'mme/testRun': runTestsFromMme(params || {}); break;
+    case 'mme/testCancel': cancelTestRuns(); break;
+    case 'mme/runTask': runTaskFromMme(params || {}); break;
+    case 'mme/treeSelect': treeSelect(params || {}); break;
+    case 'mme/treeAction': treeAction(params || {}); break;
     case 'window/workDoneProgress/cancel': {	// the progress item clicked: Cancel
       const c = params && progressCancels.get(params.token);
       if (c) c.cancel();
@@ -3732,6 +4847,8 @@ function capabilities () {
     renameProvider: {prepareProvider: true}, foldingRangeProvider: true, selectionRangeProvider: true,
     documentLinkProvider: {resolveProvider: false}, colorProvider: true, linkedEditingRangeProvider: true,
     inlineCompletionProvider: true,
+    semanticTokensProvider: {legend: {tokenTypes: SEM_TYPES, tokenModifiers: SEM_MODS}, full: true, range: true},
+    callHierarchyProvider: true, typeHierarchyProvider: true,
     executeCommandProvider: {commands: []},
   };
 }

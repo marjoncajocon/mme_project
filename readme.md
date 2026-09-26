@@ -703,10 +703,29 @@ With no file open the editor shows the keys to start with.
   are edits of mme's document. The page is an ordinary tab: it is not docked
   in mme.
 
+  **Tree views** (`createTreeView`: the Go extension's GO and PACKAGE OUTLINE,
+  npm scripts, Docker ...) are sections of the side bar's EXTENSION VIEWS,
+  whose activity bar icon shows when a running extension has one: their
+  items come from the extension as they are opened, with its icons; Enter
+  runs an item's command, the right button (Shift+F10) is its context menu
+  (`view/item/context`), and the title's actions (`view/title`) are icons at
+  its right. **Task providers** (`registerTaskProvider`) are asked when Run
+  Task opens: their tasks are in the list and run in mme's task terminal with
+  its problem matchers (a `CustomExecution` runs in the extension, its output
+  in an Output channel). **Test controllers** (`tests.createTestController`)
+  fill the Testing view: their tests replace mme's own for those files, and
+  running or debugging one goes through the extension's run profile, its
+  results and output coming back. **Semantic tokens**, **call and type
+  hierarchies** from an extension work like a language server's. **Debug
+  adapters** (`contributes.debuggers`): a launch configuration of such a type
+  is resolved by the extension (`resolveDebugConfiguration`) and its adapter
+  factory says where the adapter is - a program mme starts, a port, or one
+  written in JavaScript that the host puts on a port; mme's debugger is the
+  client, as for its own adapters, and `debug.startDebugging` starts it.
+
   Not there yet (Output > Extension Host lists every `[missing]` API an
-  extension asked for): tree views, debug adapters and task providers of an
-  extension, test controllers, notebooks' kernels, semantic tokens and the
-  language model APIs. Microsoft's own extensions (Pylance, C/C++, Python,
+  extension asked for): notebooks' kernels, the language model APIs, debug
+  adapter trackers and `DebugSession.customRequest`. Microsoft's own extensions (Pylance, C/C++, Python,
   debugpy, C# Dev Kit) are licensed for Microsoft's VS Code only: mme runs them
   if named, but their licence does not allow it.
 - **Explorer** — the folder tree, with a scrollbar at its right edge (every

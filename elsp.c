@@ -2423,6 +2423,27 @@ int lsp_ext_command (const char *id, const char *args) {
 }
 
 
+/* a notification of mme's own to the host (etree.c: mme/treeExpand ...); nothing when it is not running */
+void lsp_ext_notify (const char *method, const char *params) {
+  Srv *s = ext_srv();
+  if (s) notify(s, method, params);
+}
+
+
+/* the host's messages read until done() holds or ms went (Run Task waits for the extensions' tasks); 1: done */
+int lsp_ext_wait (int ms, int (*done) (void)) {
+  long long end = os_now_us() + (long long)ms * 1000;
+  while (os_now_us() < end) {
+    Srv *s = ext_srv();
+    lsp_poll();
+    if (done()) return 1;
+    if (s == NULL) return 0;
+    os_wait_readable(s->from, 20);
+  }
+  return done();
+}
+
+
 /* the file was saved: onDidSaveTextDocument */
 void lsp_ext_saved (Doc *d) {
   LDoc *l = ldoc_ext(d);

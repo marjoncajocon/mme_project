@@ -246,8 +246,16 @@ static void forget (void) {
 
 
 /* the main loop: the extensions read again (installed, uninstalled) start the host again with them */
+static char *g_start_dbg;	/* debug.startDebugging's configuration, started from the main loop */
+
 void ehost_idle (void) {
   work_out();
+  if (g_start_dbg) {	/* not while the host's message is read: starting it waits for the host's answer */
+    char *c = g_start_dbg;
+    g_start_dbg = NULL;
+    dbg_start_json(c);
+    free(c);
+  }
   if (g_restart) {
     g_restart = 0;
     lsp_restart(EXT_LANG);
@@ -467,6 +475,58 @@ static void contributions (const Json *p) {
 }
 
 
+/* ------------------------------------------------------------------ the extensions' debuggers */
+
+static Vec g_dbgtypes;	/* contributes.debuggers' types of the running extensions */
+static Json *g_dres;	/* the host's answer to mme/debugResolve */
+static int g_dseq, g_dgot;
+
+
+/* an extension's debugger has this launch configuration type */
+int ehost_debug_type (const char *type) {
+  size_t i;
+  for (i = 0; type && i < g_dbgtypes.n; i++)
+    if (strcmp(g_dbgtypes.v[i], type) == 0) return 1;
+  return 0;
+}
+
+
+static int dres_got (void) {
+  return g_dgot;
+}
+
+
+/* the configuration (JSON) through the extension: {config, adapter} or {error}, or {config: null} when it
+** stopped it; NULL: no answer (the host is not running, or it took too long) */
+Json *ehost_debug_resolve (const char *config) {
+  Buf b;
+  Json *r;
+  g_dgot = 0;
+  json_free(g_dres);
+  g_dres = NULL;
+  buf_init(&b);
+  buf_printf(&b, "{\"seq\":%d,\"config\":%s}", ++g_dseq, config);
+  buf_putc(&b, '\0');
+  lsp_ext_notify("mme/debugResolve", b.s);
+  buf_free(&b);
+  lsp_ext_wait(60000, dres_got);	/* it may ask (a tool to install, a process to attach to) */
+  r = g_dres;
+  g_dres = NULL;
+  return g_dgot ? r : NULL;
+}
+
+
+static Json *json_copy (const Json *j) {
+  Buf b;
+  Json *r;
+  buf_init(&b);
+  json_write(&b, j);
+  r = json_parse(b.s, b.len);
+  buf_free(&b);
+  return r;
+}
+
+
 int ehost_message (const char *method, const Json *p) {
   if (strcmp(method, "mme/output") == 0) {
     const char *ch = json_str(json_get(p, "channel"), "Extension Host");
@@ -482,6 +542,42 @@ int ehost_message (const char *method, const Json *p) {
     size_t i;
     for (i = 0; ls && ls->type == J_ARR && i < ls->n; i++) add_lang(json_str(ls->kid[i], ""));
   }
+  else if (strcmp(method, "mme/treeViews") == 0) tree_views(json_get(p, "views"));	/* etree.c */
+  else if (strcmp(method, "mme/debuggers") == 0) {
+    const Json *ts = json_get(p, "types");
+    size_t i;
+    vec_free(&g_dbgtypes);
+    for (i = 0; ts && ts->type == J_ARR && i < ts->n; i++) vec_push(&g_dbgtypes, xstrdup(json_str(json_get(ts->kid[i], "type"), "")));
+  }
+  else if (strcmp(method, "mme/debugResolved") == 0) {
+    if ((int)json_num(json_get(p, "seq"), -1) == g_dseq) {
+      json_free(g_dres);
+      g_dres = json_copy(p);
+      g_dgot = 1;
+    }
+  }
+  else if (strcmp(method, "mme/startDebugging") == 0) {	/* debug.startDebugging: ehost_idle starts it */
+    Buf b;
+    buf_init(&b);
+    json_write(&b, json_get(p, "config"));
+    buf_putc(&b, '\0');
+    free(g_start_dbg);
+    g_start_dbg = buf_take(&b);
+  }
+  else if (strcmp(method, "mme/stopDebugging") == 0) dbg_shutdown();
+  else if (strcmp(method, "mme/debugConsole") == 0) dbg_console(json_str(json_get(p, "text"), ""));
+  else if (strcmp(method, "mme/tasks") == 0) task_ext_list(json_get(p, "tasks"));	/* etask.c */
+  else if (strcmp(method, "mme/tests") == 0) test_ext_items(json_get(p, "tests"));	/* etest.c */
+  else if (strcmp(method, "mme/testState") == 0) test_ext_state(p);
+  else if (strcmp(method, "mme/testOutput") == 0) test_ext_output(p);
+  else if (strcmp(method, "mme/testEnd") == 0) test_ext_end();
+  else if (strcmp(method, "mme/testShowOutput") == 0) on_show_output("Test Results");
+  else if (strcmp(method, "mme/runTask") == 0) task_ext_run(p);
+  else if (strcmp(method, "mme/treeReady") == 0) tree_ready(p);
+  else if (strcmp(method, "mme/treeInfo") == 0) tree_info(p);
+  else if (strcmp(method, "mme/treeItems") == 0) tree_items(p);
+  else if (strcmp(method, "mme/treeRefresh") == 0) tree_refresh(p);
+  else if (strcmp(method, "mme/treeReveal") == 0) tree_reveal(p);
   else if (strcmp(method, "mme/inlineLanguages") == 0) {
     const Json *ls = json_get(p, "languages");
     size_t i;

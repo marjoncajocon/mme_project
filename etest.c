@@ -18,7 +18,7 @@
 #include <time.h>
 
 
-enum { FW_GO, FW_PY, FW_RUST, FW_JS };
+enum { FW_GO, FW_PY, FW_RUST, FW_JS, FW_EXT };	/* FW_EXT: an extension's test controller's (the host runs them) */
 
 typedef struct TTest {
   char *name;	/* TestAdd, test_sum, "test" (npm) */
@@ -29,6 +29,7 @@ typedef struct TTest {
   char *msg;	/* why it failed */
   char *floc;	/* where: the file (native), NULL: its own */
   size_t fline;
+  char *xid;	/* FW_EXT: the host's id of it */
 } TTest;
 
 typedef struct TFile {
@@ -197,6 +198,7 @@ static void free_test (TTest *t) {
   free(t->cls);
   free(t->msg);
   free(t->floc);
+  free(t->xid);
 }
 
 
@@ -235,9 +237,11 @@ static char *rel_of (const char *path) {
 /* a file read again: its tests keep their results by name */
 static void load_file (TFile *f) {
   size_t len;
-  char *s = read_file(f->path, &len);
+  char *s;
   TTest *old = f->t;
   int nold = f->n, i, k;
+  if (f->fw == FW_EXT) return;	/* the extension's: it says what they are */
+  s = read_file(f->path, &len);
   f->t = NULL;
   f->n = 0;
   if (s) {
@@ -343,8 +347,86 @@ void test_saved (const char *path) {
 }
 
 
+static int g_ext_asked;	/* the extensions' test controllers were asked for their tests */
+
 void test_show (void) {
   if (!g_found) discover();
+  if (!g_ext_asked && lsp_running(EXT_LANG)) {
+    g_ext_asked = 1;
+    lsp_ext_notify("mme/testDiscover", "{}");
+  }
+}
+
+
+/* mme/tests: the extensions' tests (tests.createTestController); a file they have is theirs, not read here */
+void test_ext_items (const Json *tests) {
+  TFile *old = NULL;
+  int nold = 0, i, k, n = 0;
+  size_t j;
+  for (i = 0; i < g_nf; i++)	/* the extensions' of before go out (their results are kept below) */
+    if (g_f[i].fw == FW_EXT) {
+      old = (TFile *)xrealloc(old, (size_t)(nold + 1) * sizeof(TFile));
+      old[nold++] = g_f[i];
+    }
+    else g_f[n++] = g_f[i];
+  g_nf = n;
+  for (j = 0; tests && tests->type == J_ARR && j < tests->n; j++) {
+    const Json *t = tests->kid[j];
+    const char *file = json_str(json_get(t, "file"), ""), *xid = json_str(json_get(t, "id"), "");
+    char *real = file[0] ? os_realpath(file) : NULL, *path;
+    TFile *f = NULL;
+    TTest *tt;
+    path = real ? real : xstrdup(file[0] ? file : json_str(json_get(t, "controller"), "tests"));
+    for (i = 0; i < g_nf; i++)
+      if (m_fncmp(g_f[i].path, path) == 0) {
+        if (g_f[i].fw != FW_EXT) {	/* read here before: the extension's now */
+          free_file(&g_f[i]);
+          memset(&g_f[i], 0, sizeof(TFile));
+          g_f[i].path = xstrdup(path);
+          g_f[i].rel = file[0] ? rel_of(path) : xstrdup(path);
+          g_f[i].fw = FW_EXT;
+        }
+        f = &g_f[i];
+        break;
+      }
+    if (f == NULL) {
+      g_f = (TFile *)xrealloc(g_f, (size_t)(g_nf + 1) * sizeof(TFile));
+      f = &g_f[g_nf++];
+      memset(f, 0, sizeof(*f));
+      f->path = xstrdup(path);
+      f->rel = file[0] ? rel_of(path) : xstrdup(path);
+      f->fw = FW_EXT;
+    }
+    add_test(f, xstrdup(json_str(json_get(t, "label"), "")), NULL, (size_t)json_num(json_get(t, "line"), 0));
+    tt = &f->t[f->n - 1];
+    tt->xid = xstrdup(xid);
+    for (i = 0; i < nold; i++)	/* its result of before, and whether its file was open */
+      for (k = 0; k < old[i].n; k++)
+        if (old[i].t[k].xid && strcmp(old[i].t[k].xid, xid) == 0) {
+          tt->state = old[i].t[k].state;
+          tt->ms = old[i].t[k].ms;
+          tt->msg = old[i].t[k].msg;
+          tt->floc = old[i].t[k].floc;
+          tt->fline = old[i].t[k].fline;
+          old[i].t[k].msg = old[i].t[k].floc = NULL;
+          if (old[i].open) f->open = 1;
+        }
+    free(path);
+  }
+  for (i = 0; i < nold; i++) free_file(&old[i]);
+  free(old);
+  g_found = 1;
+  qsort(g_f, (size_t)g_nf, sizeof(TFile), cmp_file);
+  scr_redraw();
+}
+
+
+static TTest *ext_test (const char *xid) {
+  int a, b;
+  for (a = 0; xid && a < g_nf; a++)
+    for (b = 0; g_f[a].fw == FW_EXT && b < g_f[a].n; b++)
+      if (g_f[a].t[b].xid && strcmp(g_f[a].t[b].xid, xid) == 0) return &g_f[a].t[b];
+  return NULL;
 }
 
 /* }================================================================== */
@@ -1566,15 +1648,110 @@ int test_idle (void) {
 }
 
 
+static int g_ext_on;	/* an extension's run goes on */
+
+/* the extensions' tests of sel to the host (mme/testRun with kind "run", "debug", "coverage"); 1: some */
+static int ext_run (const Pick1 *sel, int n, const char *kind) {
+  Buf b;
+  int i, k, any = 0;
+  buf_init(&b);
+  buf_puts(&b, "{\"ids\":[");
+  for (i = 0; i < n; i++) {
+    TFile *f = &g_f[sel[i].f];
+    if (f->fw != FW_EXT) continue;
+    for (k = 0; k < f->n; k++)
+      if (sel[i].t < 0 || sel[i].t == k) {
+        if (any++) buf_putc(&b, ',');
+        json_put_str(&b, f->t[k].xid, strlen(f->t[k].xid));
+        f->t[k].state = TM_QUEUED;
+      }
+  }
+  buf_printf(&b, "],\"kind\":\"%s\"}", kind);
+  buf_putc(&b, '\0');
+  if (any) {
+    out_log(CHAN, "%s", "Running tests through the extension...");
+    lsp_ext_notify("mme/testRun", b.s);
+    g_ext_on = 1;
+  }
+  buf_free(&b);
+  return any;
+}
+
+
+/* mme/testState: a test of an extension's run: queued, started, passed, failed, skipped */
+void test_ext_state (const Json *p) {
+  TTest *t = ext_test(json_str(json_get(p, "id"), NULL));
+  const char *s = json_str(json_get(p, "state"), "");
+  long ms = (long)json_num(json_get(p, "ms"), -1);
+  if (t == NULL) return;
+  if (strcmp(s, "queued") == 0) t->state = TM_QUEUED;
+  else if (strcmp(s, "started") == 0) t->state = TM_RUNNING;
+  else if (strcmp(s, "passed") == 0) set_result(t, TM_PASS, ms, NULL);
+  else if (strcmp(s, "skipped") == 0) set_result(t, TM_SKIP, ms, NULL);
+  else if (strcmp(s, "failed") == 0) {
+    const char *file = json_str(json_get(p, "file"), "");
+    int a, b;
+    set_result(t, TM_FAIL, ms, xstrdup(json_str(json_get(p, "message"), "")));
+    if (file[0]) {	/* where it failed, for the Problems */
+      t->floc = os_realpath(file);
+      if (t->floc == NULL) t->floc = xstrdup(file);
+      t->fline = (size_t)json_num(json_get(p, "line"), 0);
+    }
+    else
+      for (a = 0; a < g_nf; a++)
+        for (b = 0; b < g_f[a].n; b++)
+          if (&g_f[a].t[b] == t && (strchr(g_f[a].path, '/') || strchr(g_f[a].path, '\\'))) {	/* a file, not a controller's name */
+            t->floc = xstrdup(g_f[a].path);
+            t->fline = t->line;
+          }
+  }
+  scr_redraw();
+}
+
+
+/* mme/testOutput, mme/testEnd: what the run printed; it ended */
+void test_ext_output (const Json *p) {
+  const char *s = json_str(json_get(p, "text"), "");
+  out_append(CHAN, s, strlen(s));
+}
+
+
+void test_ext_end (void) {
+  int a, b, pass = 0, fail = 0;
+  g_ext_on = 0;
+  for (a = 0; a < g_nf; a++)
+    for (b = 0; g_f[a].fw == FW_EXT && b < g_f[a].n; b++) {
+      TTest *t = &g_f[a].t[b];
+      if (t->state == TM_RUNNING || t->state == TM_QUEUED) t->state = TM_UNSET;	/* not said: not run */
+      pass += t->state == TM_PASS;
+      fail += t->state == TM_FAIL;
+    }
+  out_log(CHAN, "%d passed, %d failed (the extension's run)", pass, fail);
+  publish();
+  scr_redraw();
+}
+
+
 /* the tests picked go to the queue; what was asked is kept for Rerun */
 static void run_picks (const Pick1 *sel, int n) {
-  int i, q0;
+  int i, q0, m = 0;
+  Pick1 *native;
   if (n > 0 && !trust_require("Running tests")) return;	/* Restricted Mode: the tests are the folder's code */
   if (n == 0) {
     toast(0, "No tests found to run.");
     return;
   }
   editor_save_all();	/* testing.saveBeforeTest */
+  ext_run(sel, n, g_cover ? "coverage" : "run");	/* an extension's: its controller runs them */
+  native = (Pick1 *)xmalloc((size_t)n * sizeof(Pick1));
+  for (i = 0; i < n; i++)
+    if (g_f[sel[i].f].fw != FW_EXT) native[m++] = sel[i];
+  sel = native;
+  n = m;
+  if (n == 0) {
+    free(native);
+    return;
+  }
   if (g_cover) cov_clear();	/* a run with coverage: the last one's goes */
   q0 = g_nq;
   plan(sel, n);
@@ -1583,6 +1760,7 @@ static void run_picks (const Pick1 *sel, int n) {
   g_nlast = g_nq - q0;
   g_last = (Run *)xmalloc((size_t)(g_nlast + 1) * sizeof(Run));
   for (i = 0; i < g_nlast; i++) run_copy(&g_last[i], &g_q[q0 + i]);
+  free(native);
   test_idle();
 }
 
@@ -1605,6 +1783,10 @@ static void run_all (void) {
 static void cancel (void) {
   size_t k;
   int i, a, b;
+  if (g_ext_on) {	/* an extension's run: its token cancelled */
+    lsp_ext_notify("mme/testCancel", "{}");
+    g_ext_on = 0;
+  }
   for (i = 0; i < g_nq; i++) run_free(&g_q[i]);
   g_nq = 0;
   if (g_on) {
@@ -2066,6 +2248,11 @@ static void debug_at_cursor (void) {
   }
   f = &g_f[p.f];
   t = &f->t[p.t];
+  if (f->fw == FW_EXT) {	/* the extension's debug profile */
+    editor_save_all();
+    if (!ext_run(&p, 1, "debug")) toast(0, "No test found at the cursor.");
+    return;
+  }
   buf_init(&b);
   dir = path_dirname(f->path);
   if (f->fw == FW_GO) {
@@ -2105,6 +2292,7 @@ void test_command (int cmd) {
     case CMD_TEST_RUN_ALL: run_all(); break;
     case CMD_TEST_REFRESH:
       discover();
+      if (lsp_running(EXT_LANG)) lsp_ext_notify("mme/testDiscover", "{}");
       toast(0, "Found tests in %d file%s", g_nf, g_nf == 1 ? "" : "s");
       break;
     case CMD_TEST_CANCEL: cancel(); break;
