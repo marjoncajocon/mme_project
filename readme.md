@@ -681,15 +681,30 @@ With no file open the editor shows the keys to start with.
   not signed in, out of its quota) Copilot is asked at once. To give the ghost
   text back to Copilot for good, Disable the extension in the Extensions view
   (`mme.extensions.disabled`; Enable brings it back). Their chat panels are
-  webviews and do not show. Codeium (Windsurf) signs in through its own
+  webviews: they open in the browser (below). Codeium (Windsurf) signs in through its own
   authentication provider: its link can't come back to mme, so click its
   "Signing in..." progress in the status bar and Cancel - it then gives a token
   page, and asks for the token. Start mme-sdl from mmc-shell (`mme-sdl .`) and the extensions get the
   shell's PATH (node, go, ...).
 
+  **Webviews in the browser**: mme draws cells, not HTML, so an extension's
+  webview - a chat panel (Supermaven's, Codeium's), a preview, a welcome page -
+  opens in the browser instead. The extension host serves the page on
+  127.0.0.1 (a random token in every link keeps other programs out, and only
+  the extension's, the workspace's and its `localResourceRoots` folders are
+  served) and gives it `acquireVsCodeApi()`: its messages go to the extension
+  and back, `getState` / `setState` are kept, and the `--vscode-*` colors are
+  the theme in use. `createWebviewPanel` opens a tab at once; a side bar view
+  (`registerWebviewViewProvider`) is "<Container>: Open <View> (in the
+  browser)" in the Command Palette, and VS Code's `<view>.focus` commands open
+  it too. An extension's **custom editor** (its own editor for a file type:
+  a diagram, a hex view) is "Reopen Active File With <Editor> (in the
+  browser)": the file in front opens in it, and a text file's edits there
+  are edits of mme's document. The page is an ordinary tab: it is not docked
+  in mme.
+
   Not there yet (Output > Extension Host lists every `[missing]` API an
-  extension asked for): **webviews** (an extension's HTML panels - mme has no
-  browser engine), tree views, debug adapters and task providers of an
+  extension asked for): tree views, debug adapters and task providers of an
   extension, test controllers, notebooks' kernels, semantic tokens and the
   language model APIs. Microsoft's own extensions (Pylance, C/C++, Python,
   debugpy, C# Dev Kit) are licensed for Microsoft's VS Code only: mme runs them

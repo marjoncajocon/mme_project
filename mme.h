@@ -1308,6 +1308,7 @@ const char *ext_lang_name (const char *id);
 const char *ext_lang_label (const char *path);	/* for the status bar: "Plain Text" when none */
 int ext_comment (const char *id, const char **line, const char **open, const char **close);
 const char *ext_theme_path (const char *label);	/* an extension's color theme file */
+void ext_theme_colors (Buf *r);	/* the theme in use by VS Code's color names (a webview's CSS) */
 void on_ext_page (const char *path);	/* mme.c: an extension's page to show */
 
 /* the diff editor: shown in place of the editor */

@@ -79,13 +79,53 @@ def stub_cmd(*args):
                     list(args))
 
 
+def play_browser(log):
+    '''A thread that loads each webview URL written to log, as the browser
+    would: the page (it must have the bridge), the script it links (served from
+    the extension's folder), then the message its script would post. The event
+    it returns stops it.'''
+    import threading
+    import urllib.request
+    stop = threading.Event()
+
+    def run():
+        seen = 0
+        while not stop.is_set():
+            try:
+                with open(log, encoding="utf-8") as f:
+                    urls = [u.split()[-1] for u in f if u.strip()]  # "url.dll,FileProtocolHandler <url>"
+            except OSError:
+                urls = []
+            for url in urls[seen:]:
+                if not url.startswith("http://127.0.0.1:"):
+                    continue
+                try:
+                    page = urllib.request.urlopen(url, timeout=5).read().decode("utf-8")
+                    m = re.search(r'src="([^"]+main\.js)"', page)
+                    if "acquireVsCodeApi" in page and m:
+                        urllib.request.urlopen(m.group(1), timeout=5).read()
+                        req = urllib.request.Request(url + "post", data=b'{"ready": true}',
+                                                     headers={"Content-Type": "application/json"})
+                        urllib.request.urlopen(req, timeout=5).read()
+                except OSError:
+                    pass
+            seen = len(urls)
+            stop.wait(0.2)
+
+    threading.Thread(target=run, daemon=True).start()
+    return stop
+
+
 class Scen(object):
     """One scenario: what to open, what to press, and what it guards."""
 
     def __init__(self, name, target, steps, guards, settings=None, subs=None,
                  perf=False, private=False, stub_lsp=(), watch=(),
                  inline_lsp=None, fake_browser=False, stub_claude=None, stub_github=None, env=None,
-                 speech=False, exts=()):
+                 speech=False, exts=(), play_browser=False):
+        self.play_browser = play_browser  # the URLs mme opens (fake_browser's log) are loaded here as a
+                                    # browser would: an extension's webview page, its script, and a message
+                                    # posted back by its bridge ({"ready": true})
         self.exts = exts            # (folder, package.json dict, or a fixture folder to copy): extensions
                                     # put in mme-data/extensions; one with code runs in the extension host
         self.stub_lsp = stub_lsp    # languages that get reg/stublsp.py
@@ -854,6 +894,23 @@ SCENARIOS = [
          "an extension that gives ghost text for C (the demo's) has nothing on the blank line 12, so the "
          "server's (Copilot's place: the stub) is asked at once and its continuation shows, as in lsp-inline-ghost",
          stub_lsp=("c",), exts=[("acme.demo", "acme.demo")]),
+    Scen("ext-host-webview-panel", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:acme open", "w:700", "k:" + ENTER, "w:4000", "d"],
+         "an extension's webview panel (createWebviewPanel: chat panels, previews) opens in the browser: "
+         "mme serves its page on 127.0.0.1 with the bridge (acquireVsCodeApi) and its script from the "
+         "extension's folder; what the page posts reaches the extension, which says it",
+         exts=[("acme.web", "acme.web")], play_browser=True),
+    Scen("ext-host-webview-view", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:in the browser", "w:700", "d", "k:" + ENTER, "w:4000", "d"],
+         "an extension's side bar webview (registerWebviewViewProvider: Supermaven's, Codeium's chat) is "
+         "in the palette as \"Acme Chat: Open Chat (in the browser)\"; it resolves the view and opens "
+         "it in the browser, and the page's message reaches the extension",
+         exts=[("acme.web", "acme.web")], play_browser=True),
+    Scen("ext-host-custom-editor", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:reopen active file with acme", "w:700", "d", "k:" + ENTER, "w:4000", "d"],
+         "an extension's custom editor (registerCustomEditorProvider) reopens the file in front in the "
+         "browser from the palette; its page's message becomes a WorkspaceEdit, and line 1 changes in mme",
+         exts=[("acme.web", "acme.web")], play_browser=True, private=True),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "
@@ -1455,13 +1512,14 @@ def run_once_(scen, use_prof, extra):
     # this suite is inside the editor's own checkout, and a fixture that is
     # not meant to be in a repository must not find that one by walking up
     env["GIT_CEILING_DIRECTORIES"] = BUILD
-    if scen.fake_browser:
+    if scen.fake_browser or scen.play_browser:
         # mme opens a URL with "rundll32 url.dll,FileProtocolHandler <url>", and
         # find_program takes the first rundll32 on the PATH: this one writes the
         # URL to MME_URLLOG and exits, so no browser window is ever opened
         env["PATH"] = BROWSER + os.pathsep + env.get("PATH", "")
         env["MME_URLLOG"] = os.path.join(work, "urls.txt")
     cmd = [HARNESS, os.path.join(work, "mme.exe"), tgt] + scen.steps
+    player = play_browser(env["MME_URLLOG"]) if scen.play_browser else None
     t0 = time.time()
     try:
         r = subprocess.run(cmd, env=env, stdout=subprocess.PIPE,
@@ -1470,6 +1528,8 @@ def run_once_(scen, use_prof, extra):
     except subprocess.TimeoutExpired:
         out = b"*** the harness did not finish in 180 s ***\n"
     took = time.time() - t0
+    if player:
+        player.set()
     text = normalise(out.decode("utf-8", "replace"), scen.subs)
     text += watched(scen, work)
     if scen.speech:

@@ -379,7 +379,7 @@ class Uri {
   toString (skipEncoding) {
     const enc = skipEncoding ? (s) => s : (s, sl) => pctEncode(s, sl);
     let s = this.scheme + ':';
-    if (this.authority || this.scheme === 'file') s += '//' + enc(this.authority, false);
+    if (this.authority || this.scheme === 'file') s += '//' + enc(this.authority, false).replace(/%3A(\d+)$/, ':$1');	// host:port
     let p = this.path;
     const drive = /^\/([a-zA-Z]):(.*)$/.exec(p);
     if (drive) s += '/' + drive[1].toLowerCase() + (skipEncoding ? ':' : '%3A') + enc(drive[2], true);
@@ -1213,6 +1213,11 @@ async function executeCommand (id, ...args) {
   if (!commands.has(id)) await activateOn('onCommand:' + id);	// registered already: run now (an extension's own, while it activates)
   const c = commands.get(id);
   if (c) return c.fn.apply(c.thisArg, args);
+  const vc = await viewCommand(id);	// "<view>.focus": a webview view, in the browser
+  if (vc !== undefined) return vc;
+  const ce = await customEditorCommand(id);	// a custom editor for the file in front, in the browser
+  if (ce !== undefined) return ce;
+  if (id === 'vscode.openWith' && args[0] && args[1]) return openCustomEditor(String(args[1]), toUri(args[0]));
   if (id === 'setContext') {
     contextKeys[args[0]] = args[1];
     return undefined;
@@ -2476,6 +2481,648 @@ function reg (kind) {
   };
 }
 
+// ----------------------------------------------------------------- webviews: in the browser
+
+// mme draws cells, not HTML: an extension's webview (a chat panel, a preview) is served here on
+// 127.0.0.1 and opened in the browser. acquireVsCodeApi() is given to the page; its postMessage
+// comes back by POST, the extension's by server-sent events. A random token in every path keeps
+// other programs of the machine out.
+const http = require('http');
+const wvToken = crypto.randomBytes(16).toString('hex');
+let wvServer = null, wvPort = 0, wvStarting = null;
+const webviews = new Map();	// id -> Webview
+let nextWebview = 1;
+
+function wvStart () {
+  if (wvServer) return Promise.resolve(wvPort);
+  if (wvStarting) return wvStarting;
+  wvStarting = new Promise((resolve, reject) => {
+    const srv = http.createServer((req, res) => wvServe(req, res).catch((e) => {
+      log('[error] webview server: ' + (e && e.stack ? e.stack : e));
+      try {
+        res.writeHead(500);
+        res.end();
+      } catch (err) {
+        // the answer was begun
+      }
+    }));
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      wvServer = srv;
+      wvPort = srv.address().port;
+      srv.unref();	// it does not keep the host alive
+      resolve(wvPort);
+    });
+  });
+  return wvStarting;
+}
+
+function wvOrigin () {
+  return 'http://127.0.0.1:' + wvPort;
+}
+
+const wvMime = {'.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.cjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json', '.map': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff': 'font/woff',
+  '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.wasm': 'application/wasm', '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/plain; charset=utf-8', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav'};
+
+// a file as the page asks for it: /<token>/res/<drive>/<path> on Windows, /<token>/res/<path> elsewhere
+function wvResourceUri (u) {
+  const f = toUri(u).fsPath;
+  let p = isWin ? f.replace(/\\/g, '/') : f;
+  if (isWin && /^[a-zA-Z]:/.test(p)) p = '/' + p[0].toLowerCase() + p.slice(2);
+  return new Uri('http', '127.0.0.1:' + wvPort, '/' + wvToken + '/res' + p, '', '');
+}
+
+function wvResourcePath (rest) {
+  let p = rest.split('/').map((s) => decodeURIComponent(s)).join('/');
+  if (isWin && /^\/[a-zA-Z](\/|$)/.test(p)) p = p[1] + ':' + (p.slice(2) || '/');
+  return path.normalize(p);
+}
+
+// the folders a webview may load from: its localResourceRoots, else its extension's and the workspace's
+function wvAllowed (file) {
+  const roots = [];
+  for (const w of webviews.values()) {
+    const o = w._options || {};
+    if (Array.isArray(o.localResourceRoots)) for (const r of o.localResourceRoots) roots.push(toUri(r).fsPath);
+    if (w._ext) roots.push(w._ext.dir);
+  }
+  for (const e of exts) roots.push(e.dir);
+  for (const f of folders) roots.push(f.uri.fsPath);
+  if (dataDir) roots.push(path.join(dataDir, 'extension-state'));
+  const low = (s) => (isWin ? path.normalize(s).toLowerCase() : path.normalize(s));
+  const f = low(file);
+  return roots.some((r) => {
+    const x = low(r);
+    return f === x || f.startsWith(x.endsWith(path.sep) ? x : x + path.sep);
+  });
+}
+
+function readBody (req) {
+  return new Promise((resolve, reject) => {
+    const parts = [];
+    let n = 0;
+    req.on('data', (d) => {
+      n += d.length;
+      if (n > 64 * 1024 * 1024) req.destroy();
+      else parts.push(d);
+    });
+    req.on('end', () => resolve(Buffer.concat(parts).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+async function wvServe (req, res) {
+  const url = new URL(req.url, 'http://127.0.0.1');
+  const parts = url.pathname.split('/');	// '', token, kind, ...
+  if (parts[1] !== wvToken) {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+  const noCache = {'Cache-Control': 'no-store'};
+  if (parts[2] === 'res') {
+    const file = wvResourcePath('/' + parts.slice(3).join('/'));
+    if (!wvAllowed(file)) {
+      res.writeHead(403, noCache);
+      res.end();
+      return;
+    }
+    let data;
+    try {
+      data = await fs.promises.readFile(file);
+    } catch (e) {
+      res.writeHead(404, noCache);
+      res.end();
+      return;
+    }
+    res.writeHead(200, {'Content-Type': wvMime[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      'Access-Control-Allow-Origin': '*', ...noCache});
+    res.end(data);
+    return;
+  }
+  if (parts[2] !== 'wv') {
+    res.writeHead(404);
+    res.end();
+    return;
+  }
+  const w = webviews.get(parts[3]);
+  const what = parts[4] || '';
+  if (!w) {
+    res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', ...noCache});
+    res.end('<!doctype html><title>Closed</title><body style="font-family:sans-serif;padding:2em">This panel was closed in mme.</body>');
+    return;
+  }
+  if (what === '' && req.method === 'GET') {
+    const page = await w._page();
+    res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8', ...noCache});
+    res.end(page);
+  }
+  else if (what === 'events') {
+    res.writeHead(200, {'Content-Type': 'text/event-stream', 'Connection': 'keep-alive', ...noCache});
+    res.write(': mme\n\n');
+    w._connect(res);
+  }
+  else if (what === 'post' && req.method === 'POST') {
+    const body = await readBody(req);
+    res.writeHead(204, noCache);
+    res.end();
+    let m;
+    try {
+      m = JSON.parse(body);
+    } catch (e) {
+      return;
+    }
+    w._onMessage.fire(m);
+  }
+  else if (what === 'state' && req.method === 'POST') {
+    const body = await readBody(req);
+    res.writeHead(204, noCache);
+    res.end();
+    try {
+      w._state = JSON.parse(body);
+    } catch (e) {
+      // not JSON: kept as it was
+    }
+  }
+  else {
+    res.writeHead(404, noCache);
+    res.end();
+  }
+}
+
+// VS Code's theme as CSS variables: mme's colors (mme/theme), and what VS Code derives from them
+async function wvTheme () {
+  let t = null;
+  try {
+    t = await request('mme/theme', {});
+  } catch (e) {
+    t = null;
+  }
+  const c = Object.assign({}, (t && t.colors) || {});
+  const light = !!(t && t.kind === 1);
+  const d = (k, v) => {
+    if (!c[k] && v) c[k] = v;
+  };
+  const bg = c['editor.background'] || (light ? '#ffffff' : '#1f1f1f');
+  const fg = c['editor.foreground'] || (light ? '#3b3b3b' : '#cccccc');
+  d('editor.background', bg);
+  d('editor.foreground', fg);
+  d('foreground', c['sideBar.foreground'] || fg);
+  d('sideBar.background', bg);
+  d('panel.background', bg);
+  d('editorWidget.background', c['menu.background'] || bg);
+  d('editorWidget.foreground', c['menu.foreground'] || fg);
+  d('editorWidget.border', c['sideBar.border']);
+  d('widget.border', c['sideBar.border']);
+  d('panel.border', c['sideBar.border']);
+  d('button.background', c['focusBorder'] || '#0078d4');
+  d('button.foreground', '#ffffff');
+  d('button.hoverBackground', c['focusBorder'] || '#026ec1');
+  d('button.secondaryBackground', c['input.background']);
+  d('button.secondaryForeground', c['input.foreground'] || fg);
+  d('button.secondaryHoverBackground', c['list.hoverBackground']);
+  d('button.border', 'transparent');
+  d('badge.background', c['focusBorder']);
+  d('badge.foreground', '#ffffff');
+  d('input.border', c['sideBar.border']);
+  d('dropdown.background', c['input.background']);
+  d('dropdown.foreground', c['input.foreground']);
+  d('dropdown.border', c['sideBar.border']);
+  d('dropdown.listBackground', c['menu.background']);
+  d('checkbox.background', c['input.background']);
+  d('checkbox.foreground', c['input.foreground']);
+  d('checkbox.border', c['sideBar.border']);
+  d('textLink.foreground', light ? '#005fb8' : '#4daafc');
+  d('textLink.activeForeground', light ? '#005fb8' : '#4daafc');
+  d('textPreformat.foreground', light ? '#3b3b3b' : '#d0d0d0');
+  d('textBlockQuote.background', c['sideBar.background']);
+  d('textCodeBlock.background', c['input.background']);
+  d('textSeparator.foreground', c['sideBar.border']);
+  d('errorForeground', c['editorError.foreground']);
+  d('icon.foreground', fg);
+  d('toolbar.hoverBackground', c['list.hoverBackground']);
+  d('list.focusBackground', c['list.activeSelectionBackground']);
+  d('list.focusForeground', c['list.activeSelectionForeground']);
+  d('quickInput.foreground', c['menu.foreground']);
+  d('scrollbarSlider.activeBackground', c['scrollbarSlider.hoverBackground']);
+  d('progressBar.background', c['focusBorder']);
+  d('editorHoverWidget.background', c['menu.background']);
+  d('editorHoverWidget.foreground', c['menu.foreground']);
+  d('editorHoverWidget.border', c['sideBar.border']);
+  d('menu.border', c['sideBar.border']);
+  d('notifications.foreground', c['menu.foreground']);
+  d('settings.headerForeground', fg);
+  d('chat.requestBackground', c['input.background']);
+  d('chat.slashCommandBackground', c['list.hoverBackground']);
+  d('keybindingLabel.background', c['input.background']);
+  d('keybindingLabel.foreground', fg);
+  d('keybindingLabel.border', c['sideBar.border']);
+  const font = isWin ? '"Segoe WPC", "Segoe UI", sans-serif' : process.platform === 'darwin'
+    ? '-apple-system, BlinkMacSystemFont, sans-serif' : 'system-ui, "Ubuntu", "Droid Sans", sans-serif';
+  const edFont = (settingValue('editor.fontFamily') || '') || (isWin ? 'Consolas, "Courier New", monospace' : 'Menlo, Monaco, "Courier New", monospace');
+  const edSize = settingValue('editor.fontSize') || 14;
+  const vars = [`--vscode-font-family: ${font}`, '--vscode-font-weight: normal', '--vscode-font-size: 13px',
+    `--vscode-editor-font-family: ${edFont}`, '--vscode-editor-font-weight: normal', `--vscode-editor-font-size: ${edSize}px`];
+  for (const [k, v] of Object.entries(c)) if (typeof v === 'string') vars.push('--vscode-' + k.replace(/\./g, '-') + ': ' + v);
+  return {light, css: ':root {\n  ' + vars.join(';\n  ') + ';\n}'};
+}
+
+// VS Code's default styles for a webview, and the bridge its scripts talk through
+function wvHead (w, theme) {
+  const boot = `(function () {
+  var base = location.pathname.replace(/[^/]*$/, '');
+  var state = ${JSON.stringify(w._state === undefined ? null : w._state).replace(/</g, '\\u003c')};
+  var chain = Promise.resolve();
+  function send (what, v) {
+    var body = JSON.stringify(v === undefined ? null : v);
+    chain = chain.then(function () {
+      return fetch(base + what, {method: 'POST', body: body, headers: {'Content-Type': 'application/json'}}).catch(function () {});
+    });
+  }
+  var api = Object.freeze({
+    postMessage: function (m) { send('post', m); },
+    getState: function () { return state === null ? undefined : state; },
+    setState: function (s) { state = s; send('state', s); return s; }
+  });
+  window.acquireVsCodeApi = function () { return api; };
+  function listen () {
+    var es = new EventSource(base + 'events');
+    es.onmessage = function (e) {
+      var d = JSON.parse(e.data);
+      if (d.type === 'message') window.dispatchEvent(new MessageEvent('message', {data: d.data, origin: location.origin}));
+      else if (d.type === 'reload') location.reload();
+      else if (d.type === 'title') document.title = d.title;
+      else if (d.type === 'close') {
+        es.close();
+        window.close();
+        document.body.innerHTML = '<p style="padding:2em">This panel was closed in mme.</p>';
+      }
+    };
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { setTimeout(listen, 0); });
+  else setTimeout(listen, 0);
+})();`;
+  const style = `${theme.css}
+html { scrollbar-color: var(--vscode-scrollbarSlider-background) transparent; }
+body { background-color: var(--vscode-${w._view ? 'sideBar' : 'editor'}-background); color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family); font-weight: var(--vscode-font-weight); font-size: var(--vscode-font-size);
+  margin: 0; padding: 0 20px; }
+img, video { max-width: 100%; max-height: 100%; }
+a, a code { color: var(--vscode-textLink-foreground); }
+a:hover { color: var(--vscode-textLink-activeForeground); }
+code { font-family: var(--vscode-editor-font-family); color: var(--vscode-textPreformat-foreground); }
+button:focus, input:focus, select:focus, textarea:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+input, textarea, select { background: var(--vscode-input-background); color: var(--vscode-input-foreground); }`;
+  return `<meta charset="utf-8"><title>${htmlEscape(w._title || 'mme')}</title><style id="_defaultStyles">${style}</style><script>${boot}</script>`;
+}
+
+function htmlEscape (s) {
+  return String(s).replace(/[&<>"]/g, (ch) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch]));
+}
+
+class Webview {
+  constructor (ext, options, title, view) {
+    this._id = String(nextWebview++);
+    this._ext = ext;
+    this._options = Object.assign({}, options || {});
+    this._html = '';
+    this._title = title || '';
+    this._view = !!view;
+    this._state = undefined;
+    this._clients = new Set();
+    this._queue = [];
+    this._onMessage = new EventEmitter();
+    this._onVisible = new EventEmitter();	// clients came or all went: the panel's / view's visibility
+    this.onDidReceiveMessage = this._onMessage.event;
+    webviews.set(this._id, this);
+  }
+  get html () {
+    return this._html;
+  }
+  set html (s) {
+    this._html = String(s === undefined || s === null ? '' : s);
+    this._send({type: 'reload'}, false);
+  }
+  get options () {
+    return this._options;
+  }
+  set options (o) {
+    this._options = Object.assign({}, o || {});
+  }
+  get cspSource () {
+    return wvOrigin();
+  }
+  asWebviewUri (u) {
+    return wvResourceUri(u);
+  }
+  postMessage (m) {
+    const data = plain(m);
+    if (this._clients.size === 0) {	// not opened yet (or closed): it waits, as VS Code keeps them for a page loading
+      this._queue.push(data);
+      if (this._queue.length > 1000) this._queue.shift();
+      return Promise.resolve(false);
+    }
+    this._send({type: 'message', data}, true);
+    return Promise.resolve(true);
+  }
+  _send (ev, queue) {
+    const line = 'data: ' + JSON.stringify(ev) + '\n\n';
+    for (const res of this._clients) res.write(line);
+    if (queue && this._clients.size === 0) this._queue.push(ev.data);
+  }
+  _connect (res) {
+    const first = this._clients.size === 0;
+    this._clients.add(res);
+    const ping = setInterval(() => res.write(': ping\n\n'), 20000);
+    res.on('close', () => {
+      clearInterval(ping);
+      this._clients.delete(res);
+      if (this._clients.size === 0) setTimeout(() => {
+        if (this._clients.size === 0) this._onVisible.fire(false);
+      }, 3000);
+    });
+    const q = this._queue;
+    this._queue = [];
+    for (const data of q) res.write('data: ' + JSON.stringify({type: 'message', data}) + '\n\n');
+    if (first) this._onVisible.fire(true);
+  }
+  async _page () {
+    const theme = await wvTheme();
+    let html = this._html || '<!doctype html><html><head></head><body><p style="opacity:.7">Loading...</p></body></html>';
+    // the page is ours to serve: its Content-Security-Policy is for VS Code's iframe (nonces for scripts
+    // that our bridge would not have); the token in the path already keeps it to this machine's browser
+    html = html.replace(/<meta\s+[^>]*http-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/gi, '');
+    // the old vscode-resource: links
+    html = html.replace(/vscode-resource:(\/\/[^"')\s]*)?(\/[^"')\s]*)/g, (m, auth, p) => wvResourceUri(Uri.file(p)).toString());
+    const head = wvHead(this, theme);
+    const cls = theme.light ? 'vscode-light' : 'vscode-dark';
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + head);
+    else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, (m) => m + '<head>' + head + '</head>');
+    else html = '<!doctype html><html><head>' + head + '</head><body>' + html + '</body></html>';
+    if (/<body[^>]*>/i.test(html))
+      html = html.replace(/<body([^>]*)>/i, (m, a) => {
+        if (/class\s*=\s*["']/i.test(a)) return '<body' + a.replace(/class\s*=\s*(["'])/i, (x, q) => 'class=' + q + cls + ' ') + ` data-vscode-theme-kind="${cls}">`;
+        return `<body${a} class="${cls}" data-vscode-theme-kind="${cls}">`;
+      });
+    return html;
+  }
+  _dispose () {
+    this._send({type: 'close'}, false);
+    for (const res of this._clients) res.end();
+    this._clients.clear();
+    webviews.delete(this._id);
+  }
+  async _open () {
+    await wvStart();
+    const url = wvOrigin() + '/' + wvToken + '/wv/' + this._id + '/';
+    log('[info] webview "' + this._title + '" opened in the browser: ' + url.replace(wvToken, '<token>'));
+    await request('window/showDocument', {uri: url, external: true}).catch(() => {});
+    window.setStatusBarMessage('$(globe) ' + (this._title || 'A webview') + ': opened in the browser', 6000);
+  }
+}
+
+// the extension whose code is running now (its webview's resources are its folder's)
+function callerExtension () {
+  const st = new Error().stack || '';
+  const low = isWin ? st.toLowerCase() : st;
+  return exts.find((e) => low.includes(isWin ? e.dir.toLowerCase() : e.dir));
+}
+
+function createWebviewPanel (viewType, title, showOptions, options, forExt) {
+  const ext = forExt || callerExtension();
+  const w = new Webview(ext, options, title, false);
+  const onDispose = new EventEmitter(), onState = new EventEmitter();
+  let disposed = false, visible = false;
+  const panel = {
+    webview: w, viewType, options: Object.assign({}, options || {}),
+    get title () {
+      return w._title;
+    },
+    set title (t) {
+      w._title = String(t);
+      w._send({type: 'title', title: w._title}, false);
+    },
+    iconPath: undefined,
+    get viewColumn () {
+      return typeof showOptions === 'number' ? showOptions : (showOptions && showOptions.viewColumn) || 1;
+    },
+    get active () {
+      return visible;
+    },
+    get visible () {
+      return visible;
+    },
+    onDidDispose: onDispose.event,
+    onDidChangeViewState: onState.event,
+    reveal () {
+      if (!disposed && w._clients.size === 0) w._open();
+    },
+    dispose () {
+      if (disposed) return;
+      disposed = true;
+      w._dispose();
+      onDispose.fire();
+      onDispose.dispose();
+    },
+  };
+  w._onVisible.event((v) => {
+    if (visible === v) return;
+    visible = v;
+    onState.fire({webviewPanel: panel});
+  });
+  const preserve = showOptions && typeof showOptions === 'object' && showOptions.preserveFocus;
+  setTimeout(() => {	// its html is set right after it is made: the page is asked for then
+    if (!disposed) w._open();
+  }, preserve ? 300 : 50);
+  return panel;
+}
+
+// webview views: an extension's side bar panels (its chat): opened by "<view>.focus" or its container's command
+const viewProviders = new Map();	// view id -> {provider, options}
+const openViews = new Map();	// view id -> {view, webview}
+
+function webviewViews () {	// every contributed webview view: {id, name, container, ext}
+  const out = [];
+  for (const e of exts) {
+    const c = e.pkg.contributes || {};
+    const containers = {};
+    for (const list of Object.values(c.viewsContainers || {}))
+      for (const vc of list || []) containers[vc.id] = l10nString(e, vc.title);
+    for (const [container, list] of Object.entries(c.views || {}))
+      for (const v of list || [])
+        if (v.type === 'webview') out.push({id: v.id, name: l10nString(e, v.name) || v.id, container,
+          containerTitle: containers[container] || l10nString(e, e.pkg.displayName) || e.id, ext: e});
+  }
+  return out;
+}
+
+function registerWebviewViewProvider (viewId, provider, options) {
+  viewProviders.set(viewId, {provider, options: options || {}});
+  return new Disposable(() => viewProviders.delete(viewId));
+}
+
+async function openView (viewId) {
+  const known = openViews.get(viewId);
+  if (known) {
+    if (known.webview._clients.size === 0) await known.webview._open();
+    return true;
+  }
+  if (!viewProviders.has(viewId)) await activateOn('onView:' + viewId);
+  const p = viewProviders.get(viewId);
+  const info = webviewViews().find((v) => v.id === viewId);
+  if (!p) {
+    window.showWarningMessage((info ? info.name : viewId) + ': the extension gives no view for it yet (is it running and signed in?)');
+    return false;
+  }
+  const title = info ? (info.containerTitle && info.containerTitle !== info.name ? info.containerTitle + ': ' + info.name : info.name) : viewId;
+  const w = new Webview(info ? info.ext : callerExtension(), (p.options && p.options.webviewOptions) || {}, title, true);
+  const onDispose = new EventEmitter(), onVis = new EventEmitter();
+  let visible = false;
+  const view = {
+    webview: w, viewType: viewId,
+    get title () {
+      return w._title;
+    },
+    set title (t) {
+      if (t) {
+        w._title = String(t);
+        w._send({type: 'title', title: w._title}, false);
+      }
+    },
+    description: undefined, badge: undefined,
+    get visible () {
+      return visible;
+    },
+    onDidDispose: onDispose.event,
+    onDidChangeVisibility: onVis.event,
+    show () {
+      if (w._clients.size === 0) w._open();
+    },
+  };
+  w._onVisible.event((v) => {
+    if (visible === v) return;
+    visible = v;
+    onVis.fire();
+  });
+  openViews.set(viewId, {view, webview: w});
+  const cts = new CancellationTokenSource();
+  try {
+    await p.provider.resolveWebviewView(view, {state: undefined}, cts.token);
+  } catch (e) {
+    log('[error] ' + viewId + ': resolveWebviewView: ' + (e && e.stack ? e.stack : e));
+  }
+  await w._open();
+  return true;
+}
+
+// the palette's commands for the webview views: VS Code's "<view>.focus", and "workbench.view.extension.<container>"
+function webviewViewCommands () {
+  const out = [];
+  for (const v of webviewViews())
+    out.push({id: v.id + '.focus', title: 'Open ' + v.name + ' (in the browser)', category: v.containerTitle, ext: v.ext.id});
+  return out;
+}
+
+async function viewCommand (id) {	// a command that opens a webview view; undefined: not one
+  const views = webviewViews();
+  if (id.endsWith('.focus')) {
+    const v = views.find((x) => x.id === id.slice(0, -6));
+    if (v) return openView(v.id);
+  }
+  if (id.startsWith('workbench.view.extension.')) {
+    const v = views.find((x) => x.container === id.slice(25));
+    if (v) return openView(v.id);
+  }
+  return undefined;
+}
+
+
+// custom editors (an extension's own editor for a file type: a diagram, a hex view): the file in front
+// reopened with one, in the browser - "Reopen Active File With <editor>" in the palette
+const customEditors = new Map();	// viewType -> {provider, options}
+
+function registerCustomEditorProvider (viewType, provider, options) {
+  customEditors.set(viewType, {provider, options: options || {}});
+  return new Disposable(() => customEditors.delete(viewType));
+}
+
+function customEditorList () {	// every contributed one: {viewType, name, patterns, ext}
+  const out = [];
+  for (const e of exts)
+    for (const c of (e.pkg.contributes && e.pkg.contributes.customEditors) || [])
+      out.push({viewType: c.viewType, name: l10nString(e, c.displayName) || c.viewType, ext: e,
+        patterns: (c.selector || []).map((x) => x.filenamePattern).filter(Boolean)});
+  return out;
+}
+
+function editorPatternMatch (pattern, file) {	// "*.drawio", "**/*.{png,jpg}": against the file's name, or its path for a "/"
+  const name = pattern.includes('/') ? file.replace(/\\/g, '/') : path.basename(file);
+  let re = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '*' && pattern[i + 1] === '*') {
+      re += '.*';
+      i++;
+      if (pattern[i + 1] === '/') i++;
+    } else if (ch === '*') re += '[^/]*';
+    else if (ch === '?') re += '[^/]';
+    else if (ch === '{') re += '(';
+    else if (ch === '}') re += ')';
+    else if (ch === ',') re += '|';
+    else re += ch.replace(/[.+^$()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp((pattern.includes('/') ? '(^|/)' : '^') + re + '$', 'i').test(name);
+}
+
+async function openCustomEditor (viewType, uri) {
+  const info = customEditorList().find((c) => c.viewType === viewType);
+  if (!customEditors.has(viewType)) await activateOn('onCustomEditor:' + viewType);
+  const c = customEditors.get(viewType);
+  if (!c) {
+    window.showWarningMessage((info ? info.name : viewType) + ': the extension gives no editor for it (is it running?)');
+    return false;
+  }
+  const title = path.basename(uri.fsPath) + ' - ' + (info ? info.name : viewType);
+  const panel = createWebviewPanel(viewType, title, 1, (c.options && c.options.webviewOptions) || {enableScripts: true}, info && info.ext);
+  const cts = new CancellationTokenSource();
+  try {
+    if (typeof c.provider.resolveCustomTextEditor === 'function') {	// a text file: its edits go to mme's document
+      const doc = docFor(uri) || await openTextDocument(uri);
+      await c.provider.resolveCustomTextEditor(doc, panel, cts.token);
+    } else {
+      const cd = await c.provider.openCustomDocument(uri, {backupId: undefined, untitledDocumentData: undefined}, cts.token);
+      await c.provider.resolveCustomEditor(cd, panel, cts.token);
+    }
+  } catch (e) {
+    log('[error] ' + viewType + ': ' + (e && e.stack ? e.stack : e));
+  }
+  return true;
+}
+
+function customEditorCommands () {
+  return customEditorList().map((c) => ({id: '_mme.customEditor.' + c.viewType,
+    title: 'Reopen Active File With ' + c.name + ' (in the browser)', category: l10nString(c.ext, c.ext.pkg.displayName) || c.ext.id, ext: c.ext.id}));
+}
+
+async function customEditorCommand (id) {	// "_mme.customEditor.<viewType>": the file in front; undefined: not one
+  if (!id.startsWith('_mme.customEditor.')) return undefined;
+  const viewType = id.slice(18);
+  const info = customEditorList().find((c) => c.viewType === viewType);
+  if (!activeEditor) {
+    window.showWarningMessage('Open a file first, then reopen it with ' + (info ? info.name : viewType));
+    return false;
+  }
+  const f = activeEditor.document.uri.fsPath;
+  if (info && info.patterns.length && !info.patterns.some((pt) => editorPatternMatch(pt, f)))
+    window.showInformationMessage(info.name + ' is for ' + info.patterns.join(', ') + ': trying it on ' + path.basename(f) + ' anyway');
+  return openCustomEditor(viewType, activeEditor.document.uri);
+}
+
+
 const window = spare({
   showInformationMessage: (...a) => showMessage('info', ...a),
   showWarningMessage: (...a) => showMessage('warning', ...a),
@@ -2522,6 +3169,8 @@ const window = spare({
     return d;
   },
   createTextEditorDecorationType: () => ({key: 'dec' + nextHandle++, dispose () {}}),
+  createWebviewPanel: (a, b, c, d) => createWebviewPanel(a, b, c, d), registerWebviewViewProvider, registerCustomEditorProvider,
+  registerWebviewPanelSerializer: () => new Disposable(() => {}),	// a panel is not brought back after a restart
   registerUriHandler: () => new Disposable(() => {}),
   tabGroups: {all: [], activeTabGroup: {tabs: [], activeTab: undefined, isActive: true, viewColumn: 1},
     onDidChangeTabGroups: stubEvent(), onDidChangeTabs: stubEvent(), close: async () => true},
@@ -2824,6 +3473,8 @@ function readExtension (dir) {
   const c = pkg.contributes || {};
   for (const cmd of c.commands || []) events.push('onCommand:' + cmd.command);	// implicit, VS Code 1.74+
   for (const l of c.languages || []) if (l.id) events.push('onLanguage:' + l.id);
+  for (const list of Object.values(c.views || {})) for (const v of list || []) if (v.id) events.push('onView:' + v.id);
+  for (const ce of c.customEditors || []) if (ce.viewType) events.push('onCustomEditor:' + ce.viewType);
   const props = [];
   const confs = Array.isArray(c.configuration) ? c.configuration : c.configuration ? [c.configuration] : [];
   for (const cf of confs) for (const [k, v] of Object.entries(cf.properties || {})) {
@@ -2945,6 +3596,7 @@ async function start () {
     }
   }
   log('[info] node ' + process.version + ', ' + exts.length + ' extension(s): ' + exts.map((e) => e.id).join(', '));
+  await wvStart().catch((e) => log('[error] the webview server: ' + e.message));	// its port is in asWebviewUri's links, asked for at once
   // the palette's commands: what the running extensions contribute
   const cmds = [];
   for (const e of exts) for (const c of (e.pkg.contributes && e.pkg.contributes.commands) || []) {
@@ -2952,6 +3604,7 @@ async function start () {
     const cat = typeof c.category === 'object' ? c.category.value : c.category;
     cmds.push({id: c.command, title: l10nString(e, t), category: l10nString(e, cat) || '', ext: e.id});
   }
+  cmds.push(...webviewViewCommands(), ...customEditorCommands());	// "Open <view> (in the browser)", "Reopen Active File With ..."
   const keys = [];
   for (const e of exts) for (const k of (e.pkg.contributes && e.pkg.contributes.keybindings) || []) {
     const key = isWin ? k.win || k.key : process.platform === 'darwin' ? k.mac || k.key : k.linux || k.key;

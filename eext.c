@@ -548,6 +548,20 @@ static const char *const tokscope[T_N][3] = {
   [T_HEADING] = {"markup.heading", "entity.name.section"}
 };
 
+/* the theme in use by VS Code's names, for an extension's webview: {"kind":1 light / 2 dark,"colors":{...}} */
+void ext_theme_colors (Buf *r) {
+  size_t m;
+  uint32_t bg = ui_color(C_EDITOR_BG);
+  int lum = (int)(((bg >> 16) & 255) * 299 + ((bg >> 8) & 255) * 587 + (bg & 255) * 114) / 1000;
+  buf_printf(r, "{\"kind\":%d,\"colors\":{\"editor.background\":\"#%06x\"", lum > 128 ? 1 : 2, (unsigned)bg);
+  for (m = 0; m < sizeof(colormap) / sizeof(colormap[0]); m++) {
+    if (m > 0 && strcmp(colormap[m].key, colormap[m - 1].key) == 0) continue;	/* one key on several slots: the first */
+    buf_printf(r, ",\"%s\":\"#%06x\"", colormap[m].key, (unsigned)ui_color(colormap[m].slot));
+  }
+  buf_puts(r, "}}");
+}
+
+
 typedef struct Load {
   unsigned char set[C_N];
   int score[T_N][3];	/* the best rule for each of a token's scopes */

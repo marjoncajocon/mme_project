@@ -647,6 +647,7 @@ int ehost_request (const char *method, const Json *p, Buf *r) {
       else buf_puts(r, "\"\"");
     }
   }
+  else if (strcmp(method, "mme/theme") == 0) ext_theme_colors(r);	/* a webview's --vscode-* colors */
   else if (strcmp(method, "mme/save") == 0) {
     char *path = lsp_path(json_str(json_get(p, "uri"), ""));
     buf_puts(r, path && mme_save_path(path) == 0 ? "true" : "false");
