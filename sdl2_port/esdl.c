@@ -80,14 +80,17 @@ static struct {
 } W;
 
 
-/* the picture of the image preview (sixel from eimage.c), decoded, where it is */
-static struct {
+/* the pictures shown (the image preview's, a notebook's: sixel from eimage.c), decoded, where they are */
+typedef struct Pic {
   char *src;	/* the sixel it was decoded from */
   size_t n;
   uint32_t *px;	/* 0xAARRGGBB, alpha 0: not painted */
   int w, h;
-  int on, x, y, cols, rows;	/* shown, in cells */
-} IM;
+  int x, y, cols, rows;	/* in cells */
+} Pic;
+
+static Pic IM[MAX_IMG];
+static int NIM;
 
 
 static uint32_t mix (uint32_t bg, uint32_t fg, int a) {
@@ -828,17 +831,23 @@ static uint32_t *sixel_decode (const char *s, size_t n, int *ow, int *oh) {
 static void caret_off (void);
 
 
-/* the picture, over rows y0 .. y1 of it (only those) */
-static void image_paint (int y0, int y1) {
-  int top = IM.y * W.ch, left = IM.x * W.cw, maxw = IM.cols * W.cw, maxh = IM.rows * W.ch, i, j;
-  int from = y0 * W.ch, to = (y1 + 1) * W.ch;
-  if (IM.px == NULL) return;
+/* picture p, over rows y0 .. y1 of the screen (only those it covers) */
+static void image_paint (const Pic *p, int y0, int y1) {
+  int top = p->y * W.ch, left = p->x * W.cw, maxw = p->cols * W.cw, maxh = p->rows * W.ch, i, j;
+  int from, to;
+  if (p->px == NULL) return;
+  if (y0 < p->y) y0 = p->y;
+  if (y1 > p->y + p->rows - 1) y1 = p->y + p->rows - 1;
+  if (y1 >= S.rows) y1 = S.rows - 1;
+  if (y0 > y1) return;
+  from = y0 * W.ch;
+  to = (y1 + 1) * W.ch;
   if (W.car_on && W.car_y >= y0 && W.car_y <= y1) caret_off();	/* painted again after it, where it is then */
-  for (j = 0; j < IM.h && j < maxh; j++) {
+  for (j = 0; j < p->h && j < maxh; j++) {
     int py = top + j;
     if (py < from || py >= to || py < 0 || py >= W.fr.h) continue;
-    for (i = 0; i < IM.w && i < maxw; i++) {
-      uint32_t c = IM.px[(size_t)j * (size_t)IM.w + (size_t)i];
+    for (i = 0; i < p->w && i < maxw; i++) {
+      uint32_t c = p->px[(size_t)j * (size_t)p->w + (size_t)i];
       int x = left + i;
       if ((c >> 24) == 0 || x < 0 || x >= W.fr.w) continue;
       W.fr.px[(size_t)py * (size_t)W.fr.w + (size_t)x] = c & 0xFFFFFF;
@@ -848,46 +857,64 @@ static void image_paint (int y0, int y1) {
 }
 
 
-/* the picture of this flush (IMG, from scr_image) or none: shown, moved, taken away */
-static void image_flush (int y_first, int y_last) {
+static void images_row (int y) {	/* the pictures over row y again (it was painted from its cells) */
   int k;
-  if (IMG.data && (IM.src == NULL || IM.n != IMG.n || memcmp(IM.src, IMG.data, IMG.n) != 0)) {	/* a new one */
-    free(IM.px);
-    free(IM.src);
-    IM.src = (char *)xmalloc(IMG.n + 1);
-    memcpy(IM.src, IMG.data, IMG.n);
-    IM.n = IMG.n;
-    IM.px = sixel_decode(IMG.data, IMG.n, &IM.w, &IM.h);
-    if (IM.on) {	/* the old one goes first: the new one may be smaller */
-      for (k = IM.y; k < IM.y + IM.rows && k < S.rows; k++) paint_row(k, S.front);
-      IM.on = 0;
+  for (k = 0; k < NIM; k++) image_paint(&IM[k], y, y);
+}
+
+
+/*
+** The pictures of this flush (IMG[], from scr_image): the ones decoded
+** before are kept (a sixel is decoded once), the rows of the ones that
+** went or moved painted again from their cells, the new ones painted
+*/
+static void image_flush (int y_first, int y_last) {
+  Pic now[MAX_IMG];
+  int k, i, same = NIMG == NIM;
+  memset(now, 0, sizeof(now));
+  for (i = 0; i < NIMG; i++) {
+    Pic *p = &now[i];
+    for (k = 0; k < NIM; k++)	/* decoded already */
+      if (IM[k].src && IM[k].n == IMG[i].n && memcmp(IM[k].src, IMG[i].data, IMG[i].n) == 0) {
+        *p = IM[k];
+        IM[k].src = NULL;
+        IM[k].px = NULL;
+        break;
+      }
+    if (p->src == NULL) {
+      p->src = (char *)xmalloc(IMG[i].n + 1);
+      memcpy(p->src, IMG[i].data, IMG[i].n);
+      p->n = IMG[i].n;
+      p->px = sixel_decode(IMG[i].data, IMG[i].n, &p->w, &p->h);
+      same = 0;
     }
-    y_first = 0;	/* painted again, all of it */
+    if (i < NIM && (IM[i].x != IMG[i].x || IM[i].y != IMG[i].y || IM[i].cols != IMG[i].w || IM[i].rows != IMG[i].h)) same = 0;
+    p->x = IMG[i].x;
+    p->y = IMG[i].y;
+    p->cols = IMG[i].w;
+    p->rows = IMG[i].h;
+  }
+  if (!same) {	/* the old ones' rows from their cells; everything of the new ones */
+    for (k = 0; k < NIM; k++) {
+      int r;
+      for (r = IM[k].y; r < IM[k].y + IM[k].rows && r < S.rows; r++) paint_row(r, S.front);
+    }
+    y_first = 0;
     y_last = S.rows - 1;
   }
-  if (IM.on && (IMG.data == NULL || IM.x != IMG.x || IM.y != IMG.y || IM.cols != IMG.w || IM.rows != IMG.h)) {
-    for (k = IM.y; k < IM.y + IM.rows && k < S.rows; k++) paint_row(k, S.front);	/* gone from there */
-    IM.on = 0;
+  for (k = 0; k < NIM; k++) {	/* the ones not shown any more */
+    free(IM[k].src);
+    free(IM[k].px);
   }
-  if (IMG.data && IM.px) {
-    int a = IMG.y, b = IMG.y + IMG.h - 1;
-    if (b >= S.rows) b = S.rows - 1;
-    if (!IM.on) {
-      y_first = 0;
-      y_last = S.rows - 1;
-    }
-    IM.x = IMG.x;
-    IM.y = IMG.y;
-    IM.cols = IMG.w;
-    IM.rows = IMG.h;
-    IM.on = 1;
-    if (y_first < a) y_first = a;	/* the rows under it that were painted again */
-    if (y_last > b) y_last = b;
-    if (y_first <= y_last) image_paint(y_first, y_last);
+  memcpy(IM, now, sizeof(now));
+  NIM = NIMG;
+  for (k = 0; k < NIM; k++)
+    if (y_first <= y_last) image_paint(&IM[k], y_first, y_last);	/* over the rows painted again */
+  for (i = 0; i < NIMG; i++) {
+    free(IMG[i].data);
+    IMG[i].data = NULL;
   }
-  free(IMG.data);
-  IMG.data = NULL;
-  IMG.n = 0;
+  NIMG = 0;
 }
 
 /* }================================================================== */
@@ -912,7 +939,7 @@ static void caret_off (void) {
   W.car_on = 0;
   if (W.car_y < 0 || W.car_y >= S.rows) return;
   paint_row(W.car_y, S.front);
-  if (IM.on && W.car_y >= IM.y && W.car_y < IM.y + IM.rows) image_paint(W.car_y, W.car_y);
+  images_row(W.car_y);
 }
 
 
@@ -1437,6 +1464,20 @@ int term_cell_px (int *w, int *h) {	/* the image preview's pictures: a cell's pi
   *w = W.cw;
   *h = W.ch;
   return 1;
+}
+
+
+/* New Window: mme-sdl again, a window (a process) of its own, as VS Code's windows */
+int term_new_window (const char *arg) {
+  char *exe = os_exe_path(NULL), *argv[3];
+  int r;
+  if (exe == NULL) return -1;
+  argv[0] = exe;
+  argv[1] = (char *)arg;
+  argv[2] = NULL;
+  r = spawn_detached(argv);
+  free(exe);
+  return r;
 }
 
 

@@ -110,6 +110,13 @@ hidden menu bar (`window.menuBarVisibility`, Zen mode), since the window must
 still be moved. It uses plain Windows messages (WM_NCHITTEST, WM_NCCALCSIZE),
 which Windows XP has too.
 
+New Window (Ctrl+Shift+N) starts mme-sdl again, a window with no folder yet
+(the Welcome page opens one); Duplicate As Workspace in New Window opens the
+folder in another; Close Window (Ctrl+Shift+W) closes this one. Each window is
+its own process, as VS Code's are. In a terminal, mme opens them in a new
+mmc-term or Windows Terminal window (the terminal keeps those two keys: the
+menu and the Command Palette have the commands).
+
 Ctrl+= / Ctrl+- (the keypad's too) and Ctrl+NumPad0 zoom, as in VS Code;
 `editor.fontFamily` and `editor.fontSize` are VS Code's settings, and a change
 to them shows at once. Moved to a screen with another DPI, the font keeps its

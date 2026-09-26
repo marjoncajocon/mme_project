@@ -146,7 +146,10 @@ static const char *const names[CMD_N] = {
   "Test: Run Test at Cursor with Coverage", "Test: Close Coverage", "Test: Toggle Inline Coverage",
   "Profiles: Switch Profile...", "Profiles: New Profile...", "Profiles: Rename Profile...", "Profiles: Delete Profile...",
   "Git: Create Worktree...", "Git: Open Worktree...", "Git: Delete Worktree...",
-  "Workspaces: Manage Workspace Trust", "Developer: Toggle Screencast Mode"
+  "Workspaces: Manage Workspace Trust", "Developer: Toggle Screencast Mode",
+  "New Window", "Workspaces: Duplicate As Workspace in New Window", "Close Window",
+  "Notebook: Run All", "Notebook: Restart Kernel", "Notebook: Interrupt Kernel", "Notebook: Clear All Outputs",
+  "Create: New Jupyter Notebook"
 };
 
 static const char *const keys[CMD_N] = {
@@ -212,7 +215,9 @@ static const char *const keys[CMD_N] = {
   "", "", "", "", "",
   "", "", "", "",
   "", "", "",
-  "", ""
+  "", "",
+  "Ctrl+Shift+N", "", "Ctrl+Shift+W",
+  "", "", "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -374,7 +379,10 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "workbench.profiles.actions.switchProfile", "workbench.profiles.actions.createProfile",
   "workbench.profiles.actions.renameProfile", "workbench.profiles.actions.deleteProfile",
   "git.createWorktree", "git.openWorktree", "git.deleteWorktree",
-  "workbench.trust.manage", "workbench.action.toggleScreencastMode"
+  "workbench.trust.manage", "workbench.action.toggleScreencastMode",
+  "workbench.action.newWindow", "workbench.action.duplicateWorkspaceInNewWindow", "workbench.action.closeWindow",
+  "notebook.execute", "jupyter.restartkernel", "jupyter.interruptkernel", "notebook.clearAllOutputs",
+  "ipynb.newUntitledIpynb"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -425,8 +433,8 @@ int cmd_by_id (const char *id) {
 */
 
 /* 0 is a line between groups, -1 the end */
-static const int m_file[] = {CMD_NEW, 0, CMD_OPEN_FILE, CMD_OPEN_FOLDER, CMD_OPEN_WORKSPACE, CMD_OPEN_PROJECT,
-                             0, CMD_ADD_FOLDER, CMD_SAVE_WORKSPACE, 0, CMD_SAVE, CMD_SAVE_AS, CMD_SAVE_ALL, 0, CMD_AUTO_SAVE, CMD_REVERT, 0, CMD_SETTINGS, CMD_SETTINGS_JSON, CMD_KEYS, CMD_SNIPPETS, CMD_IMPORT_VSCODE, 0, CMD_CLOSE, CMD_CLOSE_WORKSPACE, 0, CMD_QUIT, -1};
+static const int m_file[] = {CMD_NEW, CMD_NEW_WINDOW, 0, CMD_OPEN_FILE, CMD_OPEN_FOLDER, CMD_OPEN_WORKSPACE, CMD_OPEN_PROJECT,
+                             0, CMD_ADD_FOLDER, CMD_SAVE_WORKSPACE, 0, CMD_SAVE, CMD_SAVE_AS, CMD_SAVE_ALL, 0, CMD_AUTO_SAVE, CMD_REVERT, 0, CMD_SETTINGS, CMD_SETTINGS_JSON, CMD_KEYS, CMD_SNIPPETS, CMD_IMPORT_VSCODE, 0, CMD_CLOSE, CMD_CLOSE_WORKSPACE, CMD_CLOSE_WINDOW, 0, CMD_QUIT, -1};
 static const int m_edit[] = {CMD_UNDO, CMD_REDO, 0, CMD_CUT, CMD_COPY, CMD_PASTE,
                              0, CMD_FIND, CMD_REPLACE, CMD_FIND_FILES, 0, CMD_COMMENT, CMD_BLOCK_COMMENT, 0, CMD_UPPER, CMD_LOWER, CMD_SORT_ASC, CMD_JOIN, CMD_TRIM,
                              0, CMD_FORMAT, CMD_FORMAT_SEL, CMD_ORGANIZE_IMPORTS, CMD_SOURCE_ACTION, CMD_INSERT_SNIPPET, 0, CMD_SUGGEST, CMD_QUICKFIX, CMD_RENAME, -1};

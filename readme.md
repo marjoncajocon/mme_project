@@ -58,6 +58,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `egitlog.c` | the Source Control Graph, branches, pull / push / sync, stash, blame |
 | `equick.c` | quick diff (the gutter's changes against the index) and merge conflicts |
 | `emerge.c` | the merge editor: Incoming and Current over the Result, three panes |
+| `enb.c` | Jupyter notebooks (.ipynb): the notebook editor, its cells and outputs, a kernel (`enb_kernel.h`: mme-kernel.py) |
 | `esyntax.c` | syntax highlighting in VS Code's Dark+ colors, for about sixty languages, with VS Code's language ids |
 | `eemmet.c` | Emmet: HTML and CSS abbreviations, as VS Code expands them |
 | `epanel.c` | the panel: the integrated terminals, split, links, find, profiles |
@@ -689,6 +690,29 @@ With no file open the editor shows the keys to start with.
   "Searching N files" show while it goes on, and typing again starts it over.
   The editor draws and answers keys throughout; the results settle into the
   folder's order once the walk is over.
+- **Jupyter notebooks** — a `.ipynb` opens in VS Code's notebook editor:
+  Markdown cells drawn, code cells in the language's colors with `[n]`, their
+  outputs under them (text, errors in red, pictures: plots show as themselves
+  where the terminal (or mme-sdl) draws pictures). Command mode: Enter edits a
+  cell, A / B add one above / below, D D deletes (Z brings it back), M / Y
+  Markdown / code, Alt+Up / Alt+Down move it, Ctrl+C / Ctrl+V copy and paste
+  cells. Edit mode: typing, auto-indent, Tab / Shift+Tab, Ctrl+/ comments,
+  Ctrl+Z / Ctrl+Y, Esc back; the kernel's completions show as you type a name
+  (or after a dot; Ctrl+Space: all of them), Tab or Enter takes one. Ctrl+Enter
+  runs the cell, Shift+Enter runs it and goes to the next, Alt+Enter runs it and
+  adds one; the toolbar has Run All, Restart, Interrupt and Clear All Outputs
+  (and the Command Palette's "Notebook: ..."). input() asks in the quick input
+  box at the top (Esc interrupts the cell); Interrupt is a KeyboardInterrupt in
+  the cell, and when that has not stopped it in 10 seconds mme asks, as VS Code
+  does, whether to restart the kernel. HTML outputs with a table (a pandas
+  DataFrame) show as a table; up to eight pictures show as themselves at once.
+  "Create: New Jupyter Notebook" opens Untitled-1.ipynb (Ctrl+S asks its path).
+  The kernel is mme-kernel.py (written into mme-data) in the Python of
+  python.defaultInterpreterPath or the PATH: a real Jupyter kernel (any
+  language) when jupyter_client and ipykernel are installed, else that Python
+  itself (completions from jedi when it is there, else rlcompleter),
+  matplotlib's figures sent after each cell as Jupyter's inline backend does.
+  Ctrl+S writes nbformat 4 as Jupyter does, metadata and outputs kept.
 - **Search Editor** — "Search Editor: New Search Editor" (the selection is its
   query), or "Open in editor" under the Search view's count (Alt+Enter there,
   or the new-file icon in its title), opens a tab "Search: query": the query

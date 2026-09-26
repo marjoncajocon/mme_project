@@ -326,6 +326,105 @@ JSON_FILE = """{
 }
 """
 
+NB_FILE = r'''{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "c1",
+   "metadata": {},
+   "source": [
+    "# Notebook fixture\n",
+    "Some **bold** text."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "c2",
+   "metadata": {},
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "hello\n"
+     ]
+    },
+    {
+     "data": {
+      "text/plain": [
+       "42"
+      ]
+     },
+     "execution_count": 1,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "x = 6 * 7\n",
+    "print('hello')\n",
+    "x"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "c3",
+   "metadata": {},
+   "outputs": [
+    {
+     "ename": "ZeroDivisionError",
+     "evalue": "division by zero",
+     "output_type": "error",
+     "traceback": [
+      "Traceback (most recent call last):",
+      "ZeroDivisionError: division by zero"
+     ]
+    }
+   ],
+   "source": [
+    "1 / 0"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "c4",
+   "metadata": {},
+   "outputs": [
+    {
+     "data": {
+      "text/html": [
+       "<table><thead><tr><th></th><th>city</th><th>people</th></tr></thead>",
+       "<tbody><tr><th>0</th><td>Manila</td><td>1846513</td></tr><tr><th>1</th><td>Cebu</td><td>964169</td></tr></tbody></table>"
+      ],
+      "text/plain": [
+       "     city   people"
+      ]
+     },
+     "execution_count": 3,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "df"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
+'''
+
 PY_FILE = '''"""util.py - a Python fixture."""
 import os
 import sys
@@ -456,6 +555,7 @@ def build_tree():
     w(os.path.join(lang, "doc.md"), MD_FILE)
     w(os.path.join(lang, "conf.json"), JSON_FILE)
     w(os.path.join(lang, "util.py"), PY_FILE)
+    w(os.path.join(lang, "nb.ipynb"), NB_FILE)
     w(os.path.join(lang, "fold.c"), FOLD_FILE)
     w(os.path.join(lang, "sticky.c"), sticky_file())
     w(os.path.join(lang, "wrap.js"), WRAP_FILE)

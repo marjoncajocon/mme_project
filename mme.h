@@ -400,6 +400,8 @@ void term_write (const char *s, size_t n);
 void term_font (int delta);	/* +1 bigger, -1 smaller, 0 the configured size */
 void term_ask_pixels (void);	/* XTSMGRAPHICS: how many pixels a cell is (the answer comes with the keys) */
 int term_cell_px (int *w, int *h);	/* 0: the terminal has not said */
+int term_new_window (const char *arg);	/* mme again in a window of its own (a terminal's, mme-sdl's), with arg: a folder, "--new-window"; -1: cannot */
+int spawn_detached (char **argv);	/* mme.c: argv[0] (a whole path) started on its own, nothing waited for; 0 started */
 
 /* a typed character that goes into text: not a control key, no Ctrl or Alt */
 #define IS_TEXT(k)	((k) >= 32 && (k) < K_UP && (k) != 127)
@@ -643,6 +645,8 @@ enum {
   CMD_PROFILE_SWITCH, CMD_PROFILE_NEW, CMD_PROFILE_RENAME, CMD_PROFILE_DELETE,
   CMD_GIT_WT_CREATE, CMD_GIT_WT_OPEN, CMD_GIT_WT_DELETE,	/* egitlog.c: git_command too */
   CMD_TRUST_MANAGE, CMD_SCREENCAST,
+  CMD_NEW_WINDOW, CMD_DUP_WINDOW, CMD_CLOSE_WINDOW,
+  CMD_NB_RUN_ALL, CMD_NB_RESTART, CMD_NB_INTERRUPT, CMD_NB_CLEAR, CMD_NB_NEW,	/* enb.c */
   CMD_N
 };
 
@@ -749,6 +753,9 @@ void img_draw (void *page, int x, int y, int w, int h, int focus);
 int img_key (void *page, int k);
 void img_zoom (void *page, int delta);	/* 0: fit again */
 int img_click (void *page, int mx, int my);
+void *img_open_mem (const unsigned char *s, size_t n);	/* a picture from its bytes (a notebook's output); NULL: not one */
+int img_rows (void *page, int w);	/* the rows it takes at most w cells wide */
+void img_draw_at (void *page, int x, int y, int w, int skip, int h, int real);	/* the picture alone, its rows skip ..; real: itself (one at a time), else Braille */
 
 /* ehistory.c - Local History: a copy of a file at each save */
 typedef struct HistEntry {
@@ -860,7 +867,7 @@ int context_menu (int x, int y, const char *const *label, const char *const *key
 ** esettings.c, ewelcome.c - the pages that show in an editor tab: the
 ** Settings editor and the Welcome page. They tell mme.c what to do.
 */
-enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE, PAGE_SEARCHED, PAGE_MDIFF };
+enum { PAGE_NONE, PAGE_SETTINGS, PAGE_WELCOME, PAGE_IMAGE, PAGE_HEX, PAGE_MERGE, PAGE_SEARCHED, PAGE_MDIFF, PAGE_NOTEBOOK };
 
 typedef struct PageAct {
   int what;	/* PA_* */
@@ -1105,6 +1112,27 @@ void diff_embed_draw (int x, int y, int w, size_t skip, int h, long sel);	/* row
 size_t diff_embed_line (size_t i, int *fold);	/* row i: the file's line, from 1; *fold: a fold there */
 void diff_embed_expand (size_t i);	/* the fold at row i opens */
 void diff_embed_stats (size_t *add, size_t *del);	/* the lines that came and went */
+
+/*
+** enb.c - Jupyter notebooks (.ipynb): VS Code's notebook editor in a tab
+** (PAGE_NOTEBOOK), a kernel (mme-kernel.py) that runs its cells
+*/
+enum { NB_RUN_ALL, NB_RESTART, NB_INTERRUPT, NB_CLEAR, NB_RUN };
+int nb_is_file (const char *path);	/* its name ends in .ipynb */
+void *nb_open (const char *path);	/* NULL: not a notebook; a file not there: a new one; path NULL: Untitled-1.ipynb */
+void nb_close (void *page);
+const char *nb_title (void *page);
+const char *nb_path (void *page);
+void nb_changes (void *page, long *changes, long *saved);	/* dirty when they differ (the tab's dot) */
+int nb_save (void *page, int as);	/* 0 written; as (or never saved): its path asked first */
+void nb_draw (void *page, int x, int y, int w, int h, int focus);
+int nb_takes (void *page, int k);	/* a key it takes before mme's (typing in a cell, Ctrl+Enter) */
+void nb_key (void *page, int k);
+void nb_mouse (void *page, const Mouse *m);
+void nb_command (void *page, int what);	/* NB_* */
+int nb_poll (void);	/* the kernels' answers; 1: something changed */
+int nb_busy (void);	/* a kernel works */
+void nb_shutdown (void);	/* the kernels stop */
 
 /* emdiff.c - the multi-diff editor: every changed file's diff in one tab (PAGE_MDIFF) */
 void *mdiff_new (int staged);	/* Changes, or Staged Changes */

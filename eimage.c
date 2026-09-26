@@ -1094,6 +1094,108 @@ int img_info (const char *path, char *out, size_t n) {
 }
 
 
+/*
+** A picture in memory, a notebook's output (image/png): as img_open's, from
+** its bytes; drawn in a box of cells with img_draw_at, as tall as img_rows
+*/
+void *img_open_mem (const unsigned char *s, size_t n) {
+  Img *im;
+  const char *kind = kind_of(s, n);
+  if (kind == NULL) return NULL;
+  im = (Img *)xmalloc(sizeof(Img));
+  memset(im, 0, sizeof(*im));
+  im->path = xstrdup("output");
+  im->kind = xstrdup(kind);
+  im->bytes = n;
+  size_of(s, n, kind, &im->w, &im->h);
+  if (!decode(s, n, kind, &im->pix)) {
+    img_close(im);
+    return NULL;
+  }
+  if (im->w == 0) im->w = im->pix.w;
+  if (im->h == 0) im->h = im->pix.h;
+  term_ask_pixels();
+  return im;
+}
+
+
+/* its size in cells at most w wide (never bigger than it is), at most 40 rows */
+static void fit_cells (const Img *im, int w, int *cw_out, int *ch_out, int *pw_out, int *ph_out) {
+  int cw = 0, ch = 0, pw = im->pix.w, ph = im->pix.h, cells_w, cells_h;
+  if (term_cell_px(&cw, &ch) && cw > 1 && ch > 1) {	/* the picture itself */
+    int dw = pw < w * cw ? pw : w * cw, dh;
+    dh = (int)((long long)ph * dw / (pw > 0 ? pw : 1));
+    if (dh > 40 * ch) {
+      dh = 40 * ch;
+      dw = (int)((long long)pw * dh / (ph > 0 ? ph : 1));
+    }
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    *pw_out = dw;
+    *ph_out = dh;
+    cells_w = (dw + cw - 1) / cw;
+    cells_h = (dh + ch - 1) / ch;
+  }
+  else {	/* Braille: a cell is 2 by 4 dots, a dot about 4 pixels */
+    cells_w = (pw + 7) / 8;
+    if (cells_w > w) cells_w = w;
+    if (cells_w < 1) cells_w = 1;
+    cells_h = (int)((long long)cells_w * ph / (2LL * (pw > 0 ? pw : 1)));
+    if (cells_h > 40) {
+      cells_h = 40;
+      cells_w = (int)((long long)cells_h * 2 * pw / (ph > 0 ? ph : 1));
+    }
+    if (cells_h < 1) cells_h = 1;
+    *pw_out = *ph_out = 0;
+  }
+  *cw_out = cells_w;
+  *ch_out = cells_h;
+}
+
+
+int img_rows (void *page, int w) {
+  Img *im = (Img *)page;
+  int cw, ch, pw, ph;
+  if (im == NULL || im->pix.px == NULL || w < 1) return 0;
+  fit_cells(im, w, &cw, &ch, &pw, &ph);
+  return ch;
+}
+
+
+/*
+** The picture alone at x, y in w cells, its rows skip .. skip+h-1 (it may
+** be cut at the top or the bottom): real, the picture itself when the
+** terminal (the window) draws pictures - one of those shows at a time -
+** else Braille
+*/
+void img_draw_at (void *page, int x, int y, int w, int skip, int h, int real) {
+  Img *im = (Img *)page;
+  int cw, ch, pw, ph, cpx = 0, cpy = 0;
+  if (im == NULL || im->pix.px == NULL || w < 1 || h < 1) return;
+  fit_cells(im, w, &cw, &ch, &pw, &ph);
+  if (skip < 0) skip = 0;
+  if (h > ch - skip) h = ch - skip;
+  if (h < 1) return;
+  if (real && pw > 0 && term_cell_px(&cpx, &cpy) && cpy > 0) {
+    int y0 = skip * cpy, y1 = (skip + h) * cpy;	/* the pixel rows that show */
+    if (y1 > ph) y1 = ph;
+    if (y1 <= y0) return;
+    if (im->sixel == NULL || im->fit_w != pw || im->fit_h != ph || im->sx_w != y0 || im->sx_h != y1) {
+      uint32_t *sc = scale(&im->pix, pw, ph);
+      free(im->sixel);
+      im->sixel = sixel_of(sc + (size_t)y0 * (size_t)pw, pw, y1 - y0, &im->nsixel);
+      im->fit_w = pw;
+      im->fit_h = ph;
+      im->sx_w = y0;	/* the rows the sixel has (this use of them is the notebook's) */
+      im->sx_h = y1;
+      free(sc);
+    }
+    scr_image(x, y, cw, h, im->sixel, im->nsixel);
+  }
+  else braille(im, x, y, cw, h);
+}
+
+
 /* the kinds that open in the picture page */
 int img_is_image (const char *path) {
   static const char *const ext[] = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico", ".svg"};

@@ -232,6 +232,67 @@ int term_cell_px (int *w, int *h) {
 }
 
 
+/*
+** New Window: mme again in a new window of the terminal it runs in -
+** mmc-term (it says MMC_TERM; it is two folders over the shell's usr/bin),
+** Windows Terminal (WT_SESSION: "wt -w new"), else $TERMINAL (Unix)
+*/
+int term_new_window (const char *arg) {
+  char *exe = os_exe_path(NULL), *prog = NULL, *env, *argv[8];
+  int n = 0, r = -1;
+  OsStat st;
+  if (exe == NULL) return -1;
+  if ((env = os_getenv("MMC_TERM")) != NULL) {
+    char *bin = path_dirname(exe), *usr = path_dirname(bin), *top = path_dirname(usr);
+#ifdef _WIN32
+    prog = path_join(top, "mmc-term.exe");
+#else
+    prog = path_join(top, "mmc-term");
+#endif
+    if (os_stat(prog, &st) != 0 || !st.exists) {
+      free(prog);
+      prog = find_program("mmc-term");
+    }
+    free(bin);
+    free(usr);
+    free(top);
+    free(env);
+    if (prog) {
+      argv[n++] = prog;
+      argv[n++] = (char *)"-e";
+    }
+  }
+#ifdef _WIN32
+  if (prog == NULL && (env = os_getenv("WT_SESSION")) != NULL) {
+    free(env);
+    if ((prog = find_program("wt")) != NULL) {
+      argv[n++] = prog;
+      argv[n++] = (char *)"-w";
+      argv[n++] = (char *)"new";
+    }
+  }
+#else
+  if (prog == NULL && (env = os_getenv("TERMINAL")) != NULL) {
+    prog = find_program(env);
+    free(env);
+    if (prog) {
+      argv[n++] = prog;
+      argv[n++] = (char *)"-e";
+    }
+  }
+#endif
+  if (prog) {
+    argv[n++] = exe;
+    argv[n++] = (char *)arg;
+    argv[n] = NULL;
+    r = spawn_detached(argv);
+  }
+  free(prog);
+  free(exe);
+  return r;
+}
+
+
 static int read_csi (void) {
   int p[8], np = 0, c, lt = 0, qm = 0, k;
   memset(p, 0, sizeof(p));

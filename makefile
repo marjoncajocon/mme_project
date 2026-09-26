@@ -13,11 +13,11 @@ ZIG= zig
 
 BASE= mutil.c mpath.c mos.c
 TSRC= tpty.c tvt.c tgrid.c
-SRC= mme.c ethread.c ejson.c econfig.c elsp.c etheme.c ebuf.c eterm.c edraw.c emenu.c eside.c esearch.c esearched.c emdiff.c egit.c esyntax.c epanel.c ekeys.c esnip.c eext.c egitlog.c equick.c emerge.c eregex.c esettings.c ewelcome.c efiles.c eemmet.c edebug.c etask.c eout.c ehistory.c emd.c ehex.c eimage.c eworkspace.c eimport.c evscode.c etest.c eonig.c etm.c eeditorconfig.c echat.c evim.c $(TSRC) $(BASE)
+SRC= mme.c ethread.c ejson.c econfig.c elsp.c etheme.c ebuf.c eterm.c edraw.c emenu.c eside.c esearch.c esearched.c emdiff.c egit.c esyntax.c epanel.c ekeys.c esnip.c eext.c egitlog.c equick.c emerge.c eregex.c esettings.c ewelcome.c efiles.c eemmet.c edebug.c etask.c eout.c ehistory.c emd.c ehex.c eimage.c eworkspace.c eimport.c evscode.c etest.c eonig.c etm.c eeditorconfig.c echat.c evim.c enb.c $(TSRC) $(BASE)
 
 all: mme
 
-mme: $(SRC) mme.h mmc.h mterm.h
+mme: $(SRC) mme.h mmc.h mterm.h enb_kernel.h
 	$(CC) $(CFLAGS) $(LDFLAGS) -o mme $(SRC) -lm -lpthread
 
 # static musl: one program that runs on any Linux, Android (Termux) too

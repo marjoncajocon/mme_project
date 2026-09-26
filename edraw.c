@@ -388,26 +388,32 @@ void scr_pointer (int shape) {
 }
 
 
-/* the picture waiting to be sent (one is enough: the editor shows one at a time) */
-static struct {
+/* the pictures waiting to be sent (the image preview's, a notebook's plots) */
+#define MAX_IMG	8
+
+typedef struct Pict {
   int x, y, w, h;
   char *data;
   size_t n;
-} IMG;
+} Pict;
 
-
-static struct { int x, y; char *data; size_t n; } SENT;	/* what the terminal already has */
+static Pict IMG[MAX_IMG];
+static int NIMG;
+static Pict SENT[MAX_IMG];	/* what the terminal already has */
+static int NSENT;
 
 
 void scr_image (int x, int y, int w, int h, const char *data, size_t n) {
-  free(IMG.data);
-  IMG.data = (char *)xmalloc(n + 1);
-  memcpy(IMG.data, data, n);
-  IMG.n = n;
-  IMG.x = x;
-  IMG.y = y;
-  IMG.w = w;
-  IMG.h = h;
+  Pict *p;
+  if (NIMG == MAX_IMG) return;
+  p = &IMG[NIMG++];
+  p->data = (char *)xmalloc(n + 1);
+  memcpy(p->data, data, n);
+  p->n = n;
+  p->x = x;
+  p->y = y;
+  p->w = w;
+  p->h = h;
 }
 
 
@@ -415,7 +421,7 @@ void (*scr_overlay_hook) (void);	/* drawn over everything, just before it shows 
 
 void scr_flush (void) {
   Buf o;
-  int x, y, st = -1, img_dirty = 0;
+  int x, y, st = -1, img_dirty = 0, i;
   uint32_t fg = 0, bg = 0, at = 0, ul = 0;
   size_t row = (size_t)S.cols * sizeof(ECell);
   if (scr_overlay_hook) scr_overlay_hook();
@@ -424,7 +430,8 @@ void scr_flush (void) {
   for (y = 0; y < S.rows; y++) {
     ECell *b = &S.back[y * S.cols];
     if (!S.full && memcmp(b, &S.front[y * S.cols], row) == 0) continue;
-    if (IMG.data && y >= IMG.y && y < IMG.y + IMG.h) img_dirty = 1;	/* its cells were written over */
+    for (i = 0; i < NIMG; i++)
+      if (y >= IMG[i].y && y < IMG[i].y + IMG[i].h) img_dirty = 1;	/* a picture's cells were written over */
     buf_printf(&o, "\033[%d;1H", y + 1);
     for (x = 0; x < S.cols; x++) {
       char u[4];
@@ -460,28 +467,27 @@ void scr_flush (void) {
     }
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
-  if (IMG.data) {	/* a picture: sent only when the terminal has not got this one */
-    int again = S.full || img_dirty || SENT.data == NULL || SENT.n != IMG.n ||
-                SENT.x != IMG.x || SENT.y != IMG.y || memcmp(SENT.data, IMG.data, IMG.n) != 0;
+  {	/* the pictures: sent when the terminal has not got these, there */
+    int again = S.full || img_dirty || NIMG != NSENT;
+    for (i = 0; !again && i < NIMG; i++)
+      again = SENT[i].n != IMG[i].n || SENT[i].x != IMG[i].x || SENT[i].y != IMG[i].y ||
+              memcmp(SENT[i].data, IMG[i].data, IMG[i].n) != 0;
     if (again) {
-      buf_printf(&o, "\033[%d;%dH", IMG.y + 1, IMG.x + 1);
-      buf_putn(&o, IMG.data, IMG.n);
-      free(SENT.data);
-      SENT.data = IMG.data;
-      SENT.n = IMG.n;
-      SENT.x = IMG.x;
-      SENT.y = IMG.y;
-      IMG.data = NULL;
+      for (i = 0; i < NSENT; i++) free(SENT[i].data);
+      for (i = 0; i < NIMG; i++) {
+        buf_printf(&o, "\033[%d;%dH", IMG[i].y + 1, IMG[i].x + 1);
+        buf_putn(&o, IMG[i].data, IMG[i].n);
+        SENT[i] = IMG[i];
+        IMG[i].data = NULL;
+      }
+      NSENT = NIMG;
     }
+    for (i = 0; i < NIMG; i++) {	/* the drawing asks for them again every time */
+      free(IMG[i].data);
+      IMG[i].data = NULL;
+    }
+    NIMG = 0;
   }
-  else if (SENT.data) {	/* nothing is shown now: the next one must be sent again */
-    free(SENT.data);
-    SENT.data = NULL;
-    SENT.n = 0;
-  }
-  free(IMG.data);	/* the drawing asks for it again every time */
-  IMG.data = NULL;
-  IMG.n = 0;
   S.full = 0;
   if (g_ptr != g_ptr_sent) {	/* the hand over buttons, the I beam over text */
     static const char *const name[] = {"default", "text", "pointer"};

@@ -3001,6 +3001,7 @@ static const char *tab_name (const Tab *t) {
   if (t->page == PAGE_MERGE) return merge_tab_name();
   if (t->page == PAGE_SEARCHED) return searched_title(t->pdata);
   if (t->page == PAGE_MDIFF) return mdiff_title(t->pdata);
+  if (t->page == PAGE_NOTEBOOK) return nb_title(t->pdata);
   if (t->page == PAGE_IMAGE || t->page == PAGE_HEX)	/* a picture or a binary: the file's name */
     return t->ppath ? path_basename(t->ppath) : "Untitled";
   if (t->page) return t->page == PAGE_SETTINGS ? "Settings" : "Welcome";
@@ -3055,6 +3056,7 @@ static int draw_tab (int x, int y, const char *name, int on, int dirty, int prev
   int ist, w = tab_width(name), x1, n;
   uint32_t icon = page == PAGE_SETTINGS ? 0xEAF8 : page == PAGE_WELCOME ? 0xF121
                 : page == PAGE_MERGE ? 0xEAFB : page == PAGE_SEARCHED ? 0xEA6D : page == PAGE_MDIFF ? 0xEAE1
+                : page == PAGE_NOTEBOOK ? 0xEBAF
                 : file_icon(name, &ist);	/* a page: gear, </>, merge, search */
   int st = on ? S_TAB_ON : S_TAB;
   if (x + w > L.ed_x + L.ed_w) w = L.ed_x + L.ed_w - x;
@@ -3809,6 +3811,9 @@ static void title_var (const char *v, size_t n, Buf *b) {
 ** The title (window.title, VS Code's variables): the parts between
 ** ${separator} that come out empty go, with their separator.
 */
+static char *g_empty_root;	/* New Window (--new-window): the folder it shows until one is opened */
+
+
 static void update_title (void) {
   const char *t = opt.win_title[0] ? opt.win_title : "${dirty}${activeEditorShort}${separator}${rootName}${separator}${profileName}${separator}${appName}";
   Buf out, part;
@@ -3836,7 +3841,9 @@ static void update_title (void) {
   }
   buf_putc(&out, '\0');
   snprintf(ui_title, sizeof(ui_title), "%s", out.s);
-  snprintf(ui_cc, sizeof(ui_cc), "%s", ws_active() ? ws_title() : path_basename(side_root()));
+  if (g_empty_root && !ws_active() && m_fncmp(g_empty_root, side_root()) == 0)
+    snprintf(ui_cc, sizeof(ui_cc), "Search");	/* New Window, no folder opened yet: VS Code's command center says so */
+  else snprintf(ui_cc, sizeof(ui_cc), "%s", ws_active() ? ws_title() : path_basename(side_root()));
   buf_free(&out);
   buf_free(&part);
 }
@@ -4728,7 +4735,10 @@ static void lang_settings (void) {
 }
 
 
+static void nb_sync (void);
+
 static void draw (void) {
+  nb_sync();
   lang_settings();
   background();
   scr_cursor_shape(E.focus == F_PANEL && E.panel && E.panel_view == 0 && panel_alive() ? panel_cursor_shape()
@@ -5501,6 +5511,24 @@ void clip_set (const char *s, size_t n) {
 }
 
 
+/* a program started on its own (a new window): no pipes to it, nothing waited for; 0 started */
+int spawn_detached (char **argv) {
+#ifdef _WIN32
+  int null = os_open("NUL", OS_RDWR);
+#else
+  int null = os_open("/dev/null", OS_RDWR);
+#endif
+  int io[3], r;
+  OsProc proc;
+  long pid;
+  io[0] = io[1] = io[2] = null;
+  r = os_spawn(argv[0], argv, NULL, io, 3, &proc, &pid);
+  if (r == 0) os_detach(proc);
+  if (null >= 0) os_close(null);
+  return r;
+}
+
+
 const char *clip_get (size_t *n) {
   *n = E.clip ? E.cliplen : 0;
   return E.clip;
@@ -5810,6 +5838,17 @@ static void tab_new (void) {
 }
 
 
+/* a notebook's changes on its tab's doc: the dot, the questions on closing come from there */
+static void nb_sync (void) {
+  int g, i;
+  for (g = 0; g < g_ngrp; g++)
+    for (i = 0; i < g_grp[g].ntab; i++) {
+      Tab *t = g_grp[g].tab[i];
+      if (t->page == PAGE_NOTEBOOK) nb_changes(t->pdata, &t->doc->changes, &t->doc->saved);
+    }
+}
+
+
 /* tab i goes; the one after it comes to the front, like VS Code */
 static void tab_free (int i) {
   Tab *t = G->tab[i];
@@ -5818,6 +5857,7 @@ static void tab_free (int i) {
   else if (t->page == PAGE_IMAGE) img_close(t->pdata);
   else if (t->page == PAGE_SEARCHED) searched_close(t->pdata);
   else if (t->page == PAGE_MDIFF) mdiff_close(t->pdata);
+  else if (t->page == PAGE_NOTEBOOK) nb_close(t->pdata);
   free(t->ppath);
   if (--t->doc->refs <= 0) {	/* the last tab that shows it */
     lsp_close(t->doc);
@@ -5865,6 +5905,7 @@ static void close_tab (int i) {
     if (!merge_may_close()) return;
     keep = NULL;
   }
+  nb_sync();
   if (doc_dirty(G->tab[i]->doc) && G->tab[i]->doc->refs == 1) {
     focus_tab(i);	/* show it while asking */
     if (!save_changes()) return;
@@ -5885,6 +5926,7 @@ static int save_all_changes (void) {
   char msg[160], detail[512];
   int i, n = 0;
   if (merge_active() && !merge_may_close()) return 0;	/* a merge with conflicts left */
+  nb_sync();
   for (i = 0; i < G->ntab; i++) n += doc_dirty(G->tab[i]->doc);
   if (n == 0) return 1;
   if (n == 1) {
@@ -5975,6 +6017,7 @@ static int open_file (const char *path, int preview) {
   if (merge_offer(path)) return 0;	/* a conflicted file: the merge editor takes it */
   if (!opt.preview_tabs) preview = 0;	/* every file in a tab of its own */
   if (img_is_image(path)) return page_file_open(PAGE_IMAGE, path, preview);	/* its own editor, as VS Code has */
+  if (nb_is_file(path)) return page_file_open(PAGE_NOTEBOOK, path, 0);	/* a Jupyter notebook: the notebook editor */
   if (file_is_binary(path)) return page_file_open(PAGE_HEX, path, preview);
   if (searched_is_file(path)) return page_file_open(PAGE_SEARCHED, path, 0);	/* a .code-search: the Search Editor */
   char *p = xstrdup(path), *real = os_realpath(path);
@@ -13213,7 +13256,8 @@ static int page_file_open (int kind, const char *path, int preview) {
       recent_file_add(path);
       return 0;
     }
-  data = kind == PAGE_HEX ? hex_open(path) : kind == PAGE_SEARCHED ? searched_load(path) : img_open(path);
+  data = kind == PAGE_HEX ? hex_open(path) : kind == PAGE_SEARCHED ? searched_load(path) : kind == PAGE_NOTEBOOK ? nb_open(path)
+       : img_open(path);
   if (data == NULL) {
     if (kind == PAGE_IMAGE) return page_file_open(PAGE_HEX, path, preview);	/* not a picture after all */
     toast(1, "Unable to open '%s'", path_basename(path));
@@ -13284,6 +13328,7 @@ static void page_draw (int other) {
   else if (T->page == PAGE_IMAGE) img_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else if (T->page == PAGE_SEARCHED) searched_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else if (T->page == PAGE_MDIFF) mdiff_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
+  else if (T->page == PAGE_NOTEBOOK) nb_draw(T->pdata, L.ed_x, y, L.ed_w, h, focus);
   else welcome_draw(L.ed_x, y, L.ed_w, h, focus, &g_wrecent);
 }
 
@@ -13296,6 +13341,11 @@ static void page_key (int k) {
   }
   if (T->page == PAGE_IMAGE) {
     img_key(T->pdata, k);
+    return;
+  }
+  if (T->page == PAGE_NOTEBOOK) {
+    nb_key(T->pdata, k);
+    nb_sync();
     return;
   }
   if (T->page == PAGE_SEARCHED || T->page == PAGE_MDIFF) {	/* the Search Editor, the multi-diff: a file to go to */
@@ -13321,6 +13371,7 @@ static int page_takes (int k) {
   if (!HAS_DOC || G->diff || E.focus != F_EDITOR) return 0;
   if (T->page == PAGE_HEX) return k == CTRL('f') || k == CTRL('g') || KEY_CODE(k) == K_F3;
   if (T->page == PAGE_SEARCHED) return searched_takes(k);
+  if (T->page == PAGE_NOTEBOOK) return nb_takes(T->pdata, k);
   return 0;
 }
 
@@ -13334,6 +13385,11 @@ static void page_mouse (Mouse *m) {
   }
   if (T->page == PAGE_IMAGE) {
     if (m->wheel && (m->mods & KM_CTRL)) img_zoom(T->pdata, m->wheel < 0 ? 1 : -1);	/* Ctrl+wheel: nearer */
+    return;
+  }
+  if (T->page == PAGE_NOTEBOOK) {
+    nb_mouse(T->pdata, m);
+    nb_sync();
     return;
   }
   if (T->page == PAGE_SEARCHED || T->page == PAGE_MDIFF) {
@@ -14900,7 +14956,7 @@ static void session_restore (void) {
         page_open(page);
         continue;
       }
-      if ((page == PAGE_IMAGE || page == PAGE_HEX || page == PAGE_SEARCHED) && path) {
+      if ((page == PAGE_IMAGE || page == PAGE_HEX || page == PAGE_SEARCHED || page == PAGE_NOTEBOOK) && path) {
         page_file_open(page, path, 0);
         continue;
       }
@@ -16518,6 +16574,18 @@ static void run_command (int cmd) {
     case CMD_IMPORT_VSCODE: import_vscode(); break;
     case CMD_SAVE:
     case CMD_SAVE_AS:
+      if (HAS_DOC && !G->diff && T->page == PAGE_NOTEBOOK) {	/* a notebook: its .ipynb */
+        if (nb_save(T->pdata, cmd == CMD_SAVE_AS) == 0 && nb_path(T->pdata)) {
+          free(T->ppath);
+          T->ppath = xstrdup(nb_path(T->pdata));
+          free(T->real);
+          T->real = os_realpath(T->ppath);
+          recent_file_add(T->ppath);
+          files_index_stale();
+        }
+        nb_sync();
+        return;
+      }
       if (HAS_DOC && !G->diff && T->page == PAGE_SEARCHED) {	/* a .code-search file */
         if (searched_save(T->pdata, cmd == CMD_SAVE_AS) == 0) {
           free(T->ppath);
@@ -16703,6 +16771,27 @@ static void run_command (int cmd) {
     case CMD_MANAGE: manage_menu(); break;
     case CMD_TRUST_MANAGE: trust_manage(); break;
     case CMD_SCREENCAST: sc_toggle(); break;
+    case CMD_NEW_WINDOW:	/* VS Code's New Window: one with no folder yet, its own mme */
+      if (term_new_window("--new-window") != 0) toast(1, "New Window: mme cannot open a window here (run mme-sdl, or mme in mmc-term or Windows Terminal).");
+      break;
+    case CMD_DUP_WINDOW:	/* the folder (the workspace) in another window too */
+      if (term_new_window(ws_active() ? ws_file() : side_root()) != 0)
+        toast(1, "New Window: mme cannot open a window here (run mme-sdl, or mme in mmc-term or Windows Terminal).");
+      break;
+    case CMD_CLOSE_WINDOW: run_command(CMD_QUIT); break;	/* this window: each is its own mme */
+    case CMD_NB_NEW:	/* VS Code's New Jupyter Notebook: Untitled-1.ipynb, its path asked when saved */
+      tab_new();
+      T->page = PAGE_NOTEBOOK;
+      T->pdata = nb_open(NULL);
+      G->diff = 0;
+      E.focus = F_EDITOR;
+      break;
+    case CMD_NB_RUN_ALL: case CMD_NB_RESTART: case CMD_NB_INTERRUPT: case CMD_NB_CLEAR:
+      if (HAS_DOC && !G->diff && T->page == PAGE_NOTEBOOK)
+        nb_command(T->pdata, cmd == CMD_NB_RUN_ALL ? NB_RUN_ALL : cmd == CMD_NB_RESTART ? NB_RESTART
+                             : cmd == CMD_NB_INTERRUPT ? NB_INTERRUPT : NB_CLEAR);
+      else toast(0, "Open a Jupyter notebook (.ipynb) first.");
+      break;
     case CMD_PROFILE_SWITCH: case CMD_PROFILE_NEW: case CMD_PROFILE_RENAME: case CMD_PROFILE_DELETE: profile_command(cmd); break;
     case CMD_PANEL_RIGHT: case CMD_PANEL_LEFT: case CMD_PANEL_BOTTOM:	/* View: Move Panel ...: remembered */
       opt.panel_loc = cmd == CMD_PANEL_RIGHT ? PANEL_RIGHT : cmd == CMD_PANEL_LEFT ? PANEL_LEFT : PANEL_BOTTOM;
@@ -17406,7 +17495,9 @@ static int global_key (int k) {
     {K_F3 | KM_ALT, CMD_DIRTY_NEXT}, {K_F3 | KM_ALT | KM_SHIFT, CMD_DIRTY_PREV},
     {K_F5 | KM_ALT, CMD_CHANGE_NEXT}, {K_F5 | KM_ALT | KM_SHIFT, CMD_CHANGE_PREV},
     {'i' | KM_CTRL | KM_ALT, CMD_CHAT_OPEN}, {K_TAB | KM_ALT, CMD_CHAT_OPEN},	/* Ctrl+Alt+I, from the kitty keys or not */
-    {'i' | KM_CTRL, CMD_INLINE_CHAT}, {CTRL('b') | KM_ALT, CMD_CHAT_TOGGLE}
+    {'i' | KM_CTRL, CMD_INLINE_CHAT}, {CTRL('b') | KM_ALT, CMD_CHAT_TOGGLE},
+    {'n' | KM_CTRL | KM_SHIFT, CMD_NEW_WINDOW}, {'N' | KM_CTRL | KM_SHIFT, CMD_NEW_WINDOW},
+    {'w' | KM_CTRL | KM_SHIFT, CMD_CLOSE_WINDOW}, {'W' | KM_CTRL | KM_SHIFT, CMD_CLOSE_WINDOW}
   };
   size_t i;
   if (E.chord) {	/* the second key of Ctrl+K ... */
@@ -21137,6 +21228,7 @@ static long split_line (char *arg) {
 
 
 static void cleanup (void) {
+  nb_shutdown();
   test_shutdown();
   dbg_shutdown();
   lsp_shutdown();
@@ -21168,8 +21260,18 @@ int main (int argc, char **argv) {
     fd_puts(1, MME_NAME " " MME_VERSION "\n");
     return 0;
   }
-  if (argc > 1) line = split_line(argv[1]);
-  if (argc > 1 && is_workspace_file(argv[1])) {	/* mme x.code-workspace */
+  if (argc > 1 && strcmp(argv[1], "--new-window") != 0) line = split_line(argv[1]);
+  if (argc > 1 && strcmp(argv[1], "--new-window") == 0) {	/* New Window: no folder yet, the Welcome page to open one */
+    char *home = os_getenv("HOME");
+    if (home == NULL) home = os_getenv("USERPROFILE");
+    if (home == NULL) home = os_getcwd();
+    trust_temp(home);	/* VS Code's empty window is trusted */
+    side_open(home);
+    g_empty_root = xstrdup(side_root());
+    free(home);
+    E.side = 0;
+  }
+  else if (argc > 1 && is_workspace_file(argv[1])) {	/* mme x.code-workspace */
     if (ws_open(argv[1]) != 0) {
       fd_printf(2, MME_NAME ": %s is not a workspace\n", argv[1]);
       return 1;
@@ -21192,8 +21294,10 @@ int main (int argc, char **argv) {
     side_open(dir);
     free(dir);
     free(real);
-    if (img_is_image(argv[1]) || file_is_binary(argv[1]) || (searched_is_file(argv[1]) && os_access(argv[1], 'r'))) {
-      int kind = img_is_image(argv[1]) ? PAGE_IMAGE : searched_is_file(argv[1]) ? PAGE_SEARCHED : PAGE_HEX;
+    if (nb_is_file(argv[1]) || img_is_image(argv[1]) || file_is_binary(argv[1]) ||
+        (searched_is_file(argv[1]) && os_access(argv[1], 'r'))) {
+      int kind = nb_is_file(argv[1]) ? PAGE_NOTEBOOK : img_is_image(argv[1]) ? PAGE_IMAGE
+               : searched_is_file(argv[1]) ? PAGE_SEARCHED : PAGE_HEX;
       if (page_file_open(kind, argv[1], 0) != 0) {	/* a picture, a binary, a .code-search: its own editor */
         fd_printf(2, MME_NAME ": cannot open %s\n", argv[1]);
         return 1;
@@ -21251,6 +21355,7 @@ int main (int argc, char **argv) {
     int k;
     lsp_poll();
     dbg_poll();
+    nb_poll();
     nav_track();
     cursor_record();	/* Ctrl+U: the cursors as they were */
     mru_track();
@@ -21259,7 +21364,7 @@ int main (int argc, char **argv) {
       if (E.focus == F_PANEL) E.focus = F_EDITOR;
     }
     draw();
-    k = term_key(search_busy() ? 30 : (panel_alive() || dbg_active() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
+    k = term_key(search_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
     quickfix_idle();
     if (k == K_NONE) {
       hover_idle();
