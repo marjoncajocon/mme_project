@@ -50,7 +50,7 @@ static struct {
   int tw, th;	/* its size in pixels */
   Frame fr;	/* painted here, then copied into tex */
   int cw, ch, ascent;	/* a cell, in pixels */
-  float px, px0;	/* the font's size; the one the settings give (Zoom Reset) */
+  float zoom;	/* Zoom In / Out: both fonts' sizes times this (1: the settings') */
   float scale;	/* the display's DPI over 96 */
   double radius;	/* round corners, in pixels: mme.ui.cornerRadius at this DPI */
   int ow, oh;	/* the window, in pixels */
@@ -61,6 +61,7 @@ static struct {
   int focused;	/* the window has the keyboard: else the caret is a hollow box */
   int ccx, ccy;	/* where the caret was last flush (it moved: shown at once) */
   int car_on, car_x, car_y, car_shape, car_focus;	/* the caret painted into the picture now */
+  int car_py, car_ph;	/* its pixels' rows (in a text zone it may cross two of the window's rows) */
   int up0, up1;	/* the rows of the picture painted since it was last shown */
   int use_surface;	/* shown through SDL's window surface (GDI's own bitmap on Windows), only the rows that
                    changed: no renderer, no texture (macOS: the renderer, for Retina's pixels) */
@@ -72,8 +73,10 @@ static struct {
   char title[512];
   SDL_Cursor *ptr[3];
   int ptr_now;
-  char font_fam[128];	/* editor.fontFamily and editor.fontSize, as the font was made from them */
+  char font_fam[128];	/* editor.fontFamily and editor.fontSize, as the editor's font was made from them */
   double font_size;
+  double ui_size;	/* mme.ui.fontSize: the rest of the window's */
+  int relayout;	/* a font's cells changed: the editor lays its zones out again before the next key */
   long long font_seen;	/* when the settings were looked at last */
   float wheel_x, wheel_y;	/* a touchpad's scrolling, less than a line so far */
   int ime_x, ime_y;	/* where the IME's window was told the caret is */
@@ -115,8 +118,26 @@ static uint32_t mix3 (uint32_t bg, uint32_t fg, int ar, int ag, int ab) {
 }
 
 
+/* where painting may go: the whole frame, or a text zone's part of one of the window's rows */
+#define CLIP_ALL	(1 << 30)
+static int clip_x0, clip_y0, clip_x1 = CLIP_ALL, clip_y1 = CLIP_ALL;
+
+static void clip_rect (int *x, int *y, int *w, int *h) {
+  if (*x < clip_x0) { *w -= clip_x0 - *x; *x = clip_x0; }
+  if (*y < clip_y0) { *h -= clip_y0 - *y; *y = clip_y0; }
+  if (*x + *w > clip_x1) *w = clip_x1 - *x;
+  if (*y + *h > clip_y1) *h = clip_y1 - *y;
+}
+
+
+static int clipped (int x, int y) {
+  return x < clip_x0 || x >= clip_x1 || y < clip_y0 || y >= clip_y1;
+}
+
+
 static void fill (Frame *f, int x, int y, int w, int h, uint32_t color) {
   int i, j;
+  clip_rect(&x, &y, &w, &h);
   if (x < 0) { w += x; x = 0; }
   if (y < 0) { h += y; y = 0; }
   if (x + w > f->w) w = f->w - x;
@@ -130,6 +151,7 @@ static void fill (Frame *f, int x, int y, int w, int h, uint32_t color) {
 
 static void fill_alpha (Frame *f, int x, int y, int w, int h, uint32_t color, int a) {
   int i, j;
+  clip_rect(&x, &y, &w, &h);
   if (x < 0) { w += x; x = 0; }
   if (y < 0) { h += y; y = 0; }
   if (x + w > f->w) w = f->w - x;
@@ -168,6 +190,10 @@ static void blit_glyph (Frame *f, const Glyph *g, int x, int y, uint32_t fg, uin
   if (g == NULL || g->bm == NULL) return;
   if (!lut_ready) make_luts();
   lut = brightness(fg) > brightness(bg) ? lut_light : lut_dark;
+  if (clip0 < clip_x0) clip0 = clip_x0;
+  if (clip1 > clip_x1) clip1 = clip_x1;
+  if (top < clip_y0) top = clip_y0;
+  if (bottom > clip_y1) bottom = clip_y1;
   if (clip0 < 0) clip0 = 0;
   if (clip1 > f->w) clip1 = f->w;
   if (top < 0) top = 0;
@@ -233,7 +259,7 @@ static void draw_arc (Frame *f, uint32_t cp, int x, int y, int w, int h, int t, 
       if ((px - ax) * sx > 0.5 || (py - ay) * sy > 0.5) continue;	/* the quarter toward the corner */
       d = sqrt((px - ax) * (px - ax) + (py - ay) * (py - ay));
       a = t / 2.0 + 0.5 - fabs(d - r);
-      if (a <= 0.0 || x + i < 0 || x + i >= f->w || y + j < 0 || y + j >= f->h) continue;
+      if (a <= 0.0 || x + i < 0 || x + i >= f->w || y + j < 0 || y + j >= f->h || clipped(x + i, y + j)) continue;
       {
         uint32_t *p = &f->px[(size_t)(y + j) * (size_t)f->w + (size_t)(x + i)];
         *p = mix(*p, fg, a >= 1.0 ? 255 : (int)(a * 255.0));
@@ -376,7 +402,7 @@ static int draw_powerline (Frame *f, uint32_t cp, int x, int y, int w, int h, ui
     for (i = 0; i < w; i++) {
       int n = 0;
       uint32_t *p;
-      if (x + i < 0 || x + i >= f->w) continue;
+      if (x + i < 0 || x + i >= f->w || clipped(x + i, y + j)) continue;
       for (sj = 0; sj < 4; sj++)	/* 4 x 4 samples a pixel: smooth edges */
         for (si = 0; si < 4; si++)
           n += pl_inside(cp, (double)i + (si + 0.5) / 4.0, (double)j + (sj + 0.5) / 4.0, (double)w, (double)h, t);
@@ -456,8 +482,25 @@ static void cell_colors (const ECell *c, uint32_t *fg, uint32_t *bg, uint32_t *a
 ** half a cell past its own on either side (italics, ClearType's edges),
 ** as in a terminal (over: 1), but never above or below its row.
 */
-static void fill_row (Frame *f, int x, int y, int w, int h, uint32_t color, int top) {	/* inside the row at top */
-  if (y + h > top + W.ch) h = top + W.ch - y;
+/* a font's cells: the window's (mme.ui.fontSize) or the editor's (editor.fontSize) */
+typedef struct Fm {
+  int cw, ch, ascent;
+  const Glyph *(*glyph) (uint32_t cp, int bold, int italic, int dark);
+} Fm;
+
+static Fm FU, FE;
+
+const Glyph *ed_font_glyph (uint32_t cp, int bold, int italic, int dark);	/* tfont_ed.c: tfont.c again */
+void ed_font_add_dir (const char *native);
+int ed_font_init (const Config *c);
+void ed_font_set_px (float px);
+int ed_font_cell_w (void);
+int ed_font_cell_h (void);
+int ed_font_ascent (void);
+
+
+static void fill_row (Frame *f, int x, int y, int w, int h, uint32_t color, int top, int rh) {	/* inside the row at top */
+  if (y + h > top + rh) h = top + rh - y;
   if (y < top) {
     h -= top - y;
     y = top;
@@ -466,31 +509,32 @@ static void fill_row (Frame *f, int x, int y, int w, int h, uint32_t color, int 
 }
 
 
-static void paint_fg (const ECell *c, int col, int row, int wide, uint32_t fg, uint32_t bg, uint32_t at, uint32_t ul,
-                      int over) {
+/* the cell at pixels px, py in font m */
+static void paint_fg (const Fm *m, const ECell *c, int px, int py, int wide, uint32_t fg, uint32_t bg, uint32_t at,
+                      uint32_t ul, int over) {
   Frame *f = &W.fr;
-  int px = col * W.cw, py = row * W.ch, w = W.cw * (wide ? 2 : 1), line = (W.ch + 8) / 16, o = over ? W.cw / 2 : 0;
+  int w = m->cw * (wide ? 2 : 1), line = (m->ch + 8) / 16, o = over ? m->cw / 2 : 0;
   uint32_t ch = c->ch;
   if (line < 1) line = 1;
-  if (ch > ' ') {
+  if (ch > ' ' && ch != ZONE_HOLE) {
     int drawn = 0;
-    if (ch >= 0x2500 && ch <= 0x257F) drawn = draw_box(f, ch, px, py, w, W.ch, fg);
-    else if (ch >= 0x2580 && ch <= 0x259F) drawn = draw_block(f, ch, px, py, w, W.ch, fg);
-    else if (ch >= 0xE0B0 && ch <= 0xE0BF) drawn = draw_powerline(f, ch, px, py, w, W.ch, fg);
+    if (ch >= 0x2500 && ch <= 0x257F) drawn = draw_box(f, ch, px, py, w, m->ch, fg);
+    else if (ch >= 0x2580 && ch <= 0x259F) drawn = draw_block(f, ch, px, py, w, m->ch, fg);
+    else if (ch >= 0xE0B0 && ch <= 0xE0BF) drawn = draw_powerline(f, ch, px, py, w, m->ch, fg);
     if (!drawn)
-      blit_glyph(f, font_glyph(ch, (at & RGB_BOLD) != 0, (at & RGB_ITALIC) != 0, brightness(fg) < brightness(bg)),
-                 px, py + W.ascent, fg, bg, px - o, px + w + o, py, py + W.ch);
+      blit_glyph(f, m->glyph(ch, (at & RGB_BOLD) != 0, (at & RGB_ITALIC) != 0, brightness(fg) < brightness(bg)),
+                 px, py + m->ascent, fg, bg, px - o, px + w + o, py, py + m->ch);
   }
   if (at & RGB_CURLY) {	/* a squiggle: a wave from cell to cell (tdraw.c) */
-    int amp = line + 1, period = W.cw > 4 ? W.cw : 4, x, y = py + W.ascent + line + 1;
+    int amp = line + 1, period = m->cw > 4 ? m->cw : 4, x, y = py + m->ascent + line + 1;
     for (x = 0; x < w; x++) {
       double t = (double)((px + x) % period) / (double)period;
       int dy = (int)((double)amp * (1.0 - cos(t * 6.283185307179586)) / 2.0 + 0.5);
-      fill_row(f, px + x, y - 1 + dy, 1, line, ul, py);
+      fill_row(f, px + x, y - 1 + dy, 1, line, ul, py, m->ch);
     }
   }
-  else if (at & RGB_UNDER) fill_row(f, px, py + W.ascent + line + 1, w, line, ul, py);
-  if (at & RGB_STRIKE) fill_row(f, px, py + (W.ascent * 2) / 3, w, line, fg, py);
+  else if (at & RGB_UNDER) fill_row(f, px, py + m->ascent + line + 1, w, line, ul, py, m->ch);
+  if (at & RGB_STRIKE) fill_row(f, px, py + (m->ascent * 2) / 3, w, line, fg, py, m->ch);
 }
 
 
@@ -520,7 +564,7 @@ static void out_size (int *w, int *h) {
 */
 
 static int tb_width (void) {	/* a button: VS Code's 46 pixels (at 96 DPI, zoomed), as high as a row */
-  int w = (int)(46.0f * W.scale * (W.px0 > 0.0f ? W.px / W.px0 : 1.0f) + 0.5f);
+  int w = (int)(46.0f * W.scale * W.zoom + 0.5f);
   return w > W.ch ? w : W.ch;
 }
 
@@ -767,13 +811,66 @@ static void window_round (void) {
 
 
 /* row y of a grid (S.back, or S.front: what is shown) into the picture: every background, then the characters */
+/*
+** A text zone's rows in the window's row y (they may start in the row
+** above, end in the one below), painted in the editor's font, clipped to
+** the row and to the zone: the window's cells over it are painted after.
+*/
+static void paint_zone_band (const Zone *z, int y, int front) {
+  const ECell *grid = front ? z->front : z->back;
+  int x0 = z->x * W.cw, x1 = (z->x + z->w) * W.cw, zy = z->y * W.ch, b0 = y * W.ch, b1 = b0 + W.ch, r, r1, pass, x;
+  clip_x0 = x0;
+  clip_x1 = x1;
+  clip_y0 = b0;
+  clip_y1 = b1;
+  r1 = (b1 - 1 - zy) / FE.ch;
+  for (r = (b0 - zy) / FE.ch; r <= r1; r++) {
+    int py = zy + r * FE.ch;
+    const ECell *c;
+    uint32_t fg, bg, at, ul;
+    if (r >= z->rows) {	/* under its last row: the editor's background */
+      fill(&W.fr, x0, py, x1 - x0, b1 - py, ui_color(C_EDITOR_BG));
+      break;
+    }
+    c = &grid[(size_t)r * (size_t)z->cols];
+    for (pass = 0; pass < 2; pass++)
+      for (x = 0; x < z->cols; x++) {
+        int wide = c[x].w == 2 && x + 1 < z->cols;
+        if (c[x].ch == 0 && x > 0 && c[x - 1].w == 2) continue;
+        cell_colors(&c[x], &fg, &bg, &at, &ul);
+        if (pass == 0) fill(&W.fr, x0 + x * FE.cw, py, FE.cw * (wide ? 2 : 1), FE.ch, bg);
+        else paint_fg(&FE, &c[x], x0 + x * FE.cw, py, wide, fg, bg, at, ul, 1);
+      }
+    cell_colors(&c[z->cols - 1], &fg, &bg, &at, &ul);	/* not a whole number of its cells: the rest in its row's color */
+    fill(&W.fr, x0 + z->cols * FE.cw, py, x1 - x0 - z->cols * FE.cw, FE.ch, bg);
+  }
+  clip_x0 = clip_y0 = 0;
+  clip_x1 = clip_y1 = CLIP_ALL;
+}
+
+
+/* the zone under the window's cell x, y, or NULL */
+static const Zone *zone_at (int x, int y) {
+  int k;
+  for (k = 0; k < MAX_ZONE; k++)
+    if (Z[k].on && x >= Z[k].x && x < Z[k].x + Z[k].w && y >= Z[k].y && y < Z[k].y + Z[k].h) return &Z[k];
+  return NULL;
+}
+
+
 static void paint_row (int y, const ECell *grid) {
   const ECell *b = &grid[(size_t)y * (size_t)S.cols];
-  int x, pass;
+  int x, pass, k;
+  for (k = 0; k < MAX_ZONE; k++)	/* the text zones first: the window's cells over them after */
+    if (Z[k].on && y >= Z[k].y && y < Z[k].y + Z[k].h) paint_zone_band(&Z[k], y, grid == S.front);
   for (pass = 0; pass < 2; pass++)
     for (x = 0; x < S.cols; x++) {
       uint32_t fg, bg, at, ul;
       int wide = b[x].w == 2 && x + 1 < S.cols;
+      if (b[x].ch == ZONE_HOLE) {	/* a text zone shows there */
+        if (pass == 0 && zone_at(x, y) == NULL) fill(&W.fr, x * W.cw, y * W.ch, W.cw, W.ch, ui_color(C_EDITOR_BG));
+        continue;
+      }
       if (b[x].ch == 0 && x > 0 && b[x - 1].w == 2) continue;	/* the right half of a wide one: painted with it */
       if (is_badge(&b[x])) {	/* under the badge: the color beside it; the badge itself after */
         int k = x;
@@ -784,7 +881,7 @@ static void paint_row (int y, const ECell *grid) {
       }
       cell_colors(&b[x], &fg, &bg, &at, &ul);
       if (pass == 0) fill(&W.fr, x * W.cw, y * W.ch, W.cw * (wide ? 2 : 1), W.ch, bg);
-      else paint_fg(&b[x], x, y, wide, fg, bg, at, ul, 1);
+      else paint_fg(&FU, &b[x], x * W.cw, y * W.ch, wide, fg, bg, at, ul, 1);
     }
   for (x = 0; x < S.cols; x++)
     if (is_badge(&b[x])) {
@@ -808,7 +905,7 @@ static void paint_row (int y, const ECell *grid) {
   }
   paint_round(y, grid);
   if (y == 0 && W.borderless) tb_paint(b);	/* the title bar's buttons, over its right end */
-  if (W.car_on && W.car_y == y) W.car_on = 0;	/* painted over */
+  if (W.car_on && W.car_py < (y + 1) * W.ch && W.car_py + W.car_ph > y * W.ch) W.car_on = 0;	/* painted over */
   mark(y);
 }
 
@@ -1036,51 +1133,99 @@ static int caret_shape (void) {	/* 1 block, 2 underline, 3 bar (DECSCUSR 0 .. 6)
 
 
 static void caret_off (void) {
+  int y;
   if (!W.car_on) return;
   W.car_on = 0;
-  if (W.car_y < 0 || W.car_y >= S.rows) return;
-  paint_row(W.car_y, S.front);
-  images_row(W.car_y);
+  for (y = W.car_py / W.ch; y <= (W.car_py + W.car_ph - 1) / W.ch; y++) {
+    if (y < 0 || y >= S.rows) continue;
+    paint_row(y, S.front);
+    images_row(y);
+  }
+}
+
+
+/*
+** Where the caret is: its cell (in the window's cells, or in its text
+** zone's), its pixels, the font; 0: nowhere to be seen (off its grid, or
+** under a popup drawn over the text)
+*/
+static int caret_at (const ECell **cell, int *wide, int *px, int *py, const Fm **fm) {
+  const ECell *row;
+  int x, cols;
+  if (S.cy < 0) return 0;
+  if (S.cz >= 0 && S.cz < MAX_ZONE && Z[S.cz].on) {
+    const Zone *z = &Z[S.cz];
+    int zx = S.cx - z->x, zy = S.cy - z->y, ux, uy;
+    if (zx < 0 || zy < 0 || zx >= z->cols || zy >= z->rows) return 0;
+    *px = z->x * W.cw + zx * FE.cw;
+    *py = z->y * W.ch + zy * FE.ch;
+    ux = *px / W.cw;
+    uy = *py / W.ch;
+    if (ux >= S.cols || uy >= S.rows || S.front[(size_t)uy * (size_t)S.cols + (size_t)ux].ch != ZONE_HOLE) return 0;
+    row = &z->front[(size_t)zy * (size_t)z->cols];
+    cols = z->cols;
+    x = zx;
+    *fm = &FE;
+  }
+  else {
+    if (S.cx < 0 || S.cx >= S.cols || S.cy >= S.rows) return 0;
+    row = &S.front[(size_t)S.cy * (size_t)S.cols];
+    cols = S.cols;
+    x = S.cx;
+    *px = x * W.cw;
+    *py = S.cy * W.ch;
+    *fm = &FU;
+  }
+  if (row[x].ch == 0 && x > 0 && row[x - 1].w == 2) {	/* on the right half of a wide one */
+    x--;
+    *px -= (*fm)->cw;
+  }
+  *wide = row[x].w == 2 && x + 1 < cols;
+  *cell = &row[x];
+  return 1;
 }
 
 
 static void caret_on (void) {
-  const ECell *row = &S.front[(size_t)S.cy * (size_t)S.cols];
-  int x = S.cx, wide, px, py, w, thin;
+  const ECell *cell;
+  const Fm *fm;
+  int wide, px, py, w, h, thin, y;
   uint32_t cc = ui_color(C_MCURSOR), fg, bg, at, ul;
   Frame *f = &W.fr;
-  if (row[x].ch == 0 && x > 0 && row[x - 1].w == 2) x--;	/* on the right half of a wide one */
-  wide = row[x].w == 2 && x + 1 < S.cols;
-  px = x * W.cw;
-  py = S.cy * W.ch;
-  w = W.cw * (wide ? 2 : 1);
-  thin = (int)(2.0f * W.scale * (W.px0 > 0 ? W.px / W.px0 : 1.0f) + 0.5f);	/* VS Code's 2 pixels, zoomed */
+  if (!caret_at(&cell, &wide, &px, &py, &fm)) return;
+  w = fm->cw * (wide ? 2 : 1);
+  h = fm->ch;
+  thin = (int)(2.0f * W.scale * W.zoom + 0.5f);	/* VS Code's 2 pixels, zoomed */
   if (thin < 1) thin = 1;
   if (!W.focused) {	/* a hollow box, not blinking: the window has not got the keys */
     fill(f, px, py, w, 1, cc);
-    fill(f, px, py + W.ch - 1, w, 1, cc);
-    fill(f, px, py, 1, W.ch, cc);
-    fill(f, px + w - 1, py, 1, W.ch, cc);
+    fill(f, px, py + h - 1, w, 1, cc);
+    fill(f, px, py, 1, h, cc);
+    fill(f, px + w - 1, py, 1, h, cc);
   }
-  else if (caret_shape() == 2) fill(f, px, py + W.ch - thin, w, thin, cc);
-  else if (caret_shape() == 3) fill(f, px, py, thin, W.ch, cc);
+  else if (caret_shape() == 2) fill(f, px, py + h - thin, w, thin, cc);
+  else if (caret_shape() == 3) fill(f, px, py, thin, h, cc);
   else {	/* a block: the character in it in the background's color */
-    cell_colors(&row[x], &fg, &bg, &at, &ul);
-    fill(f, px, py, w, W.ch, cc);
-    paint_fg(&row[x], x, S.cy, wide, bg, cc, at & ~(uint32_t)(RGB_UNDER | RGB_CURLY | RGB_STRIKE), bg, 0);
+    cell_colors(cell, &fg, &bg, &at, &ul);
+    fill(f, px, py, w, h, cc);
+    paint_fg(fm, cell, px, py, wide, bg, cc, at & ~(uint32_t)(RGB_UNDER | RGB_CURLY | RGB_STRIKE), bg, 0);
   }
   W.car_on = 1;
   W.car_x = S.cx;
   W.car_y = S.cy;
+  W.car_py = py;
+  W.car_ph = h;
   W.car_shape = caret_shape();
   W.car_focus = W.focused;
-  mark(S.cy);
+  for (y = py / W.ch; y <= (py + h - 1) / W.ch; y++) mark(y);
 }
 
 
 /* the caret as it should be now: where, what shape, on or off in its blink */
 static void caret_sync (void) {
-  int want = S.cy >= 0 && S.cy < S.rows && S.cx >= 0 && S.cx < S.cols && (W.blink_on || !W.focused);
+  const ECell *cell;
+  const Fm *fm;
+  int wide, cpx = 0, cpy = 0, want = caret_at(&cell, &wide, &cpx, &cpy, &fm) && (W.blink_on || !W.focused);
   if (W.car_on && (!want || W.car_x != S.cx || W.car_y != S.cy || W.car_shape != caret_shape() ||
                    W.car_focus != W.focused)) caret_off();
   if (want && !W.car_on) caret_on();
@@ -1089,10 +1234,10 @@ static void caret_sync (void) {
     int ww = 0, wh = 0, pw = 0, ph = 0;
     SDL_GetWindowSize(W.win, &ww, &wh);
     out_size(&pw, &ph);
-    r.x = S.cx * W.cw;
-    r.y = S.cy * W.ch;
-    r.w = W.cw;
-    r.h = W.ch;
+    r.x = cpx;
+    r.y = cpy;
+    r.w = fm->cw;
+    r.h = fm->ch;
     if (pw > 0 && ph > 0 && pw != ww) {	/* macOS's Retina: in points */
       r.x = r.x * ww / pw;
       r.y = r.y * wh / ph;
@@ -1325,6 +1470,36 @@ static int tb_mouse (int x, int y, int type) {
 ** settings say), then the rows painted copied into the texture; the
 ** title, the mouse pointer. Nothing changed: nothing is shown.
 */
+/* the window's rows a text zone's changed rows are in: g_zrow[y] 1 */
+static unsigned char *g_zrow;
+static int g_nzrow;
+
+static void zones_changed (void) {
+  int k, r, y;
+  if (g_nzrow < S.rows) {
+    free(g_zrow);
+    g_zrow = (unsigned char *)xmalloc((size_t)S.rows);
+    g_nzrow = S.rows;
+  }
+  memset(g_zrow, 0, (size_t)S.rows);
+  for (k = 0; k < MAX_ZONE; k++) {
+    const Zone *z = &Z[k];
+    size_t rb = (size_t)z->cols * sizeof(ECell);
+    if (!z->on) continue;
+    if (S.full || z->full) {
+      for (y = z->y; y < z->y + z->h && y < S.rows; y++) g_zrow[y] = 1;
+      continue;
+    }
+    for (r = 0; r < z->rows; r++)
+      if (memcmp(&z->back[(size_t)r * (size_t)z->cols], &z->front[(size_t)r * (size_t)z->cols], rb) != 0) {
+        int py = z->y * W.ch + r * FE.ch;
+        for (y = py / W.ch; y <= (py + FE.ch - 1) / W.ch; y++)
+          if (y >= z->y && y < z->y + z->h && y < S.rows) g_zrow[y] = 1;
+      }
+  }
+}
+
+
 void scr_flush (void) {
   int y, painted0 = S.rows, painted1 = -1, caret_row = 0;
   size_t row = (size_t)S.cols * sizeof(ECell);
@@ -1344,15 +1519,24 @@ void scr_flush (void) {
   }
   picture_size();
   if (W.up0 > S.rows) W.up0 = S.rows;
+  zones_changed();
   for (y = 0; y < S.rows; y++) {
     ECell *b = &S.back[(size_t)y * (size_t)S.cols];
-    if (!S.full && memcmp(b, &S.front[(size_t)y * (size_t)S.cols], row) == 0) continue;
+    if (!S.full && !g_zrow[y] && memcmp(b, &S.front[(size_t)y * (size_t)S.cols], row) == 0) continue;
     paint_row(y, S.back);
-    if (y == S.cy) caret_row = 1;
+    if (W.car_py < (y + 1) * W.ch && W.car_py + W.car_ph > y * W.ch) caret_row = 1;
     if (y < painted0) painted0 = y;
     painted1 = y;
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
+  {
+    int k;
+    for (k = 0; k < MAX_ZONE; k++)
+      if (Z[k].on) {
+        memcpy(Z[k].front, Z[k].back, (size_t)Z[k].cols * (size_t)Z[k].rows * sizeof(ECell));
+        Z[k].full = 0;
+      }
+  }
   S.full = 0;
   tb_update();
   image_flush(painted0, painted1);
@@ -1396,6 +1580,18 @@ static void font_metrics (void) {
   W.ascent = font_ascent();
   if (W.cw < 1) W.cw = 1;
   if (W.ch < 1) W.ch = 1;
+  FU.cw = W.cw;
+  FU.ch = W.ch;
+  FU.ascent = W.ascent;
+  FU.glyph = font_glyph;
+  FE.cw = ed_font_cell_w();
+  FE.ch = ed_font_cell_h();
+  FE.ascent = ed_font_ascent();
+  FE.glyph = ed_font_glyph;
+  if (FE.cw < 1) FE.cw = 1;
+  if (FE.ch < 1) FE.ch = 1;
+  scr_zone_metrics(FU.cw, FU.ch, FE.cw, FE.ch);	/* the editor's text: zones of these cells */
+  W.relayout = 1;
 }
 
 
@@ -1436,47 +1632,79 @@ static void font_dirs (void) {
     free(up);
   }
   font_add_dir(fonts);
+  ed_font_add_dir(fonts);
   free(fonts);
   free(dir);
   free(exe);
 }
 
 
-static int font_make (const char *fam, double size) {
+/* VS Code's pixels at 96 DPI, as many more as the screen's DPI, zoomed */
+static float font_px (double size) {
+  if (size < 6 || size > 100) size = 14;
+  return (float)size * W.scale * W.zoom;
+}
+
+
+/* the two fonts at their sizes again (the zoom, the DPI) */
+static void font_sizes (void) {
+  font_set_px(font_px(W.ui_size));
+  ed_font_set_px(font_px(W.font_size));
+  font_metrics();
+}
+
+
+/* the window's font: mme's own (JetBrains Mono, from mme-fonts), mme.ui.fontSize */
+static int ui_font_make (double size) {
   Config c;
-  size_t n = 0;
   memset(&c, 0, sizeof(c));
   c.smoothing = SMOOTH_CLEARTYPE;	/* Windows: GDI's ClearType, like every other Windows program */
   c.ligatures = 0;	/* one character a cell: mme places each itself */
-  snprintf(W.font_fam, sizeof(W.font_fam), "%s", fam);
-  W.font_size = size;
-  while (*fam == ' ' || *fam == '\'' || *fam == '"') fam++;	/* VS Code's list: its first family */
-  while (fam[n] && fam[n] != ',' && fam[n] != '\'' && fam[n] != '"' && n + 1 < sizeof(c.font)) n++;
-  memcpy(c.font, fam, n);
-  c.font[n] = '\0';
   if (font_init(&c) != 0) return -1;
-  if (size < 6 || size > 100) size = 14;
-  W.px0 = W.px = (float)size * W.scale;	/* VS Code's pixels at 96 DPI, as many more as the screen's DPI */
-  font_set_px(W.px);
-  font_metrics();
+  W.ui_size = size;
   return 0;
 }
 
 
-static int font_setup (void) {
-  font_dirs();
-  return font_make(json_str(settings_get("editor\\.fontFamily"), ""), json_num(settings_get("editor\\.fontSize"), 14));
+/* the editor's font: editor.fontFamily (VS Code's list: its first family), editor.fontSize */
+static int ed_font_make (const char *fam, double size) {
+  Config c;
+  size_t n = 0;
+  memset(&c, 0, sizeof(c));
+  c.smoothing = SMOOTH_CLEARTYPE;
+  c.ligatures = 0;
+  snprintf(W.font_fam, sizeof(W.font_fam), "%s", fam);
+  W.font_size = size;
+  while (*fam == ' ' || *fam == '\'' || *fam == '"') fam++;
+  while (fam[n] && fam[n] != ',' && fam[n] != '\'' && fam[n] != '"' && n + 1 < sizeof(c.font)) n++;
+  memcpy(c.font, fam, n);
+  c.font[n] = '\0';
+  return ed_font_init(&c);
 }
 
 
-/* editor.fontFamily or editor.fontSize changed in the settings: the font is made again (the zoom goes) */
+static int font_setup (void) {
+  W.zoom = 1.0f;
+  font_dirs();
+  if (ui_font_make(json_num(settings_get("mme\\.ui\\.fontSize"), 14)) != 0) return -1;
+  if (ed_font_make(json_str(settings_get("editor\\.fontFamily"), ""), json_num(settings_get("editor\\.fontSize"), 14)) != 0)
+    return -1;
+  font_sizes();
+  return 0;
+}
+
+
+/* editor.fontFamily, editor.fontSize or mme.ui.fontSize changed in the settings: that font is made again */
 static void font_settings (void) {
   const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
+  double size = json_num(settings_get("editor\\.fontSize"), 14), ui = json_num(settings_get("mme\\.ui\\.fontSize"), 14);
+  int again = 0;
   W.custom = title_custom();
-  double size = json_num(settings_get("editor\\.fontSize"), 14);
   W.font_seen = (long long)SDL_GetTicks();
-  if (size == W.font_size && strcmp(fam, W.font_fam) == 0) return;
-  if (font_make(fam, size) != 0) return;
+  if ((size != W.font_size || strcmp(fam, W.font_fam) != 0) && ed_font_make(fam, size) == 0) again = 1;
+  if (ui != W.ui_size && ui_font_make(ui) == 0) again = 1;
+  if (!again) return;
+  font_sizes();
   S.full = 1;
 }
 
@@ -1488,24 +1716,20 @@ static void font_dpi (void) {
   if (i < 0 || SDL_GetDisplayDPI(i, &ddpi, &hdpi, &vdpi) != 0 || hdpi < 48.0f) return;
   s = hdpi / 96.0f;
   if (s - W.scale < 0.01f && W.scale - s < 0.01f) return;
-  W.px *= s / W.scale;
-  W.px0 *= s / W.scale;
   W.scale = s;
-  font_set_px(W.px);
-  font_metrics();
+  font_sizes();
   S.full = 1;
 }
 
 
 /* Zoom In / Out / Reset (VS Code's Ctrl+= Ctrl+- Ctrl+0): the font is ours here */
 void term_font (int delta) {
-  if (delta > 0) W.px *= 1.1f;
-  else if (delta < 0) W.px /= 1.1f;
-  else W.px = W.px0;
-  if (W.px < 6.0f) W.px = 6.0f;
-  if (W.px > 200.0f) W.px = 200.0f;
-  font_set_px(W.px);
-  font_metrics();
+  if (delta > 0) W.zoom *= 1.1f;
+  else if (delta < 0) W.zoom /= 1.1f;
+  else W.zoom = 1.0f;
+  if (W.zoom < 0.4f) W.zoom = 0.4f;
+  if (W.zoom > 5.0f) W.zoom = 5.0f;
+  font_sizes();
   S.full = 1;
 }
 
@@ -2089,6 +2313,9 @@ static void mouse_at (int x, int y) {
   if (y < 0) y = 0;
   term_mouse.x = x / (W.cw > 0 ? W.cw : 1);
   term_mouse.y = y / (W.ch > 0 ? W.ch : 1);
+  term_mouse.fx = (int)((long)x * 256 / (W.cw > 0 ? W.cw : 1));	/* in the cell too: a text zone's cells are others */
+  term_mouse.fy = (int)((long)y * 256 / (W.ch > 0 ? W.ch : 1));
+  if (term_mouse.fx == 0 && term_mouse.fy == 0) term_mouse.fx = 1;
   if (term_mouse.x >= S.cols) term_mouse.x = S.cols - 1;
   if (term_mouse.y >= S.rows) term_mouse.y = S.rows - 1;
 }
@@ -2198,9 +2425,19 @@ static void on_event (const SDL_Event *e) {
       if (tb_mouse(e->motion.x, e->motion.y, SDL_MOUSEMOTION)) break;
       memset(&term_mouse, 0, sizeof(term_mouse));
       mouse_at(e->motion.x, e->motion.y);
-      if (term_mouse.x == g_mcol && term_mouse.y == g_mrow) break;
-      g_mcol = term_mouse.x;
-      g_mrow = term_mouse.y;
+      {	/* once a cell: a text zone's cell where it is over one */
+        int k, cx = term_mouse.x, cy = term_mouse.y;
+        for (k = 0; k < MAX_ZONE; k++)
+          if (Z[k].on && term_mouse.x >= Z[k].x && term_mouse.x < Z[k].x + Z[k].w && term_mouse.y >= Z[k].y &&
+              term_mouse.y < Z[k].y + Z[k].h) {
+            scr_zone_pt(k, &term_mouse, &cx, &cy);
+            cx += (k + 1) * 100000;
+            break;
+          }
+        if (cx == g_mcol && cy == g_mrow) break;
+        g_mcol = cx;
+        g_mrow = cy;
+      }
       term_mouse.drag = 1;
       term_mouse.press = 1;
       term_mouse.button = g_mbutton >= 0 ? g_mbutton : 3;
@@ -2242,6 +2479,10 @@ int term_key (int ms) {
   for (;;) {
     SDL_Event e;
     int wait, got;
+    if (W.relayout && g_qn == 0) {	/* a font's cells changed: the zones are laid out again */
+      W.relayout = 0;
+      return K_NONE;
+    }
     if (g_qn > 0) {
       k = g_q[0];
       term_mouse = g_qm[0];

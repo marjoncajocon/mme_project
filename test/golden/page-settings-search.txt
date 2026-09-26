@@ -7,26 +7,26 @@
 |       User                                                                                                         
 |     ━━━━━━──────────────────────────────────────────────────────────────────────────────────────────────────────────
 |
-|     Text Editor (6)         │   Editor › Minimap: Enabled
-|        Minimap (6)           │    Controls whether the minimap is shown.
-|                             │
-|                              │   Editor › Minimap: Side
-|                             │   Controls the side where to render the minimap.
-|                              │    right                                  
-|                              │
-|                              │   Editor › Minimap: Show Slider
-|                              │   Controls when the minimap slider is shown.
-|                              │    mouseover                              
-|                              │
-|                              │   Editor › Minimap: Render Characters
-|                              │    Render the actual characters on a line as opposed to color blocks.
-|                              │
-|                              │   Editor › Minimap: Max Column
-|                              │   Limit the width of the minimap to render at most a certain number of columns.
-|                              │    120
-|                              │
-|                              │   Editor › Minimap: Scale
-|                             │   Scale of content drawn in the minimap: 1, 2 or 3.
+|     Text Editor (6)         │   Editor › Minimap: Enabled                                                            ▐
+|        Minimap (6)           │    Controls whether the minimap is shown.                                             ▐
+|                             │                                                                                        ▐
+|                              │   Editor › Minimap: Side                                                               ▐
+|                             │   Controls the side where to render the minimap.                                       ▐
+|                              │    right                                                                              ▐
+|                              │                                                                                        ▐
+|                              │   Editor › Minimap: Show Slider                                                        ▐
+|                              │   Controls when the minimap slider is shown.                                           ▐
+|                              │    mouseover                                                                          ▐
+|                              │                                                                                        ▐
+|                              │   Editor › Minimap: Render Characters                                                  ▐
+|                              │    Render the actual characters on a line as opposed to color blocks.                 ▐
+|                              │                                                                                        ▐
+|                              │   Editor › Minimap: Max Column                                                         ▐
+|                              │   Limit the width of the minimap to render at most a certain number of columns.        ▐
+|                              │    120                                                                                 ▐
+|                              │                                                                                        ▐
+|                              │   Editor › Minimap: Scale                                                              ▐
+|                             │   Scale of content drawn in the minimap: 1, 2 or 3.                                    ▐
 |                              │    1
 |                                                                                                                     
 exited=0

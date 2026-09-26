@@ -77,7 +77,7 @@ for %%F in (..\*.c) do (
   set F=%%~nxF
   if /i not "!F!"=="eterm.c" if /i not "!F!"=="edraw.c" if /i not "!F!"=="mos.c" if /i not "!F!"=="tpty.c" set SRC=!SRC! %%F
 )
-set SRC=%SRC% esdl.c emos.c etpty.c tfont.c tshape.c
+set SRC=%SRC% esdl.c emos.c etpty.c tfont.c tfont_ed.c tshape.c
 if not exist %OUT% mkdir %OUT%
 if not exist %OBJ% mkdir %OBJ%
 

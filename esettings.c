@@ -46,6 +46,10 @@ typedef struct Setting {
 } Setting;
 
 static const Setting set[] = {
+  {"editor.fontSize", C_EDITOR, ST_NUM, 1, "14", NULL,
+   "Controls the font size in pixels of the code editor and the diff viewer (mme-sdl); the rest of the window has #mme.ui.fontSize#. In a terminal the terminal's font is used."},
+  {"editor.fontFamily", C_EDITOR, ST_STR, 1, "\"\"", NULL,
+   "Controls the font family of the code editor and the diff viewer (mme-sdl; the first of a comma list). Empty: JetBrains Mono. Any installed font works, or copy its .ttf/.otf files into mme-fonts. In a terminal the terminal's font is used."},
   {"editor.tabSize", C_EDITOR, ST_NUM, 1, "4", NULL,
    "The number of spaces a tab is equal to. This setting is overridden based on the file contents when #editor.detectIndentation# is on."},
   {"editor.insertSpaces", C_EDITOR, ST_BOOL, 1, "true", NULL,
@@ -276,6 +280,8 @@ static const Setting set[] = {
    "Controls the location of the primary side bar and activity bar. They can either show on the left or right of the workbench."},
   {"window.menuBarVisibility", C_LOOK, ST_ENUM, 0, "\"classic\"", "classic|visible|toggle|hidden|compact",
    "Control the visibility of the menu bar. A setting of 'toggle' or 'hidden' hides it (Alt+F, F10 still open the menus)."},
+  {"mme.ui.fontSize", C_LOOK, ST_NUM, 0, "14", NULL,
+   "Font size in pixels of the workbench (mme-sdl): the menus, the side bar, the tabs, the panel, the status bar. The code editor has #editor.fontSize#. Ctrl+= and Ctrl+- zoom both."},
   {"window.titleBarStyle", C_LOOK, ST_ENUM, 0, "\"custom\"", "custom|native",
    "Adjust the appearance of the window title bar (mme-sdl): 'custom' draws it with the menu bar, its own minimize, maximize and close buttons, no system frame; 'native' uses the system's frame. In a terminal the terminal has the frame."},
   {"workbench.statusBar.visible", C_LOOK, ST_BOOL, 0, "true", NULL,
@@ -795,6 +801,8 @@ static struct {
   } hit[MAXHIT];
   int nhit;
   int drop_x, drop_y, drop_w, drop_n, drop_top;
+  int bar_x, drag_bar;	/* the scrollbar's column; its thumb held: 1 + where in it it was taken */
+  int follow;	/* the setting in focus moved: the list scrolls to it (the wheel, the bar leave it) */
 } S;
 
 
@@ -872,6 +880,7 @@ static void build (void) {
       }
     }
   if (S.top < 0) S.top = 0;
+  S.follow = 1;
 }
 
 
@@ -926,6 +935,49 @@ static int block_h (const Setting *s, int w) {
 static int entry_h (int i, int w) {
   if (S.e[i].set < 0) return 2;	/* a heading, a blank row */
   return block_h(&set[S.e[i].set], w);
+}
+
+
+/* the rows the whole list takes */
+static int list_total (void) {
+  int i, total = 0;
+  for (i = 0; i < S.ne; i++) total += entry_h(i, S.list_w > 0 ? S.list_w : 60);
+  return total;
+}
+
+
+/* not past the end */
+static void clamp_top (void) {
+  int most = list_total() - S.body_h;
+  if (S.top > most) S.top = most;
+  if (S.top < 0) S.top = 0;
+}
+
+
+/* the scrollbar's thumb: its first row (from S.body_y) and its length; 0 when all fits */
+static int bar_thumb (int *at) {
+  int total = list_total(), len;
+  *at = 0;
+  if (S.body_h < 2 || total <= S.body_h) return 0;
+  len = (int)((double)S.body_h * S.body_h / total + 0.5);
+  if (len < 1) len = 1;
+  if (len > S.body_h - 1) len = S.body_h - 1;
+  *at = (int)((double)S.top * (S.body_h - len) / (double)(total - S.body_h) + 0.5);
+  if (*at < 0) *at = 0;
+  if (*at > S.body_h - len) *at = S.body_h - len;
+  return len;
+}
+
+
+/* the thumb's first row goes to row 'at' of the bar: the list follows */
+static void bar_to (int at) {
+  int len, now, total = list_total();
+  len = bar_thumb(&now);
+  if (len == 0) return;
+  if (at < 0) at = 0;
+  if (at > S.body_h - len) at = S.body_h - len;
+  S.top = (int)((double)at * (total - S.body_h) / (double)(S.body_h - len) + 0.5);
+  clamp_top();
 }
 
 
@@ -1106,6 +1158,7 @@ void sui_draw (int x, int y, int w, int h, int focus) {
   S.w = w;
   S.h = h;
   S.nhit = 0;
+  S.bar_x = 0;
   if (S.ne == 0 && S.search[0] == '\0') build();
   scr_box(x, y, w, h, S_TEXT);
   if (w < 30 || h < 8) return;
@@ -1140,7 +1193,9 @@ void sui_draw (int x, int y, int w, int h, int focus) {
   S.list_w = x + w - 3 - S.list_x;
   if (S.list_w > 100) S.list_w = 100;
   if (S.list_w < 12) return;
-  keep_sel();
+  if (S.follow) keep_sel();
+  S.follow = 0;
+  clamp_top();
   /* the list */
   ly = 0;
   sy = S.body_y;
@@ -1162,6 +1217,13 @@ void sui_draw (int x, int y, int w, int h, int focus) {
     ly += eh;
   }
   if (S.ne == 0) scr_puts(S.list_x, S.body_y, "No Settings Found", S_CRUMB);
+  /* VS Code's scrollbar at the page's right edge */
+  S.bar_x = x + w - 1;
+  {
+    int at, len = bar_thumb(&at), r;
+    for (r = at; r < at + len; r++)	/* a half block, so it shows on any background */
+      scr_put_rgb(S.bar_x, S.body_y + r, 0x2590, ui_color(C_THUMB), ui_color(C_EDITOR_BG), 0);
+  }
   /* the table of contents */
   for (t = 0; t < TOC_N; t++) S.toc_row[t] = -1;
   if (S.toc_w) {
@@ -1398,6 +1460,7 @@ void sui_key (int k, PageAct *a) {
     }
     return;
   }
+  S.follow = 1;
   switch (code) {	/* the list */
     case K_UP: {
       int was = S.sel;
@@ -1439,19 +1502,35 @@ void sui_key (int k, PageAct *a) {
 }
 
 
+int sui_dragging (void) {
+  return S.drag_bar != 0;
+}
+
+
 void sui_mouse (const Mouse *m, PageAct *a) {
   int i, press = m->button == 0 && m->press && !m->drag;
   a->what = PA_NONE;
   if (m->wheel) {
     if (S.drop) return;
     S.top += m->wheel * 3;
-    if (S.top < 0) S.top = 0;
-    {	/* not past the end */
-      int total = 0;
-      for (i = 0; i < S.ne; i++) total += entry_h(i, S.list_w > 0 ? S.list_w : 60);
-      if (S.top > total - S.body_h) S.top = total - S.body_h > 0 ? total - S.body_h : 0;
-    }
+    clamp_top();
     return;
+  }
+  if (S.drag_bar) {	/* the thumb follows the mouse until the button comes up */
+    if (m->button == 0 && m->drag) bar_to(m->y - S.body_y - (S.drag_bar - 1));
+    if (!m->press) S.drag_bar = 0;
+    return;
+  }
+  if (press && S.bar_x > 0 && m->x == S.bar_x && m->y >= S.body_y && m->y < S.body_y + S.body_h && !S.drop) {
+    int at, len = bar_thumb(&at), ry = m->y - S.body_y;
+    if (len > 0) {
+      if (ry >= at && ry < at + len) S.drag_bar = 1 + (ry - at);	/* the thumb is taken */
+      else {	/* elsewhere: the thumb jumps there, like VS Code */
+        S.drag_bar = 1 + len / 2;
+        bar_to(ry - len / 2);
+      }
+      return;
+    }
   }
   if (!press && !(m->button == 2 && m->press)) return;
   if (S.drop) {	/* a value of the open list, or a click elsewhere closes it */

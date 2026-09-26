@@ -24,6 +24,7 @@
 #include "mterm.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -245,6 +246,208 @@ static const char *find_file (const char *basename) {
 void font_add_dir (const char *native) {
   free(extra_dir);
   extra_dir = xstrdup(native);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** Families by name: each font file's 'name' table, read without the
+** rest of the file, so any font installed (or put in the fonts folder)
+** can be asked for by the name its maker gave it - "Fira Code"
+** ===================================================================
+*/
+
+typedef struct Fam {
+  const char *file;	/* in font_files */
+  int index;	/* the face inside a .ttc */
+  int style;	/* ST_BOLD | ST_ITALIC; -1 another weight (Light, Retina...) */
+  char family[64];	/* lower case */
+} Fam;
+
+static Fam *fams = NULL;
+static size_t nfams = 0, capfams = 0;
+static int fams_read = 0;
+
+
+static unsigned rd16 (const unsigned char *p) {
+  return (unsigned)(p[0] << 8 | p[1]);
+}
+
+
+static unsigned long rd32 (const unsigned char *p) {
+  return ((unsigned long)p[0] << 24) | ((unsigned long)p[1] << 16) | ((unsigned long)p[2] << 8) | p[3];
+}
+
+
+static int read_at (FILE *fp, unsigned long off, unsigned char *buf, size_t n) {
+  return fseek(fp, (long)off, SEEK_SET) == 0 && fread(buf, 1, n, fp) == n;
+}
+
+
+/* a 'name' string as lower-case ASCII (of UTF-16 big endian: its ASCII) */
+static void name_ascii (const unsigned char *str, unsigned len, int wide, char *out, size_t n) {
+  size_t k = 0;
+  unsigned i;
+  for (i = 0; i + (wide ? 1u : 0u) < len && k + 1 < n; i += wide ? 2 : 1) {
+    unsigned c = wide ? rd16(str + i) : str[i];
+    if (c >= 'A' && c <= 'Z') c += 32;
+    out[k++] = (char)(c >= 32 && c < 127 ? c : '?');
+  }
+  out[k] = '\0';
+}
+
+
+/* the face at off: its family (name 16, else 1) and its style (17, else 2) */
+static int face_names (FILE *fp, unsigned long off, char *fam, size_t nfam, char *sub, size_t nsub) {
+  unsigned char hdr[12], rec[16], *tab;
+  unsigned i, ntab, count, strs;
+  int best_f = 0, best_s = 0;
+  unsigned long name_off = 0, name_len = 0;
+  fam[0] = sub[0] = '\0';
+  if (!read_at(fp, off, hdr, 12)) return 0;
+  ntab = rd16(hdr + 4);
+  for (i = 0; i < ntab && i < 64; i++) {
+    if (!read_at(fp, off + 12 + 16 * (unsigned long)i, rec, 16)) return 0;
+    if (memcmp(rec, "name", 4) == 0) {
+      name_off = rd32(rec + 8);
+      name_len = rd32(rec + 12);
+      break;
+    }
+  }
+  if (name_off == 0 || name_len < 6 || name_len > (1ul << 20)) return 0;
+  tab = (unsigned char *)malloc(name_len);
+  if (tab == NULL) return 0;
+  if (!read_at(fp, name_off, tab, name_len)) {
+    free(tab);
+    return 0;
+  }
+  count = rd16(tab + 2);
+  strs = rd16(tab + 4);
+  for (i = 0; i < count && 6 + 12 * ((unsigned long)i + 1) <= name_len; i++) {
+    const unsigned char *r = tab + 6 + 12 * i;
+    unsigned pid = rd16(r), eid = rd16(r + 2), lang = rd16(r + 4), id = rd16(r + 6);
+    unsigned len = rd16(r + 8), so = rd16(r + 10);
+    int rank, wide;
+    if ((unsigned long)strs + so + len > name_len) continue;
+    if (pid == 3 && (eid == 0 || eid == 1 || eid == 10)) wide = 1, rank = lang == 0x409 ? 4 : 2;	/* Windows', in English first */
+    else if (pid == 1 && eid == 0) wide = 0, rank = lang == 0 ? 3 : 1;	/* the Mac's */
+    else if (pid == 0) wide = 1, rank = 1;	/* Unicode's */
+    else continue;
+    if (id == 16 || id == 17) rank += 8;	/* the typographic names: "Fira Code" + "Light", not "Fira Code Light" */
+    if ((id == 1 || id == 16) && rank > best_f) {
+      best_f = rank;
+      name_ascii(tab + strs + so, len, wide, fam, nfam);
+    }
+    else if ((id == 2 || id == 17) && rank > best_s) {
+      best_s = rank;
+      name_ascii(tab + strs + so, len, wide, sub, nsub);
+    }
+  }
+  free(tab);
+  return fam[0] != '\0';
+}
+
+
+static int style_of (const char *sub) {
+  if (strcmp(sub, "regular") == 0 || strcmp(sub, "normal") == 0 || strcmp(sub, "book") == 0 ||
+      strcmp(sub, "roman") == 0 || sub[0] == '\0')
+    return 0;
+  if (strcmp(sub, "bold") == 0) return ST_BOLD;
+  if (strcmp(sub, "italic") == 0 || strcmp(sub, "oblique") == 0) return ST_ITALIC;
+  if (strcmp(sub, "bold italic") == 0 || strcmp(sub, "bold oblique") == 0) return ST_BOLD | ST_ITALIC;
+  return -1;
+}
+
+
+static void fam_add (const char *file, int index, const char *family, const char *sub) {
+  Fam *f;
+  if (nfams == capfams) {
+    size_t cap = capfams ? capfams * 2 : 256;
+    Fam *nf = (Fam *)realloc(fams, cap * sizeof(Fam));
+    if (nf == NULL) return;
+    fams = nf;
+    capfams = cap;
+  }
+  f = &fams[nfams++];
+  f->file = file;
+  f->index = index;
+  f->style = style_of(sub);
+  snprintf(f->family, sizeof(f->family), "%s", family);
+}
+
+
+/* every face of every font file found, by its family */
+static void fams_scan (void) {
+  size_t i;
+  if (fams_read) return;
+  fams_read = 1;
+  list_fonts();
+  for (i = 0; i < font_files.n; i++) {
+    FILE *fp = fopen(font_files.v[i], "rb");
+    unsigned char hdr[12];
+    char fam[64], sub[64];
+    if (fp == NULL) continue;
+    if (read_at(fp, 0, hdr, 12)) {
+      if (memcmp(hdr, "ttcf", 4) == 0) {	/* a collection: each of its faces */
+        unsigned long k, n = rd32(hdr + 8);
+        for (k = 0; k < n && k < 32; k++) {
+          unsigned char o[4];
+          if (read_at(fp, 12 + 4 * k, o, 4) && face_names(fp, rd32(o), fam, sizeof(fam), sub, sizeof(sub)))
+            fam_add(font_files.v[i], (int)k, fam, sub);
+        }
+      }
+      else if (face_names(fp, 0, fam, sizeof(fam), sub, sizeof(sub)))
+        fam_add(font_files.v[i], 0, fam, sub);
+    }
+    fclose(fp);
+  }
+}
+
+
+/* the files are listed again: a font installed (or put in the folder) since */
+static void fams_rescan (void) {
+  if (files_listed) vec_free(&font_files);
+  files_listed = 0;
+  nfams = 0;
+  fams_read = 0;
+}
+
+
+/* "Fira Code", "firacode", "FIRA CODE" are one name */
+static int same_family (const char *a, const char *b) {
+  for (;;) {
+    while (*a == ' ' || *a == '-' || *a == '_') a++;
+    while (*b == ' ' || *b == '-' || *b == '_') b++;
+    if (*a == '\0' || *b == '\0') return *a == *b;
+    if ((*a >= 'A' && *a <= 'Z' ? *a + 32 : *a) != (*b >= 'A' && *b <= 'Z' ? *b + 32 : *b)) return 0;
+    a++, b++;
+  }
+}
+
+
+static int face_load (Face *f, const char *file, int index);
+
+
+static int load_family (const char *name) {
+  const Fam *face[4] = {NULL, NULL, NULL, NULL}, *other = NULL;
+  size_t i;
+  fams_scan();
+  for (i = 0; i < nfams; i++) {
+    const Fam *f = &fams[i];
+    if (!same_family(f->family, name)) continue;
+    if (f->style >= 0) {
+      if (face[f->style] == NULL) face[f->style] = f;
+    }
+    else if (other == NULL) other = f;	/* only Light or Medium: better than none */
+  }
+  if (face[0] == NULL) face[0] = other;
+  if (face[0] == NULL || !face_load(&f_regular, face[0]->file, face[0]->index)) return 0;
+  if (face[ST_BOLD]) face_load(&f_bold, face[ST_BOLD]->file, face[ST_BOLD]->index);
+  if (face[ST_ITALIC]) face_load(&f_italic, face[ST_ITALIC]->file, face[ST_ITALIC]->index);
+  strncpy(name_buf, name, sizeof(name_buf) - 1);
+  return 1;
 }
 
 /* }================================================================== */
@@ -613,7 +816,11 @@ int font_init (const Config *c) {
   }
   if (!f_regular.ok && c->font[0] != '\0') {
     if (is_known_name(c->font)) load_by_name(c->font);
-    else {	/* maybe it is a file name, with or without ".ttf" */
+    if (!f_regular.ok && !load_family(c->font)) {	/* a family no table knows: by its own name */
+      fams_rescan();	/* installed since the files were listed? */
+      load_family(c->font);
+    }
+    if (!f_regular.ok) {	/* maybe it is a file name, with or without ".ttf" */
       char *guess = xstrcat3(c->font, ".ttf", "");
       const char *file = find_file(c->font);
       if (file == NULL) file = find_file(guess);

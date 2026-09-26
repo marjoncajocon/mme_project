@@ -388,6 +388,8 @@ typedef struct Mouse {
   int wheel;	/* -1 up, 1 down, 0 not the wheel */
   int mods;	/* KM_* */
   int out;	/* past the window's edge (mme-sdl, a button held: a tab dragged out) */
+  int fx, fy;	/* mme-sdl: where in the cell too, in 256ths of one from the screen's corner; 0 0: its middle */
+  int tx, ty;	/* the cell of the text zone under it (mme.c sets them): x, y where the text has the window's cells */
 } Mouse;
 
 extern Mouse term_mouse;
@@ -591,6 +593,21 @@ void scr_flush (void);
 extern void (*scr_overlay_hook) (void);	/* edraw.c: drawn over everything before it shows */
 extern void (*term_key_hook) (int k);	/* eterm.c: every key read, whoever reads it */
 void scr_redraw (void);	/* send everything on the next flush */
+
+/*
+** Text zones: an editor group's text and gutter in cells of their own
+** size (mme-sdl: editor.fontSize, the rest of the window mme.ui.fontSize).
+** A zone covers w by h cells of the screen at x, y and has *cols by *rows
+** cells of its own; while it is used every scr_* call draws into it, still
+** at x + col, y + row. In a terminal (one cell size) a zone is the screen.
+*/
+void scr_zone_metrics (int ui_w, int ui_h, int tx_w, int tx_h);	/* the cells' sizes in pixels (mme-sdl) */
+void scr_zone_set (int id, int x, int y, int w, int h, int *cols, int *rows);	/* w 0: no zone */
+void scr_zone_size (int w, int h, int *cols, int *rows);	/* the cells a zone of w by h would have (nothing set) */
+void scr_zone_use (int id);	/* -1: the screen again */
+void scr_zone_hole (int id);	/* the screen's cells under it show it: drawn over again, they show over it */
+void scr_zone_to_ui (int id, int zx, int zy, int up, int *ux, int *uy);	/* the screen's cell a zone's cell starts in (up: the first at or after it) */
+void scr_zone_pt (int id, const Mouse *m, int *tx, int *ty);	/* the zone's cell under the mouse */
 
 /*
 ** A line of text at x, y in w columns, from column 'left' on: tabs are
@@ -956,6 +973,7 @@ void sui_draw (int x, int y, int w, int h, int focus);
 void sui_key (int k, PageAct *a);
 void sui_mouse (const Mouse *m, PageAct *a);
 void sui_search (void);	/* Ctrl+F: to the search box */
+int sui_dragging (void);	/* its scrollbar's thumb is held: the drags and the release go to it */
 
 void welcome_draw (int x, int y, int w, int h, int focus, const Vec *recent);
 void welcome_key (int k, const Vec *recent, PageAct *a);

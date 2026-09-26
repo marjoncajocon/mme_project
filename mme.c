@@ -164,6 +164,8 @@ typedef struct Layout {
   int sb_w;	/* the scrollbar's: 1, or 0 */
   int hsb;	/* the horizontal scrollbar under the text: 1, or 0 */
   int text_h0;	/* the text's rows before it */
+  int view_h;	/* the window's rows the text takes (text_h: the text's own, in its zone's cells) */
+  int tz_w, tz_on;	/* the text zone's columns (gutter and text, its cells); it has cells of its own size */
   int panel_y, panel_h;	/* the panel, its title row included; 0: none */
   int panel_x, panel_w;	/* its columns: under the editors, the whole width (justify), or at a side */
   int area_y, area_h;	/* the editor area's rows (the panel under it takes some) */
@@ -1606,6 +1608,10 @@ static void layout (void) {
     L.panel_y = L.body_y + L.body_h - L.panel_h;
   }
   layout_groups(L.area_x, L.area_y, L.area_w, L.area_h);
+  {	/* the groups that are no more have no text zone */
+    int g;
+    for (g = g_ngrp; g < MAX_GRP; g++) scr_zone_set(g, 0, 0, 0, 0, NULL, NULL);
+  }
   use_group(g_gcur);
   group_layout();
 }
@@ -1629,6 +1635,26 @@ static size_t doc_width (void) {
 }
 
 
+/*
+** The group's gutter and text: a zone of cells of their own size (mme-sdl:
+** editor.fontSize, the rest of the window mme.ui.fontSize). L.text_h and
+** L.tz_w are its rows and columns; in a terminal they are the window's.
+*/
+static void text_zone (int set) {	/* set 0: only its size (the zone's cells are kept) */
+  int g = (int)(G - g_grp), w = L.ed_w - L.mm_w - L.sb_w;
+  L.tz_w = w > 1 ? w : 1;
+  L.text_h = L.view_h;
+  L.tz_on = 0;
+  if (((G->diff && HAS_DIFF) || (HAS_DOC && !G->diff && !T->page && !T->md)) && w > 0 && L.view_h > 0 &&
+      !(E.panel_max && L.panel_h >= L.body_h)) {	/* the text, or the diff viewer's */
+    if (set) scr_zone_set(g, L.ed_x, L.text_y, w, L.view_h, &L.tz_w, &L.text_h);
+    else scr_zone_size(w, L.view_h, &L.tz_w, &L.text_h);
+    L.tz_on = L.tz_w != w || L.text_h != L.view_h;
+  }
+  else if (set) scr_zone_set(g, 0, 0, 0, 0, NULL, NULL);
+}
+
+
 /* the group in front's minimap and scrollbars; the text's rows under them */
 static void group_layout (void) {
   L.mm_w = (E.minimap && HAS_DOC && !G->diff && !T->page && L.ed_w >= 60) ? MM_W : 0;
@@ -1642,15 +1668,17 @@ static void group_layout (void) {
     L.ed_x += L.mml_w;
     L.ed_w -= L.mml_w;
   }
-  L.text_h = L.text_h0;
+  L.view_h = L.text_h0;
   L.hsb = 0;
+  text_zone(0);
   if (HAS_DOC && !G->diff && !T->page && !E.wrap && L.text_h0 > 3) {	/* a line wider than the text */
-    int tc = L.ed_w - gutter_width() - L.mm_w - L.sb_w;
+    int tc = L.tz_w - gutter_width();
     if (tc > 1 && doc_width() + 1 > (size_t)tc) {
       L.hsb = 1;
-      L.text_h = L.text_h0 - 1;
+      L.view_h = L.text_h0 - 1;
     }
   }
+  text_zone(1);	/* once: a zone laid out again at another size loses what was drawn in it */
 }
 
 
@@ -1671,8 +1699,14 @@ static int gutter_width (void) {
 }
 
 
+/* a widget in the text's rows (a peek, the exception's): over the minimap too, unless the text has cells of its own */
+static int wide_w (void) {
+  return L.tz_on ? L.tz_w : L.ed_w - L.sb_w;
+}
+
+
 static int text_cols (void) {
-  int w = L.ed_w - gutter_width() - L.mm_w - L.sb_w;
+  int w = L.tz_w - gutter_width();
   return w > 1 ? w : 1;
 }
 
@@ -2454,7 +2488,7 @@ static void extras_idle (void) {
 static void draw_lens_row (int sy, size_t y, int gw) {
   int x = L.ed_x + gw, end = L.ed_x + gw + text_cols(), first = 1;
   size_t i, ind = 0;
-  scr_fill(L.ed_x, sy, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+  scr_fill(L.ed_x, sy, L.tz_w, S_TEXT);
   if (y < T->doc->n) {	/* under the indent of the line, like VS Code */
     const Row *r = row_at(y);
     ind = col_of(r, indent_end(r));
@@ -3880,7 +3914,7 @@ static size_t mm_ch (void) {	/* characters of text in one dot */
 
 
 static size_t mm_top (void) {
-  size_t lpr = mm_lpr(), cap = (size_t)L.text_h * lpr, n = T->doc->n, t;
+  size_t lpr = mm_lpr(), cap = (size_t)L.view_h * lpr, n = T->doc->n, t;
   if (n <= cap || n <= (size_t)L.text_h) return 0;
   t = (size_t)((double)T->top * (double)(n - cap) / (double)(n - (size_t)L.text_h));
   return t > n - cap ? n - cap : t;
@@ -3930,7 +3964,7 @@ static void mm_mark (uint32_t *tint, unsigned char *pri, size_t top, size_t y, s
   long row;
   if (y < top || y >= T->doc->n) return;
   row = (long)((y - top) / lpr);
-  if (row >= L.text_h) return;
+  if (row >= L.view_h) return;
   cell = col_of_upto(row_at(y), x, lim) / (2 * mm_ch());	/* past the last cell: it is not drawn */
   if (cell >= (size_t)mm_width()) return;
   if (pri[row * MM_W + cell] < p) {
@@ -3948,11 +3982,11 @@ static void draw_minimap (void) {
   /* the Braille dots: bit[line][left, right] */
   static const unsigned char bit[MM_LINES][2] = {{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}};
   int row, i, k, x0 = L.mm_x, mw = mm_width();
-  size_t top = mm_top(), lpr = mm_lpr(), last = top + (size_t)L.text_h * lpr, y;
+  size_t top = mm_top(), lpr = mm_lpr(), last = top + (size_t)L.view_h * lpr, y;
   int slider = vopt.mm_slider || g_mm_hover || E.drag_mm;
   uint32_t dot[MM_LINES][2 * MM_W];
-  uint32_t *tint = (uint32_t *)calloc((size_t)L.text_h * MM_W + 1, sizeof(uint32_t));
-  unsigned char *pri = (unsigned char *)calloc((size_t)L.text_h * MM_W + 1, 1);
+  uint32_t *tint = (uint32_t *)calloc((size_t)L.view_h * MM_W + 1, sizeof(uint32_t));
+  unsigned char *pri = (unsigned char *)calloc((size_t)L.view_h * MM_W + 1, 1);
   if (tint == NULL || pri == NULL) {
     free(tint);
     free(pri);
@@ -3980,7 +4014,7 @@ static void draw_minimap (void) {
           mm_mark(tint, pri, top, dv[d].a.y, xx, ui_color(dv[d].sev == 1 ? C_ERROR : C_WARNING), dv[d].sev == 1 ? 4 : 3);
       }
   }
-  for (row = 0; row < L.text_h; row++) {
+  for (row = 0; row < L.view_h; row++) {
     size_t y0 = top + (size_t)row * lpr;
     int in_view = slider && (y0 + lpr > T->top && y0 < T->top + (size_t)L.text_h);
     uint32_t bg = ui_color(in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG), git = 0;
@@ -4045,7 +4079,7 @@ static void minimap_mouse (Mouse *m) {
   if (want < 0) want = 0;
   if (n <= h * lpr) top = (size_t)want * lpr;
   else {
-    double f = (double)want / (double)(L.text_h - sh > 0 ? L.text_h - sh : 1);
+    double f = (double)want / (double)(L.view_h - sh > 0 ? L.view_h - sh : 1);
     top = (size_t)((f > 1 ? 1 : f) * (double)(n - h) + 0.5);
   }
   T->top = top > n - h ? n - h : top;
@@ -4057,15 +4091,15 @@ static void minimap_mouse (Mouse *m) {
 ** overview ruler's marks in it: problems, find matches, the cursor.
 */
 static int sb_thumb (int *pos) {
-  size_t n = T->doc->n, h = (size_t)L.text_h;
+  size_t n = T->doc->n, h = (size_t)L.text_h, track = (size_t)L.view_h;
   int size;
   if (n <= h) {
     *pos = 0;
-    return (int)h;
+    return (int)track;
   }
-  size = (int)(h * h / n);
+  size = (int)(track * h / n);
   if (size < 1) size = 1;
-  *pos = (int)((double)T->top * (double)(L.text_h - size) / (double)(n - h) + 0.5);
+  *pos = (int)((double)T->top * (double)(L.view_h - size) / (double)(n - h) + 0.5);
   return size;
 }
 
@@ -4074,10 +4108,10 @@ static void draw_scrollbar (void) {
   int x = L.ed_x + L.ed_w - 1, row, pos, size = sb_thumb(&pos);
   size_t n = T->doc->n, nd, i;
   const Diag *dv = lsp_diags(T->doc, &nd);
-  unsigned char *mark = (unsigned char *)calloc((size_t)L.text_h + 1, 1);
+  unsigned char *mark = (unsigned char *)calloc((size_t)L.view_h + 1, 1);
   /* the marks: 1 cursor, 2 3 4 git added, modified, deleted, 5 occurrence, 6 find match, 7 warning, 8 error; the strongest shows */
-#define MARK(line, m)	do { double d_ = (double)(line) * L.text_h / (double)(n > 0 ? n : 1); \
-    int r_ = d_ < (double)L.text_h ? (int)d_ : L.text_h - 1;	/* a line past the end (a server's): the last row */ \
+#define MARK(line, m)	do { double d_ = (double)(line) * L.view_h / (double)(n > 0 ? n : 1); \
+    int r_ = d_ < (double)L.view_h ? (int)d_ : L.view_h - 1;	/* a line past the end (a server's): the last row */ \
     if (r_ < 0) r_ = 0; if (mark[r_] < (m)) mark[r_] = (unsigned char)(m); } while (0)
   if (mark == NULL) return;
   MARK(T->cur.y, 1);
@@ -4110,8 +4144,8 @@ static void draw_scrollbar (void) {
   for (i = 0; i < nd; i++)
     if (dv[i].sev <= 2) MARK(dv[i].a.y, dv[i].sev == 1 ? 8 : 7);
 #undef MARK
-  for (row = 0; row < L.text_h; row++) {
-    int on = row >= pos && row < pos + size && size < L.text_h;
+  for (row = 0; row < L.view_h; row++) {
+    int on = row >= pos && row < pos + size && size < L.view_h;
     uint32_t bg = ui_color(on ? (E.drag_sb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
     uint32_t col[9];
     col[0] = 0;
@@ -4133,14 +4167,15 @@ static void draw_scrollbar (void) {
 /* the horizontal scrollbar: the part of the widest line that shows */
 static int hsb_thumb (int *pos, int *x0, int *w) {
   size_t width = doc_width() + 1, tc = (size_t)text_cols();
-  int size;
-  *x0 = L.ed_x + gutter_width();
-  *w = (int)tc;
+  int size, uy;
+  scr_zone_to_ui((int)(G - g_grp), L.ed_x + gutter_width(), L.text_y, 0, x0, &uy);	/* where the text starts on the window */
+  *w = L.ed_x + L.ed_w - L.mm_w - L.sb_w - *x0;
+  if (*w < 1) *w = 1;
   if (width <= tc) {
     *pos = 0;
     return *w;
   }
-  size = (int)(tc * tc / width);
+  size = (int)((size_t)*w * tc / width);
   if (size < 2) size = 2;
   *pos = (int)((double)T->left * (double)(*w - size) / (double)(width - tc) + 0.5);
   if (*pos > *w - size) *pos = *w - size;
@@ -4149,8 +4184,8 @@ static int hsb_thumb (int *pos, int *x0, int *w) {
 
 
 static void draw_hscrollbar (void) {
-  int pos, x0, w, size = hsb_thumb(&pos, &x0, &w), i, y = L.text_y + L.text_h;
-  scr_fill(L.ed_x, y, gutter_width(), S_TEXT);
+  int pos, x0, w, size = hsb_thumb(&pos, &x0, &w), i, y = L.text_y + L.view_h;
+  scr_fill(L.ed_x, y, x0 - L.ed_x, S_TEXT);
   for (i = 0; i < w; i++) {	/* half a row high: the lower half of the cell */
     int on = i >= pos && i < pos + size;
     uint32_t fg = ui_color(on ? (E.drag_hsb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
@@ -4185,8 +4220,8 @@ static void scrollbar_mouse (Mouse *m) {
   }
   ry -= E.drag_sb - 1;
   if (ry < 0) ry = 0;
-  if (L.text_h - size <= 0) return;
-  top = (size_t)((double)ry * (double)(n - h) / (double)(L.text_h - size) + 0.5);
+  if (L.view_h - size <= 0) return;
+  top = (size_t)((double)ry * (double)(n - h) / (double)(L.view_h - size) + 0.5);
   T->top = top > n - h ? n - h : top;
 }
 
@@ -4350,7 +4385,7 @@ static int exception_at (size_t *after, int *rows) {
 static void draw_exception (void) {
   const char *title, *desc;
   Pos p;
-  int r, y0, w = L.ed_w - L.sb_w, i, rows;
+  int r, y0, w = wide_w(), i, rows;
   if (!exception_at(&p.y, &rows)) return;
   if (!dbg_exception(T->real, p.y, &title, &desc)) return;
   p.x = 0;
@@ -4385,7 +4420,7 @@ static void draw_ghost_rows (int gw) {
   y0 = L.text_y + r;
   for (k = 1; k < GH.nline && y0 + (int)k - 1 < L.text_y + L.text_h; k++) {
     int sy = y0 + (int)k - 1;
-    scr_fill(L.ed_x, sy, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+    scr_fill(L.ed_x, sy, L.tz_w, S_TEXT);
     put_ghost(sy, gw, 0, GH.line[k], E.wrap ? 0 : T->left, ui_color(C_EDITOR_BG));
     draw_rulers(sy, gw, E.wrap ? 0 : T->left);
   }
@@ -4413,12 +4448,12 @@ static void draw_nedit_rows (int gw) {
   y0 = L.text_y + r;
   for (k = 0; k < NE.nline && y0 + (int)k < L.text_y + L.text_h; k++) {
     int sy = y0 + (int)k, i, w = text_cols();
-    scr_fill(L.ed_x, sy, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+    scr_fill(L.ed_x, sy, L.tz_w, S_TEXT);
     for (i = 0; i < w; i++) scr_set_bg(L.ed_x + gw + i, sy, ui_color(C_DIFF_ADD));
     put_ghost(sy, gw, 0, NE.line[k], E.wrap ? 0 : T->left, ui_color(C_DIFF_ADD));
   }
   if (NE.chat && y0 + (int)k < L.text_y + L.text_h) {	/* Inline Chat's buttons, VS Code's */
-    scr_fill(L.ed_x, y0 + (int)k, L.ed_w - L.mm_w - L.sb_w, S_TEXT);
+    scr_fill(L.ed_x, y0 + (int)k, L.tz_w, S_TEXT);
     chat_inline_bar(L.ed_x + gw, y0 + (int)k, text_cols());
   }
 }
@@ -4477,8 +4512,12 @@ static void draw_group (int other) {
   draw_tabs_full();
   view_blocks_update(other);	/* a peek's rows, before the lines are drawn */
   if (G->diff && HAS_DIFF) {
+    int zg = (int)(G - g_grp);
     draw_crumbs_full();
-    diff_draw(L.ed_x, L.text_y, L.ed_w, L.text_h, E.wrap);
+    scr_zone_hole(zg);	/* the diff in the editor's cells too */
+    scr_zone_use(zg);
+    diff_draw(L.ed_x, L.text_y, L.tz_w, L.text_h, E.wrap);
+    scr_zone_use(-1);
     diff_title_draw(L.ed_x + L.ed_w, L.ed_y);	/* its actions in the tab bar, like VS Code's */
   }
   else if (!HAS_DOC) draw_watermark();
@@ -4488,7 +4527,10 @@ static void draw_group (int other) {
     md_draw(T->doc, L.ed_x, L.text_y, L.ed_w, L.text_h + L.hsb, &T->top);
   }
   else {
+    int zg = (int)(G - g_grp);
     draw_crumbs_full();
+    scr_zone_hole(zg);	/* the window's cells under the text: what is drawn over them later shows over it */
+    scr_zone_use(zg);	/* the gutter and the text in cells of their own size */
     sel_range(&sa, &sb);
     {
       Pos ba, bb;
@@ -4533,15 +4575,18 @@ static void draw_group (int other) {
       if (screen_at(E.drag_drop && E.drop_moved ? E.drop : T->cur, &cx, &cy) && cy >= L.text_y + ns)
         scr_cursor(cx, cy);
     }
+    scr_zone_use(-1);
     if (mm_width() > 0) draw_minimap();
     if (L.sb_w > 0) draw_scrollbar();
     if (L.hsb) draw_hscrollbar();
+    scr_zone_use(zg);	/* the widgets in the text's rows */
     if (!other) draw_peek();
     if (!other) draw_dirty_peek();
     if (!other) draw_exception();
     if (!other) draw_ghost_rows(gw);
     if (!other) draw_nedit_rows(gw);
     if (!other) draw_inline_chat(gw);
+    scr_zone_use(-1);	/* the popups: the window's cells, over the text */
     if (E.find_open && !other) draw_find();
     if (!other) {
       draw_signature(gw);
@@ -6857,6 +6902,7 @@ static struct {
   Pos at;	/* the name */
   int from_mouse;
   int mx, my;	/* the mouse, where it rests */
+  int tx, ty;	/* the same in the text zone's cells */
   long long mt;
   int waiting;	/* it moved: after a while it is asked about */
   char *diag;	/* the problems there, waiting for the server's hover to join them */
@@ -8267,6 +8313,16 @@ static void wrap_text (const char *s, int w, Vec *v) {
 }
 
 
+/* where p is on the window's cells (the popups are drawn there): its cell, the first row under its line */
+static int screen_ui (Pos p, int *x, int *y, int *below) {
+  int zx, zy, bx, g = (int)(G - g_grp);
+  if (!screen_at(p, &zx, &zy)) return 0;
+  scr_zone_to_ui(g, zx, zy, 0, x, y);
+  scr_zone_to_ui(g, zx, zy + 1, 1, &bx, below);
+  return 1;
+}
+
+
 /* VS Code's details beside the suggestions: the item's detail, then its documentation */
 static void draw_comp_details (const CompItem *c, int lx, int ly, int lw, int lh) {
   Buf b;
@@ -8295,7 +8351,7 @@ static void draw_comp_details (const CompItem *c, int lx, int ly, int lw, int lh
   if (h > 16) h = 16;
   if (h < lh && h < (int)lines.n) h = lh;
   y = ly;
-  if (y + h > L.text_y + L.text_h) y = L.text_y + L.text_h - h;
+  if (y + h > L.text_y + L.view_h) y = L.text_y + L.view_h - h;
   if (y < L.text_y) y = L.text_y;
   for (i = 0; i < h; i++) {
     k = (size_t)i;
@@ -8309,7 +8365,7 @@ static void draw_comp_details (const CompItem *c, int lx, int ly, int lw, int lh
 
 /* the suggestions, under the word (above it when there is no room) */
 static void draw_comp (int gw) {
-  int w = 30, h, x, y, cy, i;
+  int w = 30, h, x, y, cy, cb, i;
   size_t k;
   (void)gw;	/* screen_at knows the gutter */
   if (!CP.open || T->cur.y < T->top || T->cur.y >= T->top + (size_t)L.text_h) return;
@@ -8326,12 +8382,12 @@ static void draw_comp (int gw) {
   if (w > 64) w = 64;
   if (w > L.ed_w - 2) w = L.ed_w - 2;
   if (w < 8) return;	/* no room for it */
-  if (!screen_at(CP.start, &x, &cy)) return;
+  if (!screen_ui(CP.start, &x, &cy, &cb)) return;
   x -= 2;
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
-  y = cy + 1;
-  if (y + h > L.text_y + L.text_h && cy - h >= L.text_y) y = cy - h;
+  y = cb;
+  if (y + h > L.text_y + L.view_h && cy - h >= L.text_y) y = cy - h;
   if (CP.sel < CP.top) CP.top = CP.sel;
   if (CP.sel >= CP.top + (size_t)h) CP.top = CP.sel - (size_t)h + 1;
   for (i = 0; i < h && CP.top + (size_t)i < CP.nvis; i++) scr_fill(x, y + i, w, S_BOX);
@@ -8525,13 +8581,13 @@ static void hover_idle (void) {
   if (!HV.waiting || os_now_us() - HV.mt < (long long)opt.hover_delay * 1000) return;	/* editor.hover.delay */
   HV.waiting = 0;
   if (E.focus == F_PANEL && in_panel(HV.mx, HV.my)) return;
-  if (!pos_at_screen(HV.mx, HV.my, &p)) {	/* not a name: a squiggle's problem still shows */
+  if (!pos_at_screen(HV.tx, HV.ty, &p)) {	/* not a name: a squiggle's problem still shows */
     Pos q;
     int gw = gutter_width();
     size_t from, to, left;
-    long col = HV.mx - L.ed_x - gw;
-    if (!HAS_DOC || G->diff || T->page || HV.my < L.text_y || HV.my >= L.text_y + L.text_h || col < 0 ||
-        col >= text_cols() || !vis_goto(HV.my - L.text_y, &q.y, &from, &to, &left))
+    long col = HV.tx - L.ed_x - gw;
+    if (!HAS_DOC || G->diff || T->page || HV.ty < L.text_y || HV.ty >= L.text_y + L.text_h || col < 0 ||
+        col >= text_cols() || !vis_goto(HV.ty - L.text_y, &q.y, &from, &to, &left))
       return;
     q.x = x_of_vcol(q.y, left + (size_t)col);
     if (q.x >= row_at(q.y)->len || (HV.text && HV.at.y == q.y && HV.at.x == q.x)) return;
@@ -9158,7 +9214,7 @@ static void hover_text_line (int x, int y, int w, const char *t, int *li) {
 /* the hover box: text, its links, its code in its language's colors; it scrolls */
 static void draw_hover (int gw) {
   const char *p;
-  int w = 20, h = 0, x, y, ay, i, maxw, in_code = 0, state = 0, li = 0, n = 0;
+  int w = 20, h = 0, x, y, ay, ab, i, maxw, in_code = 0, state = 0, li = 0, n = 0;
   char *lines[256];
   int code[256], lk[256];	/* lk: the number of links before the line */
   const Syntax *sx[256], *fence = NULL;
@@ -9221,13 +9277,13 @@ static void draw_hover (int gw) {
   if (h == 0) return;
   if (HV.top > n - h) HV.top = n - h;
   if (HV.top < 0) HV.top = 0;
-  if (!screen_at(HV.at, &x, &ay)) {
+  if (!screen_ui(HV.at, &x, &ay, &ab)) {
     for (i = 0; i < n; i++) free(lines[i]);
     return;
   }
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
-  y = (ay - h >= L.text_y) ? ay - h : ay + 1;	/* above the name, else under it */
+  y = (ay - h >= L.text_y) ? ay - h : ab;	/* above the name, else under it */
   HV.bx = x;
   HV.by = y;
   HV.bw = w;
@@ -9344,13 +9400,13 @@ static int hover_click (Mouse *m) {
 ** underlined, and under it that parameter's documentation.
 */
 static void draw_signature (int gw) {
-  int w, x, y, cy, lw, h = 1, i, np = 0, nd = 0, pre = 0;
+  int w, x, y, cy, cb, lw, h = 1, i, np = 0, nd = 0, pre = 0;
   const SigInfo *si;
   char cnt[32], *pd[3], *dd[2];
   (void)gw;	/* screen_at knows the gutter */
   SG.row = -1;
   if (SG.label == NULL || SG.y != T->cur.y || T->cur.y < T->top || T->cur.y >= T->top + (size_t)L.text_h) return;
-  if (!screen_at(T->cur, &x, &cy)) return;
+  if (!screen_ui(T->cur, &x, &cy, &cb)) return;
   si = &SG.v[SG.cur];
   cnt[0] = '\0';
   if (SG.n > 1) {	/* "↑ 1/3 ↓ " */
@@ -9393,7 +9449,7 @@ static void draw_signature (int gw) {
     if ((int)str_cols(dd[i]) + 2 > w) w = (int)str_cols(dd[i]) + 2;
   h = 1 + np + (np && nd ? 1 : 0) + nd;
   if (w > L.ed_w - 2) w = L.ed_w - 2;
-  y = cy - h >= L.text_y ? cy - h : cy + 1;
+  y = cy - h >= L.text_y ? cy - h : cb;
   x -= 2;
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
@@ -11879,7 +11935,7 @@ static void draw_peek (void) {
   if (PK.y + ph > L.text_y + L.text_h) ph = L.text_y + L.text_h - PK.y;
   if (ph < 3) return;
   PK.x = L.ed_x;
-  PK.w = L.ed_w - L.sb_w;
+  PK.w = wide_w();
   PK.h = ph;
   pw = PK.w * 62 / 100;
   if (PK.w - pw < 24) pw = PK.w - 24;
@@ -12433,7 +12489,7 @@ static int draw_sticky (int gw, Pos sa, Pos sb) {
   }
   if (n > 0) {	/* a shadow under them */
     int x;
-    for (x = L.ed_x; x < L.ed_x + L.ed_w - L.mm_w - L.sb_w; x++) scr_set_bg(x, L.text_y + n - 1, ui_color(C_LINE_BG));
+    for (x = L.ed_x; x < L.ed_x + L.tz_w; x++) scr_set_bg(x, L.text_y + n - 1, ui_color(C_LINE_BG));
   }
   SS.n = n;
   return n;
@@ -12443,7 +12499,7 @@ static int draw_sticky (int gw, Pos sa, Pos sb) {
 /* a click on a sticky line: 1, and the editor goes there */
 static int sticky_click (Mouse *m) {
   int r = m->y - L.text_y;
-  if (SS.n == 0 || r < 0 || r >= SS.n || m->x < L.ed_x || m->x >= L.ed_x + L.ed_w - L.mm_w - L.sb_w) return 0;
+  if (SS.n == 0 || r < 0 || r >= SS.n || m->x < L.ed_x || m->x >= L.ed_x + L.tz_w) return 0;
   T->nmc = 0;
   T->sel = 0;
   T->cur.y = SS.line[r];
@@ -15545,7 +15601,7 @@ static void draw_dirty_peek (void) {
   if (y0 + ph > L.text_y + L.text_h) ph = L.text_y + L.text_h - y0;
   if (ph < 3) return;
   DP.x = L.ed_x;
-  DP.w = L.ed_w - L.sb_w;
+  DP.w = wide_w();
   DP.y = y0;
   DP.h = ph;
   if (DP.top + (size_t)(ph - 2) > total) DP.top = total > (size_t)(ph - 2) ? total - (size_t)(ph - 2) : 0;
@@ -20865,13 +20921,22 @@ static void find_click (Mouse *m) {
 ** the tabs, the side bar, the panel's tabs, the status bar, the pages).
 ** Terminals that do not know OSC 22 keep their own pointer.
 */
-static int pointer_at (const Mouse *m) {
-  int in_editor = m->x >= L.area_x && m->y >= L.text_y && m->y < L.text_y + L.text_h &&
+/* the mouse in the text zone's cells (the gutter, the text, the widgets in its rows): z is m with them for x, y */
+static void zone_mouse (const Mouse *m, Mouse *z) {
+  *z = *m;
+  scr_zone_pt((int)(G - g_grp), m, &z->tx, &z->ty);
+  z->x = z->tx;
+  z->y = z->ty;
+}
+
+
+static int pointer_at (const Mouse *m, const Mouse *zm) {
+  int in_editor = m->x >= L.area_x && m->y >= L.text_y && m->y < L.text_y + L.view_h &&
                   !in_panel(m->x, m->y);
   if (in_panel(m->x, m->y) && m->y > L.panel_y && E.panel_view == 0) return PTR_TEXT;	/* the terminal's text */
   if (in_editor && HAS_DOC && !T->page && !G->diff) {
     int gw = gutter_width();
-    if (m->x >= L.ed_x + gw && m->x < L.ed_x + gw + text_cols()) return E.link_y ? PTR_POINTER : PTR_TEXT;
+    if (zm->x >= L.ed_x + gw && zm->x < L.ed_x + gw + text_cols()) return E.link_y ? PTR_POINTER : PTR_TEXT;
     return PTR_POINTER;	/* the gutter: folding, breakpoints, the changes' bars */
   }
   return PTR_POINTER;
@@ -20879,13 +20944,14 @@ static int pointer_at (const Mouse *m) {
 
 
 static void on_mouse (void) {
-  Mouse *m = &term_mouse;
+  Mouse *m = &term_mouse, zm;
   int press = m->button == 0 && m->press && !m->drag;
   E.follow = 0;
+  zone_mouse(m, &zm);	/* zm: where it is in the text's cells */
   if (press && toast_click(m->x, m->y)) return;	/* a notification's buttons, its x */
-  scr_pointer(pointer_at(m));
+  scr_pointer(pointer_at(m, &zm));
   g_mm_hover = HAS_DOC && mm_width() > 0 && m->x >= L.mm_x && m->x < L.mm_x + mm_width() &&
-               m->y >= L.text_y && m->y < L.text_y + L.text_h;	/* editor.minimap.showSlider "mouseover" */
+               m->y >= L.text_y && m->y < L.text_y + L.view_h;	/* editor.minimap.showSlider "mouseover" */
   panel_hover(m->x, m->y);	/* a link under it is underlined */
   if (panel_dragging()) {	/* a selection in the terminal: the mouse is its until the button comes up */
     PanelLink lk;
@@ -20902,9 +20968,9 @@ static void on_mouse (void) {
     sb_hover(m->x, m->y);	/* the status bar's tooltips */
     E.link_y = 0;
     if ((m->mods & (eopt.mc_ctrl ? KM_ALT : KM_CTRL)) && HAS_DOC && !G->diff && !T->page && lsp_active(T->doc) &&
-        m->y >= L.text_y && m->y < L.text_y + L.text_h && m->x >= L.ed_x + gutter_width() &&
-        m->x < L.ed_x + gutter_width() + text_cols()) {	/* Ctrl+hover: a link to the definition */
-      Pos p = mouse_pos(m), a, b;
+        zm.y >= L.text_y && zm.y < L.text_y + L.text_h && zm.x >= L.ed_x + gutter_width() &&
+        zm.x < L.ed_x + gutter_width() + text_cols()) {	/* Ctrl+hover: a link to the definition */
+      Pos p = mouse_pos(&zm), a, b;
       long lk = link_at(p);
       if (lk >= 0 && LK.v[lk].a.y == LK.v[lk].b.y) {	/* editor.links: the whole link */
         a = LK.v[lk].a;
@@ -20921,6 +20987,8 @@ static void on_mouse (void) {
     if (HV.text && HV.from_mouse && (m->y != HV.my || abs(m->x - HV.mx) > 3)) hover_close();
     HV.mx = m->x;
     HV.my = m->y;
+    HV.tx = zm.x;
+    HV.ty = zm.y;
     HV.mt = os_now_us();
     HV.waiting = 1;
     return;
@@ -20936,7 +21004,7 @@ static void on_mouse (void) {
   if (press && HAS_DOC && !G->diff && LN.d == T->doc) {	/* a code lens: its command */
     int k;
     for (k = 0; k < LN.nhit; k++)
-      if (m->y == LN.hy[k] && m->x >= LN.hx0[k] && m->x < LN.hx1[k] && LN.hidx[k] < LN.n) {
+      if (zm.y == LN.hy[k] && zm.x >= LN.hx0[k] && zm.x < LN.hx1[k] && LN.hidx[k] < LN.n) {
         Pos at;
         at.y = LN.v[LN.hidx[k]].y;
         at.x = 0;
@@ -20966,19 +21034,20 @@ static void on_mouse (void) {
     if (g >= 0 && g != g_gcur) {
       focus_group(g);
       layout();
+      zone_mouse(m, &zm);	/* that group's text */
     }
   }
-  if (HAS_DOC && !G->diff && peek_click(m)) return;
-  if (HAS_DOC && !G->diff && (dirty_click(m) || conflict_click(m))) return;
+  if (HAS_DOC && !G->diff && peek_click(&zm)) return;
+  if (HAS_DOC && !G->diff && (dirty_click(&zm) || conflict_click(&zm))) return;
   if (press && dbg_active()) {	/* the debug toolbar */
     int c = dbg_toolbar_hit(m->x, m->y);
     if (c > 0) run_command(c);
     if (c != 0) return;
   }
-  if (m->button == 2 && m->press && !m->drag && HAS_DOC && !G->diff && !T->page && m->x == L.ed_x &&
-      m->y >= L.text_y && m->y < L.text_y + L.text_h) {	/* right click in the glyph margin: the breakpoint's menu */
+  if (m->button == 2 && m->press && !m->drag && HAS_DOC && !G->diff && !T->page && zm.x == L.ed_x &&
+      zm.y >= L.text_y && zm.y < L.text_y + L.text_h) {	/* right click in the glyph margin: the breakpoint's menu */
     size_t y, from, to, left;
-    if (vis_goto(m->y - L.text_y, &y, &from, &to, &left)) {
+    if (vis_goto(zm.y - L.text_y, &y, &from, &to, &left)) {
       static const int add[] = {CMD_BREAKPOINT, CMD_BP_CONDITIONAL, CMD_BP_LOG, CMD_RUN_TO_CURSOR, -1};
       static const char *const add_l[] = {"Add Breakpoint", "Add Conditional Breakpoint...", "Add Logpoint...",
                                           "Run to Line"};
@@ -20997,16 +21066,16 @@ static void on_mouse (void) {
       return;
     }
   }
-  if (press && HAS_DOC && !G->diff && m->x == L.ed_x && m->y >= L.text_y && m->y < L.text_y + L.text_h &&
-      m->x >= L.area_x && !(lsp_active(T->doc) && m->y == L.text_y + vis_row(T->cur))) {	/* the glyph margin: a breakpoint */
+  if (press && HAS_DOC && !G->diff && zm.x == L.ed_x && zm.y >= L.text_y && zm.y < L.text_y + L.text_h &&
+      m->x >= L.area_x && !(lsp_active(T->doc) && zm.y == L.text_y + vis_row(T->cur))) {	/* the glyph margin: a breakpoint */
     size_t y, from, to, left;
-    if (vis_goto(m->y - L.text_y, &y, &from, &to, &left)) {
+    if (vis_goto(zm.y - L.text_y, &y, &from, &to, &left)) {
       if (T->real && test_mark(T->real, y) && !dbg_mark(T->real, y)) test_gutter(T->real, y);	/* ▷: the test runs */
       else dbg_toggle(T->real, y);
       return;
     }
   }
-  if (press && HAS_DOC && lsp_active(T->doc) && m->x == L.ed_x && m->y == L.text_y + vis_row(T->cur)) {
+  if (press && HAS_DOC && lsp_active(T->doc) && zm.x == L.ed_x && zm.y == L.text_y + vis_row(T->cur)) {
     quickfix();	/* the lightbulb */
     return;
   }
@@ -21070,13 +21139,13 @@ static void on_mouse (void) {
     return;
   }
   if (E.drag_col) {	/* the column selection follows the mouse */
-    if (m->drag && HAS_DOC && !G->diff) column_mouse(m, 0);
+    if (m->drag && HAS_DOC && !G->diff) column_mouse(&zm, 0);
     else if (!m->press) E.drag_col = 0;
     return;
   }
   if (E.drag_drop) {	/* the selection being dragged: where it would go, dropped at the release */
     if (m->drag && HAS_DOC && !G->diff) {
-      E.drop = mouse_pos(m);
+      E.drop = mouse_pos(&zm);
       E.drop_moved = 1;
     }
     else if (!m->press) {
@@ -21094,8 +21163,8 @@ static void on_mouse (void) {
   }
   if (E.drag_text) {
     if (m->drag && HAS_DOC && !G->diff) {
-      if (E.drag_unit >= 2) unit_drag(m);
-      else text_click(m, 1);
+      if (E.drag_unit >= 2) unit_drag(&zm);
+      else text_click(&zm, 1);
     }
     else if (!m->press) E.drag_text = 0;
     return;
@@ -21115,13 +21184,16 @@ static void on_mouse (void) {
     else if (!m->press) E.drag_hsb = 0;
     return;
   }
-  if (L.hsb && press && m->y == L.text_y + L.text_h && m->x >= L.ed_x + gutter_width() &&
-      m->x < L.ed_x + gutter_width() + text_cols()) {
-    hscrollbar_mouse(m);
-    return;
+  if (L.hsb && press && m->y == L.text_y + L.view_h) {
+    int pos, x0, w;
+    hsb_thumb(&pos, &x0, &w);
+    if (m->x >= x0 && m->x < x0 + w) {
+      hscrollbar_mouse(m);
+      return;
+    }
   }
   if (!m->wheel && diff_bar_held()) {	/* the diff's scrollbar: the same */
-    if (m->drag) diff_bar_drag(m->x, m->y);
+    if (m->drag) diff_bar_drag(zm.x, zm.y);
     else if (!m->press) diff_bar_up();
     return;
   }
@@ -21131,7 +21203,7 @@ static void on_mouse (void) {
     return;
   }
   if (L.sb_w > 0 && press && m->x == L.ed_x + L.ed_w - 1 && m->y >= L.text_y &&
-      m->y < L.text_y + L.text_h && m->x >= L.area_x) {
+      m->y < L.text_y + L.view_h && m->x >= L.area_x) {
     scrollbar_mouse(m);
     return;
   }
@@ -21202,7 +21274,7 @@ static void on_mouse (void) {
     return;
   }
   if (mm_width() > 0 && (E.drag_mm || (m->x >= L.mm_x && m->x < L.mm_x + mm_width() && m->y >= L.text_y &&
-                                       m->y < L.text_y + L.text_h))) {
+                                       m->y < L.text_y + L.view_h))) {
     if (m->wheel) {	/* over the minimap */
       size_t st = (size_t)wheel_step(m->mods);
       if (m->wheel < 0) T->top = T->top > st ? T->top - st : 0;
@@ -21408,11 +21480,11 @@ static void on_mouse (void) {
     if (m->wheel) diff_wheel(m->wheel, m->mods);
     else if (press || (m->button == 0 && m->drag)) {
       if (press) E.focus = F_EDITOR;
-      if (press && diff_bar_press(m->x, m->y)) ;	/* its scrollbars */
+      if (press && diff_bar_press(zm.x, zm.y)) ;	/* its scrollbars */
       else {
         if (!press || (m->mods & KM_SHIFT)) diff_sel_start();	/* a drag, a Shift+click: the selection from the caret */
         else diff_sel_clear();
-        if (diff_click(m->x, m->y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
+        if (diff_click(zm.x, zm.y) == DIFF_REVERT && press) run_command(CMD_REVERT_RANGES);	/* its arrow: Revert Block */
       }
     }
     return;
@@ -21423,7 +21495,8 @@ static void on_mouse (void) {
   }
   if (T->page) {
     if (press || m->wheel || (m->button == 2 && m->press && !m->drag) ||
-        (T->page == PAGE_SEARCHED && m->button == 0)) {	/* the Search Editor's drag selects */
+        (T->page == PAGE_SEARCHED && m->button == 0) ||	/* the Search Editor's drag selects */
+        (T->page == PAGE_SETTINGS && sui_dragging())) {	/* the Settings editor's scrollbar, held */
       if (!m->wheel) E.focus = F_EDITOR;
       page_mouse(m);
     }
@@ -21461,21 +21534,21 @@ static void on_mouse (void) {
     if (press) find_click(m);
     return;
   }
-  if (press && m->y >= L.text_y && m->y < L.text_y + L.text_h && HAS_DOC && !G->diff && !T->page &&
-      m->x == L.ed_x + gutter_width() - 1) {	/* a change's bar: its dirty diff peek */
+  if (press && zm.y >= L.text_y && zm.y < L.text_y + L.text_h && HAS_DOC && !G->diff && !T->page &&
+      zm.x == L.ed_x + gutter_width() - 1) {	/* a change's bar: its dirty diff peek */
     size_t y, from, to, left, n;
     const QHunk *h = qhunks(&n);
     long i;
-    if (h && vis_goto(m->y - L.text_y, &y, &from, &to, &left) && (i = hunk_at(h, n, y)) >= 0) {
+    if (h && vis_goto(zm.y - L.text_y, &y, &from, &to, &left) && (i = hunk_at(h, n, y)) >= 0) {
       if (DP.open && DP.hi == (size_t)i) DP.open = 0;
       else dirty_show(i);
       return;
     }
   }
-  if (press && m->y >= L.text_y && m->y < L.text_y + L.text_h && gutter_width() >= 4 &&
-      m->x == L.ed_x + gutter_width() - 2) {	/* a fold's chevron */
+  if (press && zm.y >= L.text_y && zm.y < L.text_y + L.text_h && gutter_width() >= 4 &&
+      zm.x == L.ed_x + gutter_width() - 2) {	/* a fold's chevron */
     size_t y, from, to, left;
-    if (vis_goto(m->y - L.text_y, &y, &from, &to, &left) && from == 0) {
+    if (vis_goto(zm.y - L.text_y, &y, &from, &to, &left) && from == 0) {
       if (is_folded(y)) fold_del(y);
       else if (fold_end(y) > y) {
         fold_add(y);
@@ -21493,21 +21566,21 @@ static void on_mouse (void) {
     E.finding = 0;
     if ((m->mods & (eopt.mc_ctrl ? KM_ALT : KM_CTRL)) && !(m->mods & KM_SHIFT) && lsp_active(T->doc)) {	/* Ctrl+Click: the definition */
       long lk;
-      text_click(m, 0);
+      text_click(&zm, 0);
       if ((lk = link_at(T->cur)) >= 0) lsp_link_open(T->doc, (size_t)lk);	/* editor.links: a link opens */
       else lsp_define(T->doc, T->cur);
       return;
     }
-    if (sticky_click(m)) return;
-    if (!m->mods && swatch_click(m)) return;	/* editor.colorDecorators: the color's picker */
+    if (sticky_click(&zm)) return;
+    if (!m->mods && swatch_click(&zm)) return;	/* editor.colorDecorators: the color's picker */
     if ((m->mods & (KM_SHIFT | KM_ALT)) == (KM_SHIFT | KM_ALT)) {	/* Shift+Alt+drag: a column */
-      column_mouse(m, 1);
+      column_mouse(&zm, 1);
       E.drag_col = 1;
       return;
     }
     if (m->mods & (eopt.mc_ctrl ? KM_CTRL : KM_ALT)) {	/* Alt+Click (editor.multiCursorModifier): one more cursor */
       mc_push();
-      text_click(m, 0);
+      text_click(&zm, 0);
       mc_merge();
       return;
     }
@@ -21522,7 +21595,7 @@ static void on_mouse (void) {
       E.drag_unit = (m->mods & KM_SHIFT) ? 1 : count;
     }
     if (E.drag_unit == 1 && !(m->mods & KM_SHIFT) && T->sel && T->nmc == 0 && opt.drag_drop) {
-      Pos p = mouse_pos(m), a, b;
+      Pos p = mouse_pos(&zm), a, b;
       sel_range(&a, &b);
       if (pos_cmp(p, a) >= 0 && pos_cmp(p, b) < 0) {	/* in the selection: maybe a drag */
         E.drag_drop = 1;
@@ -21533,7 +21606,7 @@ static void on_mouse (void) {
     }
     T->nmc = 0;
     E.drag_text = 1;
-    text_click(m, (m->mods & KM_SHIFT) != 0);
+    text_click(&zm, (m->mods & KM_SHIFT) != 0);
     if (E.drag_unit >= 2) {
       Pos a, b;
       if (E.drag_unit == 2) {
@@ -21557,10 +21630,10 @@ static void on_mouse (void) {
       T->want = col_of(row_at(b.y), b.x);
     }
   }
-  else if (m->button == 1 && m->press && !m->drag && m->y >= L.text_y && m->y < L.text_y + L.text_h &&
-           m->x >= L.ed_x + gutter_width()) {	/* the middle button dragged: a column */
+  else if (m->button == 1 && m->press && !m->drag && zm.y >= L.text_y && zm.y < L.text_y + L.text_h &&
+           zm.x >= L.ed_x + gutter_width()) {	/* the middle button dragged: a column */
     E.focus = F_EDITOR;
-    column_mouse(m, 1);
+    column_mouse(&zm, 1);
     E.drag_col = 1;
   }
 }

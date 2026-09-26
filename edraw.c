@@ -27,7 +27,170 @@ static struct {
   ECell *back, *front;
   int full;	/* send every line */
   int cx, cy;	/* the cursor, cy < 0: hidden */
+  int cz;	/* the zone the cursor is in, -1: the screen */
 } S;
+
+
+/*
+** Text zones (mme.h): a rectangle of the screen with cells of another
+** size. D is where the scr_* calls draw now: the screen, or a zone, whose
+** cell (col, row) is still asked for at (ox + col, oy + row).
+*/
+#define MAX_ZONE	8
+
+typedef struct Zone {
+  int on;	/* its cells are not the screen's */
+  int x, y, w, h;	/* the screen's cells it covers */
+  int cols, rows;	/* its own */
+  ECell *back, *front;
+  int full;	/* painted again whole */
+} Zone;
+
+static Zone Z[MAX_ZONE];
+static int zm_uw, zm_uh, zm_tw, zm_th;	/* the cells' pixels: the screen's, a zone's; 0: one size (a terminal) */
+
+static struct {
+  ECell *b;
+  int ox, oy, cols, rows, z;
+} D;
+
+
+static void draw_screen (void) {
+  D.b = S.back;
+  D.ox = D.oy = 0;
+  D.cols = S.cols;
+  D.rows = S.rows;
+  D.z = -1;
+}
+
+
+/* the cell being drawn at x, y; NULL: outside */
+static ECell *cell_at (int x, int y) {
+  x -= D.ox;
+  y -= D.oy;
+  if (x < 0 || y < 0 || x >= D.cols || y >= D.rows) return NULL;
+  return &D.b[(size_t)y * (size_t)D.cols + (size_t)x];
+}
+
+
+static int zones_differ (void) {
+  return zm_uw > 0 && zm_uh > 0 && zm_tw > 0 && zm_th > 0 && (zm_uw != zm_tw || zm_uh != zm_th);
+}
+
+
+void scr_zone_metrics (int ui_w, int ui_h, int tx_w, int tx_h) {
+  if (ui_w == zm_uw && ui_h == zm_uh && tx_w == zm_tw && tx_h == zm_th) return;
+  zm_uw = ui_w;
+  zm_uh = ui_h;
+  zm_tw = tx_w;
+  zm_th = tx_h;
+  S.full = 1;
+}
+
+
+void scr_zone_size (int w, int h, int *cols, int *rows) {
+  *cols = w;
+  *rows = h;
+  if (w <= 0 || h <= 0 || !zones_differ()) return;
+  *cols = (int)((long)w * zm_uw / zm_tw);
+  *rows = (int)((long)h * zm_uh / zm_th);
+  if (*cols < 1) *cols = 1;
+  if (*rows < 1) *rows = 1;
+}
+
+
+void scr_zone_set (int id, int x, int y, int w, int h, int *cols, int *rows) {
+  Zone *z;
+  int c = w, r = h;
+  if (id < 0 || id >= MAX_ZONE) return;
+  z = &Z[id];
+  if (w > 0 && h > 0 && zones_differ()) {
+    scr_zone_size(w, h, &c, &r);
+    if (!z->on || c != z->cols || r != z->rows) {
+      free(z->back);
+      free(z->front);
+      z->back = (ECell *)calloc((size_t)c * (size_t)r, sizeof(ECell));
+      z->front = (ECell *)calloc((size_t)c * (size_t)r, sizeof(ECell));
+      if (z->back == NULL || z->front == NULL) xmalloc((size_t)-1);	/* dies */
+      z->full = 1;
+    }
+    if (z->x != x || z->y != y || z->w != w || z->h != h) z->full = 1;
+    z->on = 1;
+    z->x = x;
+    z->y = y;
+    z->w = w;
+    z->h = h;
+    z->cols = c;
+    z->rows = r;
+  }
+  else {
+    if (z->on) S.full = 1;	/* the screen's cells under it are seen again */
+    z->on = 0;
+  }
+  if (cols) *cols = c;
+  if (rows) *rows = r;
+}
+
+
+#define ZONE_HOLE	0x110000u	/* a screen's cell that shows the zone under it (not a character) */
+
+void scr_zone_hole (int id) {
+  const Zone *z = id >= 0 && id < MAX_ZONE ? &Z[id] : NULL;
+  int x, y;
+  if (z == NULL || !z->on) return;
+  for (y = z->y; y < z->y + z->h && y < S.rows; y++)
+    for (x = z->x; x < z->x + z->w && x < S.cols; x++) {
+      ECell *c = &S.back[(size_t)y * (size_t)S.cols + (size_t)x];
+      c->ch = ZONE_HOLE;
+      c->st = S_TEXT;
+      c->w = 1;
+      c->fg = c->bg = c->at = c->ul = 0;
+    }
+}
+
+
+void scr_zone_use (int id) {
+  Zone *z = id >= 0 && id < MAX_ZONE ? &Z[id] : NULL;
+  if (z == NULL || !z->on) {
+    draw_screen();
+    return;
+  }
+  D.b = z->back;
+  D.ox = z->x;
+  D.oy = z->y;
+  D.cols = z->cols;
+  D.rows = z->rows;
+  D.z = id;
+}
+
+
+void scr_zone_to_ui (int id, int zx, int zy, int up, int *ux, int *uy) {
+  const Zone *z = id >= 0 && id < MAX_ZONE ? &Z[id] : NULL;
+  long r = up ? 1 : 0;
+  *ux = zx;
+  *uy = zy;
+  if (z == NULL || !z->on) return;
+  *ux = z->x + (int)(((long)(zx - z->x) * zm_tw + r * (zm_uw - 1)) / zm_uw);
+  *uy = z->y + (int)(((long)(zy - z->y) * zm_th + r * (zm_uh - 1)) / zm_uh);
+}
+
+
+static int floor_div (long a, long b) {
+  return (int)(a >= 0 ? a / b : -((-a + b - 1) / b));
+}
+
+
+void scr_zone_pt (int id, const Mouse *m, int *tx, int *ty) {
+  const Zone *z = id >= 0 && id < MAX_ZONE ? &Z[id] : NULL;
+  long fx, fy;
+  *tx = m->x;
+  *ty = m->y;
+  if (z == NULL || !z->on) return;
+  fx = (m->fx || m->fy) ? m->fx : m->x * 256L + 128;	/* in 256ths of the screen's cell */
+  fy = (m->fx || m->fy) ? m->fy : m->y * 256L + 128;
+  *tx = z->x + floor_div((fx - z->x * 256L) * zm_uw, 256L * zm_tw);
+  *ty = z->y + floor_div((fy - z->y * 256L) * zm_uh, 256L * zm_th);
+}
 
 
 /*
@@ -131,6 +294,7 @@ void scr_resize (int cols, int rows) {
   if (S.back == NULL || S.front == NULL) xmalloc((size_t)-1);	/* dies */
   S.full = 1;
   S.cy = -1;
+  draw_screen();
 }
 
 
@@ -149,29 +313,37 @@ void scr_redraw (void) {
 }
 
 
-void scr_clear (int st) {
-  size_t i, n = (size_t)S.cols * (size_t)S.rows;
-  g_nround = 0;	/* a new picture: its own round corners */
+static void cells_clear (ECell *c, size_t n, int st) {
+  size_t i;
   for (i = 0; i < n; i++) {
-    S.back[i].ch = ' ';
-    S.back[i].st = (uint16_t)st;
-    S.back[i].w = 1;
-    S.back[i].fg = S.back[i].bg = S.back[i].at = S.back[i].ul = 0;
+    c[i].ch = ' ';
+    c[i].st = (uint16_t)st;
+    c[i].w = 1;
+    c[i].fg = c[i].bg = c[i].at = c[i].ul = 0;
   }
 }
 
 
+void scr_clear (int st) {
+  int k;
+  g_nround = 0;	/* a new picture: its own round corners */
+  cells_clear(S.back, (size_t)S.cols * (size_t)S.rows, st);
+  for (k = 0; k < MAX_ZONE; k++)
+    if (Z[k].on) cells_clear(Z[k].back, (size_t)Z[k].cols * (size_t)Z[k].rows, st);
+  draw_screen();
+}
+
+
 int scr_put (int x, int y, uint32_t ch, int st) {
-  ECell *c;
+  ECell *c = cell_at(x, y);
   int w;
-  if (x < 0 || y < 0 || x >= S.cols || y >= S.rows) return 0;
+  if (c == NULL) return 0;
   w = uc_width(ch);
   if (w == 0) return 0;	/* a mark that joins the one before: not kept */
-  if (w == 2 && x + 1 >= S.cols) {
+  if (w == 2 && x + 1 - D.ox >= D.cols) {
     ch = ' ';
     w = 1;
   }
-  c = &S.back[y * S.cols + x];
   c->ch = ch;
   c->st = (uint16_t)st;
   c->w = (uint16_t)w;
@@ -189,7 +361,7 @@ int scr_put (int x, int y, uint32_t ch, int st) {
 int scr_put_rgb (int x, int y, uint32_t ch, uint32_t fg, uint32_t bg, int at) {
   int w = scr_put(x, y, ch, S_RGB), i;
   for (i = 0; i < w; i++) {
-    ECell *c = &S.back[y * S.cols + x + i];
+    ECell *c = cell_at(x + i, y);
     c->fg = fg;
     c->bg = bg;
     c->at = (uint32_t)at;
@@ -200,9 +372,8 @@ int scr_put_rgb (int x, int y, uint32_t ch, uint32_t fg, uint32_t bg, int at) {
 
 /* the cell as S_RGB: the colors its style had */
 static ECell *own_colors (int x, int y) {
-  ECell *c;
-  if (x < 0 || y < 0 || x >= S.cols || y >= S.rows) return NULL;
-  c = &S.back[y * S.cols + x];
+  ECell *c = cell_at(x, y);
+  if (c == NULL) return NULL;
   if (c->st != S_RGB) {
     if (c->st >= S_N) theme_tok(c->st, &c->fg, &c->bg);
     else {
@@ -235,8 +406,8 @@ void scr_glyph (int x, int y, uint32_t ch, uint32_t fg) {
 
 /* the character a cell has now (0: the right half of a wide one) */
 uint32_t scr_ch (int x, int y) {
-  if (x < 0 || y < 0 || x >= S.cols || y >= S.rows) return 0;
-  return S.back[y * S.cols + x].ch;
+  const ECell *c = cell_at(x, y);
+  return c ? c->ch : 0;
 }
 
 
@@ -260,9 +431,8 @@ void scr_underline (int x, int y, int w, uint32_t color) {
 /* VS Code's squiggle under cells, their colors kept */
 void scr_squiggle (int x, int y, int w, uint32_t color) {
   for (; w > 0; w--, x++) {
-    ECell *c;
-    if (x < 0 || y < 0 || x >= S.cols || y >= S.rows) continue;
-    c = &S.back[y * S.cols + x];
+    ECell *c = cell_at(x, y);
+    if (c == NULL) continue;
     if (c->st != S_RGB) {	/* a token on a background: its colors, now its own */
       int st = c->st;
       if (st >= S_N) theme_tok(st, &c->fg, &c->bg);
@@ -287,7 +457,7 @@ uint32_t tok_color (int t) {
 int scr_putsw (int x, int y, int w, const char *s, int st) {
   size_t n = strlen(s), i = 0, len;
   int x0 = x;
-  while (i < n && x < S.cols) {
+  while (i < n && x < D.ox + D.cols) {
     uint32_t cp = utf8_decode(s + i, n - i, &len);
     if (x - x0 + uc_width(cp) > w) break;
     x += scr_put(x, y, cp, st);
@@ -298,13 +468,13 @@ int scr_putsw (int x, int y, int w, const char *s, int st) {
 
 
 int scr_puts (int x, int y, const char *s, int st) {
-  return scr_putsw(x, y, S.cols, s, st);
+  return scr_putsw(x, y, D.ox + D.cols, s, st);
 }
 
 
 void scr_fill (int x, int y, int w, int st) {
   int x0 = x, w0 = w;
-  for (; w > 0 && x < S.cols; w--, x++) scr_put(x, y, ' ', st);
+  for (; w > 0 && x < D.ox + D.cols; w--, x++) scr_put(x, y, ' ', st);
   if ((st == S_INPUT || st == S_MENU_SEL) && w0 >= 3) scr_round(x0, y, w0, 1, RC_ALL, RR_SMALL);	/* a box to type in, a menu's item */
 }
 
@@ -320,6 +490,7 @@ void scr_box (int x, int y, int w, int h, int st) {
 void scr_round (int x, int y, int w, int h, int corners, int size) {
   Round *r;
   int k;
+  if (D.z >= 0) return;	/* in a text zone: square */
   if (w < 1 || h < 1 || x < 0 || y < 0 || x + w > S.cols || y + h > S.rows) return;
   if (g_nround > 0) {
     r = &g_round[g_nround - 1];
@@ -347,9 +518,10 @@ void scr_round (int x, int y, int w, int h, int corners, int size) {
 
 
 void scr_restyle (int x, int y, int w, int st) {
-  if (y < 0 || y >= S.rows) return;
-  for (; w > 0 && x < S.cols; w--, x++)
-    if (x >= 0) S.back[y * S.cols + x].st = (uint16_t)st;
+  for (; w > 0; w--, x++) {
+    ECell *c = cell_at(x, y);
+    if (c) c->st = (uint16_t)st;
+  }
 }
 
 
@@ -414,6 +586,7 @@ size_t scr_code (int x, int y, int w, const char *s, size_t n, size_t left,
 void scr_cursor (int x, int y) {
   S.cx = x;
   S.cy = y;
+  S.cz = y < 0 ? -1 : D.z;
 }
 
 

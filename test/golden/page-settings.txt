@@ -7,26 +7,26 @@
 |       User                                                                                                         
 |     ━━━━━━──────────────────────────────────────────────────────────────────────────────────────────────────────────
 |
-|     Commonly Used           │   Commonly Used
+|     Commonly Used           │   Commonly Used                                                                        ▐
 |      Text Editor             │
-|       Formatting            │   Editor: Tab Size
-|        Minimap               │   The number of spaces a tab is equal to. This setting is overridden based on the
-|       Suggestions           │   file contents when Editor: Detect Indentation is on.
-|        Files                 │    4
-|      Workbench               │
-|        Appearance            │   Editor: Insert Spaces
-|      Features                │    Insert spaces when pressing Tab. This setting is overridden based on the file
-|        Explorer              │     contents when Editor: Detect Indentation is on.
-|        Search                │
-|        Terminal              │   Editor: Render Whitespace
-|        Source Control        │   Controls how the editor should render whitespace characters.
-|        Testing               │    selection                              
-|        Debug                 │
-|      Extensions              │   Editor: Word Wrap
-|        Emmet                 │   Controls how lines should wrap.
-|        HTML                  │    off                                    
+|       Formatting            │   Editor: Font Size
+|        Minimap               │   Controls the font size in pixels of the code editor and the diff viewer (mme-sdl);
+|       Suggestions           │   the rest of the window has Mme › Ui: Font Size. In a terminal the terminal's font
+|        Files                 │   is used.
+|      Workbench               │    14
+|        Appearance            │
+|      Features                │   Editor: Font Family
+|        Explorer              │   Controls the font family of the code editor and the diff viewer (mme-sdl; the
+|        Search                │   first of a comma list). Empty: JetBrains Mono. Any installed font works, or copy
+|        Terminal              │   its .ttf/.otf files into mme-fonts. In a terminal the terminal's font is used.
+|        Source Control        │
+|        Testing               │
+|        Debug                 │   Editor: Tab Size
+|      Extensions              │   The number of spaces a tab is equal to. This setting is overridden based on the
+|        Emmet                 │   file contents when Editor: Detect Indentation is on.
+|        HTML                  │    4
 |        Vim                   │
-|                             │   Editor: Format On Save
-|                              │     Format a file on save. A formatter must be available and the editor must not be
+|                             │   Editor: Insert Spaces
+|                              │    Insert spaces when pressing Tab. This setting is overridden based on the file
 |                                                                                                                     
 exited=0
