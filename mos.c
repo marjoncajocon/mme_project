@@ -754,6 +754,55 @@ void os_detach (OsProc proc) {
 static int proc_pause (long pid, int stop);
 
 
+/*
+** A process and everything it started, and what those started (an extension
+** host's language servers and daemons): the children first, deepest first, so
+** none is left running on its own. Windows keeps a dead parent's id in its
+** children's entries, so they are found even when a parent went already.
+*/
+int os_kill_tree (long pid) {
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  PROCESSENTRY32 pe;
+  DWORD *id = NULL, *par = NULL, *tree;
+  size_t n = 0, cap = 0, nt = 1, i, k;
+  if (snap != INVALID_HANDLE_VALUE) {
+    pe.dwSize = sizeof(pe);
+    if (Process32First(snap, &pe))
+      do {
+        if (n == cap) {
+          cap = cap ? cap * 2 : 256;
+          id = (DWORD *)xrealloc(id, cap * sizeof(DWORD));
+          par = (DWORD *)xrealloc(par, cap * sizeof(DWORD));
+        }
+        id[n] = pe.th32ProcessID;
+        par[n++] = pe.th32ParentProcessID;
+      } while (Process32Next(snap, &pe));
+    CloseHandle(snap);
+  }
+  tree = (DWORD *)xmalloc((n + 1) * sizeof(DWORD));
+  tree[0] = (DWORD)pid;
+  for (i = 0; i < nt; i++)	/* breadth first: every descendant once */
+    for (k = 0; k < n; k++) {
+      size_t j;
+      int seen = 0;
+      if (par[k] != tree[i] || id[k] == 0 || id[k] == tree[i]) continue;
+      for (j = 0; j < nt && !seen; j++) seen = tree[j] == id[k];
+      if (!seen) tree[nt++] = id[k];
+    }
+  for (i = nt; i-- > 0;) {	/* the deepest first, the process itself last */
+    HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, tree[i]);
+    if (h) {
+      TerminateProcess(h, 137);
+      CloseHandle(h);
+    }
+  }
+  free(tree);
+  free(id);
+  free(par);
+  return 0;
+}
+
+
 int os_kill (long pid, int sig) {
   HANDLE h;
   int ok;
@@ -1423,6 +1472,12 @@ static int native_sig (int sig) {
 
 int os_kill (long pid, int sig) {
   return kill((pid_t)pid, native_sig(sig));
+}
+
+
+/* the process; what it started cleans up after itself when its pipes close (the extension host does) */
+int os_kill_tree (long pid) {
+  return kill((pid_t)pid, SIGKILL);
 }
 
 /*

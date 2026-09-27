@@ -184,6 +184,7 @@ int os_wait_fg (OsProc proc, int *stopped);	/* os_wait; *stopped: Ctrl-Z stopped
 int os_suspend_self (void);
 void os_detach (OsProc proc);
 int os_kill (long pid, int sig);
+int os_kill_tree (long pid);	/* the process and all it started (Windows: its descendants too) */
 int os_exec (const char *exe, char **argv, char **envp);	/* POSIX only */
 int os_can_exec_replace (void);
 

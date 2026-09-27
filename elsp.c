@@ -682,7 +682,7 @@ static void srv_stop (Srv *s) {
   os_close(s->from);
   if (s->err >= 0) os_close(s->err);
   s->err = -1;
-  if (s->pid > 0 && os_poll_proc(s->proc, &status) == 0) os_kill(s->pid, 9);
+  if (s->pid > 0 && os_poll_proc(s->proc, &status) == 0) os_kill_tree(s->pid);	/* and what it started (gopls, daemons) */
 }
 
 
@@ -918,7 +918,7 @@ void lsp_shutdown (void) {
     if (s->err >= 0) os_close(s->err);
     /* a server that ignores the exit must not outlive the editor; not when it is
     ** dead already: os_poll_proc took its handle then, and the id can be another's */
-    if (s->pid > 0 && !s->dead) os_kill(s->pid, 9);
+    if (s->pid > 0 && !s->dead) os_kill_tree(s->pid);	/* with what it started: nothing outlives mme */
     s->dead = 1;
   }
   g_nsrv = 0;

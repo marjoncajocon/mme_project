@@ -971,6 +971,15 @@ SCENARIOS = [
          exts=[("acme.demo", "acme.demo"),
                ("acme.monokai-dark-1.0.0", {"name": "monokai-dark", "publisher": "acme", "version": "1.0.0",
                                              "displayName": "Monokai Dark", "description": "A dark color theme"})]),
+    Scen("ext-view-scrollbar", "lang/plain.txt",
+         ["w:1500", "k:" + csiu("x", ctrl=True, shift=True), "w:800", "d"] + click(33, 27) + ["w:500", "d",
+          "k:`[<0;33;27M", "k:`[<32;33;16M", "k:`[<32;33;6M", "k:`[<0;33;6m", "w:500", "d"],
+         "the Extensions view's scrollbar: pressing it at its foot scrolls the list to its last extensions, "
+         "dragging its thumb to the top back to the first "
+         "(the same for Testing, Search, Source Control, Run and Debug and the extension views)",
+         exts=[("acme.theme%d-1.0.0" % i, {"name": "theme%d" % i, "publisher": "acme", "version": "1.0.0",
+                                           "displayName": "Theme %02d" % i, "description": "A color theme"})
+               for i in range(1, 11)]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

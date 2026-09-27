@@ -673,7 +673,10 @@ With no file open the editor shows the keys to start with.
   Run This Extension). Each extension with code has an **Enable / Disable**
   button in the Extensions view, beside Uninstall: Disable stops its code at
   once (its status bar items go with it; its themes and snippets stay), Enable
-  starts it again. When a running extension serves a language, mme does not
+  starts it again. What an extension started (Dart's analysis server,
+  Flutter's daemon, an AI agent) stops with it: the host ends them, and mme
+  ends the host's whole process tree, so nothing is left running. One that
+  depends on an extension that does not run says so ("needs dart-code"). When a running extension serves a language, mme does not
   start its own server for it (the extension starts its own).
 
   **Ghost text from extensions**: an AI extension that gives inline completions

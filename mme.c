@@ -69,6 +69,7 @@ typedef struct Ed {
   int focus;
   int resizing;	/* dragging the sidebar's edge */
   int bar_drag;	/* the side bar's scrollbar is held */
+  int sbar_drag;	/* another view's scrollbar (Extensions, Testing, Search ...) is held */
   int drag_text;	/* selecting with the mouse */
   int drag_unit;	/* 2: a double click drags by words, 3: a triple one by lines */
   Pos drag_a, drag_b;	/* the word or line clicked first */
@@ -21420,6 +21421,11 @@ static void on_mouse (void) {
     else show_view(v);
     return;
   }
+  if (E.sbar_drag) {	/* a side bar view's scrollbar, held: it follows the mouse */
+    if (m->button == 0 && !m->press && !m->drag) E.sbar_drag = 0;
+    else side_bar_to(E.view, m->y);
+    return;
+  }
   if (E.bar_drag) {	/* the side bar's scrollbar, held */
     if (m->button == 0 && !m->press && !m->drag) E.bar_drag = 0;
     else files_bar_to(m->y - files_bar_y(), files_bar_rows());
@@ -21435,6 +21441,11 @@ static void on_mouse (void) {
         m->y >= files_bar_y() && m->y < files_bar_y() + files_bar_rows()) {	/* its scrollbar */
       E.bar_drag = 1;
       files_bar_to(m->y - files_bar_y(), files_bar_rows());
+      return;
+    }
+    if (press && E.view != VIEW_FILES && m->button == 0 && side_bar_hit(m->x, m->y)) {	/* the view's scrollbar */
+      E.sbar_drag = 1;
+      side_bar_to(E.view, m->y);
       return;
     }
     if (E.view == VIEW_FILES && OE.h > 0 && m->y >= OE.y0 && m->y < OE.y0 + OE.h) {	/* OPEN EDITORS */

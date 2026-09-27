@@ -2925,6 +2925,13 @@ void debug_click (int row, int col, SideAct *act) {
 }
 
 
+void debug_scroll_to (size_t top) {	/* its scrollbar dragged */
+  g_top = (int)top;
+  if (g_top > g_nrow - 1) g_top = g_nrow > 0 ? g_nrow - 1 : 0;
+  if (g_top < 0) g_top = 0;
+}
+
+
 void debug_wheel (int d) {
   g_top += d * wheel_step(0);
   if (g_top < 0) g_top = 0;

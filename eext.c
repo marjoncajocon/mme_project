@@ -1497,7 +1497,7 @@ void ext_draw (int x, int y, int w, int h, int focus) {
       scr_putsw(x + 2, y + HEAD + 2, w - 3, "Download a .vsix, then Install from VSIX...", S_SIDE_DIM);
     }
   }
-  side_bar(x, y + HEAD, w, h - HEAD, g_nitem * (size_t)ROWS, g_top * (size_t)ROWS, (size_t)(h - HEAD));
+  side_bar(x, y + HEAD, w, h - HEAD, g_nitem * (size_t)ROWS, g_top * (size_t)ROWS, (size_t)g_h * ROWS);	/* the rows of the whole ones shown */
 }
 
 
@@ -1753,6 +1753,15 @@ void ext_wheel (int d) {
   if (d < 0) g_top = g_top > st ? g_top - st : 0;
   else if (g_nitem > (size_t)g_h && g_top + (size_t)g_h < g_nitem)
     g_top = g_top + st + (size_t)g_h <= g_nitem ? g_top + st : g_nitem - (size_t)g_h;
+  if (g_sel < g_top) g_sel = g_top;
+  if (g_sel >= g_top + (size_t)g_h) g_sel = g_top + (size_t)g_h - 1;
+}
+
+
+/* its scrollbar dragged: top is in rows (ROWS for each extension); the selection stays in sight */
+void ext_scroll_to (size_t top) {
+  g_top = top / ROWS;
+  if (g_nitem > (size_t)g_h && g_top > g_nitem - (size_t)g_h) g_top = g_nitem - (size_t)g_h;
   if (g_sel < g_top) g_sel = g_top;
   if (g_sel >= g_top + (size_t)g_h) g_sel = g_top + (size_t)g_h - 1;
 }

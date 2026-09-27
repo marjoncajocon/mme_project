@@ -80,7 +80,46 @@ process.stdin.on('data', (d) => {
     dispatch(msg);
   }
 });
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => quit());
+
+// the processes the extensions start (language servers, daemons, agents): kept, so none outlives the host
+const spawned = new Set();
+for (const fn of ['spawn', 'execFile', 'exec', 'fork']) {
+  const real = cp[fn];
+  cp[fn] = function (...a) {
+    const c = real.apply(this, a);
+    if (c && c.pid) {
+      spawned.add(c);
+      c.once('exit', () => spawned.delete(c));
+    }
+    return c;
+  };
+}
+
+// the host goes (mme said exit, or its pipe closed): the extensions' deactivate, then what they started
+let quitting = false;
+async function quit () {
+  if (quitting) return;
+  quitting = true;
+  const done = new Promise((r) => setTimeout(r, 1500));	// an extension that does not finish is not waited for
+  const deact = Promise.all(exts.filter((e) => e.active && e.module && typeof e.module.deactivate === 'function').map((e) => {
+    try {
+      return Promise.resolve(e.module.deactivate()).catch(() => {});
+    } catch (err) {
+      return Promise.resolve();
+    }
+  }));
+  await Promise.race([deact, done]);
+  for (const c of spawned) {
+    try {
+      if (isWin) cp.spawnSync('taskkill', ['/PID', String(c.pid), '/T', '/F'], {stdio: 'ignore', windowsHide: true});
+      else c.kill('SIGKILL');
+    } catch (err) {
+      // gone already
+    }
+  }
+  process.exit(0);
+}
 
 
 // ----------------------------------------------------------------- the log
@@ -5500,6 +5539,13 @@ async function activate (e) {
     done = r;
   });
   (async () => {
+    const missing = missingDeps(e);
+    if (missing.length) {	// Flutter without Dart: it cannot work, and it is not started
+      e.failed = true;
+      log('[info] ' + e.id + ' is not started: it needs ' + missing.join(', '));
+      notify('mme/extensionState', {id: e.id, state: 'needs ' + missing.map((m) => m.split('.').pop()).join(', ')});
+      return;
+    }
     for (const dep of e.pkg.extensionDependencies || []) {
       const d = exts.find((x) => x.id === dep.toLowerCase());
       if (d) await activate(d);
@@ -5523,6 +5569,11 @@ async function activate (e) {
     }
   })().finally(done);
   return e.activating;
+}
+
+// the extensions it depends on that do not run here (VS Code's own vscode.* are there always)
+function missingDeps (e) {
+  return (e.pkg.extensionDependencies || []).filter((dep) => !/^vscode\./i.test(dep) && !exts.some((x) => x.id === dep.toLowerCase()));
 }
 
 // an activation event happened: every extension waiting for it starts
@@ -5686,6 +5737,10 @@ async function start () {
       props.push({key: k, type: Array.isArray(v.type) ? v.type[0] : v.type || 'string', default: v.default === undefined ? null : v.default,
         enum: v.enum, description: l10nString(e, v.markdownDescription || v.description || '') || '', ext: e.id});
   }
+  for (const e of exts) {	// one that cannot start says why at once, not "starting" for ever
+    const missing = missingDeps(e);
+    if (missing.length) notify('mme/extensionState', {id: e.id, state: 'needs ' + missing.map((m) => m.split('.').pop()).join(', ')});
+  }
   notify('mme/contributions', {commands: cmds, keybindings: keys, configuration: props});
   notify('mme/treeViews', {views: treeViewList().map((v) => ({id: v.id, name: v.name, title: v.title}))});
   notify('mme/debuggers', {types: debuggerTypes().map((d) => ({type: d.type, label: d.label}))});
@@ -5766,7 +5821,7 @@ async function dispatch (msg) {
   }
   switch (method) {	// a notification
     case 'initialized': start(); break;
-    case 'exit': process.exit(0); break;
+    case 'exit': quit(); break;
     case '$/cancelRequest': {
       const s = cancels.get(params.id);
       if (s) s.cancel();

@@ -82,7 +82,14 @@ int act_hit (int y) {
 ** ===================================================================
 */
 
+static struct {	/* the scrollbar side_bar drew last (the view shown's), for the mouse */
+  int on, x, y, w, h;
+  size_t total, shown;
+} g_sb;
+
+
 void side_draw (int view, int x, int y, int w, int h, int focus, const char *active) {
+  g_sb.on = 0;	/* the view draws its bar again, if it has one */
   if (view == VIEW_SEARCH) search_draw(x, y, w, h, focus);
   else if (view == VIEW_GIT) git_draw(x, y, w, h, focus);
   else if (view == VIEW_DEBUG) debug_draw(x, y, w, h, focus);
@@ -125,6 +132,13 @@ void side_click (int view, int row, int col, SideAct *act) {
 void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t shown) {
   int len, at;
   if (h < 2 || shown == 0 || total <= shown) return;
+  g_sb.on = 1;
+  g_sb.x = x;
+  g_sb.y = y;
+  g_sb.w = w;
+  g_sb.h = h;
+  g_sb.total = total;
+  g_sb.shown = shown;
   len = (int)((double)shown * h / (double)total + 0.5);
   if (len < 1) len = 1;
   if (len > h - 1) len = h - 1;
@@ -133,6 +147,35 @@ void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t show
   if (at > h - len) at = h - len;
   for (len += at; at < len; at++)	/* a half block, so it shows on any background */
     scr_put_rgb(x + w - 1, y + at, 0x2590, ui_color(C_THUMB), ui_color(C_SIDE_BG), 0);
+}
+
+
+/* the screen's x, y is on the scrollbar the view shown drew (not the Explorer's: mme.c has that one) */
+int side_bar_hit (int x, int y) {
+  return g_sb.on && x == g_sb.x + g_sb.w - 1 && y >= g_sb.y && y < g_sb.y + g_sb.h;
+}
+
+
+/* the bar pressed or dragged at the screen's row y: the view scrolls to the place it stands for */
+void side_bar_to (int view, int y) {
+  size_t hidden, top;
+  int row = y - g_sb.y;
+  if (!g_sb.on || g_sb.h < 2) return;
+  hidden = g_sb.total - g_sb.shown;
+  {	/* the thumb's middle goes where the pointer is, as VS Code's (its length as side_bar draws it) */
+    double len = (double)g_sb.shown * g_sb.h / (double)g_sb.total, at = row - len / 2;
+    double room = g_sb.h - len;
+    if (len < 1) len = 1;
+    if (at < 0 || room <= 0) at = 0;
+    top = room > 0 ? (size_t)(at * (double)hidden / room + 0.5) : 0;
+  }
+  if (top > hidden) top = hidden;
+  if (view == VIEW_SEARCH) search_scroll_to(top);
+  else if (view == VIEW_GIT) git_scroll_to(top);
+  else if (view == VIEW_DEBUG) debug_scroll_to(top);
+  else if (view == VIEW_EXT) ext_scroll_to(top);
+  else if (view == VIEW_TEST) test_scroll_to(top);
+  else if (view == VIEW_TREE) tree_scroll_to(top);
 }
 
 

@@ -930,6 +930,14 @@ void git_click (int row, int col, SideAct *act) {
 }
 
 
+void git_scroll_to (size_t top) {	/* its scrollbar dragged */
+  size_t h = (size_t)g_h;
+  g_top_row = g_nrow > h && top > g_nrow - h ? g_nrow - h : top;
+  if (g_sel > 0 && g_sel - 1 < g_top_row) g_sel = g_top_row + 1;
+  if (g_sel > 0 && g_sel - 1 >= g_top_row + h) g_sel = g_top_row + h;
+}
+
+
 void git_wheel (int d) {
   size_t h = (size_t)g_h, st = (size_t)wheel_step(0);
   if (d < 0) g_top_row = g_top_row > st ? g_top_row - st : 0;

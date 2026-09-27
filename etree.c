@@ -618,6 +618,17 @@ void tree_menu (int row, int x, int y) {
 }
 
 
+void tree_scroll_to (size_t top) {	/* its scrollbar dragged */
+  rows();
+  g_top = (int)top;
+  if (g_top > g_nrow - g_h) g_top = g_nrow - g_h;
+  if (g_top < 0) g_top = 0;
+  if (g_sel < g_top) g_sel = g_top;
+  if (g_sel >= g_top + g_h) g_sel = g_top + g_h - 1;
+  remember();
+}
+
+
 void tree_wheel (int d) {
   rows();
   g_top += d * wheel_step(0);

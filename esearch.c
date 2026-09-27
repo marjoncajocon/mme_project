@@ -1503,6 +1503,14 @@ void search_click (int row, int col, SideAct *act) {
 }
 
 
+void search_scroll_to (size_t top) {	/* its scrollbar dragged */
+  size_t h = g_h > 0 ? (size_t)g_h : 1;
+  g_top = g_nrow > h && top > g_nrow - h ? g_nrow - h : top;
+  if (g_sel < g_top) g_sel = g_top;
+  if (g_sel >= g_top + h) g_sel = g_top + h - 1;
+}
+
+
 void search_wheel (int d) {
   size_t h = g_h > 0 ? (size_t)g_h : 1, st = (size_t)wheel_step(0);	/* a side bar too short for a row */
   if (d < 0) g_top = g_top > st ? g_top - st : 0;

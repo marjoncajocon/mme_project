@@ -2155,6 +2155,16 @@ void test_click (int row, int col, SideAct *act) {
 }
 
 
+void test_scroll_to (size_t top) {	/* its scrollbar dragged */
+  rows();
+  g_top = (int)top;
+  if (g_top > g_nrow - g_h) g_top = g_nrow - g_h;
+  if (g_top < 0) g_top = 0;
+  if (g_sel < g_top) g_sel = g_top;
+  if (g_sel >= g_top + g_h) g_sel = g_top + g_h - 1;
+}
+
+
 void test_wheel (int d) {
   rows();
   g_top += d * wheel_step(0);

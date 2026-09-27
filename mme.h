@@ -1032,6 +1032,14 @@ enum { SA_NONE, SA_OPEN, SA_GO, SA_DIFF, SA_SHOW_DIFF, SA_CMD, SA_FOCUS_SCM,
        SA_OPEN_SIDE, SA_FIND_FOLDER, SA_OPEN_FOLDER };	/* path opened in the group beside; Search in folder path (from the root) */
 
 void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t shown);	/* a pane's scrollbar */
+int side_bar_hit (int x, int y);	/* eside.c: on the scrollbar of the view shown (not the Explorer's) */
+void side_bar_to (int view, int y);	/* pressed / dragged there: the view scrolls */
+void ext_scroll_to (size_t top);	/* the views' scrollbars dragged: top in the bar's rows */
+void test_scroll_to (size_t top);
+void tree_scroll_to (size_t top);
+void search_scroll_to (size_t top);
+void git_scroll_to (size_t top);
+void debug_scroll_to (size_t top);
 int files_bar_y (void);	/* the tree's scrollbar: the row it starts at */
 int files_bar_rows (void);	/* its rows, 0 when everything fits */
 void files_bar_to (int row, int rows);	/* dragged there */
