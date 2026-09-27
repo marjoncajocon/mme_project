@@ -1115,6 +1115,318 @@ class LanguageModelError extends Error {
   }
 }
 
+// more of VS Code's classes, as vscode.d.ts has them: an extension extends or makes them (Dart's FileCoverage),
+// and a bundler's __importStar copies the module's own properties once, so each must be really there
+class SemanticTokensEdit {
+  constructor (start, deleteCount, data) {
+    Object.assign(this, {start, deleteCount, data});
+  }
+}
+class SemanticTokensEdits {
+  constructor (edits, resultId) {
+    Object.assign(this, {edits, resultId});
+  }
+}
+class CallHierarchyIncomingCall {
+  constructor (from, fromRanges) {
+    Object.assign(this, {from, fromRanges});
+  }
+}
+class CallHierarchyOutgoingCall {
+  constructor (to, fromRanges) {
+    Object.assign(this, {to, fromRanges});
+  }
+}
+class FileDecoration {
+  constructor (badge, tooltip, color) {
+    Object.assign(this, {badge, tooltip, color, propagate: false});
+  }
+}
+class Breakpoint {
+  constructor (enabled, condition, hitCondition, logMessage) {
+    Object.assign(this, {id: crypto.randomUUID(), enabled: enabled !== false, condition, hitCondition, logMessage});
+  }
+}
+class SourceBreakpoint extends Breakpoint {
+  constructor (location, enabled, condition, hitCondition, logMessage) {
+    super(enabled, condition, hitCondition, logMessage);
+    this.location = location;
+  }
+}
+class FunctionBreakpoint extends Breakpoint {
+  constructor (functionName, enabled, condition, hitCondition, logMessage) {
+    super(enabled, condition, hitCondition, logMessage);
+    this.functionName = functionName;
+  }
+}
+class EvaluatableExpression {
+  constructor (range, expression) {
+    Object.assign(this, {range, expression});
+  }
+}
+class InlineValueText {
+  constructor (range, text) {
+    Object.assign(this, {range, text});
+  }
+}
+class InlineValueVariableLookup {
+  constructor (range, variableName, caseSensitiveLookup) {
+    Object.assign(this, {range, variableName, caseSensitiveLookup: caseSensitiveLookup !== false});
+  }
+}
+class InlineValueEvaluatableExpression {
+  constructor (range, expression) {
+    Object.assign(this, {range, expression});
+  }
+}
+class NotebookEdit {
+  constructor (range, newCells) {
+    Object.assign(this, {range, newCells});
+  }
+  static replaceCells (range, newCells) {
+    return new NotebookEdit(range, newCells);
+  }
+  static insertCells (index, newCells) {
+    return new NotebookEdit({start: index, end: index}, newCells);
+  }
+  static deleteCells (range) {
+    return new NotebookEdit(range, []);
+  }
+  static updateCellMetadata (index, newCellMetadata) {
+    const e = new NotebookEdit({start: index, end: index}, []);
+    e.newCellMetadata = newCellMetadata;
+    return e;
+  }
+  static updateNotebookMetadata (newNotebookMetadata) {
+    const e = new NotebookEdit({start: 0, end: 0}, []);
+    e.newNotebookMetadata = newNotebookMetadata;
+    return e;
+  }
+}
+class NotebookCellStatusBarItem {
+  constructor (text, alignment) {
+    Object.assign(this, {text, alignment});
+  }
+}
+class TestCoverageCount {
+  constructor (covered, total) {
+    Object.assign(this, {covered, total});
+  }
+}
+class FileCoverage {
+  constructor (uri, statementCoverage, branchCoverage, declarationCoverage, includesTests) {
+    Object.assign(this, {uri, statementCoverage, branchCoverage, declarationCoverage, includesTests: includesTests || []});
+  }
+  static fromDetails (uri, details) {
+    const st = new TestCoverageCount(0, 0);
+    for (const d of details || []) {
+      if (d instanceof DeclarationCoverage) continue;
+      st.total++;
+      if (d.executed) st.covered++;
+    }
+    return new FileCoverage(uri, st);
+  }
+}
+class StatementCoverage {
+  constructor (executed, location, branches) {
+    Object.assign(this, {executed, location, branches: branches || []});
+  }
+}
+class BranchCoverage {
+  constructor (executed, location, label) {
+    Object.assign(this, {executed, location, label});
+  }
+}
+class DeclarationCoverage {
+  constructor (name, executed, location) {
+    Object.assign(this, {name, executed, location});
+  }
+}
+class TestMessageStackFrame {
+  constructor (label, uri, position) {
+    Object.assign(this, {label, uri, position});
+  }
+}
+class TerminalLink {
+  constructor (startIndex, length, tooltip) {
+    Object.assign(this, {startIndex, length, tooltip});
+  }
+}
+class TerminalProfile {
+  constructor (options) {
+    this.options = options;
+  }
+}
+class DocumentDropOrPasteEditKind {
+  constructor (value) {
+    this.value = value;
+  }
+  append (...parts) {
+    return new DocumentDropOrPasteEditKind((this.value ? [this.value] : []).concat(parts).join('.'));
+  }
+  intersects (other) {
+    return this.contains(other) || other.contains(this);
+  }
+  contains (other) {
+    return this.value === other.value || other.value.startsWith(this.value + '.');
+  }
+}
+DocumentDropOrPasteEditKind.Empty = new DocumentDropOrPasteEditKind('');
+DocumentDropOrPasteEditKind.Text = new DocumentDropOrPasteEditKind('text');
+DocumentDropOrPasteEditKind.TextUpdateImports = new DocumentDropOrPasteEditKind('text.updateImports');
+class DocumentDropEdit {
+  constructor (insertText, title, kind) {
+    Object.assign(this, {insertText, title, kind});
+  }
+}
+class DocumentPasteEdit {
+  constructor (insertText, title, kind) {
+    Object.assign(this, {insertText, title, kind});
+  }
+}
+class DataTransferItem {
+  constructor (value) {
+    this.value = value;
+  }
+  async asString () {
+    return typeof this.value === 'string' ? this.value : JSON.stringify(this.value);
+  }
+  asFile () {
+    return undefined;
+  }
+}
+class DataTransfer {
+  constructor () {
+    this._m = new Map();
+  }
+  get (mime) {
+    return this._m.get(String(mime).toLowerCase());
+  }
+  set (mime, item) {
+    this._m.set(String(mime).toLowerCase(), item);
+  }
+  forEach (cb, thisArg) {
+    for (const [k, v] of this._m) cb.call(thisArg, v, k, this);
+  }
+  [Symbol.iterator] () {
+    return this._m.entries();
+  }
+}
+class TabInputText {
+  constructor (uri) {
+    this.uri = uri;
+  }
+}
+class TabInputTextDiff {
+  constructor (original, modified) {
+    Object.assign(this, {original, modified});
+  }
+}
+class TabInputCustom {
+  constructor (uri, viewType) {
+    Object.assign(this, {uri, viewType});
+  }
+}
+class TabInputWebview {
+  constructor (viewType) {
+    this.viewType = viewType;
+  }
+}
+class TabInputNotebook {
+  constructor (uri, notebookType) {
+    Object.assign(this, {uri, notebookType});
+  }
+}
+class TabInputNotebookDiff {
+  constructor (original, modified, notebookType) {
+    Object.assign(this, {original, modified, notebookType});
+  }
+}
+class TabInputTerminal {}
+class ChatResponseMarkdownPart {
+  constructor (value) {
+    this.value = typeof value === 'string' ? new MarkdownString(value) : value;
+  }
+}
+class ChatResponseFileTreePart {
+  constructor (value, baseUri) {
+    Object.assign(this, {value, baseUri});
+  }
+}
+class ChatResponseAnchorPart {
+  constructor (value, title) {
+    Object.assign(this, {value, title});
+  }
+}
+class ChatResponseProgressPart {
+  constructor (value) {
+    this.value = value;
+  }
+}
+class ChatResponseReferencePart {
+  constructor (value, iconPath) {
+    Object.assign(this, {value, iconPath});
+  }
+}
+class ChatResponseCommandButtonPart {
+  constructor (value) {
+    this.value = value;
+  }
+}
+class ChatRequestTurn {
+  constructor (prompt, command, references, participant, toolReferences) {
+    Object.assign(this, {prompt, command, references: references || [], participant, toolReferences: toolReferences || []});
+  }
+}
+class ChatResponseTurn {
+  constructor (response, result, participant, command) {
+    Object.assign(this, {response, result, participant, command});
+  }
+}
+class ChatReferenceBinaryData {
+  constructor (mimeType, data) {
+    Object.assign(this, {mimeType, data});
+  }
+}
+class McpStdioServerDefinition {
+  constructor (label, command, args, env, version) {
+    Object.assign(this, {label, command, args: args || [], env: env || {}, version});
+  }
+}
+class McpHttpServerDefinition {
+  constructor (label, uri, headers, version) {
+    Object.assign(this, {label, uri, headers: headers || {}, version});
+  }
+}
+class DebugThread {
+  constructor (session, threadId) {
+    Object.assign(this, {session, threadId});
+  }
+}
+class DebugStackFrame {
+  constructor (session, threadId, frameId) {
+    Object.assign(this, {session, threadId, frameId});
+  }
+}
+const moreClasses = {
+  SemanticTokensEdit, SemanticTokensEdits, CallHierarchyIncomingCall, CallHierarchyOutgoingCall, FileDecoration, Breakpoint,
+  SourceBreakpoint, FunctionBreakpoint, EvaluatableExpression, InlineValueText, InlineValueVariableLookup,
+  InlineValueEvaluatableExpression, NotebookEdit, NotebookCellStatusBarItem, TestCoverageCount, FileCoverage, StatementCoverage,
+  BranchCoverage, DeclarationCoverage, TestMessageStackFrame, TerminalLink, TerminalProfile, DocumentDropOrPasteEditKind,
+  DocumentDropEdit, DocumentPasteEdit, DataTransferItem, DataTransfer, TabInputText, TabInputTextDiff, TabInputCustom,
+  TabInputWebview, TabInputNotebook, TabInputNotebookDiff, TabInputTerminal, ChatResponseMarkdownPart, ChatResponseFileTreePart,
+  ChatResponseAnchorPart, ChatResponseProgressPart, ChatResponseReferencePart, ChatResponseCommandButtonPart, ChatRequestTurn,
+  ChatResponseTurn, ChatReferenceBinaryData, McpStdioServerDefinition, McpHttpServerDefinition, DebugThread, DebugStackFrame,
+  HoverVerbosityAction: {Increase: 0, Decrease: 1},
+  TreeItemCheckboxState: {Unchecked: 0, Checked: 1},
+  TerminalShellExecutionCommandLineConfidence: {Low: 0, Medium: 1, High: 2},
+  QuickInputButtons: {Back: {iconPath: new ThemeIcon('arrow-left'), tooltip: 'Back'}},
+  CommentThreadCollapsibleState: {Collapsed: 0, Expanded: 1},
+  CommentThreadState: {Unresolved: 0, Resolved: 1},
+  DocumentPasteTriggerKind: {Automatic: 0, PasteAs: 1},
+  ChatResultFeedbackKind: {Unhelpful: 0, Helpful: 1},
+};
+
 const enums = {
   EndOfLine, DiagnosticSeverity, DiagnosticTag, CompletionItemKind, CompletionItemTag, CompletionTriggerKind,
   SignatureHelpTriggerKind, DocumentHighlightKind, SymbolKind, SymbolTag, CodeActionTriggerKind, InlayHintKind, FoldingRangeKind,
@@ -5109,7 +5421,7 @@ const vscodeApi = spare({
   LanguageModelTextPart, LanguageModelToolCallPart, LanguageModelToolResultPart, LanguageModelToolResult, LanguageModelPromptTsxPart,
   LanguageModelDataPart, LanguageModelChatMessageRole, LanguageModelChatToolMode, NotebookCellOutputItem, NotebookCellOutput,
   NotebookRange, NotebookCellKind, NotebookControllerAffinity, NotebookCellStatusBarAlignment, NotebookEditorRevealType, NotebookCellData, NotebookData, LanguageModelError, TextDocument, TextLine,
-  ...enums,
+  ...enums, ...moreClasses,
   window, workspace, languages, commands: commandsNs, env, extensions: extensionsNs, tasks, debug, l10n,
   scm: spare({createSourceControl: undefined, inputBox: undefined}, 'scm'),
   comments: spare({}, 'comments'), authentication: spare(authentication, 'authentication'),
