@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+char *fs_real_dir (const char *path);	/* efiles.c: a folder's real path, links followed */
+
 
 typedef struct SFile {
   char *path;	/* native */
@@ -89,24 +91,28 @@ static int lower (int c) {
 }
 
 
-/* p against s ('/' between folders): * not over '/', ** over anything, ? one, {a,b} */
+/*
+** p against s ('/' between folders): * not over '/', ** over anything, ?
+** one, {a,b}; '\' in p is '/'. No backtracking but to the last * and the
+** last **: a later star can take what an earlier one could, so the time
+** is not exponential.
+*/
 static int glob (const char *p, const char *s) {
-  while (*p) {
+  const char *sp = NULL, *ss = NULL, *dp = NULL, *ds = NULL;	/* the last *, the last **: after it, and where it stops */
+  for (;;) {
     if (p[0] == '*' && p[1] == '*') {
       p += 2;
       if (*p == '/') p++;	/* "**" and "**" "/": no folder too */
       if (*p == '\0') return 1;
-      for (;; s++) {
-        if (glob(p, s)) return 1;
-        if (*s == '\0') return 0;
-      }
+      dp = p;
+      ds = s;
+      sp = NULL;	/* the stars before it: nothing they could take that it can't */
+      continue;
     }
     if (*p == '*') {
-      p++;
-      for (;; s++) {
-        if (glob(p, s)) return 1;
-        if (*s == '\0' || *s == '/') return 0;
-      }
+      sp = ++p;
+      ss = s;
+      continue;
     }
     if (*p == '{') {	/* {a,b}rest: a then rest, b then rest */
       const char *e = strchr(p, '}'), *a = p + 1;
@@ -124,19 +130,28 @@ static int glob (const char *p, const char *s) {
         }
         a = c + 1;
       }
-      return 0;
     }
-    if (*s == '\0') return 0;
-    if (*p == '?') {
-      if (*s == '/') return 0;
+    else if (*p == '\0') {
+      if (*s == '\0') return 1;
     }
-    else if (lower((unsigned char)*p) != lower((unsigned char)*s) &&
-             !((*p == '/' || *p == '\\') && (*s == '/' || *s == '\\')))
-      return 0;
-    p++;
-    s++;
+    else if (*s != '\0' && (*p == '?' ? *s != '/' : (*p == '/' || *p == '\\') ? *s == '/' :	/* rel has '/' only */
+             lower((unsigned char)*p) == lower((unsigned char)*s))) {
+      p++;
+      s++;
+      continue;
+    }
+    /* no match here: the last * takes one more, else the last ** */
+    if (sp && *ss != '\0' && *ss != '/') {
+      p = sp;
+      s = ++ss;
+    }
+    else if (dp && *ds != '\0') {
+      p = dp;
+      s = ++ds;
+      sp = NULL;
+    }
+    else return 0;
   }
-  return *s == '\0';
 }
 
 
@@ -376,6 +391,7 @@ static struct {
   char *exc;	/* "files to exclude", .gitignore and files.exclude, as globs */
   int icase, word, regex;
   Vec skip;	/* the files the editor has open: it searched them itself */
+  Vec real;	/* the real folders of the roots and of the folder links walked: a link is walked once, not round and round */
   Thread *th[MAX_WORK];
   int nth;
 } WK;
@@ -446,6 +462,23 @@ static int is_open_file (const char *path) {
 }
 
 
+/* a folder link at path: is its real folder not walked yet (and now it is)? */
+static int link_first (const char *path) {
+  char *rp = fs_real_dir(path);
+  size_t i;
+  int first;
+  if (rp == NULL) return 0;
+  mx_lock(WK.mx);
+  for (i = 0; i < WK.real.n; i++)
+    if (m_fncmp(WK.real.v[i], rp) == 0) break;
+  first = i == WK.real.n;
+  if (first) vec_push(&WK.real, rp);
+  else free(rp);
+  mx_unlock(WK.mx);
+  return first;
+}
+
+
 /* a worker: folders and files off the stack until there are none, or it is told to stop */
 static void worker (void *ud) {
   Match M;
@@ -484,7 +517,8 @@ static void worker (void *ud) {
     name = path_basename(path);
     took = 0;
     if (rel[0] && search_globs(WK.exc, rel)) ;	/* left out */
-    else if (os_stat(path, &st) != 0) ;
+    else if (os_lstat(path, &st) != 0) ;
+    else if (st.is_link && (os_stat(path, &st) != 0 || (st.is_dir && !link_first(path)))) ;	/* a link to a folder above: not forever */
     else if (st.is_dir) {
       Vec v;
       vec_init(&v);
@@ -603,6 +637,7 @@ static void wk_stop (void) {
   vec_free(&WK.path);	/* vec_free frees what is in them too */
   vec_free(&WK.rel);
   vec_free(&WK.skip);
+  vec_free(&WK.real);
   free(WK.exc);
   WK.exc = NULL;
   WK.busy = 0;
@@ -702,8 +737,11 @@ static void wk_start (void) {
   WK.regex = g_regex;
   open_docs_list(&WK.skip);
   search_open_docs();	/* their text here, the disk on the workers */
-  for (i = ws_count() - 1; i >= 0; i--)
+  for (i = ws_count() - 1; i >= 0; i--) {
+    char *rp = fs_real_dir(ws_folder(i));
+    if (rp) vec_push(&WK.real, rp);
     wk_push(xstrdup(ws_folder(i)), xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
+  }
   n = th_cpus();
   for (i = 0; i < n && i < MAX_WORK; i++) {
     Thread *t;
@@ -923,14 +961,15 @@ void search_replace_mode (const char *text) {
 */
 
 /*
-** s[0..n) with the matches replaced: every one (line 0), or the one at
-** line / col. The edits are also given as TextEdits (for a file the
+** s[0..n) with the matches replaced: those at the hits want[0..nwant)
+** (in line / col order; one dismissed is not there, and a match no hit
+** is at stays). The edits are also given as TextEdits (for a file the
 ** editor has open). *count: how many.
 */
-static char *replaced (const char *path, const char *s, size_t n, size_t line1, size_t col1,
+static char *replaced (const char *path, const char *s, size_t n, const SHit *want, size_t nwant,
                        size_t *count, size_t *outlen, TextEdit **ev, size_t *nev) {
   Buf o;
-  size_t i, from = 0, line = 1, m = strlen(g_ran), rl = strlen(R), cap = 0;
+  size_t i, from = 0, line = 1, m = strlen(g_ran), rl = strlen(R), cap = 0, w = 0;
   Match M;
   ui_match(&M);
   (void)m;
@@ -947,7 +986,9 @@ static char *replaced (const char *path, const char *s, size_t n, size_t line1, 
          at = find_in(&M, s + from, end - from, at + (ml ? ml : 1), &ml)) {
       char *rep = R;
       size_t repl = rl;
-      if (line1 && (line != line1 || at != col1)) continue;
+      while (w < nwant && (want[w].line < line || (want[w].line == line && want[w].col < at))) w++;
+      if (w == nwant || want[w].line != line || want[w].col != at) continue;
+      w++;
       if (g_re) {	/* $1, $& ... from this match */
         size_t cap[20], e;
         if (re_at(g_re, s + from, end - from, at, &e, cap)) rep = re_expand(R, s + from, cap, &repl);
@@ -984,13 +1025,13 @@ static char *replaced (const char *path, const char *s, size_t n, size_t line1, 
 }
 
 
-/* file f's matches (or the one at line / col) replaced: in the editor, or on disk */
-static size_t replace_file (const SFile *f, size_t line, size_t col) {
+/* file f's matches at the hits want[0..nwant) replaced: in the editor, or on disk */
+static size_t replace_file (const SFile *f, const SHit *want, size_t nwant) {
   size_t len, count = 0, outlen, nev;
   TextEdit *ev;
   char *s = text_of(f->path, &len), *out;
   if (s == NULL) return 0;
-  out = replaced(f->path, s, len, line, col, &count, &outlen, &ev, &nev);
+  out = replaced(f->path, s, len, want, nwant, &count, &outlen, &ev, &nev);
   if (count > 0 && !open_doc_edit(f->path, ev, nev)) {
     int fd = os_open(f->path, OS_WRITE);
     if (fd >= 0) {
@@ -1032,7 +1073,7 @@ static void replace_all (void) {
            n == 1 ? "" : "s", (unsigned long)files, files == 1 ? "" : "s", R);
   if (dialog(msg, NULL, bt, 2) != 0) return;
   for (i = 0; i < g_nfile; i++)
-    if (g_file[i].n) done += replace_file(&g_file[i], 0, 0);
+    if (g_file[i].n) done += replace_file(&g_file[i], g_hit + g_file[i].first, g_file[i].n);	/* not the dismissed */
   toast(0, "Replaced %lu occurrence%s across %lu file%s with '%s'.", (unsigned long)done,
         done == 1 ? "" : "s", (unsigned long)files, files == 1 ? "" : "s", R);
   side_refresh();
@@ -1045,10 +1086,10 @@ static void replace_row (size_t k) {
   size_t r;
   if (k >= g_nrow) return;
   r = g_row[k];
-  if (r % 2 == 0) replace_file(&g_file[r / 2], 0, 0);
+  if (r % 2 == 0) replace_file(&g_file[r / 2], g_hit + g_file[r / 2].first, g_file[r / 2].n);
   else {
     const SHit *h = &g_hit[r / 2];
-    replace_file(&g_file[h->file], h->line, h->col);
+    replace_file(&g_file[h->file], h, 1);
   }
   run();
 }

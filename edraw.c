@@ -334,6 +334,18 @@ void scr_clear (int st) {
 }
 
 
+/* the cell at x is written over: a wide character it is half of becomes a
+   space, or the flush would draw it whole (its right half) or leave half */
+static void cell_unwide (ECell *c, int x, int y) {
+  ECell *l;
+  if (c->ch == 0 && (l = cell_at(x - 1, y)) != NULL && l->w == 2) {
+    l->ch = ' ';
+    l->w = 1;
+  }
+  if (c->w == 2 && cell_at(x + 1, y) != NULL) c[1].ch = ' ';
+}
+
+
 int scr_put (int x, int y, uint32_t ch, int st) {
   ECell *c = cell_at(x, y);
   int w;
@@ -344,6 +356,8 @@ int scr_put (int x, int y, uint32_t ch, int st) {
     ch = ' ';
     w = 1;
   }
+  cell_unwide(c, x, y);
+  if (w == 2) cell_unwide(c + 1, x + 1, y);
   c->ch = ch;
   c->st = (uint16_t)st;
   c->w = (uint16_t)w;
@@ -398,6 +412,7 @@ void scr_set_fg (int x, int y, uint32_t fg) {
 void scr_glyph (int x, int y, uint32_t ch, uint32_t fg) {
   ECell *c = own_colors(x, y);
   if (c == NULL || c->w != 1) return;
+  cell_unwide(c, x, y);
   c->ch = ch;
   c->fg = fg;
   c->at = 0;

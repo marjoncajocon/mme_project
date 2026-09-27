@@ -978,10 +978,11 @@ static int cursor_brackets (Pos *a, Pos *b) {
 static size_t depth_at (size_t y) {
   Doc *doc = T->doc;
   size_t k, d, want = y + 1, last = T->top + (size_t)L.text_h + 1;
-  if (doc->depth_cap != doc->n + 1) {	/* lines came or went: the count starts over */
+  if (doc->depth_cap != doc->n + 1) {	/* lines came or went: the lines above the edit keep their count */
     doc->depth_cap = doc->n + 1;
     doc->depth = (size_t *)xrealloc(doc->depth, doc->depth_cap * sizeof(size_t));
-    doc->depth_n = 0;
+    if (doc->br_from == (size_t)-1) doc->depth_n = 0;	/* no edit to go by: all again */
+    if (doc->depth_n > doc->n) doc->depth_n = doc->n;	/* the room there is now; br_from below cuts it further */
   }
   if (doc->br_from < doc->depth_n) doc->depth_n = doc->br_from;	/* an edit: from its line on again */
   doc->br_from = (size_t)-1;
@@ -1212,10 +1213,10 @@ static void fold_del (size_t y) {
 
 /* the folded region line y is hidden in: its start, or (size_t)-1 */
 static size_t hidden_in (size_t y) {
-  size_t i, found = (size_t)-1;
+  size_t i;
   for (i = 0; i < T->nfold && T->fold[i] < y; i++)
-    if (fold_end(T->fold[i]) >= y && found == (size_t)-1) found = T->fold[i];	/* the outermost */
-  return found;
+    if (fold_end(T->fold[i]) >= y) return T->fold[i];	/* the outermost: the first (they are in order) */
+  return (size_t)-1;
 }
 
 
@@ -1248,7 +1249,8 @@ static void fold_shift (int ins, Pos a, Pos b) {
   if (T->nfold == 0 || a.y == b.y) return;
   for (i = 0; i < T->nfold; i++) {
     size_t f = T->fold[i];
-    if (f > a.y) {
+    if (ins && f == a.y && a.x == 0) f += b.y - a.y;	/* lines put in over its header: it moves down with it */
+    else if (f > a.y) {
       if (ins) f += b.y - a.y;
       else if (f <= b.y) continue;	/* its line went */
       else f -= b.y - a.y;
@@ -1352,17 +1354,23 @@ static int lower (int c) {
 }
 
 
-/* E.find as a regular expression (".*" on): made again when it or Alt+C change */
+/*
+** E.find as a regular expression (".*" on): made again when it or Alt+C
+** change. One that does not compile is kept too (as NULL): match_at asks
+** for every byte, and compiling it again each time made a bad regex slow.
+*/
 static const Regex *find_re (void) {
   static Regex *re;
-  static char was[258];
-  char key[258];
+  static char was[sizeof(E.find)];
+  static int made, was_case;
   const char *err;
-  snprintf(key, sizeof(key), "%c%s", E.find_case ? 'C' : 'c', E.find);
-  if (re && strcmp(key, was) == 0) return re;
+  if (made && was_case == E.find_case && strcmp(E.find, was) == 0) return re;
   re_free(re);
   re = re_compile(E.find, !E.find_case, &err);
-  snprintf(was, sizeof(was), "%s", key);
+  made = 1;
+  was_case = E.find_case;
+  memcpy(was, E.find, sizeof(was));
+  was[sizeof(was) - 1] = '\0';
   return re;
 }
 
@@ -1429,24 +1437,74 @@ hit:
 }
 
 
-/* how many matches, and which one starts at p (0: none) */
-static size_t count_matches (Pos p, size_t *which) {
+/*
+** The matches up to p (upto), or all of them; *which: the one that starts
+** at p (0: none). They do not overlap, a regex's or not: what Replace All,
+** Alt+Enter and the highlight see ("aa" in "aaaa" is 2).
+*/
+static size_t count_scan (Pos p, int upto, size_t *which) {
   size_t y, x, n = 0;
   *which = 0;
   if (E.find[0] == '\0') return 0;
-  for (y = 0; y < T->doc->n; y++) {
+  for (y = 0; y < T->doc->n && !(upto && y > p.y); y++) {
     const Row *r = row_at(y);
     if (E.find_insel && (y < E.fsel_a.y || y > E.fsel_b.y)) continue;
-    for (x = 0; x < r->len; x++) {
+    for (x = 0; x < r->len && !(upto && y == p.y && x > p.x); x++) {
       size_t m = match_at(y, x);
       if (m) {
         n++;
         if (y == p.y && x == p.x) *which = n;
-        if (E.find_regex) x += m - 1;	/* a regex's matches do not overlap */
+        x += m - 1;
       }
     }
   }
   return n;
+}
+
+
+/*
+** How many matches, and which one starts at p (0: none). The find widget
+** asks every time it is drawn: the count is kept until the text or what is
+** looked for changes, and which one p is until p moves too.
+*/
+static size_t count_matches (Pos p, size_t *which) {
+  static struct {
+    const Doc *d;
+    unsigned long edits;
+    char find[sizeof(E.find)];
+    int fcase, word, re, insel, ok;
+    Pos fa, fb, p;
+    size_t total, which;
+  } FC;
+  size_t w;
+  if (E.find[0] == '\0') {
+    *which = 0;
+    return 0;
+  }
+  if (!FC.ok || FC.d != T->doc || FC.edits != T->doc->edits || strcmp(FC.find, E.find) != 0 ||
+      FC.fcase != E.find_case || FC.word != E.find_word || FC.re != E.find_regex || FC.insel != E.find_insel ||
+      (E.find_insel && (pos_cmp(FC.fa, E.fsel_a) != 0 || pos_cmp(FC.fb, E.fsel_b) != 0))) {
+    FC.total = count_scan(p, 0, &w);
+    FC.d = T->doc;
+    FC.edits = T->doc->edits;
+    memcpy(FC.find, E.find, sizeof(FC.find));
+    FC.find[sizeof(FC.find) - 1] = '\0';
+    FC.fcase = E.find_case;
+    FC.word = E.find_word;
+    FC.re = E.find_regex;
+    FC.insel = E.find_insel;
+    FC.fa = E.fsel_a;
+    FC.fb = E.fsel_b;
+    FC.ok = 1;
+    FC.p = p;
+    FC.which = w;
+  }
+  else if (pos_cmp(FC.p, p) != 0) {	/* only p moved: the matches up to it */
+    count_scan(p, 1, &FC.which);
+    FC.p = p;
+  }
+  *which = FC.which;
+  return FC.total;
 }
 
 /* }================================================================== */
@@ -1714,39 +1772,101 @@ static int text_cols (void) {
 
 /*
 ** Word wrap: a line too long for the text is cut into rows, after a space
-** when there is one, like VS Code's. wrap_segs gives where each row starts.
+** when there is one, like VS Code's. wrap_segs gives where each row starts
+** (*st) and the column it starts at (*sc), as many rows as the line needs.
+**
+** The rows of a line are kept, by the line's number, until its text, the
+** text's width or what a character is wide changes: every screen row asks
+** for the rows of the lines above it, and a long line cut into thousands
+** of rows was cut again for each. What *st and *sc point to stays until
+** wrap_segs is asked for another line with the same slot (WRAP_SLOTS apart).
 */
-#define MAXSEG	512
+#define WRAP_SLOTS	512
 
-static size_t wrap_segs (size_t y, size_t *st) {
+typedef struct {
+  const Doc *doc;
+  const char *s;	/* the row as it was */
+  size_t y, len, width, n, cap;
+  unsigned long edits;
+  int tabw, cc, ui, on;
+  size_t *st, *sc;	/* where each row starts, and its column */
+} WrapRows;
+
+static WrapRows g_wrap[WRAP_SLOTS];
+
+static void wrap_add (WrapRows *w, size_t x, size_t col) {
+  if (w->n == w->cap) {
+    w->cap = w->cap ? w->cap * 2 : 16;
+    w->st = (size_t *)xrealloc(w->st, w->cap * sizeof(size_t));
+    w->sc = (size_t *)xrealloc(w->sc, w->cap * sizeof(size_t));
+  }
+  w->st[w->n] = x;
+  w->sc[w->n++] = col;
+}
+
+
+static size_t wrap_segs (size_t y, const size_t **st, const size_t **sc) {
+  static const size_t zero[1] = { 0 };
   const Row *r = row_at(y);
-  size_t n = 1, x = 0, col = 0, segcol = 0, lastsp = 0, width = (size_t)text_cols(), len;
-  st[0] = 0;
-  if (!E.wrap || width < 4) return 1;
+  size_t x = 0, col = 0, segcol = 0, lastsp = 0, lastcol = 0, width = (size_t)text_cols(), len;
+  WrapRows *w = &g_wrap[y % WRAP_SLOTS];
+  if (!E.wrap || width < 4) {
+    *st = zero;
+    if (sc) *sc = zero;
+    return 1;
+  }
+  if (w->on && w->doc == T->doc && w->y == y && w->edits == T->doc->edits && w->s == r->s && w->len == r->len &&
+      w->width == width && w->tabw == (int)TABW && w->cc == eopt.control_chars && w->ui == eopt.uni_invisible) {
+    *st = w->st;
+    if (sc) *sc = w->sc;
+    return w->n;
+  }
+  w->on = 1;
+  w->doc = T->doc;
+  w->y = y;
+  w->edits = T->doc->edits;
+  w->s = r->s;
+  w->len = r->len;
+  w->width = width;
+  w->tabw = (int)TABW;
+  w->cc = eopt.control_chars;
+  w->ui = eopt.uni_invisible;
+  w->n = 0;
+  wrap_add(w, 0, 0);
   while (x < r->len) {
-    size_t w = char_width(r, x, col, &len);
-    if (col + w - segcol > width && x > st[n - 1]) {	/* it does not fit: a new row */
-      size_t cut = lastsp > st[n - 1] ? lastsp : x;
-      if (n == MAXSEG) break;
-      st[n++] = cut;
+    size_t cw = char_width(r, x, col, &len);
+    if (col + cw - segcol > width && x > w->st[w->n - 1]) {	/* it does not fit: a new row */
+      int atsp = lastsp > w->st[w->n - 1];
+      size_t cut = atsp ? lastsp : x;
+      col = segcol = atsp ? lastcol : col;	/* the column is known: not counted again from the start */
+      wrap_add(w, cut, col);
       x = cut;
-      col = segcol = col_of(r, cut);
       lastsp = 0;
       continue;
     }
-    if (r->s[x] == ' ' || r->s[x] == '\t') lastsp = x + len;
-    col += w;
+    col += cw;
     x += len;
+    if (r->s[x - len] == ' ' || r->s[x - len] == '\t') {
+      lastsp = x;
+      lastcol = col;
+    }
   }
-  return n;
+  *st = w->st;
+  if (sc) *sc = w->sc;
+  return w->n;
 }
 
 
 /* the row of line y that x is in */
 static size_t seg_of (size_t y, size_t x) {
-  size_t st[MAXSEG], n = wrap_segs(y, st), k = 0;
-  while (k + 1 < n && st[k + 1] <= x) k++;
-  return k;
+  const size_t *st;
+  size_t n = wrap_segs(y, &st, NULL), lo = 0, hi = n - 1;
+  while (lo < hi) {	/* the last row that starts at or before x */
+    size_t mid = lo + (hi - lo + 1) / 2;
+    if (st[mid] <= x) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
 }
 
 
@@ -1788,7 +1908,8 @@ static void view_block_clear (void) {
 ** rows of their own and count, exactly as vis_row counts them.
 */
 static int vb_start (void) {
-  size_t y, rows = 0, st[MAXSEG];
+  size_t y, rows = 0;
+  const size_t *st;
   if (!VB.on || !HAS_DOC || VB.after >= T->doc->n || VB.after < T->top) return -1;
   if (T->nfold && hidden_in(VB.after) != (size_t)-1) return -1;
   if (!E.wrap) {
@@ -1796,8 +1917,8 @@ static int vb_start (void) {
     for (y = T->top; y < VB.after; y = line_next(y)) rows += 1 + (size_t)lens_row_at(y);
     return (int)(rows + (size_t)lens_row_at(VB.after)) + 1;
   }
-  for (y = T->top; y < VB.after; y = line_next(y)) rows += wrap_segs(y, st);
-  rows += wrap_segs(VB.after, st);
+  for (y = T->top; y < VB.after; y = line_next(y)) rows += wrap_segs(y, &st, NULL);
+  rows += wrap_segs(VB.after, &st, NULL);
   if (rows < T->sub) return -1;
   rows -= T->sub;
   for (y = T->top; y <= VB.after; y = line_next(y)) {
@@ -1830,7 +1951,8 @@ static int vb_at (int sy) {
 ** of a view block (a peek) are none of the text's.
 */
 static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *left, int *lens) {
-  size_t y = T->top, k, st[MAXSEG], n;
+  size_t y = T->top, k, n;
+  const size_t *st, *sc;
   *lens = 0;
   {	/* the block's rows are not the text's: under it the lines moved down */
     int s = vb_start();
@@ -1879,7 +2001,7 @@ static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *l
     }
     sy--;
   }
-  n = wrap_segs(y, st);
+  n = wrap_segs(y, &st, &sc);
   k = T->sub < n ? T->sub : n - 1;
   while (sy > 0) {
     if (++k >= n) {
@@ -1895,7 +2017,7 @@ static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *l
           return 1;
         }
       }
-      n = wrap_segs(y, st);
+      n = wrap_segs(y, &st, &sc);
       k = 0;
     }
     sy--;
@@ -1903,7 +2025,7 @@ static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *l
   *line = y;
   *from = st[k];
   *to = k + 1 < n ? st[k + 1] : row_at(y)->len;
-  *left = col_of(row_at(y), st[k]);
+  *left = sc[k];
   return 1;
 }
 
@@ -2570,7 +2692,8 @@ static void lens_run_here (void) {
 
 /* the screen row of p (from the top of the text), -1 when not shown */
 static int vis_row (Pos p) {
-  size_t y, rows = 0, st[MAXSEG], shift = (size_t)vb_shift(p.y);	/* a peek's rows over it */
+  size_t y, rows = 0, shift = (size_t)vb_shift(p.y);
+  const size_t *st;	/* a peek's rows over it */
   if (T->nfold && hidden_in(p.y) != (size_t)-1) return -1;
   if (p.y < T->top) return -1;
   if (!E.wrap && T->nfold == 0) {
@@ -2584,7 +2707,7 @@ static int vis_row (Pos p) {
     return (y == p.y && rows < (size_t)L.text_h) ? (int)rows : -1;
   }
   for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y))
-    rows += wrap_segs(y, st) + (size_t)(y == T->top ? (T->sub == 0 && lens_row_at(y)) : lens_row_at(y));
+    rows += wrap_segs(y, &st, NULL) + (size_t)(y == T->top ? (T->sub == 0 && lens_row_at(y)) : lens_row_at(y));
   if (lens_row_at(p.y) && (p.y != T->top || T->sub == 0)) rows++;
   rows += seg_of(p.y, p.x);
   if (rows < T->sub) return -1;
@@ -2603,9 +2726,9 @@ static int screen_at (Pos p, int *sx, int *sy) {
   if (row < 0) return 0;
   col = vcol(row_at(p.y), p.y, p.x);
   if (E.wrap) {
-    size_t st[MAXSEG];
-    wrap_segs(p.y, st);
-    left = col_of(row_at(p.y), st[seg_of(p.y, p.x)]);
+    const size_t *st, *sc;
+    wrap_segs(p.y, &st, &sc);
+    left = sc[seg_of(p.y, p.x)];
   }
   else left = T->left;
   if (col < left || col >= left + (size_t)text_cols()) return 0;
@@ -2617,14 +2740,14 @@ static int screen_at (Pos p, int *sx, int *sy) {
 
 /* the view one row further down (d > 0) or up */
 static void vis_scroll (int d) {
-  size_t st[MAXSEG];
+  const size_t *st;
   if (!E.wrap) {
     if (d < 0) T->top = line_prev(T->top);
     else if (line_next(T->top) < T->doc->n) T->top = line_next(T->top);
     return;
   }
   if (d > 0) {
-    if (T->sub + 1 < wrap_segs(T->top, st)) T->sub++;
+    if (T->sub + 1 < wrap_segs(T->top, &st, NULL)) T->sub++;
     else if (line_next(T->top) < T->doc->n) {
       T->top = line_next(T->top);
       T->sub = 0;
@@ -2633,7 +2756,7 @@ static void vis_scroll (int d) {
   else if (T->sub > 0) T->sub--;
   else if (T->top > 0) {
     T->top = line_prev(T->top);
-    T->sub = wrap_segs(T->top, st) - 1;
+    T->sub = wrap_segs(T->top, &st, NULL) - 1;
   }
 }
 
@@ -2645,6 +2768,22 @@ static void scroll_to_cursor (void) {
     if (T->cur.y < T->top || (T->cur.y == T->top && seg < T->sub)) {
       T->top = T->cur.y;
       T->sub = seg;
+    }
+    else if (T->cur.y > T->top + (size_t)L.text_h && vis_row(T->cur) < 0 &&
+             !(T->nfold && hidden_in(T->cur.y) != (size_t)-1)) {
+      /* far below (every line takes a row at least): from the cursor's row up, not row by row down to it */
+      int i;
+      T->top = T->cur.y;
+      T->sub = seg;
+      for (i = 0; i < L.text_h; i++) {
+        size_t top = T->top, sub = T->sub;
+        vis_scroll(-1);
+        if ((T->top == top && T->sub == sub) || vis_row(T->cur) < 0) {
+          T->top = top;
+          T->sub = sub;
+          break;
+        }
+      }
     }
     while (vis_row(T->cur) < 0 && guard++ < 100000) vis_scroll(1);
     return;
@@ -2842,6 +2981,8 @@ static uint32_t cov_bg (int cov, int gutter) {
 }
 
 
+static unsigned long g_draw_gen;	/* one more for every drawing of a group */
+
 static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, size_t to, size_t left) {
   static unsigned char *tok;
   static size_t tokcap;
@@ -2859,13 +3000,37 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
   char num[32];
   int cov;
   mc_row_prep(y);	/* the other cursors this line has, once for the whole row */
-  if (r->len + 1 > tokcap) {
-    tokcap = r->len + 256;
-    tok = (unsigned char *)xrealloc(tok, tokcap);
+  {	/* a wrapped line's rows, one after another in the same drawing: its tokens once */
+    static const Doc *tk_doc;
+    static const void *tk_sx;
+    static const char *tk_s;
+    static size_t tk_y, tk_len;
+    static unsigned long tk_edits, tk_gen;
+    static int tk_tmc;
+    int again = tok && tk_gen == g_draw_gen && tk_doc == T->doc && tk_sx == (const void *)T->sx && tk_y == y &&
+                tk_edits == T->doc->edits && tk_s == r->s && tk_len == r->len;
+    if (again) {
+      tmc = tm_colors(T->doc, y, &tfg, &tfs, &tcls);
+      if (tmc != tk_tmc) again = 0;	/* the grammar's colors are another line's now: all again */
+    }
+    if (!again) {
+      if (r->len + 1 > tokcap) {
+        tokcap = r->len + 256;
+        tok = (unsigned char *)xrealloc(tok, tokcap);
+      }
+      syntax_line(T->doc, T->sx, y, tok);
+      tmc = tm_colors(T->doc, y, &tfg, &tfs, &tcls);
+      sem_apply(y, tok, r->len);
+      tk_doc = T->doc;
+      tk_sx = (const void *)T->sx;
+      tk_s = r->s;
+      tk_y = y;
+      tk_len = r->len;
+      tk_edits = T->doc->edits;
+      tk_gen = g_draw_gen;
+      tk_tmc = tmc;
+    }
   }
-  syntax_line(T->doc, T->sx, y, tok);
-  tmc = tm_colors(T->doc, y, &tfg, &tfs, &tcls);
-  sem_apply(y, tok, r->len);
   if (hints) hi = ih_first(y);
   if (opt.line_numbers && from == 0) {
     unsigned long v = (unsigned long)(y + 1);
@@ -2898,6 +3063,10 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     if (bulb) scr_put_rgb(x0, sy, bulb, ui_color(C_LIGHTBULB), ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG), 0);
   }
   if (from == 0) draw_quick(sy, y, gw, is_cur);	/* scm.diffDecorations: the change's bar */
+  if (from > 0 && from <= r->len && E.wrap && !((E.find_open || vim_lit()) && n > 0)) {
+    x = from;	/* a wrapped line's later row: it starts at column left, no need to walk there */
+    col = left;
+  }
   while (x < r->len && x < to && col + vs < right) {
     size_t w = char_width(r, x, col, &len), i;
     uint32_t cp = utf8_decode(r->s + x, r->len - x, &len);
@@ -4530,6 +4699,7 @@ static void draw_crumbs_full (void) {
 static void draw_group (int other) {
   int gw = gutter_width(), sy, ns;
   Pos sa, sb;
+  g_draw_gen++;	/* draw_row's tokens are this drawing's */
   draw_tabs_full();
   view_blocks_update(other);	/* a peek's rows, before the lines are drawn */
   if (G->diff && HAS_DIFF) {
@@ -4874,7 +5044,8 @@ static void move_v (long dy, int extend) {
 
 /* word wrap: Up / Down go to the row above / below, even in the same line; 0: not wrapped here */
 static int wrap_move (int d, int extend) {
-  size_t st[MAXSEG], n = wrap_segs(T->cur.y, st), k = seg_of(T->cur.y, T->cur.x);
+  const size_t *st;
+  size_t n = wrap_segs(T->cur.y, &st, NULL), k = seg_of(T->cur.y, T->cur.x);
   const Row *r = row_at(T->cur.y);
   size_t rel = col_of(r, T->cur.x) - col_of(r, st[k]);
   Pos p = T->cur;
@@ -4892,14 +5063,14 @@ static int wrap_move (int d, int extend) {
     size_t m;
     p.y = line_prev(p.y);
     r = row_at(p.y);
-    m = wrap_segs(p.y, st);
+    m = wrap_segs(p.y, &st, NULL);
     p.x = x_of_col(r, col_of(r, st[m - 1]) + rel);
   }
   else if (d > 0 && line_next(p.y) < T->doc->n) {	/* the first row of the line below */
     size_t m;
     p.y = line_next(p.y);
     r = row_at(p.y);
-    m = wrap_segs(p.y, st);
+    m = wrap_segs(p.y, &st, NULL);
     p.x = x_of_col(r, rel);
     if (m > 1 && p.x >= st[1]) p.x = prev_x(r, st[1]);
   }
@@ -12545,7 +12716,8 @@ static int draw_sticky (int gw, Pos sa, Pos sb) {
     const Row *r = row_at(SS.line[i]);
     size_t to = r->len;
     if (E.wrap) {	/* its first row only */
-      size_t st[MAXSEG], ns = wrap_segs(SS.line[i], st);
+      const size_t *st;
+      size_t ns = wrap_segs(SS.line[i], &st, NULL);
       to = ns > 1 ? st[1] : r->len;
     }
     draw_row(L.text_y + i, SS.line[i], gw, sa, sb, 0, to, E.wrap ? 0 : T->left);
@@ -13162,11 +13334,14 @@ static void goto_line (const char *init) {
   Pick p;
   char hint[160];
   int r;
+  size_t x, ch = 0;
+  const Row *cr = row_at(T->cur.y);
+  for (x = 0; x < T->cur.x && x < cr->len; x = next_x(cr, x)) ch++;	/* characters, not bytes */
   pick_init(&p, NULL);
   p.prefix = ":";
   if (init) snprintf(p.text, sizeof(p.text), "%s", init);
   snprintf(hint, sizeof(hint), "Current Line: %lu, Character: %lu. Type a line number between 1 and %lu to navigate to.",
-           (unsigned long)(T->cur.y + 1), (unsigned long)(T->cur.x + 1), (unsigned long)T->doc->n);
+           (unsigned long)(T->cur.y + 1), (unsigned long)(ch + 1), (unsigned long)T->doc->n);
   p.hint = hint;
   r = pick_run(&p);
   if (r == PICK_TEXT) {
@@ -13175,9 +13350,13 @@ static void goto_line (const char *init) {
     Pos q;
     if (c) col = strtoul(c + 1, NULL, 10);
     if (line > 0) {
+      const Row *lr;
       q.y = line - 1;
-      q.x = col > 0 ? col - 1 : 0;
-      move_h(doc_clamp(T->doc, q), 0);
+      q.x = 0;
+      q = doc_clamp(T->doc, q);
+      lr = row_at(q.y);
+      for (; col > 1 && q.x < lr->len; col--) q.x = next_x(lr, q.x);	/* the column counts characters */
+      move_h(q, 0);
       center_cursor();
     }
   }
@@ -14828,6 +15007,8 @@ static int save_conflict (void) {
 }
 
 
+static long long g_saved_at;	/* a save's git and Explorer refresh is due then (0: none) */
+
 /* after a save: settings.json, keybindings.json and snippets apply; git and the Explorer look again */
 static void after_save (void) {
   char *sp;
@@ -14875,6 +15056,17 @@ static void after_save (void) {
   T->preview = 0;
   T->sx = syntax_detect(T->doc->path, T->doc);
   lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
+  g_saved_at = os_now_us() + 400000;	/* git and the Explorer: once the saves stop (save_refresh_idle) */
+}
+
+
+/*
+** Git's status and the Explorer, looked at again after the saves: not
+** for each one (auto save, Save All), once 0.4 s after the last.
+*/
+static void save_refresh_idle (void) {
+  if (g_saved_at == 0 || os_now_us() < g_saved_at) return;
+  g_saved_at = 0;
   git_refresh();
   side_refresh();
 }
@@ -19211,26 +19403,44 @@ static int next_exact (const char *s, size_t n, Pos p, Pos *f) {
 }
 
 
-static int has_cursor_at (Pos a) {
+/* where a selection starts: the smaller of its anchor and its cursor */
+static Pos sel_start (Pos anchor, Pos cur) {
+  return pos_cmp(anchor, cur) <= 0 ? anchor : cur;
+}
+
+
+/* a selection of the main cursor, or of the first n of T->mc, starts at a */
+static int has_cursor_at (Pos a, int n) {
   int i;
-  if (T->sel && pos_cmp(T->anchor, a) == 0) return 1;
-  for (i = 0; i < T->nmc; i++)
-    if (T->mc[i].sel && pos_cmp(T->mc[i].anchor, a) == 0) return 1;
+  if (T->sel && pos_cmp(sel_start(T->anchor, T->cur), a) == 0) return 1;
+  for (i = 0; i < n; i++)
+    if (T->mc[i].sel && pos_cmp(sel_start(T->mc[i].anchor, T->mc[i].cur), a) == 0) return 1;
   return 0;
 }
 
 
-/* Ctrl+D: the next place of the selection gets a cursor too; all: Ctrl+Shift+L */
+/*
+** Ctrl+D: the next place of the selection gets a cursor too; all: Ctrl+Shift+L.
+** The cursors added here come one after another from the selection on, so
+** they are only checked against the ones there were before, and the search
+** stops once it has gone round the end and is back where it started.
+*/
 static void add_next_match (int all) {
-  Pos a, b, f;
+  Pos a, b, f, s0;
   char *t;
   size_t n;
+  int nmc0, wrapped = 0;
   if (!T->sel && !select_word()) return;
   sel_range(&a, &b);
   if (a.y != b.y) return;
   t = doc_text(T->doc, a, b, &n);
+  s0 = a;
+  nmc0 = T->nmc;
   do {
-    if (!next_exact(t, n, b, &f) || has_cursor_at(f)) break;
+    if (!next_exact(t, n, b, &f)) break;
+    if (pos_cmp(f, b) < 0) wrapped = 1;
+    if (wrapped && pos_cmp(f, s0) >= 0) break;
+    if (has_cursor_at(f, nmc0)) break;
     mc_push();
     T->anchor = f;
     T->cur = f;
@@ -19301,7 +19511,7 @@ static void move_sel_next (void) {
   sel_range(&a, &b);
   if (a.y != b.y) return;
   t = doc_text(T->doc, a, b, &n);
-  if (next_exact(t, n, b, &f) && !has_cursor_at(f)) {
+  if (next_exact(t, n, b, &f) && !has_cursor_at(f, T->nmc)) {
     T->anchor = f;
     T->cur = f;
     T->cur.x += n;
@@ -21983,6 +22193,7 @@ int main (int argc, char **argv) {
     k = term_key(search_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
     quickfix_idle();
     if (k == K_NONE) {
+      save_refresh_idle();	/* git and the Explorer, after the last save */
       hover_idle();
       hl_idle();
       bulb_idle();
@@ -21997,6 +22208,7 @@ int main (int argc, char **argv) {
     if (k == K_MOUSE) on_mouse();
     else on_key(k);
     acc_track(k);	/* a screen reader's: what changed, said */
+    save_refresh_idle();	/* keys all the time: it is still done */
     autosave_focus();
   }
   search_stop();	/* the workers end before the editor does */

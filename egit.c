@@ -137,11 +137,12 @@ int git_exec (Buf *out, int err, const char *const *args) {
   argv[n++] = g_git;
   argv[n++] = (char *)"-C";
   argv[n++] = (char *)(g_top ? g_top : side_root());
+  argv[n++] = (char *)"--literal-pathspecs";	/* a file named "[ab].txt" or "*.c" is only that file */
   while (*args && n < 63) argv[n++] = (char *)*args++;
   argv[n] = NULL;
   rc = err ? run_capture_err(argv, out) : run_capture(argv, out);
   buf_init(&cmd);	/* the OUTPUT view's Git channel, like VS Code's: "> git status -z [12ms]" */
-  for (i = 3; i < n; i++) buf_printf(&cmd, " %s", argv[i]);
+  for (i = 4; i < n; i++) buf_printf(&cmd, " %s", argv[i]);
   buf_putc(&cmd, '\0');
   out_log("Git", "[%s] > git%s [%ldms]", rc == 0 ? "info" : "error", cmd.s, (long)((os_now_us() - t0) / 1000));
   if (rc != 0 && out->len > from) out_append("Git", out->s + from, out->len - from < 4096 ? out->len - from : 4096);
@@ -1537,8 +1538,9 @@ static int same_line (const TLine *a, const TLine *b) {
 
 /*
 ** The edit script from a to b: ops[i] is ' ', '-' or '+'. Greedy Myers
-** with every step's furthest points kept to walk back; a script too long
-** for that memory is made of the rest deleted and inserted.
+** with every step's furthest points kept to walk back (step d keeps only
+** its diagonals -d..d); a script too long for that memory is made of the
+** rest deleted and inserted.
 */
 static char *edit_script (const TLine *a, size_t n, const TLine *b, size_t m, size_t *nops) {
   long max = (long)(n + m), d, k, off = max + 1, x, y, dmax;
@@ -1549,8 +1551,12 @@ static char *edit_script (const TLine *a, size_t n, const TLine *b, size_t m, si
   if ((double)max * (double)(2 * max + 3) > 60e6) dmax = (long)(60e6 / (double)(2 * max + 3));
   v = (long *)calloc((size_t)(2 * max + 3), sizeof(long));
   trace = (long **)xmalloc((size_t)(dmax + 1) * sizeof(long *));
+  for (d = 0; d <= dmax; d++) trace[d] = NULL;
+  if (v == NULL) {
+    d = -1;
+    goto giveup;
+  }
   for (d = 0; d <= dmax; d++) {
-    trace[d] = NULL;
     for (k = -d; k <= d; k += 2) {
       if (k == -d || (k != d && v[off + k - 1] < v[off + k + 1])) x = v[off + k + 1];
       else x = v[off + k - 1] + 1;
@@ -1561,19 +1567,22 @@ static char *edit_script (const TLine *a, size_t n, const TLine *b, size_t m, si
       }
       v[off + k] = x;
       if (x >= (long)n && y >= (long)m) {
-        trace[d] = (long *)xmalloc((size_t)(2 * max + 3) * sizeof(long));
-        memcpy(trace[d], v, (size_t)(2 * max + 3) * sizeof(long));
+        trace[d] = (long *)malloc((size_t)(2 * d + 1) * sizeof(long));
+        if (trace[d] == NULL) goto giveup;
+        memcpy(trace[d], v + off - d, (size_t)(2 * d + 1) * sizeof(long));
         goto found;
       }
     }
-    trace[d] = (long *)xmalloc((size_t)(2 * max + 3) * sizeof(long));
-    memcpy(trace[d], v, (size_t)(2 * max + 3) * sizeof(long));
+    trace[d] = (long *)malloc((size_t)(2 * d + 1) * sizeof(long));	/* trace[d][d + k]: v[k] */
+    if (trace[d] == NULL) goto giveup;
+    memcpy(trace[d], v + off - d, (size_t)(2 * d + 1) * sizeof(long));
   }
-  /* too different: all of a goes, all of b comes */
+  d = dmax;
+giveup:	/* too different: all of a goes, all of b comes */
   g_gaveup = 1;
   for (x = 0; x < (long)n; x++) ops[no++] = '-';
   for (y = 0; y < (long)m; y++) ops[no++] = '+';
-  for (d = 0; d <= dmax; d++) free(trace[d]);
+  for (; d >= 0; d--) free(trace[d]);
   free(trace);
   free(v);
   *nops = no;
@@ -1584,11 +1593,11 @@ found:
     x = (long)n;
     y = (long)m;
     for (; dd > 0; dd--) {
-      long *pv = trace[dd - 1];
+      long *pv = trace[dd - 1] + (dd - 1);	/* pv[k]: step dd-1's diagonal k */
       k = x - y;
-      if (k == -dd || (k != dd && pv[off + k - 1] < pv[off + k + 1])) k = k + 1;	/* came down: an insert */
+      if (k == -dd || (k != dd && pv[k - 1] < pv[k + 1])) k = k + 1;	/* came down: an insert */
       else k = k - 1;	/* came right: a delete */
-      px = pv[off + k];
+      px = pv[k];
       py = px - k;
       while (x > px && y > py) {	/* the diagonal */
         ops[no++] = ' ';
@@ -1886,11 +1895,12 @@ int diff_open (const char *path, int staged) {
   }
   else {
     {	/* the whole file as context: VS Code shows all of it */
-      char *argv[12];
+      char *argv[14];
       int k = 0;
       argv[k++] = g_git;
       argv[k++] = (char *)"-C";
       argv[k++] = g_top;
+      argv[k++] = (char *)"--literal-pathspecs";
       argv[k++] = (char *)"diff";
       if (staged) argv[k++] = (char *)"--cached";
       argv[k++] = (char *)"--no-color";

@@ -13,6 +13,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 
 int pos_cmp (Pos a, Pos b) {
   if (a.y != b.y) return a.y < b.y ? -1 : 1;
@@ -49,21 +57,29 @@ static void row_room (Row *r, size_t need) {
 
 
 static void row_append (Row *r, const char *s, size_t n) {
+  if (n == 0) return;	/* r->s may be NULL yet */
   row_room(r, r->len + n);
   memcpy(r->s + r->len, s, n);
   r->len += n;
 }
 
 
-/* a new empty line at index at */
-static Row *row_new (Doc *d, size_t at) {
-  if (d->n == d->cap) {
-    d->cap = d->cap ? d->cap * 2 : 64;
+/* k new empty lines at index at: the ones after it move once */
+static void rows_open (Doc *d, size_t at, size_t k) {
+  if (d->n + k > d->cap) {
+    d->cap = d->cap ? d->cap : 64;
+    while (d->cap < d->n + k) d->cap *= 2;
     d->row = (Row *)xrealloc(d->row, d->cap * sizeof(Row));
   }
-  memmove(d->row + at + 1, d->row + at, (d->n - at) * sizeof(Row));
-  d->n++;
-  memset(&d->row[at], 0, sizeof(Row));
+  memmove(d->row + at + k, d->row + at, (d->n - at) * sizeof(Row));
+  d->n += k;
+  memset(&d->row[at], 0, k * sizeof(Row));
+}
+
+
+/* a new empty line at index at */
+static Row *row_new (Doc *d, size_t at) {
+  rows_open(d, at, 1);
   return &d->row[at];
 }
 
@@ -90,22 +106,33 @@ static Pos raw_insert (Doc *d, Pos at, const char *s, size_t n) {
   if (at.y < d->hl_from) d->hl_from = at.y;
   if (at.y < d->br_from) d->br_from = at.y;
   if (at.y < d->tm_from) d->tm_from = at.y;
-  char *tail = xstrndup(r->s ? r->s + at.x : "", r->len - at.x);
-  size_t tlen = r->len - at.x, i, from = 0;
+  size_t tlen = r->len - at.x, i, k = 0, from = 0, y;
+  Row *last;
+  for (i = 0; i < n; i++)
+    if (s[i] == '\n') k++;
+  if (k == 0) {	/* in the line: the tail moves over, no copy of it */
+    if (n == 0) return at;
+    row_room(r, r->len + n);
+    memmove(r->s + at.x + n, r->s + at.x, tlen);
+    memcpy(r->s + at.x, s, n);
+    r->len += n;
+    at.x += n;
+    return at;
+  }
+  rows_open(d, at.y + 1, k);	/* all the new lines at once */
+  r = &d->row[at.y];
+  last = &d->row[at.y + k];
+  for (i = n; s[i - 1] != '\n'; i--) ;
+  row_append(last, s + i, n - i);	/* the last line: the text after the last newline, then the tail */
+  if (tlen > 0) row_append(last, r->s + at.x, tlen);
   r->len = at.x;
-  for (i = 0; i <= n; i++) {
-    if (i < n && s[i] != '\n') continue;
-    row_append(&d->row[at.y], s + from, i - from);
-    if (i < n) {	/* a newline: the rest goes on a new line */
-      at.x = 0;
-      at.y++;
-      row_new(d, at.y);
-    }
-    else at.x = d->row[at.y].len;
+  for (i = 0, y = at.y; i < n; i++) {	/* the lines before it */
+    if (s[i] != '\n') continue;
+    row_append(&d->row[y++], s + from, i - from);
     from = i + 1;
   }
-  row_append(&d->row[at.y], tail, tlen);
-  free(tail);
+  at.y += k;
+  at.x = last->len - tlen;
   return at;
 }
 
@@ -147,8 +174,12 @@ static void raw_delete (Doc *d, Pos a, Pos b) {
 static unsigned long g_docgen;
 
 
+static void nobom_set (const Doc *d, int enc);
+
+
 void doc_init (Doc *d) {
   memset(d, 0, sizeof(*d));
+  nobom_set(d, -1);	/* a Doc made again where one was */
   d->edits = ++g_docgen;
   row_new(d, 0);
   d->indent = opt.tab_size;
@@ -178,6 +209,7 @@ void doc_free (Doc *d) {
   undo_clear(&d->undo);
   undo_clear(&d->redo);
   free(d->path);
+  nobom_set(d, -1);
   memset(d, 0, sizeof(*d));
 }
 
@@ -294,6 +326,7 @@ static char *decode (const char *s, size_t len, int enc, size_t *out) {
       }
       buf_putn(&b, u, (size_t)utf8_encode(c, u));
     }
+    if (i < len) buf_puts(&b, "\xEF\xBF\xBD");	/* an odd byte at the end: U+FFFD, not lost */
   }
   else if (enc == ENC_1252 || enc == ENC_LATIN1) {
     for (; i < len; i++) {
@@ -309,8 +342,8 @@ static char *decode (const char *s, size_t len, int enc, size_t *out) {
 }
 
 
-/* UTF-8 text put into b in enc (with its BOM when it has one) */
-static void encode (Buf *b, const char *s, size_t n, int enc) {
+/* UTF-8 text put into b in enc (with its BOM when it has one, UTF-16's unless nobom) */
+static void encode (Buf *b, const char *s, size_t n, int enc, int nobom) {
   size_t i = 0, len;
   if (enc == ENC_UTF8) {
     buf_putn(b, s, n);
@@ -321,8 +354,8 @@ static void encode (Buf *b, const char *s, size_t n, int enc) {
     buf_putn(b, s, n);
     return;
   }
-  if (enc == ENC_UTF16LE) buf_putn(b, "\xFF\xFE", 2);
-  if (enc == ENC_UTF16BE) buf_putn(b, "\xFE\xFF", 2);
+  if (enc == ENC_UTF16LE && !nobom) buf_putn(b, "\xFF\xFE", 2);
+  if (enc == ENC_UTF16BE && !nobom) buf_putn(b, "\xFE\xFF", 2);
   while (i < n) {
     uint32_t c = utf8_decode(s + i, n - i, &len);
     if (len == 0) len = 1;
@@ -374,13 +407,92 @@ void doc_set_text (Doc *d, const char *s, size_t len) {
 }
 
 
-/* the file's bytes in the text's encoding, CR LF made LF; NULL: it can't be read */
-static char *load_bytes (const char *native, int *enc, int *crlf, size_t *len) {
+/*
+** UTF-16 is written with a BOM, but a file that was read without one is
+** saved without one too: the Docs that came so, with the encoding they
+** came in (another one chosen since gets its BOM).
+*/
+static struct {
+  const Doc *d;
+  int enc;
+} *g_nobom;
+static size_t g_nobom_n;
+
+
+static void nobom_set (const Doc *d, int enc) {
+  size_t i;
+  for (i = 0; i < g_nobom_n && g_nobom[i].d != d; i++) ;
+  if (enc < 0) {	/* forget it */
+    if (i < g_nobom_n) g_nobom[i] = g_nobom[--g_nobom_n];
+    return;
+  }
+  if (i == g_nobom_n) {
+    g_nobom = xrealloc(g_nobom, (g_nobom_n + 1) * sizeof(*g_nobom));
+    g_nobom_n++;
+  }
+  g_nobom[i].d = d;
+  g_nobom[i].enc = enc;
+}
+
+
+static int nobom_of (const Doc *d) {
+  size_t i;
+  for (i = 0; i < g_nobom_n; i++)
+    if (g_nobom[i].d == d) return g_nobom[i].enc == d->enc;
+  return 0;
+}
+
+
+#define LOAD_MAX	((long long)1 << 30)	/* bigger files are not opened (never cut short) */
+
+/* the whole file, NUL ended; NULL: it can't be read (or is too big to) */
+static char *read_all (const char *native, size_t *len) {
+  OsStat st;
+  size_t cap, n = 0, want;
+  long got = 0;
+  char *s;
+  int fd;
+  if (os_stat(native, &st) != 0 || st.size > LOAD_MAX) return NULL;
+  cap = st.size > 0 ? (size_t)st.size + 1 : 4096;	/* +1: EOF is seen without growing */
+  if ((s = (char *)malloc(cap + 1)) == NULL) return NULL;	/* not xmalloc: too big is an error, not an exit */
+  if ((fd = os_open(native, OS_READ)) < 0) {
+    free(s);
+    return NULL;
+  }
+  for (;;) {
+    if (n == cap) {	/* it grew since the stat */
+      char *t = (long long)cap < LOAD_MAX ? (char *)realloc(s, cap * 2 + 1) : NULL;
+      if (t == NULL) {
+        got = -1;
+        break;
+      }
+      s = t;
+      cap *= 2;
+    }
+    want = cap - n < ((size_t)1 << 24) ? cap - n : (size_t)1 << 24;
+    if ((got = os_read(fd, s + n, want)) <= 0) break;
+    n += (size_t)got;
+  }
+  os_close(fd);
+  if (got < 0) {	/* an error, or too big: none of it rather than a part */
+    free(s);
+    return NULL;
+  }
+  s[n] = '\0';
+  *len = n;
+  return s;
+}
+
+
+/* the file's bytes in the text's encoding, CR LF made LF; NULL: it can't be read.
+   *bom: it had one (UTF-16 without one is saved without one) */
+static char *load_bytes (const char *native, int *enc, int *crlf, size_t *len, int *bom) {
   size_t n, i;
-  char *raw = read_file(native, &n), *s;
+  char *raw = read_all(native, &n), *s;
   int e;
   if (raw == NULL) return NULL;
   e = bom_of(raw, n);
+  *bom = e != ENC_N;
   if (e == ENC_N) e = *enc >= 0 ? *enc : opt.encoding;
   if (e == ENC_UTF8BOM && bom_of(raw, n) != ENC_UTF8BOM) e = ENC_UTF8;
   s = decode(raw, n, e, len);
@@ -423,7 +535,7 @@ static int load_enc (Doc *d, const char *native, int enc) {
   size_t len;
   OsStat st;
   char *s;
-  int crlf, refs = d->refs, asked = enc;
+  int crlf, bom, refs = d->refs, asked = enc;
   doc_free(d);
   doc_init(d);
   d->refs = refs;	/* the tabs that show it still do */
@@ -436,9 +548,10 @@ static int load_enc (Doc *d, const char *native, int enc) {
     return 1;
   }
   if (st.is_dir) return -1;
-  s = load_bytes(native, &enc, &crlf, &len);
+  s = load_bytes(native, &enc, &crlf, &len, &bom);
   if (s == NULL) return -1;
   d->enc = asked < 0 && d->ec.enc >= 0 ? d->ec.enc : enc;	/* and it is saved in it */
+  if (!bom && (enc == ENC_UTF16LE || enc == ENC_UTF16BE)) nobom_set(d, enc);
   d->crlf = crlf;
   doc_set_text(d, s, len);
   free(s);
@@ -455,9 +568,9 @@ static int load_enc (Doc *d, const char *native, int enc) {
 
 
 char *doc_disk_text (const Doc *d, size_t *len) {
-  int enc = d->enc, crlf;
+  int enc = d->enc, crlf, bom;
   if (d->path == NULL) return NULL;
-  return load_bytes(d->path, &enc, &crlf, len);
+  return load_bytes(d->path, &enc, &crlf, len, &bom);
 }
 
 
@@ -494,10 +607,108 @@ int doc_disk_check (Doc *d) {
 }
 
 
+/* s written over the file: a write that fails half way leaves it cut */
+static int write_in_place (const char *path, const char *s, size_t n) {
+  int fd = os_open(path, OS_WRITE), ok;
+  if (fd < 0) return -1;
+  ok = n == 0 || os_write(fd, s, n) == (long)n;
+  os_close(fd);
+  return ok ? 0 : -1;
+}
+
+
+#ifdef _WIN32
+
+/* UTF-8 to UTF-16 */
+static wchar_t *wide (const char *s) {
+  int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+  wchar_t *w = (wchar_t *)xmalloc((size_t)(n > 0 ? n : 1) * sizeof(wchar_t));
+  if (n <= 0) w[0] = 0;
+  else MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
+  return w;
+}
+
+
+/* the names the file has (hard links); 0: it can't be asked */
+static unsigned long links_of (const char *path) {
+  wchar_t *w = wide(path);
+  HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  BY_HANDLE_FILE_INFORMATION fi;
+  unsigned long n = 0;
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return 0;
+  if (GetFileInformationByHandle(h, &fi)) n = fi.nNumberOfLinks;
+  CloseHandle(h);
+  return n;
+}
+
+#endif
+
+
+/* tmp put where path is, in one step; 0: it was */
+static int replace_with (const char *tmp, const char *path) {
+#ifdef _WIN32
+  wchar_t *a = wide(path), *b = wide(tmp);
+  int ok = ReplaceFileW(a, b, NULL, REPLACEFILE_IGNORE_MERGE_ERRORS, NULL, NULL) != 0;	/* keeps its attributes and ACL */
+  free(a);
+  free(b);
+  return ok ? 0 : -1;
+#else
+  return rename(tmp, path) == 0 ? 0 : -1;
+#endif
+}
+
+
+/*
+** A save writes the text to a new file beside the old one, then puts it
+** in the old one's place: a full disk or a failed write leaves the file
+** as it was, not empty. A new file, a link, a file with other names (hard
+** links) or another owner, or one whose folder we can't write in, is
+** written over in place, as before; so is one that can't be replaced.
+*/
+static int write_file_safe (const char *path, const char *s, size_t n) {
+  char *tmp;
+  int fd, ok;
+#ifdef _WIN32
+  OsStat st;
+  if (os_lstat(path, &st) != 0 || !st.exists || st.is_dir || st.is_link || links_of(path) != 1)
+    return write_in_place(path, s, n);
+#else
+  struct stat st;
+  if (lstat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_nlink != 1 || st.st_uid != geteuid())
+    return write_in_place(path, s, n);
+#endif
+  tmp = (char *)xmalloc(strlen(path) + 32);
+  sprintf(tmp, "%s~mme%ld", path, os_getpid());
+  if ((fd = os_open(tmp, OS_EXCL)) < 0) {
+    free(tmp);
+    return write_in_place(path, s, n);
+  }
+#ifndef _WIN32
+  fchmod(fd, st.st_mode & 07777);	/* its permissions, not the umask's */
+#endif
+  ok = n == 0 || os_write(fd, s, n) == (long)n;
+  os_close(fd);
+  if (!ok) {	/* the old file is still whole: keep it so */
+    os_unlink(tmp);
+    free(tmp);
+    return -1;
+  }
+  if (replace_with(tmp, path) != 0) {
+    os_unlink(tmp);
+    free(tmp);
+    return write_in_place(path, s, n);
+  }
+  free(tmp);
+  return 0;
+}
+
+
 int doc_save (Doc *d) {
   Buf b, t;
   size_t i;
-  int fd, ok;
+  int ok;
   if (d->path == NULL) return -1;
   if (d->ec.crlf >= 0) d->crlf = d->ec.crlf;	/* .editorconfig's end_of_line: on save, as its extension does */
   buf_init(&t);
@@ -506,15 +717,9 @@ int doc_save (Doc *d) {
     buf_putn(&t, d->row[i].s, d->row[i].len);
   }
   buf_init(&b);
-  encode(&b, t.s ? t.s : "", t.len, d->enc);
+  encode(&b, t.s ? t.s : "", t.len, d->enc, nobom_of(d));
   buf_free(&t);
-  fd = os_open(d->path, OS_WRITE);
-  if (fd < 0) {
-    buf_free(&b);
-    return -1;
-  }
-  ok = b.len == 0 || os_write(fd, b.s, b.len) == (long)b.len;
-  os_close(fd);
+  ok = write_file_safe(d->path, b.s, b.len) == 0;
   buf_free(&b);
   if (!ok) return -1;
   d->saved = d->changes;

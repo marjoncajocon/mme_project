@@ -1032,19 +1032,25 @@ int panel_start (int cols, int rows) {
 }
 
 
+#define POLL_MAX	((size_t)1 << 20)	/* bytes of one shell's a frame reads at most: the rest is
+					** the next frame's, so `yes` can't keep the editor from drawing */
+
 /* every shell's output into its grid; 1 when something changed, 2 the last one ended */
 int panel_poll (void) {
   char buf[65536];
   int i, got = 0, code;
   for (i = 0; i < g_n; i++) {
     Term *t = g_term[i];
+    size_t took = 0;
     long n;
     if (t->done) continue;
-    while ((n = pty_read(t->pty, buf, sizeof(buf))) > 0) {
+    while (took < POLL_MAX && (n = pty_read(t->pty, buf, sizeof(buf))) > 0) {
       term_feed(t, buf, (size_t)n);
       if (t->task) task_output(t->task, buf, (size_t)n);
+      took += (size_t)n;
       got = 1;
     }
+    if (took >= POLL_MAX) continue;	/* more may wait: whether it ended is asked when it is read */
     if (t->task && (n < 0 || pty_exited(t->pty, &code))) {	/* a task ended: its terminal stays */
       char msg[256];
       if (n < 0) code = -1;

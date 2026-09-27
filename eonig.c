@@ -12,6 +12,7 @@
 
 #include "mme.h"
 
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -73,7 +74,8 @@ struct Onig {
 enum { ANCH_NONE, ANCH_G, ANCH_BOL, ANCH_A };
 
 #define NONE	((size_t)-1)
-#define MAX_STEPS	400000
+#define MAX_STEPS	400000	/* one place to start, and 2 more for each byte after it */
+#define MAX_SCAN	2000000	/* a whole search, and 4 more for each byte */
 #define MAX_DEPTH	2000
 
 
@@ -1114,7 +1116,7 @@ typedef struct M {
   size_t g;	/* where \G matches */
   int first;	/* \A may match */
   size_t end;
-  long steps;
+  long steps, max;
   int depth, abort;
 } M;
 
@@ -1252,7 +1254,7 @@ static int behind (M *m, const Node *nd, size_t i) {
 
 static int run (M *m, const Node *nd, size_t i, const Cont *k) {
   int r = 0;
-  if (++m->steps > MAX_STEPS || m->depth > MAX_DEPTH) {
+  if (++m->steps > m->max || m->depth > MAX_DEPTH) {
     m->abort = 1;
     return 0;
   }
@@ -1463,6 +1465,13 @@ static int cont (M *m, size_t i, const Cont *k) {
 }
 
 
+/* base steps, and per more for each of n bytes */
+static long budget (long base, size_t n, int per) {
+  unsigned long long b = (unsigned long long)base + (unsigned long long)n * (unsigned)per;
+  return b > (unsigned long long)(LONG_MAX / 4) ? LONG_MAX / 4 : (long)b;
+}
+
+
 /*
 ** The first match at from or later in s[0..n): its groups in caps
 ** (2 * (groups + 1) entries, (size_t)-1 for a group that took no part).
@@ -1472,6 +1481,7 @@ int onig_search (const Onig *re, const char *s, size_t n, size_t from, size_t g,
   M m;
   size_t i = from;
   int k;
+  long total = 0, scan = budget(MAX_SCAN, n - (from < n ? from : n), 4);
   if (from > n) return 0;
   memset(&m, 0, sizeof(m));
   m.re = re;
@@ -1497,12 +1507,17 @@ int onig_search (const Onig *re, const char *s, size_t n, size_t from, size_t g,
     }
     for (k = 0; k < m.ncap; k++) caps[k] = NONE;
     m.depth = 0;
+    m.abort = 0;
+    m.steps = 0;	/* each start its own budget: one that backtracks too long is not the end of the others */
+    m.max = budget(MAX_STEPS, n - i, 2);
+    if (m.max > scan - total) m.max = scan - total;
     if (run(&m, re->root, i, NULL)) {
       caps[0] = i;
       caps[1] = m.end;
       return 1;
     }
-    if (m.abort) return 0;
+    total += m.steps;
+    if (total >= scan) return 0;	/* the search's own budget is gone: no more starts */
   next:
     if (re->anch == ANCH_G || re->anch == ANCH_A || i >= n) return 0;
     i++;

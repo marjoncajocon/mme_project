@@ -393,6 +393,12 @@ static int cmp_node (const void *a, const void *b) {
 }
 
 
+/* by name alone (strcmp), of Node pointers */
+static int cmp_name (const void *a, const void *b) {
+  return strcmp((*(Node *const *)a)->name, (*(Node *const *)b)->name);
+}
+
+
 /* the folders read so far sorted again (explorer.sortOrder changed) */
 static void resort (Node *n) {
   size_t i;
@@ -443,24 +449,34 @@ static void load_kids (Node *n) {
     j++;
   }
   vec_free(&v);
-  for (i = 0; i < j; i++) {	/* take over the old node's inside */
-    size_t o;
-    for (o = 0; o < n->nkid; o++) {
-      Node *old = &n->kid[o];
-      if (!kid[i].dir && !old->dir && strcmp(old->name, kid[i].name) == 0) {	/* a file: its nested files' state */
-        kid[i].open = old->open;
-        break;
-      }
-      if (kid[i].dir && old->dir && strcmp(old->name, kid[i].name) == 0) {
-        kid[i].open = old->open;
-        kid[i].loaded = old->loaded;
-        kid[i].kid = old->kid;
-        kid[i].nkid = old->nkid;
-        old->kid = NULL;
-        old->nkid = 0;
-        break;
+  if (j && n->nkid) {	/* take over the old node's inside: both by name, then one pass (not every old one for each) */
+    Node **nw = (Node **)xmalloc(j * sizeof(Node *)), **od = (Node **)xmalloc(n->nkid * sizeof(Node *));
+    size_t o = 0;
+    for (i = 0; i < j; i++) nw[i] = &kid[i];
+    for (i = 0; i < n->nkid; i++) od[i] = &n->kid[i];
+    qsort(nw, j, sizeof(Node *), cmp_name);
+    qsort(od, n->nkid, sizeof(Node *), cmp_name);
+    for (i = 0; i < j && o < n->nkid;) {
+      Node *k = nw[i], *old = od[o];
+      int r = strcmp(k->name, old->name);
+      if (r < 0) i++;
+      else if (r > 0) o++;
+      else {
+        if (!k->dir && !old->dir) k->open = old->open;	/* a file: its nested files' state */
+        else if (k->dir && old->dir) {
+          k->open = old->open;
+          k->loaded = old->loaded;
+          k->kid = old->kid;
+          k->nkid = old->nkid;
+          old->kid = NULL;
+          old->nkid = 0;
+        }
+        i++;
+        o++;
       }
     }
+    free(nw);
+    free(od);
   }
   for (i = 0; i < n->nkid; i++) node_free(&n->kid[i]);
   free(n->kid);
@@ -682,16 +698,31 @@ const char *side_root (void) {
 }
 
 
-void side_refresh (void) {
+/* n's open folders read again, from the top down, as vis_add shows them (a compact chain: its last one) */
+static void reload_open (Node *n) {
   size_t i;
+  int ws = n == &g_root && g_ws;	/* a workspace's folders: load_kids read them already */
+  for (i = 0; i < n->nkid; i++) {
+    Node *last = &n->kid[i];
+    if (!last->dir) continue;
+    if (opt.exp_compact && !ws)
+      for (;;) {
+        if (!last->loaded) load_kids(last);
+        if (last->nkid != 1 || !last->kid[0].dir) break;
+        last = &last->kid[0];
+      }
+    if (!last->open) continue;
+    if (!ws) load_kids(last);
+    reload_open(last);
+  }
+}
+
+
+void side_refresh (void) {
   if (g_root.path == NULL) return;
-  load(&g_root);
+  load(&g_root);	/* the rows go (the selected one is kept by its path) */
+  reload_open(&g_root);	/* the open folders too, then the rows once */
   flatten();
-  for (i = 0; i < g_nvis; i++)	/* the open folders too: from the top down */
-    if (g_vis[i]->dir && g_vis[i]->open) {
-      load(g_vis[i]);
-      flatten();
-    }
 }
 
 

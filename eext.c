@@ -325,6 +325,27 @@ int ext_is_vscode (size_t i) {
 }
 
 
+static Vec g_removing;	/* the folders an uninstall deletes (or could not delete all of): no extension is read there */
+
+static int hidden (const char *dir) {
+  size_t i;
+  for (i = 0; i < g_removing.n; i++)
+    if (strcmp(g_removing.v[i], dir) == 0) return 1;
+  return 0;
+}
+
+
+static void unhide (const char *dir) {
+  size_t i;
+  for (i = 0; i < g_removing.n; i++)
+    if (strcmp(g_removing.v[i], dir) == 0) {
+      free(g_removing.v[i]);
+      g_removing.v[i] = g_removing.v[--g_removing.n];
+      return;
+    }
+}
+
+
 /* every extension folder in root; VS Code's .obsolete ones left out */
 static void scan_root (const char *root, int vscode) {
   Vec v;
@@ -347,6 +368,10 @@ static void scan_root (const char *root, int vscode) {
         if (gone) continue;
       }
       dir = path_join(root, v.v[i]);
+      if (hidden(dir)) {	/* being uninstalled: gone already, for everyone */
+        free(dir);
+        continue;
+      }
       if (ext_read(&e, dir, vscode) == 0) {
         at = find_ext(e.id);
         if (at < 0) {
@@ -974,7 +999,7 @@ static int load_theme (void *arg, uint32_t *color) {
 ** ===================================================================
 */
 
-enum { JOB_NONE, JOB_EXTRACT };
+enum { JOB_NONE, JOB_EXTRACT, JOB_REMOVE };
 
 typedef struct Job {
   int kind;
@@ -1073,10 +1098,8 @@ static void end_job (Job *j) {
 }
 
 
-/* rm -rf, as the system does it */
-static void remove_tree (const char *dir) {
-  char *argv[8];
-  Buf out;
+/* rm -rf, as the system does it: its words in argv (8 at most); the program, to free; NULL: none */
+static char *remove_argv (char **argv, const char *dir) {
   int n = 0;
   char *exe;
 #ifdef _WIN32
@@ -1089,12 +1112,20 @@ static void remove_tree (const char *dir) {
   argv[n++] = (char *)"/q";
 #else
   exe = find_program("rm");
-  if (exe == NULL) return;
+  if (exe == NULL) return NULL;
   argv[n++] = exe;
   argv[n++] = (char *)"-rf";
 #endif
   argv[n++] = (char *)dir;
   argv[n] = NULL;
+  return exe;
+}
+
+
+static void remove_tree (const char *dir) {
+  char *argv[8], *exe = remove_argv(argv, dir);
+  Buf out;
+  if (exe == NULL) return;
   buf_init(&out);
   run_capture(argv, &out);
   buf_free(&out);
@@ -1193,6 +1224,7 @@ static void place (void) {
   else {
     int themes = e.ntheme > 0;
     char *disp = xstrdup(e.display);
+    unhide(final);	/* installed again where an uninstall could not delete it all */
     ext_rescan();
     rows();
     if (themes) toast(0, "Installed %s: Ctrl+K Ctrl+T picks its color theme", disp);
@@ -1213,7 +1245,7 @@ void ext_install_vsix (const char *path) {
   const char *base = path_basename(path);
   size_t n = strlen(base);
   if (g_inst.kind != JOB_NONE) {
-    toast(0, "Another extension is being installed");
+    toast(0, g_inst.kind == JOB_REMOVE ? "An extension is being uninstalled" : "Another extension is being installed");
     return;
   }
   if (n < 6 || m_stricmp(base + n - 5, ".vsix") != 0) {
@@ -1225,19 +1257,91 @@ void ext_install_vsix (const char *path) {
 }
 
 
+static void set_lang_servers (const Ext *e, int on);
+
+/* its folder deleted in the background; 0: started (g_inst), else nothing started */
+static int remove_start (const char *dir, const char *disp) {
+  char *argv[8], *exe = remove_argv(argv, dir);
+  int r = exe != NULL ? start(&g_inst, JOB_REMOVE, argv, 0) : -1;	/* rmdir of a big one takes a while: not here */
+  free(exe);
+  if (r != 0) return -1;
+  g_inst.dir = xstrdup(dir);
+  g_inst.file = xstrdup(disp);
+  toast(0, "Uninstalling %s...", disp);
+  return 0;
+}
+
+
+static void removed (const char *dir, const char *disp, int code);
+
+static void remove_retry (void *ud, int choice) {	/* "Retry" on the failure's notification */
+  char *dir = (char *)ud, *disp = strchr(dir, '\n');
+  *disp++ = '\0';
+  if (choice == 0) {
+    if (g_inst.kind != JOB_NONE) toast(0, "Wait for the extension being installed or uninstalled");
+    else if (remove_start(dir, disp) != 0) {
+      remove_tree(dir);
+      removed(dir, disp, 0);
+    }
+  }
+  free(dir);
+}
+
+
+/* the folder of an uninstall is gone, or not (a file of it in use): said; what is left stays hidden, so
+** the host does not run half an extension, until Retry deletes it (or mme starts again and shows it) */
+static void removed (const char *dir, const char *disp, int code) {
+  if (is_dir(dir)) {	/* rmdir says 0 even when it could not delete everything */
+    static const char *const act[] = {"Retry"};
+    char msg[400];
+    snprintf(msg, sizeof(msg), "Could not uninstall %s completely: some of its files are in use. Close what "
+             "uses them, then retry.", disp);
+    out_log("Extensions", "[error] Could not delete all of %s (exit code %d)", dir, code);
+    toast_ask(2, "Extensions", msg, act, 1, remove_retry, xstrcat3(dir, "\n", disp));
+  }
+  else {
+    unhide(dir);
+    toast(0, "Uninstalled %s", disp);
+    out_log("Extensions", "[info] Uninstalled %s", disp);
+  }
+  ext_rescan();
+  rows();
+}
+
+
+/*
+** Uninstall: its languages go back to mme's own servers; the extension
+** host lets it go first (its deactivate runs, and its .node, .exe files are
+** no longer in use), then its folder is deleted in the background, and
+** whether that worked is checked.
+*/
 static void uninstall (int i) {
-  char *disp;
+  char *dir, *id, *disp;
+  int hosted;
   if (i < 0 || (size_t)i >= g_next) return;
   if (g_ext[i].vscode) {
     toast(0, "%s is VS Code's: uninstall it in VS Code", g_ext[i].display);
     return;
   }
+  if (g_inst.kind != JOB_NONE) {
+    toast(0, "Wait for the extension being installed or uninstalled");
+    return;
+  }
+  dir = xstrdup(g_ext[i].dir);
+  id = xstrdup(g_ext[i].id);
   disp = xstrdup(g_ext[i].display);
-  remove_tree(g_ext[i].dir);
-  ext_rescan();
+  hosted = lsp_running(EXT_LANG) && ehost_state(id) != NULL;
+  set_lang_servers(&g_ext[i], 1);	/* mme's own servers of its languages back, as Enable gives them */
+  if (!hidden(dir)) vec_push(&g_removing, xstrdup(dir));
+  ext_rescan();	/* not there any more, for the host too */
+  if (hosted) ehost_restart();	/* the host without it: the old one ends (its deactivate) before its files go */
   rows();
-  toast(0, "Uninstalled %s", disp);
-  out_log("Extensions", "[info] Uninstalled %s", disp);
+  if (remove_start(dir, disp) != 0) {	/* could not start it by itself: here, then */
+    remove_tree(dir);
+    removed(dir, disp, 0);
+  }
+  free(dir);
+  free(id);
   free(disp);
 }
 
@@ -1628,6 +1732,14 @@ int ext_idle (void) {
       end_job(&g_inst);
       rows();
     }
+    else if (g_inst.kind == JOB_REMOVE) {
+      char *dir = g_inst.dir, *disp = g_inst.file;
+      g_inst.dir = g_inst.file = NULL;
+      end_job(&g_inst);
+      removed(dir, disp, code);	/* may start it again (Retry comes later, from the notification) */
+      free(dir);
+      free(disp);
+    }
     else end_job(&g_inst);
   }
   return changed;
@@ -1691,7 +1803,7 @@ void ext_draw (int x, int y, int w, int h, int focus) {
   scr_putsw(x + 1, y + 2, w - 2, sec, S_SIDE_HEAD);
   scr_put(x + 1, y + VSIX_ROW, 0xEAC2, S_SIDE_DIM);	/* codicon cloud-download: a .vsix you downloaded */
   {	/* a link, in the accent color */
-    int lw = scr_putsw(x + 3, y + VSIX_ROW, w - 4, g_inst.kind != JOB_NONE ? "Installing..." : "Install from VSIX...", S_SIDE), i;
+    int lw = scr_putsw(x + 3, y + VSIX_ROW, w - 4, g_inst.kind == JOB_REMOVE ? "Uninstalling..." : g_inst.kind != JOB_NONE ? "Installing..." : "Install from VSIX...", S_SIDE), i;
     for (i = 0; i < lw; i++) scr_set_fg(x + 3 + i, y + VSIX_ROW, ui_color(C_ACCENT));
   }
   g_h = (h - HEAD) / ROWS;
@@ -1893,14 +2005,11 @@ static void set_lang_servers (const Ext *e, int on) {
   vec_free(&changed);
 }
 
-/* the Enable / Disable button: its code on or off (a VS Code extension: mme.extensions.run; the others:
-** mme.extensions.disabled); the extension host starts again without it, or with it */
-static void toggle (size_t k) {
-  const Item *it;
-  if (k >= g_nitem) return;
-  it = &g_item[k];
-  if (!g_ext[it->ext].code) return;
-  if (is_on(it)) {
+/* its code on or off (a VS Code extension: mme.extensions.run; the others: mme.extensions.disabled), its
+** languages with it; the extension host starts again without it, or with it. The button and the menu's
+** Enable, Disable, Run, Stop all come here */
+static void code_set (const Item *it, int on) {
+  if (!on) {
     set_lang_servers(&g_ext[it->ext], 0);	/* its languages go with it (mme's own servers of them too) */
     if (g_ext[it->ext].vscode) set_run(it->id, 0);
     else set_disabled(it->id, 1);
@@ -1910,6 +2019,16 @@ static void toggle (size_t k) {
     if (ehost_disabled(it->id)) set_disabled(it->id, 0);
     if (g_ext[it->ext].vscode && !ehost_in_run(it->id)) set_run(it->id, 1);
   }
+}
+
+
+/* the Enable / Disable button */
+static void toggle (size_t k) {
+  const Item *it;
+  if (k >= g_nitem) return;
+  it = &g_item[k];
+  if (!g_ext[it->ext].code) return;
+  code_set(it, !is_on(it));
 }
 
 
@@ -2039,10 +2158,10 @@ static void actions (size_t k) {
   switch (acts[r]) {
     case A_UNINSTALL: press(k); break;
     case A_THEME: pick_ext_theme(&g_ext[it->ext]); break;
-    case A_RUN: set_run(it->id, 1); break;
-    case A_DISABLE: set_disabled(it->id, 1); break;
-    case A_ENABLE: set_disabled(it->id, 0); break;
-    case A_STOP: set_run(it->id, 0); break;
+    case A_RUN: code_set(it, 1); break;	/* the button's way: its languages with it */
+    case A_DISABLE: code_set(it, 0); break;
+    case A_ENABLE: code_set(it, 1); break;
+    case A_STOP: code_set(it, 0); break;
     default: show_page(it); break;
   }
 }

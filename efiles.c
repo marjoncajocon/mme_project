@@ -51,6 +51,27 @@ int fs_rename (const char *from, const char *to) {
 }
 
 
+/* the folder path is, links and junctions followed (os_realpath does not follow them here); NULL: unknown */
+char *fs_real_dir (const char *path) {
+  wchar_t *w = wide(path), buf[4096];
+  HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                         FILE_FLAG_BACKUP_SEMANTICS, NULL);	/* a folder is opened only with that */
+  DWORD n;
+  int k;
+  char *r;
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return NULL;
+  n = GetFinalPathNameByHandleW(h, buf, 4096, FILE_NAME_NORMALIZED);
+  CloseHandle(h);
+  if (n == 0 || n >= 4096) return NULL;
+  k = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
+  if (k <= 0) return NULL;
+  r = (char *)xmalloc((size_t)k);
+  WideCharToMultiByte(CP_UTF8, 0, buf, -1, r, k, NULL, NULL);
+  return r;
+}
+
+
 static int remove_one (const char *path, int dir) {
   wchar_t *w = wide(path);
   int r = (dir ? RemoveDirectoryW(w) : DeleteFileW(w)) ? 0 : -1;
@@ -92,6 +113,12 @@ void fs_reveal (const char *path) {
 int fs_rename (const char *from, const char *to) {
   if (fs_exists(to)) return -1;
   return rename(from, to) == 0 ? 0 : -1;
+}
+
+
+/* the folder path is, links followed; NULL: unknown */
+char *fs_real_dir (const char *path) {
+  return os_realpath(path);
 }
 
 

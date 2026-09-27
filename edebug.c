@@ -118,6 +118,7 @@ static struct {
   char *request;	/* "launch" or "attach" */
   OsProc proc;
   long pid;
+  int reaped;	/* os_poll_proc saw it end: its handle is closed, its id may be another's */
   int to, from;	/* stdio: its stdin, its stdout */
   int out;	/* TCP: its stdout (the port, its logs) */
   Sock sock;
@@ -1206,7 +1207,12 @@ static void end_session (void) {
   if (D.to >= 0) os_close(D.to);
   if (D.from >= 0) os_close(D.from);
   if (D.out >= 0) os_close(D.out);
-  if (D.pid > 0) os_kill(D.pid, 9);
+  if (D.pid > 0 && !D.reaped) {	/* the adapter and what it started (the program debugged) */
+    int status, t;
+    os_kill_tree(D.pid);
+    for (t = 0; t < 20 && os_poll_proc(D.proc, &status) != 1; t++) os_wait_readable(-1, 10);
+    if (t == 20) os_detach(D.proc);	/* not gone yet: its handle is let go all the same */
+  }
   clear_stop();
   clear_threads();
   for (i = 0; i < D.nreq; i++) free(D.req[i].path);
@@ -2079,7 +2085,8 @@ int dbg_poll (void) {
     end_session();
     return 1;
   }
-  if (D.in.len == 0 && !D.noproc && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
+  if (D.in.len == 0 && !D.noproc && !D.reaped && D.pid > 0 && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
+    D.reaped = 1;
     if (D.out >= 0) {	/* its last words */
       while (os_wait_readable(D.out, 0) == 1 && (n = os_read(D.out, chunk, sizeof(chunk))) > 0)
         adapter_output(chunk, (size_t)n);

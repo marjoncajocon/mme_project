@@ -70,18 +70,29 @@ function notify (method, params) {
   send({jsonrpc: '2.0', method, params});
 }
 
+// the chunks of a message still coming are kept apart and joined once it is whole: joining at every
+// chunk copied a big one (a file opened whole) over and over
+let inChunks = [], inHave = 0, inNeed = 0;
 process.stdin.on('data', (d) => {
-  inBuf = Buffer.concat([inBuf, d]);
+  inChunks.push(d);
+  inHave += d.length;
+  if (inHave < inNeed) return;
+  inBuf = inChunks.length === 1 ? inChunks[0] : Buffer.concat(inChunks, inHave);
+  inChunks = [];
+  inHave = inNeed = 0;
   for (;;) {
     const sep = inBuf.indexOf('\r\n\r\n');
-    if (sep < 0) return;
+    if (sep < 0) break;
     const m = /Content-Length:\s*(\d+)/i.exec(inBuf.slice(0, sep).toString('ascii'));
     if (!m) {
       inBuf = inBuf.slice(sep + 4);
       continue;
     }
     const n = +m[1];
-    if (inBuf.length < sep + 4 + n) return;
+    if (inBuf.length < sep + 4 + n) {
+      inNeed = sep + 4 + n;	// nothing is joined again before this much came
+      break;
+    }
     const body = inBuf.slice(sep + 4, sep + 4 + n).toString('utf8');
     inBuf = inBuf.slice(sep + 4 + n);
     let msg;
@@ -93,6 +104,11 @@ process.stdin.on('data', (d) => {
     }
     dispatch(msg);
   }
+  if (inBuf.length) {	// what is not a whole message yet waits for the rest
+    inChunks.push(inBuf);
+    inHave = inBuf.length;
+  }
+  inBuf = Buffer.alloc(0);
 });
 process.stdin.on('end', () => quit());
 

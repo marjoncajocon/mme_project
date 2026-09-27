@@ -84,8 +84,27 @@ static int huff_sym (Bits *b, const Huff *h) {
 }
 
 
-/* the deflate stream s (n bytes) unpacked; *out_n its size, NULL: broken */
-static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t *out_n) {
+/* out made room for need bytes, never more than max + 1: 0 when there is no memory */
+static int grow (unsigned char **out, size_t *cap, size_t need, size_t max) {
+  size_t c = need < 32768 ? 65536 : need * 2;
+  unsigned char *p;
+  if (need <= *cap) return 1;
+  if (c > max + 1) c = max + 1;
+  if (c < need) c = need;
+  p = (unsigned char *)realloc(*out, c);
+  if (p == NULL) return 0;
+  *out = p;
+  *cap = c;
+  return 1;
+}
+
+
+/*
+** the deflate stream s (n bytes) unpacked, up to max bytes (what is past
+** them is not wanted: a small file can unpack to gigabytes); *out_n its
+** size, NULL: broken
+*/
+static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t max, size_t *out_n) {
   static const unsigned short lbase[] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
                                          35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
   static const unsigned char lext[] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
@@ -102,7 +121,7 @@ static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t *out
   memset(&b, 0, sizeof(b));
   b.s = s;
   b.n = n;
-  while (!last && !b.bad) {
+  while (!last && !b.bad && len < max) {
     int type;
     Huff lit, dist;
     last = bits_get(&b, 1);
@@ -115,9 +134,10 @@ static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t *out
       l = (unsigned)b.s[b.at] | ((unsigned)b.s[b.at + 1] << 8);
       b.at += 4;
       if (b.at + l > b.n) break;
-      if (len + l + 1 > cap) {
-        cap = (len + l + 1) * 2;
-        out = (unsigned char *)xrealloc(out, cap);
+      if (l > max - len) l = (unsigned)(max - len);
+      if (!grow(&out, &cap, len + l + 1, max)) {
+        b.bad = 1;
+        break;
       }
       memcpy(out + len, b.s + b.at, l);
       len += l;
@@ -167,10 +187,10 @@ static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t *out
         b.bad = 1;
         break;
       }
-      if (sym == 256) break;
-      if (len + 1 > cap) {
-        cap = cap ? cap * 2 : 65536;
-        out = (unsigned char *)xrealloc(out, cap);
+      if (sym == 256 || len >= max) break;
+      if (!grow(&out, &cap, len + 1, max)) {
+        b.bad = 1;
+        break;
       }
       if (sym < 256) {
         out[len++] = (unsigned char)sym;
@@ -192,9 +212,10 @@ static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t *out
         b.bad = 1;
         break;
       }
-      if (len + (size_t)l + 1 > cap) {
-        cap = (len + (size_t)l + 1) * 2;
-        out = (unsigned char *)xrealloc(out, cap);
+      if ((size_t)l > max - len) l = (int)(max - len);
+      if (!grow(&out, &cap, len + (size_t)l + 1, max)) {
+        b.bad = 1;
+        break;
       }
       while (l-- > 0) {
         out[len] = out[len - d];
@@ -202,7 +223,7 @@ static unsigned char *inflate_raw (const unsigned char *s, size_t n, size_t *out
       }
     }
   }
-  if (b.bad && len == 0) {
+  if ((b.bad && len == 0) || out == NULL) {
     free(out);
     return NULL;
   }
@@ -390,11 +411,11 @@ static int png_decode (const unsigned char *b, size_t n, Pix *out) {
   }
   if (w <= 0 || h <= 0 || inter != 0 || nidat < 3 || (size_t)w * (size_t)h > (1u << 26)) goto done;
   if (depth != 1 && depth != 2 && depth != 4 && depth != 8 && depth != 16) goto done;
-  raw = inflate_raw(idat + 2, nidat - 2, &nraw);	/* past zlib's two bytes */
-  if (raw == NULL) goto done;
   chan = ctype == 2 ? 3 : ctype == 4 ? 2 : ctype == 6 ? 4 : 1;
   rb = ((size_t)w * (size_t)chan * (size_t)depth + 7) / 8;
   stride = rb + 1;
+  raw = inflate_raw(idat + 2, nidat - 2, stride * (size_t)h, &nraw);	/* past zlib's two bytes; no more than the rows */
+  if (raw == NULL) goto done;
   if (nraw < stride * (size_t)h) goto done;
   px = (uint32_t *)xmalloc((size_t)w * (size_t)h * sizeof(uint32_t));
   for (y = 0; y < h; y++) {	/* the filter of each row, then its pixels */
@@ -681,16 +702,31 @@ static int ico_decode (const unsigned char *b, size_t n, Pix *out) {
     if (len == 0 || off > n || len > n - off) return 0;
     if (len > 8 && memcmp(b + off, "\x89PNG", 4) == 0) return png_decode(b + off, len, out);
     {	/* a BMP without its file header: one is made for it */
-      unsigned char *tmp = (unsigned char *)xmalloc(len + 14);
-      int ok;
+      unsigned char *tmp;
+      int ok, k;
+      size_t hdr, bpp, used, pal, at;
+      uint32_t h2;
+      if (len < 40) return 0;
+      hdr = le32(b + off);
+      bpp = (size_t)le16(b + off + 14);
+      used = le32(b + off + 32);
+      if (hdr > len || used > len) return 0;
+      pal = bpp <= 8 ? (used ? used : (size_t)1 << bpp) : used;	/* its color table */
+      at = 14 + hdr + pal * 4 + (le32(b + off + 16) == 3 && hdr == 40 ? 12 : 0);	/* the pixels: past it (and BI_BITFIELDS' masks) */
+      if (at > len + 14) return 0;
+      h2 = le32(b + off + 8);
+      h2 = (h2 & 0x80000000u) ? (uint32_t)0 - (((uint32_t)0 - h2) / 2) : h2 / 2;	/* the height counts the AND mask too */
+      tmp = (unsigned char *)xmalloc(len + 14);
       memcpy(tmp + 14, b + off, len);
       memset(tmp, 0, 14);
       tmp[0] = 'B';
       tmp[1] = 'M';
-      tmp[10] = 54;
+      for (k = 0; k < 4; k++) {
+        tmp[10 + k] = (unsigned char)(at >> (8 * k));
+        tmp[22 + k] = (unsigned char)(h2 >> (8 * k));
+      }
       ok = bmp_decode(tmp, len + 14, out);
       free(tmp);
-      if (ok) out->h /= 2;	/* an icon's height counts its mask too */
       return ok;
     }
   }
@@ -758,12 +794,14 @@ static void pal_rgb (int i, int *r, int *g, int *b) {
 
 /*
 ** The pixels as a sixel string: six rows at a time, a run of the same
-** bits written once ("!n<char>"), one pass per color in the band.
+** bits written once ("!n<char>"), one pass per color in the band. The
+** band's bits of every color are made in one go over it.
 */
 static char *sixel_of (const uint32_t *px, int w, int h, size_t *out_n) {
   Buf o;
   unsigned char *idx = (unsigned char *)xmalloc((size_t)w * (size_t)h);
-  int used[240], band, i;
+  unsigned char *mask = (unsigned char *)xmalloc(240 * (size_t)w);	/* mask[i * w + x]: color i's rows at x */
+  int used[240], inband[240], band, i;
   size_t k;
   buf_init(&o);
   memset(used, 0, sizeof(used));
@@ -779,25 +817,25 @@ static char *sixel_of (const uint32_t *px, int w, int h, size_t *out_n) {
       pal_rgb(i, &r, &g, &b);
       buf_printf(&o, "#%d;2;%d;%d;%d", i, r, g, b);
     }
+  memset(mask, 0, 240 * (size_t)w);
   for (band = 0; band < h; band += 6) {
-    int first = 1;
-    for (i = 0; i < 240; i++) {
-      int x, any = 0, run = 0, last = -1;
-      if (!used[i]) continue;
-      for (x = 0; x < w && !any; x++) {	/* is this color in the band at all? */
-        int row;
-        for (row = 0; row < 6 && band + row < h; row++)
-          if (idx[(size_t)(band + row) * (size_t)w + (size_t)x] == i) any = 1;
+    int first = 1, row, x;
+    memset(inband, 0, sizeof(inband));
+    for (row = 0; row < 6 && band + row < h; row++)	/* the band's bits, every color's */
+      for (x = 0; x < w; x++) {
+        int c = idx[(size_t)(band + row) * (size_t)w + (size_t)x];
+        mask[(size_t)c * (size_t)w + (size_t)x] |= (unsigned char)(1 << row);
+        inband[c] = 1;
       }
-      if (!any) continue;
+    for (i = 0; i < 240; i++) {
+      unsigned char *m = mask + (size_t)i * (size_t)w;
+      int run = 0, last = -1;
+      if (!inband[i]) continue;	/* this color is not in the band */
       if (!first) buf_putc(&o, '$');	/* back to the left, another color over it */
       first = 0;
       buf_printf(&o, "#%d", i);
       for (x = 0; x < w; x++) {
-        int bits = 0, row, ch;
-        for (row = 0; row < 6 && band + row < h; row++)
-          if (idx[(size_t)(band + row) * (size_t)w + (size_t)x] == i) bits |= 1 << row;
-        ch = '?' + bits;
+        int ch = '?' + m[x];
         if (ch == last) run++;
         else {
           if (run > 3) buf_printf(&o, "!%d%c", run, last);
@@ -808,10 +846,12 @@ static char *sixel_of (const uint32_t *px, int w, int h, size_t *out_n) {
       }
       if (run > 3) buf_printf(&o, "!%d%c", run, last);
       else while (run-- > 0) buf_putc(&o, (char)last);
+      memset(m, 0, (size_t)w);	/* clean for the next band */
     }
     buf_putc(&o, '-');	/* the next band */
   }
   buf_puts(&o, "\033\\");
+  free(mask);
   free(idx);
   *out_n = o.len;
   return buf_take(&o);

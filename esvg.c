@@ -204,6 +204,7 @@ static int num (const char **s, double *v) {
     while (*q >= '0' && *q <= '9') q++;
   }
   *v = strtod(p, NULL);
+  if (!isfinite(*v)) *v = *v < 0 ? -1e30 : 1e30;	/* "1e999": inf - inf would be NaN */
   *s = q;
   return 1;
 }
@@ -440,7 +441,7 @@ static size_t contour_end (const Poly *p, size_t c) {
 /* a cubic Bézier from (x0, y0), in steps fine enough at scale */
 static void cubic (Poly *p, double x0, double y0, double x1, double y1, double x2, double y2, double x3, double y3, double scale) {
   double len = (hypot(x1 - x0, y1 - y0) + hypot(x2 - x1, y2 - y1) + hypot(x3 - x2, y3 - y2)) * scale;
-  int n = (int)(len / 1.5) + 2, i;
+  int n = len < 93 ? (int)(len / 1.5) + 2 : 64, i;	/* NaN too: (int) of it is undefined */
   if (n > 64) n = 64;
   for (i = 1; i <= n; i++) {
     double t = (double)i / n, u = 1 - t;
@@ -488,7 +489,8 @@ static void arc (Poly *p, double x0, double y0, double rx, double ry, double rot
   dt = atan2((-y1 - cy1) / ry, (-x1 - cx1) / rx) - t1;
   if (sweep && dt < 0) dt += 2 * PI;
   else if (!sweep && dt > 0) dt -= 2 * PI;
-  n = (int)(fabs(dt) * (rx > ry ? rx : ry) * scale / 1.5) + 2;
+  lam = fabs(dt) * (rx > ry ? rx : ry) * scale / 1.5;
+  n = lam < 88 ? (int)lam + 2 : 90;	/* NaN too */
   if (n > 90) n = 90;
   for (i = 1; i <= n; i++) {
     double t = t1 + dt * i / n, ex = rx * cos(t), ey = ry * sin(t);
@@ -608,7 +610,8 @@ static void path_d (Poly *p, const char *s, double scale) {
 
 /* an ellipse (a circle when rx == ry) */
 static void ellipse (Poly *p, double cx, double cy, double rx, double ry, double scale) {
-  int n = (int)((rx > ry ? rx : ry) * scale * 1.2) + 12, i;
+  double v = (rx > ry ? rx : ry) * scale * 1.2;
+  int n = v < 108 ? (v > -12 ? (int)v + 12 : 0) : 120, i;	/* NaN too */
   if (n > 120) n = 120;
   poly_move(p);
   for (i = 0; i < n; i++) {
@@ -706,7 +709,7 @@ static void fill_poly (const Poly *p, Mat m, int evenodd, int w, int h, float *c
       const double *a = &p->pt[(s + i) * 2], *b = &p->pt[(s + (i + 1) % n) * 2];
       double ax = m.a * a[0] + m.c * a[1] + m.e, ay = m.b * a[0] + m.d * a[1] + m.f;
       double bx = m.a * b[0] + m.c * b[1] + m.e, by = m.b * b[0] + m.d * b[1] + m.f;
-      if (ay == by) continue;
+      if (ay == by || !isfinite(ax) || !isfinite(ay) || !isfinite(bx) || !isfinite(by)) continue;
       if (ay < by) {
         e[ne].x0 = ax, e[ne].y0 = ay, e[ne].x1 = bx, e[ne].y1 = by, e[ne].dir = 1;
       }
@@ -717,6 +720,10 @@ static void fill_poly (const Poly *p, Mat m, int evenodd, int w, int h, float *c
       if (e[ne].y1 > ymax) ymax = e[ne].y1;
       ne++;
     }
+  }
+  if (ne == 0 || ymin >= h || ymax <= 0) {	/* nothing in the picture ((int) of a huge ymin is undefined) */
+    free(e);
+    return;
   }
   row = (float *)xmalloc((size_t)(w + 2) * sizeof(float));
   {
@@ -734,6 +741,7 @@ static void fill_poly (const Poly *p, Mat m, int evenodd, int w, int h, float *c
           if (sy >= e[i].y0 && sy < e[i].y1) {
             double t = (sy - e[i].y0) / (e[i].y1 - e[i].y0);
             xs[nx] = e[i].x0 + t * (e[i].x1 - e[i].x0);
+            if (xs[nx] != xs[nx]) continue;	/* NaN (inf - inf): no crossing */
             ds[nx++] = e[i].dir;
           }
         for (a = 1; a < nx; a++)	/* few: insertion sort */
@@ -752,8 +760,8 @@ static void fill_poly (const Poly *p, Mat m, int evenodd, int w, int h, float *c
           if (in && a + 1 < nx) {	/* xs[a] .. xs[a + 1] is inside: its coverage, exact at the ends */
             double l = xs[a] < 0 ? 0 : xs[a], r = xs[a + 1] > w ? w : xs[a + 1];
             int li, ri;
-            if (r <= l) continue;
-            li = (int)l;
+            if (!(r > l)) continue;	/* NaN too */
+            li = (int)l;	/* 0 <= l < r <= w */
             ri = (int)r;
             any = 1;
             if (li == ri) row[li] += (float)((r - l) / SUB);
@@ -826,6 +834,7 @@ typedef struct Doc {
   float *px;	/* premultiplied r g b a, w * h * 4 */
   float *cov;	/* a shape's coverage, w * h */
   int depth;	/* <use> in <use>: kept from going round */
+  long left;	/* the elements still to be drawn: <use>s of <use>s multiply them */
   int clipping;	/* a clip's shapes are drawn: their geometry only, filled white */
 } Doc;
 
@@ -1200,6 +1209,8 @@ static void draw_from (Doc *d, const char *at, const Style *up, int one) {
   while (next_tag(&p, d->end, &t)) {
     Style *s = &st[sp], ns;
     char v[256];
+    if (d->left <= 0) break;	/* too many: the rest is left out, not drawn for minutes */
+    d->left--;
     if (t.close) {
       if (sp > 0 && st[sp].clip && st[sp].clip != st[sp - 1].clip) free(st[sp].clip);
       if (--sp < 0) return;
@@ -1258,6 +1269,8 @@ static void draw_from (Doc *d, const char *at, const Style *up, int one) {
     }
     st[++sp] = ns;	/* a group (or a shape with children): what is inside takes its style */
   }
+  for (; sp > 0; sp--)	/* stopped inside groups: their clips */
+    if (st[sp].clip && st[sp].clip != st[sp - 1].clip) free(st[sp].clip);
 }
 
 
@@ -1396,6 +1409,7 @@ uint32_t *svg_render (const char *src, size_t n, int w, int h) {
   memset(&d, 0, sizeof(d));
   d.src = src;
   d.end = src + n;
+  d.left = 20000;
   for (;;) {
     if (!next_tag(&p, d.end, &t)) return NULL;
     if (!t.close && tag_is(&t, "svg")) break;

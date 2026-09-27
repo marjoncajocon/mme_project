@@ -956,7 +956,8 @@ static void file_history (const char *path, SideAct *act) {
   size_t tl, n = 0, i;
   Pick p;
   int r;
-  char **hash = NULL, **parent = NULL;
+  char **hash = NULL, **parent = NULL, **now = NULL, **was = NULL, *cur;	/* now / was: its name in the commit / its parent */
+  const char *end;
   if (top == NULL || path == NULL) {
     toast(0, "Open a file of the repository to see its history");
     return;
@@ -973,14 +974,17 @@ static void file_history (const char *path, SideAct *act) {
       if (*q == '\\') *q = '/';
   }
   buf_init(&b);
-  gitv(&b, 0, "log", "--follow", "-n500", "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s", "--", rel, NULL);
+  gitv(&b, 0, "log", "--follow", "-n500", "--name-status", "-z", "--format=%H%x1f%P%x1f%an%x1f%at%x1f%s", "--", rel, NULL);
   pick_init(&p, "Select a commit to see its changes of the file");
-  for (s = b.s ? b.s : ""; *s;) {
-    const char *e = strchr(s, '\n');
-    size_t len = e ? (size_t)(e - s) : strlen(s);
-    char *line = xstrndup(s, len), *f[5], *q = line, det[300], ago[48];
+  cur = xstrdup(rel);	/* its name in the commits still to come (older): --follow goes back over renames */
+  for (s = b.s ? b.s : "", end = s + b.len; s < end;) {	/* "fields\0" "\nR100\0old\0new\0" ...: -z, so no name is quoted */
+    size_t len;
+    char *line, *f[5], *q, det[300], ago[48];
     int k;
-    s += len + (e ? 1 : 0);
+    if (*s == '\n') s++;
+    len = strlen(s);
+    line = q = xstrndup(s, len);
+    s += len + 1;
     for (k = 0; k < 5; k++) {
       f[k] = q;
       q = strchr(q, 0x1f);
@@ -993,14 +997,37 @@ static void file_history (const char *path, SideAct *act) {
     }
     hash = (char **)xrealloc(hash, (n + 1) * sizeof(char *));
     parent = (char **)xrealloc(parent, (n + 1) * sizeof(char *));
+    now = (char **)xrealloc(now, (n + 1) * sizeof(char *));
+    was = (char **)xrealloc(was, (n + 1) * sizeof(char *));
     hash[n] = xstrdup(f[0]);
     parent[n] = strlen(f[1]) >= 40 ? xstrndup(f[1], 40) : xstrdup("4b825dc642cb6eb9a060e54bf8d69288fbee4904");
+    now[n] = xstrdup(cur);
+    was[n] = xstrdup(cur);
+    while (s < end) {	/* its status: "\nM" path, or "\nR100" old new */
+      const char *st = s + (*s == '\n');
+      int two = *st == 'R' || *st == 'C';
+      if (!(*st >= 'A' && *st <= 'Z') || strchr(st, 0x1f)) break;	/* the next commit's fields */
+      s += strlen(s) + 1;
+      if (s >= end) break;
+      free(was[n]);
+      was[n] = xstrdup(s);
+      s += strlen(s) + 1;
+      free(now[n]);
+      if (two && s < end) {
+        now[n] = xstrdup(s);
+        s += strlen(s) + 1;
+      }
+      else now[n] = xstrdup(was[n]);
+      free(cur);
+      cur = xstrdup(was[n]);
+    }
     git_ago(strtoll(f[3], NULL, 10), ago, sizeof(ago));
     snprintf(det, sizeof(det), "%.7s \xE2\x80\xA2 %s, %s", f[0], f[2], ago);
     pick_add(&p, f[4], det, 0xEAFC);	/* git-commit */
     n++;
     free(line);
   }
+  free(cur);
   buf_free(&b);
   if (n == 0) toast(0, "No history for %s", path_basename(path));
   else {
@@ -1009,7 +1036,7 @@ static void file_history (const char *path, SideAct *act) {
     if (r >= 0) {
       char title[512];
       snprintf(title, sizeof(title), "%s (%.7s^ \xE2\x86\x94 %.7s)", path_basename(path), hash[r], hash[r]);
-      if (diff_open_rev(path, rel, NULL, parent[r], hash[r], title) == 0) {
+      if (diff_open_rev(path, now[r], was[r], parent[r], hash[r], title) == 0) {
         act->what = SA_SHOW_DIFF;
         act->go = 1;
       }
@@ -1019,9 +1046,13 @@ static void file_history (const char *path, SideAct *act) {
   for (i = 0; i < n; i++) {
     free(hash[i]);
     free(parent[i]);
+    free(now[i]);
+    free(was[i]);
   }
   free(hash);
   free(parent);
+  free(now);
+  free(was);
   free(rel);
 }
 

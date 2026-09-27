@@ -43,13 +43,16 @@ typedef struct Srv {
   char lang[16];
   OsProc proc;
   long pid;
-  int gone;	/* restarted: another one does its work (it is kept, a question may still point at it) */
+  int gone;	/* restarted: another one does its work (it is kept while something still points at it) */
+  int reaped;	/* its process was waited for (or let go): its handle is closed, its id may be another's */
+  int refs;	/* the questions (showMessageRequest) still waiting to answer it */
   Prog prog[8];
   int nprog;
   int to, from;	/* its stdin, its stdout */
   int err;	/* its stderr: to the OUTPUT view; -1 closed */
   char chan[64];	/* its output channel: "gopls" */
   Buf in;	/* what came, not yet a whole message */
+  size_t off;	/* in.s[0 .. off) is handled already: dropped when messages() is done */
   int id;
   int ready;	/* initialize was answered */
   int utf8;	/* positions in bytes, else in UTF-16 units */
@@ -98,7 +101,7 @@ typedef struct DFile {
   size_t nt;	/* the last nt are a task's (its problem matcher) */
 } DFile;
 
-#define MAX_SRV	64	/* restarts take new ones */
+#define MAX_SRV	64	/* restarts take new ones; the stopped ones are let go (srv_gc) */
 #define MAX_MESSAGE	((size_t)64 << 20)	/* a Content-Length no real server sends */
 
 static Srv *g_srv[MAX_SRV];
@@ -111,6 +114,7 @@ static char g_failed[1024];	/* " lang lang ": servers that could not start, told
 static int g_log = -2;	/* $MME_LSPLOG: a file with every message, to see what goes wrong */
 static int g_down;	/* quitting: a server that ends is not restarted */
 static int g_will;	/* willRenameFiles a rename still waits for */
+static int g_busy;	/* lsp_poll or messages() runs (maybe nested): a stopped server is not freed under it */
 
 
 /* a server's number in range, else def: casting -1 or 1e300 to size_t or int is undefined in C */
@@ -384,6 +388,15 @@ static void pull (LDoc *l) {
 }
 
 
+/* b begun as {"textDocument":{"uri":...}, for the rest of the params and the closing brace; any length */
+static void td_begin (Buf *b, const LDoc *l) {
+  buf_init(b);
+  buf_puts(b, "{\"textDocument\":{\"uri\":");
+  json_put_str(b, l->uri, strlen(l->uri));
+  buf_putc(b, '}');
+}
+
+
 static void did_open (LDoc *l) {
   Buf b;
   Pos a;
@@ -417,11 +430,22 @@ static void did_open (LDoc *l) {
 static void did_change (LDoc *l) {
   Buf b;
   Pos a;
-  size_t len = 0, p = 0, s = 0, keep;
+  size_t len = 0, p = 0, s = 0, keep, k;
   char *txt;
   const char *old = l->last;
   a.y = a.x = 0;
-  txt = doc_text(l->d, a, doc_end(l->d), &len);
+  txt = NULL;
+  for (k = 0; k < g_ndoc; k++) {	/* another server of it has the text as it is now: a copy of that, not the lines again */
+    const LDoc *o = &g_doc[k];
+    if (o != l && o->d == l->d && o->opened && o->last != NULL && o->sent == l->d->edits) {
+      len = o->nlast;
+      txt = (char *)xmalloc(len + 1);
+      memcpy(txt, o->last, len);
+      txt[len] = '\0';
+      break;
+    }
+  }
+  if (txt == NULL) txt = doc_text(l->d, a, doc_end(l->d), &len);
   if (txt == NULL) return;
   buf_init(&b);
   buf_printf(&b, "{\"textDocument\":{\"uri\":\"%s\",\"version\":%d},\"contentChanges\":[{",
@@ -518,7 +542,12 @@ static Srv *start (const char *lang) {
   Srv *s;
   Buf b;
   snprintf(key, sizeof(key), " %s ", lang);
-  if (cmd == NULL || !*cmd || g_nsrv == MAX_SRV || strstr(g_failed, key)) return NULL;
+  if (cmd == NULL || !*cmd || strstr(g_failed, key)) return NULL;
+  if (g_nsrv == MAX_SRV) {	/* the stopped ones still pointed at: said, not a silent nothing */
+    toast(1, "Could not start the %s: %d servers are kept already (restart mme)",
+          strcmp(lang, EXT_LANG) == 0 ? "extension host" : lang, MAX_SRV);
+    return NULL;
+  }
   argv = split_cmd(cmd);
   if (argv == NULL || os_pipe(to) != 0 || os_pipe(from) != 0) {
     if (strlen(g_failed) + strlen(key) < sizeof(g_failed)) strcat(g_failed, key);
@@ -683,20 +712,64 @@ static Srv *srv_of (const char *lang) {
 }
 
 
-/* a server stopped for good: its pipes closed, its process ended; the struct stays */
+#define STOP_WAIT	1000000	/* us a server gets to end by itself after exit (the extension host: twice that) */
+
+/* its process waited for, a little while at most; 1: it ended (its handle is closed then) */
+static int srv_reap (Srv *s, long long us) {
+  long long end = os_now_us() + us;
+  int status, eof = 0;
+  if (s->reaped || s->pid <= 0) return 1;
+  for (;;) {
+    char chunk[16384];
+    if (os_poll_proc(s->proc, &status) == 1) {
+      s->reaped = 1;
+      return 1;
+    }
+    if (os_now_us() >= end) return 0;
+    /* what it still writes is read (and dropped: nothing is handled now), so a full pipe does not keep it
+    ** from ending; its stderr to its channel (the extensions' deactivate may say something) */
+    while (!eof && s->from >= 0 && os_wait_readable(s->from, 0) == 1)
+      if (os_read(s->from, chunk, sizeof(chunk)) <= 0) eof = 1;
+    while (s->err >= 0 && os_wait_readable(s->err, 0) == 1) {
+      long n = os_read(s->err, chunk, sizeof(chunk));
+      if (n <= 0) {
+        os_close(s->err);
+        s->err = -1;
+        break;
+      }
+      out_append(s->chan, chunk, (size_t)n);
+    }
+    os_wait_readable(eof || s->from < 0 ? -1 : s->from, 10);
+  }
+}
+
+
+/*
+** A server stopped for good: told to shut down and exit, and given a moment
+** to do it (the extension host runs its extensions' deactivate then), then
+** its pipes closed and, if it is still there, it and what it started (gopls,
+** daemons) killed; the struct stays until nothing points at it (srv_gc).
+*/
 static void srv_stop (Srv *s) {
-  int status;
   if (!s->dead) {
     request(s, "shutdown", "null", RQ_OTHER, NULL);
     notify(s, "exit", "null");
+    if (!s->dead) srv_reap(s, is_ext(s) ? 2 * STOP_WAIT : STOP_WAIT);
   }
   s->dead = s->told = s->gone = 1;
   s->nprog = 0;
   os_close(s->to);
   os_close(s->from);
   if (s->err >= 0) os_close(s->err);
-  s->err = -1;
-  if (s->pid > 0 && os_poll_proc(s->proc, &status) == 0) os_kill_tree(s->pid);	/* and what it started (gopls, daemons) */
+  s->to = s->from = s->err = -1;
+  if (s->pid > 0 && !s->reaped) {	/* not when it was waited for already: its id can be another's now */
+    os_kill_tree(s->pid);
+    if (!srv_reap(s, 200000)) {	/* killed: gone at once, as a rule; else its handle is let go */
+      os_detach(s->proc);
+      s->reaped = 1;
+    }
+  }
+  s->reaped = 1;
 }
 
 
@@ -952,9 +1025,9 @@ void lsp_shutdown (void) {
     os_close(s->to);
     os_close(s->from);
     if (s->err >= 0) os_close(s->err);
-    /* a server that ignores the exit must not outlive the editor; not when it is
-    ** dead already: os_poll_proc took its handle then, and the id can be another's */
-    if (s->pid > 0 && !s->dead) os_kill_tree(s->pid);	/* with what it started: nothing outlives mme */
+    /* a server that ignores the exit must not outlive the editor; not when it was
+    ** waited for already: os_poll_proc took its handle then, and the id can be another's */
+    if (s->pid > 0 && !s->reaped) os_kill_tree(s->pid);	/* with what it started: nothing outlives mme */
     s->dead = 1;
   }
   g_nsrv = 0;
@@ -1127,12 +1200,13 @@ static LDoc *synced (const Doc *d) {
 
 static void ask (Doc *d, Pos at, const char *method, int kind) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL) return;
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%lu,\"character\":%lu}}",
-           l->uri, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
-  request(l->s, method, params, kind, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"position\":{\"line\":%lu,\"character\":%lu}}",
+             (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
+  request(l->s, method, b.s, kind, d);
+  buf_free(&b);
 }
 
 
@@ -1237,12 +1311,13 @@ int lsp_source_pending (void) {
 /* the inlay hints of lines y0 .. y1 */
 void lsp_inlay (Doc *d, size_t y0, size_t y1) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL) return;
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"range\":{\"start\":{\"line\":%lu,\"character\":0},"
-           "\"end\":{\"line\":%lu,\"character\":0}}}", l->uri, (unsigned long)y0, (unsigned long)y1);
-  request(l->s, "textDocument/inlayHint", params, RQ_INLAY, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"range\":{\"start\":{\"line\":%lu,\"character\":0},"
+             "\"end\":{\"line\":%lu,\"character\":0}}}", (unsigned long)y0, (unsigned long)y1);
+  request(l->s, "textDocument/inlayHint", b.s, RQ_INLAY, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at.y = y0;
   l->s->req[l->s->nreq - 1].at.x = y1;
 }
@@ -1251,10 +1326,12 @@ void lsp_inlay (Doc *d, size_t y0, size_t y1) {
 /* the whole file's semantic tokens, for the text as it is now */
 void lsp_semantic (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL || l->s->nsem == 0) return;
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  request(l->s, "textDocument/semanticTokens/full", params, RQ_SEMANTIC, d);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/semanticTokens/full", b.s, RQ_SEMANTIC, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at.x = (size_t)d->edits;
 }
 
@@ -1282,10 +1359,12 @@ static void lens_forget (const Doc *d) {
 
 void lsp_lens (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL) return;
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  request(l->s, "textDocument/codeLens", params, RQ_LENS, d);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/codeLens", b.s, RQ_LENS, d);
+  buf_free(&b);
 }
 
 
@@ -1362,22 +1441,25 @@ void lsp_bulb (Doc *d, size_t y) {
 
 void lsp_symbols (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL) return;
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  request(l->s, "textDocument/documentSymbol", params, RQ_SYMBOLS, d);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/documentSymbol", b.s, RQ_SYMBOLS, d);
+  buf_free(&b);
 }
 
 
 /* textDocument/formatting, as the file's indent says */
 int lsp_format (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL) return 0;
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"options\":{\"tabSize\":%d,\"insertSpaces\":%s,"
-           "\"trimTrailingWhitespace\":true}}", l->uri, d->indent, d->tabs ? "false" : "true");
-  request(l->s, "textDocument/formatting", params, RQ_FORMAT, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"options\":{\"tabSize\":%d,\"insertSpaces\":%s,"
+             "\"trimTrailingWhitespace\":true}}", d->indent, d->tabs ? "false" : "true");
+  request(l->s, "textDocument/formatting", b.s, RQ_FORMAT, d);
+  buf_free(&b);
   return 1;
 }
 
@@ -1385,15 +1467,16 @@ int lsp_format (Doc *d) {
 /* references, implementations, type definitions, a definition to peek: to on_locations */
 void lsp_locations (Doc *d, Pos at, int what) {
   LDoc *l = synced(d);
-  char params[1200];
+  Buf b;
   static const char *const method[] = {"textDocument/references", "textDocument/implementation",
                                        "textDocument/typeDefinition", "textDocument/definition"};
   if (l == NULL || what < 0 || what > LOC_PEEK) return;
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%lu,\"character\":%lu}%s}",
-           l->uri, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x),
-           what == LOC_REFS ? ",\"context\":{\"includeDeclaration\":true}" : "");
-  request(l->s, method[what], params, RQ_LOC_REFS + what, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"position\":{\"line\":%lu,\"character\":%lu}%s}",
+             (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x),
+             what == LOC_REFS ? ",\"context\":{\"includeDeclaration\":true}" : "");
+  request(l->s, method[what], b.s, RQ_LOC_REFS + what, d);
+  buf_free(&b);
 }
 
 
@@ -1415,12 +1498,13 @@ void lsp_workspace_symbols (Doc *d, const char *query) {
 /* textDocument/documentHighlight: where the symbol at 'at' is, to on_highlights */
 void lsp_highlights (Doc *d, Pos at) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL) return;
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%lu,\"character\":%lu}}",
-           l->uri, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
-  request(l->s, "textDocument/documentHighlight", params, RQ_HIGHLIGHT, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"position\":{\"line\":%lu,\"character\":%lu}}",
+             (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
+  request(l->s, "textDocument/documentHighlight", b.s, RQ_HIGHLIGHT, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at = at;
 }
 
@@ -1484,25 +1568,28 @@ void lsp_format_type (Doc *d, Pos at, const char *ch) {
 
 void lsp_selection_range (Doc *d, Pos at) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL || !l->s->can_sel) {
     on_selection_ranges(d, at, NULL, 0);
     return;
   }
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"positions\":[{\"line\":%lu,\"character\":%lu}]}",
-           l->uri, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
-  request(l->s, "textDocument/selectionRange", params, RQ_SELRANGE, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"positions\":[{\"line\":%lu,\"character\":%lu}]}",
+             (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
+  request(l->s, "textDocument/selectionRange", b.s, RQ_SELRANGE, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at = at;
 }
 
 
 void lsp_folding (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL || !l->s->can_fold) return;
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  request(l->s, "textDocument/foldingRange", params, RQ_FOLDING, d);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/foldingRange", b.s, RQ_FOLDING, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at.x = (size_t)d->edits;
 }
 
@@ -1510,13 +1597,14 @@ void lsp_folding (Doc *d) {
 /* call / type hierarchy: prepare at 'at', then the calls or the types (what: LOC_CALLS_IN ...) */
 int lsp_hierarchy (Doc *d, Pos at, int what) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   int types = what == LOC_SUPER || what == LOC_SUB;
   if (l == NULL || (types ? !l->s->can_types : !l->s->can_calls)) return 0;
-  snprintf(params, sizeof(params),
-           "{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%lu,\"character\":%lu}}",
-           l->uri, (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
-  request(l->s, types ? "textDocument/prepareTypeHierarchy" : "textDocument/prepareCallHierarchy", params, RQ_HPREP, d);
+  td_begin(&b, l);
+  buf_printf(&b, ",\"position\":{\"line\":%lu,\"character\":%lu}}",
+             (unsigned long)at.y, (unsigned long)col_out(l->s, d, at.y, at.x));
+  request(l->s, types ? "textDocument/prepareTypeHierarchy" : "textDocument/prepareCallHierarchy", b.s, RQ_HPREP, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at.x = (size_t)what;
   return 1;
 }
@@ -2489,11 +2577,13 @@ int lsp_ext_wait (int ms, int (*done) (void)) {
 /* the file was saved: onDidSaveTextDocument */
 void lsp_ext_saved (Doc *d) {
   LDoc *l = ldoc_ext(d);
-  char params[4200];
+  Buf b;
   if (l == NULL || !l->opened || l->s->dead) return;
   if (l->sent != d->edits) did_change(l);
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  notify(l->s, "textDocument/didSave", params);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  notify(l->s, "textDocument/didSave", b.s);
+  buf_free(&b);
 }
 
 
@@ -2514,21 +2604,29 @@ void lsp_ext_settings (void) {
 
 /* the editor in front and its selection (window.activeTextEditor); d NULL: none */
 void lsp_ext_active (Doc *d, Pos anchor, Pos cur) {
-  static char last[4300];
+  static char *last;
   LDoc *l = d ? ldoc_ext(d) : NULL;
   Srv *s = ext_srv();
-  char params[4300];
+  Buf b;
   if (s == NULL) return;
   if (l && !l->opened) did_open(l);
-  if (l && l->opened)
-    snprintf(params, sizeof(params),
-             "{\"uri\":\"%s\",\"selection\":{\"start\":{\"line\":%lu,\"character\":%lu},\"end\":{\"line\":%lu,\"character\":%lu}}}",
-             l->uri, (unsigned long)anchor.y, (unsigned long)col_out(l->s, d, anchor.y, anchor.x), (unsigned long)cur.y,
-             (unsigned long)col_out(l->s, d, cur.y, cur.x));
-  else snprintf(params, sizeof(params), "{}");
-  if (strcmp(params, last) == 0) return;
-  snprintf(last, sizeof(last), "%s", params);
-  notify(s, "mme/activeEditor", params);
+  buf_init(&b);
+  if (l && l->opened) {
+    buf_puts(&b, "{\"uri\":");
+    json_put_str(&b, l->uri, strlen(l->uri));
+    buf_printf(&b, ",\"selection\":{\"start\":{\"line\":%lu,\"character\":%lu},\"end\":{\"line\":%lu,\"character\":%lu}}}",
+               (unsigned long)anchor.y, (unsigned long)col_out(l->s, d, anchor.y, anchor.x), (unsigned long)cur.y,
+               (unsigned long)col_out(l->s, d, cur.y, cur.x));
+  }
+  else buf_puts(&b, "{}");
+  if (last != NULL && strcmp(b.s, last) == 0) {
+    buf_free(&b);
+    return;
+  }
+  free(last);
+  last = xstrdup(b.s);
+  notify(s, "mme/activeEditor", b.s);
+  buf_free(&b);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2617,10 +2715,12 @@ static struct {
 
 void lsp_colors (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL || !l->s->can_color) return;
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  request(l->s, "textDocument/documentColor", params, RQ_COLOR, d);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/documentColor", b.s, RQ_COLOR, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at.x = (size_t)d->edits;
 }
 
@@ -2682,10 +2782,12 @@ static void color_pres (Srv *s, Doc *d, const Json *res) {
 
 void lsp_links (Doc *d) {
   LDoc *l = synced(d);
-  char params[1024];
+  Buf b;
   if (l == NULL || !l->s->can_link) return;
-  snprintf(params, sizeof(params), "{\"textDocument\":{\"uri\":\"%s\"}}", l->uri);
-  request(l->s, "textDocument/documentLink", params, RQ_LINK, d);
+  td_begin(&b, l);
+  buf_putc(&b, '}');
+  request(l->s, "textDocument/documentLink", b.s, RQ_LINK, d);
+  buf_free(&b);
   l->s->req[l->s->nreq - 1].at.x = (size_t)d->edits;
 }
 
@@ -3224,6 +3326,7 @@ static void question_done (void *ud, int choice) {
   }
   else buf_puts(&b, "null}");
   if (!q->s->dead) send_msg(q->s, &b);	/* a server gone takes no answer */
+  q->s->refs--;
   buf_free(&b);
   free(q);
 }
@@ -3282,6 +3385,7 @@ static void answer (Srv *s, const Json *msg) {
     size_t i;
     memset(q, 0, sizeof(*q));
     q->s = s;
+    s->refs++;	/* kept until it is answered (srv_gc) */
     if (id->type == J_STR) {
       Buf t;
       buf_init(&t);
@@ -3697,22 +3801,28 @@ static size_t hdr_len (const char *s) {
 }
 
 
-/* the whole messages that came in s->in */
+/*
+** The whole messages that came in s->in, from s->off on. Each is taken
+** (s->off past it) before it is handled: handling one may read this
+** server's messages again (a save that formats waits in lsp_poll), and must
+** not see the same one again, nor drop the next.
+*/
 static int messages (Srv *s) {
   int got = 0;
+  g_busy++;
   for (;;) {
-    char *hdr_end, *cl;
+    char *at, *hdr_end, *cl;
     size_t body, hlen;
     Json *j;
-    if (s->in.len == 0) break;
+    if (s->off >= s->in.len) break;
     s->in.s[s->in.len] = '\0';
-    hdr_end = strstr(s->in.s, "\r\n\r\n");
+    at = s->in.s + s->off;
+    hdr_end = strstr(at, "\r\n\r\n");
     if (hdr_end == NULL) break;
-    hlen = (size_t)(hdr_end - s->in.s) + 4;
-    cl = strstr(s->in.s, "Content-Length:");
+    hlen = (size_t)(hdr_end - at) + 4;
+    cl = strstr(at, "Content-Length:");
     if (cl == NULL || cl > hdr_end) {	/* no length: drop the header */
-      memmove(s->in.s, s->in.s + hlen, s->in.len - hlen);
-      s->in.len -= hlen;
+      s->off += hlen;
       continue;
     }
     body = hdr_len(cl + 15);
@@ -3721,17 +3831,22 @@ static int messages (Srv *s) {
       s->dead = 1;
       break;
     }
-    if (s->in.len < hlen + body) break;
-    trace("<< ", s->in.s + hlen, body);
-    j = json_parse(s->in.s + hlen, body);
+    if (s->in.len - s->off < hlen + body) break;
+    trace("<< ", at + hlen, body);
+    j = json_parse(at + hlen, body);
+    s->off += hlen + body;	/* taken before it is handled; s->in may move then: nothing in it is held past here */
     if (j) {
       handle(s, j);
       json_free(j);
       got = 1;
     }
-    memmove(s->in.s, s->in.s + hlen + body, s->in.len - hlen - body);
-    s->in.len -= hlen + body;
   }
+  if (s->off > 0) {	/* what was handled goes, once (a nested call may have done it: off is 0 then) */
+    memmove(s->in.s, s->in.s + s->off, s->in.len - s->off);
+    s->in.len -= s->off;
+    s->off = 0;
+  }
+  g_busy--;
   return got;
 }
 
@@ -3753,9 +3868,41 @@ static void srv_read (Srv *s) {
 }
 
 
+/* a stopped server something still points at: a document, a question, what a menu keeps to answer it */
+static int srv_used (const Srv *s) {
+  size_t k;
+  if (s->refs || g_act.s == s || g_lens.s == s || g_link.s == s || g_inl.s == s || g_inl.asked == s ||
+      g_ne.s == s || g_ne.asked == s)
+    return 1;
+  for (k = 0; k < g_ndoc; k++)
+    if (g_doc[k].s == s) return 1;
+  return 0;
+}
+
+
+/* the stopped servers nothing points at are let go, their slots with them (restarts would use them all up) */
+static void srv_gc (void) {
+  int i, n = 0;
+  for (i = 0; i < g_nsrv; i++) {
+    Srv *s = g_srv[i];
+    if (s->gone && s->reaped && !srv_used(s)) {
+      buf_free(&s->in);
+      free(s->will_ren);
+      free(s->did_ren);
+      free(s);
+      continue;
+    }
+    g_srv[n++] = s;	/* in order: the newest of a language stays the last */
+  }
+  g_nsrv = n;
+}
+
+
 int lsp_poll (void) {
   int i, got = 0;
   size_t k;
+  if (g_busy == 0) srv_gc();	/* not nested: no caller up the stack holds a server */
+  g_busy++;
   for (i = 0; i < g_nsrv; i++) {
     Srv *s = g_srv[i];
     char chunk[65536];
@@ -3771,7 +3918,7 @@ int lsp_poll (void) {
       }
       out_append(s->chan, chunk, (size_t)n);
     }
-    if (!s->dead && os_poll_proc(s->proc, &status) == 1) s->dead = 1;
+    if (!s->reaped && s->pid > 0 && os_poll_proc(s->proc, &status) == 1) s->dead = s->reaped = 1;	/* its handle is closed now */
     if (s->dead && !s->told) {
       out_log(s->chan, "[error] The %s language server stopped", s->lang);
       s->told = 1;
@@ -3794,6 +3941,7 @@ int lsp_poll (void) {
     if (now - l->seen_at >= SYNC_WAIT) did_change(l);
   }
   auth_idle();	/* a device flow nobody will ever answer is given up on */
+  g_busy--;
   return got;
 }
 
