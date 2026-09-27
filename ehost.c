@@ -71,6 +71,12 @@ static int in_run_list (const char *id) {
 }
 
 
+/* named in mme.extensions.run (a VS Code extension that runs in mme) */
+int ehost_in_run (const char *id) {
+  return in_run_list(id);
+}
+
+
 /* mme.extensions.disabled: its code does not run, wherever it is installed (its themes, snippets still do) */
 int ehost_disabled (const char *id) {
   return in_list("mme\\.extensions\\.disabled", id);
@@ -247,6 +253,7 @@ static void forget (void) {
 
 /* the main loop: the extensions read again (installed, uninstalled) start the host again with them */
 static char *g_start_dbg;	/* debug.startDebugging's configuration, started from the main loop */
+static void bars_clear (void);
 
 void ehost_idle (void) {
   work_out();
@@ -258,7 +265,7 @@ void ehost_idle (void) {
   }
   if (g_restart) {
     g_restart = 0;
-    lsp_restart(EXT_LANG);
+    ehost_restart();
   }
   if (!g_opened && *ehost_command()) {	/* something to run now (the extensions were read after the files opened) */
     g_opened = 1;
@@ -267,8 +274,18 @@ void ehost_idle (void) {
 }
 
 
+/* the host again, with what runs now: its status bar items go with the old one; the open files go to it
+** again (a file the old one had moves by itself, one it could not have - everything was disabled - is opened) */
+void ehost_restart (void) {
+  bars_clear();
+  lsp_restart(EXT_LANG);
+  if (*ehost_command()) mme_lsp_reopen();
+}
+
+
 /* the settings changed: which run is worked out again (the caller restarts the host) */
 void ehost_reset (void) {
+  bars_clear();
   forget();
   free(g_dirs);
   g_dirs = NULL;
@@ -418,6 +435,20 @@ static void bar_set (const Json *p) {
     snprintf(args, sizeof(args), "[\"%s\"]", b->key);
     b->cmd = cmd_add("_mme.statusBar", b->text, "", args, 1);
   }
+}
+
+
+/* every item gone: the host that made them stopped */
+static void bars_clear (void) {
+  size_t i;
+  for (i = 0; i < g_nbar; i++) {
+    free(g_bar[i].name);
+    free(g_bar[i].text);
+    free(g_bar[i].tip);
+  }
+  free(g_bar);
+  g_bar = NULL;
+  g_nbar = 0;
 }
 
 

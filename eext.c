@@ -58,6 +58,7 @@ typedef struct Ext {
   ELang *lang;
   size_t nlang;
   int ngrammar, ncommand, nkey, ndebug, nicon, nconfig;	/* what mme does not use */
+  int code;	/* it has code (package.json's main): it can be turned on and off */
 } Ext;
 
 static Ext *g_ext;
@@ -234,6 +235,7 @@ static int ext_read (Ext *e, const char *dir, int vscode) {
   e->ndebug = (int)count(json_get(c, "debuggers"));
   e->nicon = (int)count(json_get(c, "iconThemes"));
   e->nconfig = json_get(c, "configuration") != NULL;
+  e->code = json_get(pk, "main") != NULL || json_get(pk, "browser") != NULL;
   json_free(nl);
   json_free(pk);
   return 0;
@@ -1403,11 +1405,29 @@ static int busy_for (const char *id) {
 }
 
 
+/* its code runs (or will): a VS Code extension named in mme.extensions.run, an installed one not disabled */
+static int is_on (const Item *it) {
+  if (ehost_disabled(it->id)) return 0;
+  return g_ext[it->ext].vscode ? ehost_in_run(it->id) : 1;
+}
+
+
 /* what the button of an item says */
 static const char *button (const Item *it) {
   if (busy_for(it->id)) return "Installing";
   if (g_ext[it->ext].vscode) return "VS Code";
   return "Uninstall";
+}
+
+
+/* its Enable / Disable button's columns in a view w wide (from its left, *t0 up to *t1); 0: it has none */
+static int toggle_cols (const Item *it, int w, int *t0, int *t1) {
+  int bw = (int)strlen(button(it)) + 2, tw;
+  if (!g_ext[it->ext].code || w - bw - 11 < 6) return 0;	/* the publisher keeps a few columns */
+  tw = (int)strlen(is_on(it) ? "Disable" : "Enable") + 2;
+  *t1 = w - bw - 2;
+  *t0 = *t1 - tw;
+  return 1;
 }
 
 
@@ -1455,9 +1475,18 @@ void ext_draw (int x, int y, int w, int h, int focus) {
       }
     }
     scr_putsw(x + 3, sy + 1, w - 4, it->desc, dim);
-    scr_putsw(x + 3, sy + 2, w - bw - 5, it->publisher, dim);
     g_bx0 = w - bw - 1;
     g_bx1 = w - 1;
+    {	/* Enable / Disable, VS Code's button, before the other: only for an extension with code */
+      int t0, t1, tw = 0;
+      if (toggle_cols(it, w, &t0, &t1)) {
+        int on = is_on(it);
+        tw = t1 - t0;
+        scr_fill(x + t0, sy + 2, tw, on ? S_INPUT : S_TOGGLE_ON);
+        scr_puts(x + t0 + 1, sy + 2, on ? "Disable" : "Enable", on ? S_INPUT : S_TOGGLE_ON);
+      }
+      scr_putsw(x + 3, sy + 2, w - bw - tw - 6, it->publisher, dim);
+    }
     scr_fill(x + g_bx0, sy + 2, bw, !busy_for(it->id) ? S_INPUT : S_TOGGLE_ON);
     scr_puts(x + g_bx0 + 1, sy + 2, bt, !busy_for(it->id) ? S_INPUT : S_TOGGLE_ON);
   }
@@ -1479,6 +1508,27 @@ static void press (size_t k) {
   it = &g_item[k];
   if (busy_for(it->id)) return;
   uninstall(it->ext);
+}
+
+
+static void set_run (const char *id, int on);
+static void set_disabled (const char *id, int off);
+
+/* the Enable / Disable button: its code on or off (a VS Code extension: mme.extensions.run; the others:
+** mme.extensions.disabled); the extension host starts again without it, or with it */
+static void toggle (size_t k) {
+  const Item *it;
+  if (k >= g_nitem) return;
+  it = &g_item[k];
+  if (!g_ext[it->ext].code) return;
+  if (is_on(it)) {
+    if (g_ext[it->ext].vscode) set_run(it->id, 0);
+    else set_disabled(it->id, 1);
+  }
+  else {
+    if (ehost_disabled(it->id)) set_disabled(it->id, 0);
+    if (g_ext[it->ext].vscode && !ehost_in_run(it->id)) set_run(it->id, 1);
+  }
 }
 
 
@@ -1689,8 +1739,12 @@ void ext_click (int row, int col, SideAct *act) {
   k = g_top + (size_t)((row - HEAD) / ROWS);
   if (k >= g_nitem) return;
   g_sel = k;
-  if ((row - HEAD) % ROWS == 2 && col >= g_bx0 && col < g_bx1) press(k);
-  else show_page(&g_item[k]);
+  {
+    int t0, t1, bw = (int)strlen(button(&g_item[k])) + 2, w = side_width();
+    if ((row - HEAD) % ROWS == 2 && col >= w - bw - 1 && col < w - 1) press(k);
+    else if ((row - HEAD) % ROWS == 2 && toggle_cols(&g_item[k], w, &t0, &t1) && col >= t0 && col < t1) toggle(k);
+    else show_page(&g_item[k]);
+  }
 }
 
 

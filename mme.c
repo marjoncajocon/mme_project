@@ -5715,7 +5715,7 @@ static void apply_settings (int report) {
       run_was = buf_take(&b);
       if (again) {
         ehost_reset();
-        lsp_restart(EXT_LANG);
+        ehost_restart();	/* with what runs now (Enable / Disable in the Extensions view) */
       }
     }
     else buf_free(&b);

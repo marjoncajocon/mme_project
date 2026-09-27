@@ -962,6 +962,15 @@ SCENARIOS = [
          "and a cell run with it runs in the extension: its stdout and its result are the cell's outputs, its "
          "execution order the cell's count",
          exts=[("acme.web", "acme.web")], private=True),
+    Scen("ext-view-enable-disable", "lang/plain.txt",
+         ["w:5000", "k:" + csiu("x", ctrl=True, shift=True), "w:1000", "d"] + click(15, 8) + ["w:4000", "d"]
+         + click(15, 8) + ["w:5000", "d"],
+         "the Extensions view has an Enable / Disable button beside Uninstall for an extension with code (a "
+         "theme has none): Disable stops its code (its status bar item goes, the row says disabled, the button "
+         "says Enable), Enable starts it again",
+         exts=[("acme.demo", "acme.demo"),
+               ("acme.monokai-dark-1.0.0", {"name": "monokai-dark", "publisher": "acme", "version": "1.0.0",
+                                             "displayName": "Monokai Dark", "description": "A dark color theme"})]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

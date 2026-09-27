@@ -670,7 +670,10 @@ With no file open the editor shows the keys to start with.
   own. Which extensions run: those installed with Install from VSIX (when they
   have code), and those of VS Code's named in **`mme.extensions.run`**
   (`["redhat.vscode-yaml", "golang.go"]`, or Enter on one in the Extensions view:
-  Run This Extension). When a running extension serves a language, mme does not
+  Run This Extension). Each extension with code has an **Enable / Disable**
+  button in the Extensions view, beside Uninstall: Disable stops its code at
+  once (its status bar items go with it; its themes and snippets stay), Enable
+  starts it again. When a running extension serves a language, mme does not
   start its own server for it (the extension starts its own).
 
   **Ghost text from extensions**: an AI extension that gives inline completions
