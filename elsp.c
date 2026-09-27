@@ -647,6 +647,12 @@ static Srv *server (const char *lang) {
 
 static Srv *srv_of (const char *lang);
 
+/* the extension host started without a document (a notebook: its extensions' kernels); nothing to run: nothing */
+void lsp_ext_start (void) {
+  if (*ehost_command()) server(EXT_LANG);
+}
+
+
 /* a server for lang is running */
 int lsp_running (const char *lang) {
   Srv *s = srv_of(lang);

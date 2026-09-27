@@ -98,7 +98,15 @@ typedef struct Nb {
   int rows_cap;
   int follow;	/* the caret (the cell) must be shown */
   char title[300];
+  char xctl[128];	/* an extension's kernel (createNotebookController) runs its cells: its id; "": mme's own */
 } Nb;
+
+typedef struct XCtl {	/* an extension's notebook controller, as the host said */
+  char *id, *label, *desc;
+} XCtl;
+
+static XCtl *g_xc;
+static int g_nxc;
 
 enum { RP_NONE, RP_TOOL, RP_SRC, RP_OUT, RP_ADD, RP_GAP };
 
@@ -725,6 +733,10 @@ static void k_close (Nb *nb) {
 
 static void k_stop (Nb *nb) {
   if (nb->ks == KS_OFF) return;
+  if (nb->xctl[0]) {	/* the extension's: nothing of mme's runs */
+    nb->ks = KS_OFF;
+    return;
+  }
   os_kill(nb->pid, 9);
   os_wait(nb->proc);
   k_close(nb);
@@ -732,9 +744,27 @@ static void k_stop (Nb *nb) {
 }
 
 
+static const char *xctl_label (const char *id) {
+  int i;
+  for (i = 0; i < g_nxc; i++)
+    if (strcmp(g_xc[i].id, id) == 0) return g_xc[i].label;
+  return id;
+}
+
+
 static int k_start (Nb *nb) {
-  char *py = python_path(), *script, *argv[5], *cwd, *dir;
+  char *py, *script, *argv[5], *cwd, *dir;
   int to[2], from[2], err[2], io[3], r;
+  if (nb->xctl[0]) {	/* an extension's kernel: ready at once, the host runs the cells */
+    if (!lsp_running(EXT_LANG)) {
+      toast(1, "Notebook: the extension host is not running (its kernel %s is not there).", nb->xctl);
+      return -1;
+    }
+    snprintf(nb->kinfo, sizeof(nb->kinfo), "%s", xctl_label(nb->xctl));
+    nb->ks = KS_IDLE;
+    return 0;
+  }
+  py = python_path();
   if (py == NULL) {
     toast(1, "Notebook: no Python was found (set python.defaultInterpreterPath).");
     return -1;
@@ -815,7 +845,24 @@ static void k_next (Nb *nb) {
     memmove(nb->queue, nb->queue + 1, (nb->nq - 1) * sizeof(unsigned));
     nb->nq--;
     if (c == NULL || c->state != 1) continue;
-    {
+    if (nb->xctl[0]) {	/* to the extension's kernel, through the host */
+      Buf b;
+      const char *path = nb->path ? nb->path : "";
+      buf_init(&b);
+      buf_puts(&b, "{\"controller\":");
+      json_put_str(&b, nb->xctl, strlen(nb->xctl));
+      buf_puts(&b, ",\"path\":");
+      json_put_str(&b, path, strlen(path));
+      buf_printf(&b, ",\"id\":%u,\"language\":", s);
+      json_put_str(&b, nb->klang[0] ? nb->klang : "python", strlen(nb->klang[0] ? nb->klang : "python"));
+      buf_puts(&b, ",\"code\":");
+      json_put_str(&b, c->src.s ? c->src.s : "", c->src.len);
+      buf_puts(&b, "}");
+      buf_putc(&b, '\0');
+      lsp_ext_notify("mme/nbExec", b.s);
+      buf_free(&b);
+    }
+    else {
       Buf b;
       buf_init(&b);
       buf_printf(&b, "{\"op\":\"exec\",\"id\":%u,\"code\":", s);
@@ -1029,7 +1076,7 @@ static void restart (Nb *nb);
 static int k_poll (Nb *nb) {
   char chunk[65536];
   int got = 0, status;
-  if (nb->ks == KS_OFF) return 0;
+  if (nb->ks == KS_OFF || nb->xctl[0]) return 0;	/* an extension's kernel: its messages come through the host */
   while (nb->from >= 0 && os_wait_readable(nb->from, 0) == 1) {
     long n = os_read(nb->from, chunk, sizeof(chunk));
     if (n <= 0) break;
@@ -1145,8 +1192,89 @@ static void interrupt (Nb *nb) {	/* KeyboardInterrupt in the cell, as Jupyter's 
   for (i = 0; i < nb->n; i++)	/* the ones waiting their turn do not run */
     if (nb->cell[i]->state == 1) nb->cell[i]->state = 0;
   nb->nq = 0;
+  if (nb->xctl[0]) {	/* the extension's interruptHandler, its execution's token */
+    Buf b;
+    const char *path = nb->path ? nb->path : "";
+    buf_init(&b);
+    buf_puts(&b, "{\"controller\":");
+    json_put_str(&b, nb->xctl, strlen(nb->xctl));
+    buf_puts(&b, ",\"path\":");
+    json_put_str(&b, path, strlen(path));
+    buf_puts(&b, "}");
+    buf_putc(&b, '\0');
+    lsp_ext_notify("mme/nbInterrupt", b.s);
+    buf_free(&b);
+    return;
+  }
   k_send(nb, "{\"op\":\"interrupt\"}\n", 19);
   nb->int_at = os_now_us();
+}
+
+
+/* mme/nbControllers: the extensions' notebook kernels */
+void nb_ext_controllers (const Json *list) {
+  int i;
+  size_t k;
+  for (i = 0; i < g_nxc; i++) {
+    free(g_xc[i].id);
+    free(g_xc[i].label);
+    free(g_xc[i].desc);
+  }
+  free(g_xc);
+  g_xc = NULL;
+  g_nxc = 0;
+  if (list == NULL || list->type != J_ARR || list->n == 0) return;
+  g_xc = (XCtl *)xmalloc(list->n * sizeof(XCtl));
+  for (k = 0; k < list->n; k++) {
+    const char *type = json_str(json_get(list->kid[k], "type"), "");
+    if (strcmp(type, "jupyter-notebook") != 0 && strcmp(type, "*") != 0) continue;	/* mme's notebooks are .ipynb */
+    g_xc[g_nxc].id = xstrdup(json_str(json_get(list->kid[k], "id"), ""));
+    g_xc[g_nxc].label = xstrdup(json_str(json_get(list->kid[k], "label"), ""));
+    g_xc[g_nxc].desc = xstrdup(json_str(json_get(list->kid[k], "description"), ""));
+    g_nxc++;
+  }
+}
+
+
+/* mme/nbMsg: what the extension's kernel put out, as mme's kernel says it ("clear": a cell's outputs go) */
+void nb_ext_message (const Json *p) {
+  const char *path = json_str(json_get(p, "path"), "");
+  const Json *m = json_get(p, "msg");
+  int i;
+  for (i = 0; i < MAX_NB; i++) {
+    Nb *nb = g_nb[i];
+    if (nb == NULL || !nb->xctl[0] || m_fncmp(nb->path ? nb->path : "", path) != 0) continue;
+    if (strcmp(json_str(json_get(m, "type"), ""), "clear") == 0) {
+      Cell *c = by_serial(nb, (unsigned)json_num(json_get(m, "id"), 0), NULL);
+      if (c) cell_clear(c);
+    }
+    else k_message(nb, m);
+    scr_redraw();
+    return;
+  }
+}
+
+
+/* the toolbar's kernel name clicked: mme's own kernel, or an extension's */
+static void pick_kernel (Nb *nb) {
+  Pick p;
+  int i, r;
+  lsp_ext_start();
+  pick_init(&p, "Select Kernel");
+  p.keep_order = 1;
+  pick_add(&p, "mme: Jupyter / Python (mme-kernel.py)", nb->xctl[0] ? NULL : "selected", 0xEB2D);	/* codicon plug */
+  for (i = 0; i < g_nxc; i++)
+    pick_add(&p, g_xc[i].label, strcmp(nb->xctl, g_xc[i].id) == 0 ? "selected" : g_xc[i].desc[0] ? g_xc[i].desc : g_xc[i].id, 0xEB2D);
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r < 0) return;
+  k_stop(nb);
+  nb->kinfo[0] = '\0';
+  snprintf(nb->xctl, sizeof(nb->xctl), "%s", r == 0 ? "" : g_xc[r - 1].id);
+  for (i = 0; i < (int)nb->n; i++) nb->cell[i]->state = 0;
+  nb->nq = 0;
+  nb->running = 0;
+  if (nb->xctl[0]) k_start(nb);
 }
 
 /* }================================================================== */
@@ -1218,6 +1346,7 @@ void *nb_open (const char *path) {
   }
   if (path) snprintf(nb->title, sizeof(nb->title), "%s", path_basename(path));
   else snprintf(nb->title, sizeof(nb->title), "Untitled-%d.ipynb", ++untitled);
+  lsp_ext_start();	/* the extensions' kernels come to the kernel picker */
   for (i = 0; i < MAX_NB; i++)
     if (g_nb[i] == NULL) {
       g_nb[i] = nb;
@@ -2435,6 +2564,7 @@ void nb_mouse (void *page, const Mouse *m) {
     else if (x < 45) restart(nb);
     else if (x < 59) interrupt(nb);
     else if (x < 78) clear_all(nb);
+    else if (x >= nb->w - 30) pick_kernel(nb);	/* the kernel's name, at the right */
     return;
   }
   if (part == RP_ADD) {

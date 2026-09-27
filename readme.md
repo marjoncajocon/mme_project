@@ -723,9 +723,23 @@ With no file open the editor shows the keys to start with.
   written in JavaScript that the host puts on a port; mme's debugger is the
   client, as for its own adapters, and `debug.startDebugging` starts it.
 
+  An extension's **debug adapter trackers** see the session's messages, and
+  its `customRequest`s go to the adapter through mme's connection (its custom
+  events come back as `onDidReceiveDebugSessionCustomEvent`). **Language
+  models** (`vscode.lm`): an extension asking for a model gets the one Chat
+  uses (`mme.chat.provider`, `.model`, `.apiKey`; Anthropic's or an
+  OpenAI-compatible API), streamed, with the tools extensions register
+  (`lm.registerTool`, `invokeTool`); a **chat participant** (`@name`) is
+  "Ask @name..." in the Command Palette, its answer in an Output channel.
+  **Notebook kernels** (`createNotebookController`): click the kernel name at
+  the right of a notebook's toolbar to pick one; its cells then run in the
+  extension, their outputs (stdout, stderr, errors, text, images) in the
+  notebook.
+
   Not there yet (Output > Extension Host lists every `[missing]` API an
-  extension asked for): notebooks' kernels, the language model APIs, debug
-  adapter trackers and `DebugSession.customRequest`. Microsoft's own extensions (Pylance, C/C++, Python,
+  extension asked for): notebook serializers for other formats than .ipynb,
+  notebook renderers (they are webviews inside cells), and debug adapters on
+  named pipes. Microsoft's own extensions (Pylance, C/C++, Python,
   debugpy, C# Dev Kit) are licensed for Microsoft's VS Code only: mme runs them
   if named, but their licence does not allow it.
 - **Explorer** — the folder tree, with a scrollbar at its right edge (every

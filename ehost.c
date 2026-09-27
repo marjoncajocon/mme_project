@@ -565,6 +565,9 @@ int ehost_message (const char *method, const Json *p) {
     g_start_dbg = buf_take(&b);
   }
   else if (strcmp(method, "mme/stopDebugging") == 0) dbg_shutdown();
+  else if (strcmp(method, "mme/debugRequest") == 0) dbg_ext_request(p);
+  else if (strcmp(method, "mme/nbControllers") == 0) nb_ext_controllers(json_get(p, "controllers"));	/* enb.c */
+  else if (strcmp(method, "mme/nbMsg") == 0) nb_ext_message(p);
   else if (strcmp(method, "mme/debugConsole") == 0) dbg_console(json_str(json_get(p, "text"), ""));
   else if (strcmp(method, "mme/tasks") == 0) task_ext_list(json_get(p, "tasks"));	/* etask.c */
   else if (strcmp(method, "mme/tests") == 0) test_ext_items(json_get(p, "tests"));	/* etest.c */

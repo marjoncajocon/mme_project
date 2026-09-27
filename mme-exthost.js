@@ -1099,7 +1099,21 @@ class NotebookData {
   }
 }
 
-class LanguageModelError extends Error {}
+class LanguageModelError extends Error {
+  constructor (message, code) {
+    super(message || 'language model error');
+    this.code = code || 'Unknown';
+  }
+  static NoPermissions (m) {
+    return new LanguageModelError(m || 'no permission to use the language model', 'NoPermissions');
+  }
+  static Blocked (m) {
+    return new LanguageModelError(m || 'the request was blocked', 'Blocked');
+  }
+  static NotFound (m) {
+    return new LanguageModelError(m || 'no such language model', 'NotFound');
+  }
+}
 
 const enums = {
   EndOfLine, DiagnosticSeverity, DiagnosticTag, CompletionItemKind, CompletionItemTag, CompletionTriggerKind,
@@ -1236,6 +1250,8 @@ async function executeCommand (id, ...args) {
   if (vc !== undefined) return vc;
   const ce = await customEditorCommand(id);	// a custom editor for the file in front, in the browser
   if (ce !== undefined) return ce;
+  if (id.startsWith('_mme.chat.')) return askParticipant(id.slice(10));	// "Ask @name..."
+
   if (id === 'vscode.openWith' && args[0] && args[1]) return openCustomEditor(String(args[1]), toUri(args[0]));
   if (id === 'setContext') {
     contextKeys[args[0]] = args[1];
@@ -3384,6 +3400,43 @@ const onDidStartDebugSession = new EventEmitter(), onDidTerminateDebugSession = 
 const onDidChangeActiveDebugSession = new EventEmitter(), onDidReceiveDebugSessionCustomEvent = new EventEmitter();
 const onDidChangeBreakpoints = new EventEmitter();
 let activeDebugSession, debugBridge = null;
+const debugTrackerFactories = [];	// {type, factory}
+let debugTrackers = [];	// the session's trackers
+const debugRequests = new Map();	// customRequest's id -> {resolve, reject}
+let nextDebugRequest = 1;
+const DAP_EVENTS = new Set(['initialized', 'stopped', 'continued', 'exited', 'terminated', 'thread', 'output', 'breakpoint',
+  'module', 'loadedSource', 'process', 'capabilities', 'progressStart', 'progressUpdate', 'progressEnd', 'invalidated',
+  'memory']);
+
+function trackersCall (method, ...a) {
+  for (const t of debugTrackers)
+    if (t && typeof t[method] === 'function') {
+      try {
+        t[method](...a);
+      } catch (e) {
+        log('[error] a debug adapter tracker: ' + (e && e.message ? e.message : e));
+      }
+    }
+}
+
+function dapOut (p) {	// mme/dapOut: a message mme sent the adapter
+  trackersCall('onWillReceiveMessage', p.message);
+}
+
+function dapIn (p) {	// mme/dapIn: a message of the adapter's
+  const m = p.message || {};
+  trackersCall('onDidSendMessage', m);
+  if (m.type === 'event' && !DAP_EVENTS.has(m.event) && activeDebugSession)
+    onDidReceiveDebugSessionCustomEvent.fire({session: activeDebugSession, event: m.event, body: m.body});
+}
+
+function debugResponse (p) {	// mme/debugResponse: customRequest's answer
+  const r = debugRequests.get(p.id);
+  if (!r) return;
+  debugRequests.delete(p.id);
+  if (p.success) r.resolve(p.body);
+  else r.reject(new Error(p.message || 'the debug adapter refused the request'));
+}
 
 class DebugAdapterNamedPipeServer {
   constructor (p) {
@@ -3425,10 +3478,11 @@ function debugSession (config) {
   const s = {
     id: crypto.randomUUID(), type: config.type, name: config.name || config.type, workspaceFolder: folders[0],
     configuration: config, parentSession: undefined,
-    customRequest: async (command) => {
-      said('DebugSession.customRequest ' + command);
-      return undefined;
-    },
+    customRequest: (command, args) => new Promise((resolve, reject) => {	// through mme's connection to the adapter
+      const id = nextDebugRequest++;
+      debugRequests.set(id, {resolve, reject});
+      notify('mme/debugRequest', {id, command, args: args === undefined ? {} : plain(args)});
+    }),
     getDebugProtocolBreakpoint: async () => undefined,
   };
   return s;
@@ -3513,7 +3567,19 @@ async function resolveDebug (p) {	// mme/debugResolve {seq, config}: mme/debugRe
       return;
     }
     activeDebugSession = session;
-    answer({config, adapter});
+    debugTrackers = [];
+    for (const x of debugTrackerFactories)
+      if (x.type === config.type || x.type === '*') {
+        try {
+          const t = await x.factory.createDebugAdapterTracker(session);
+          if (t) debugTrackers.push(t);
+        } catch (e) {
+          log('[error] a debug adapter tracker factory: ' + (e && e.message ? e.message : e));
+        }
+      }
+    trackersCall('onWillStartSession');
+    // mme sends the messages here only when something wants them
+    answer({config, adapter, track: debugTrackers.length > 0 || onDidReceiveDebugSessionCustomEvent._ls.length > 0});
     onDidStartDebugSession.fire(session);
     onDidChangeActiveDebugSession.fire(session);
   } catch (e) {
@@ -3525,6 +3591,11 @@ async function resolveDebug (p) {	// mme/debugResolve {seq, config}: mme/debugRe
 function debugEnded () {	// mme/debugEnded: the session is over
   const s = activeDebugSession;
   activeDebugSession = undefined;
+  trackersCall('onWillStopSession');
+  trackersCall('onExit', 0, undefined);
+  debugTrackers = [];
+  for (const r of debugRequests.values()) r.reject(new Error('the debug session ended'));
+  debugRequests.clear();
   if (debugBridge) {
     try {
       debugBridge.srv.close();
@@ -3548,6 +3619,576 @@ async function startDebugging (folder, nameOrConfig) {	// debug.startDebugging: 
 const debugConsole = {
   append: (s) => notify('mme/debugConsole', {text: String(s)}),
   appendLine: (s) => notify('mme/debugConsole', {text: String(s) + '\n'}),
+};
+
+
+// ----------------------------------------------------------------- language models: mme's chat model
+
+// vscode.lm: an extension asking for a model gets the one mme's Chat talks to (mme.chat.provider, .model,
+// .apiKey, .baseUrl; the same environment variables), streamed as VS Code's LanguageModelChatResponse.
+// Tools (lm.registerTool) and chat participants (chat.createChatParticipant: "Ask @name..." in the palette).
+const LanguageModelChatMessageRole = {User: 1, Assistant: 2};
+const LanguageModelChatToolMode = {Auto: 1, Required: 2};
+
+class LanguageModelTextPart {
+  constructor (value) {
+    this.value = value;
+  }
+}
+class LanguageModelToolCallPart {
+  constructor (callId, name, input) {
+    Object.assign(this, {callId, name, input});
+  }
+}
+class LanguageModelToolResultPart {
+  constructor (callId, content) {
+    Object.assign(this, {callId, content});
+  }
+}
+class LanguageModelToolResult {
+  constructor (content) {
+    this.content = content;
+  }
+}
+class LanguageModelPromptTsxPart {
+  constructor (value) {
+    this.value = value;
+  }
+}
+class LanguageModelDataPart {
+  constructor (data, mimeType) {
+    Object.assign(this, {data, mimeType});
+  }
+  static text (s, mime) {
+    return new LanguageModelDataPart(Buffer.from(String(s)), mime || 'text/plain');
+  }
+  static json (v, mime) {
+    return new LanguageModelDataPart(Buffer.from(JSON.stringify(v)), mime || 'text/x-json');
+  }
+}
+class LanguageModelChatMessage {
+  constructor (role, content, name) {
+    this.role = role;
+    this.content = typeof content === 'string' ? [new LanguageModelTextPart(content)] : content || [];
+    this.name = name;
+  }
+  static User (content, name) {
+    return new LanguageModelChatMessage(1, content, name);
+  }
+  static Assistant (content, name) {
+    return new LanguageModelChatMessage(2, content, name);
+  }
+}
+
+function lmConfig () {
+  const openai = settingValue('mme.chat.provider') === 'openai';
+  let key, bearer = openai;
+  if (openai) key = settingValue('mme.chat.openai.apiKey') || process.env.OPENAI_API_KEY || '';
+  else {
+    key = settingValue('mme.chat.apiKey') || process.env.ANTHROPIC_API_KEY || '';
+    if (!key && process.env.ANTHROPIC_AUTH_TOKEN) {
+      key = process.env.ANTHROPIC_AUTH_TOKEN;
+      bearer = true;
+    }
+  }
+  let base = openai ? settingValue('mme.chat.openai.baseUrl') || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1'
+    : settingValue('mme.chat.baseUrl') || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com';
+  base = String(base).replace(/\/+$/, '');
+  const local = /:\/\/(localhost|127\.0\.0\.1|\[::1\])/.test(base);
+  const model = settingValue('mme.chat.model') || (openai ? 'gpt-4o' : 'claude-opus-5');
+  return {openai, key, bearer, base, model, ok: !!key || (openai && local), fallbacks: settingValue('mme.chat.fallbacks') !== false};
+}
+
+function partText (p) {
+  if (typeof p === 'string') return p;
+  if (p instanceof LanguageModelTextPart || (p && typeof p.value === 'string')) return p.value;
+  if (p instanceof LanguageModelPromptTsxPart) return typeof p.value === 'string' ? p.value : JSON.stringify(p.value);
+  if (p instanceof LanguageModelDataPart) return p.data.toString();
+  return '';
+}
+
+// the messages as the API wants them: Anthropic's blocks, or OpenAI's roles
+function lmMessages (messages, openai) {
+  const out = [];
+  for (const m of messages) {
+    const role = m.role === 2 ? 'assistant' : 'user';
+    const parts = typeof m.content === 'string' ? [new LanguageModelTextPart(m.content)] : m.content || [];
+    if (openai) {
+      const text = parts.filter((p) => !(p instanceof LanguageModelToolCallPart) && !(p instanceof LanguageModelToolResultPart)).map(partText).join('');
+      const calls = parts.filter((p) => p instanceof LanguageModelToolCallPart);
+      const results = parts.filter((p) => p instanceof LanguageModelToolResultPart);
+      for (const r of results) out.push({role: 'tool', tool_call_id: r.callId, content: (r.content || []).map(partText).join('')});
+      if (text || calls.length)
+        out.push(Object.assign({role, content: text || null}, calls.length ? {tool_calls: calls.map((c) => ({id: c.callId, type: 'function',
+          function: {name: c.name, arguments: JSON.stringify(c.input || {})}}))} : {}));
+      continue;
+    }
+    const blocks = [];
+    for (const p of parts) {
+      if (p instanceof LanguageModelToolCallPart) blocks.push({type: 'tool_use', id: p.callId, name: p.name, input: p.input || {}});
+      else if (p instanceof LanguageModelToolResultPart) blocks.push({type: 'tool_result', tool_use_id: p.callId, content: (p.content || []).map(partText).join('')});
+      else {
+        const t = partText(p);
+        if (t) blocks.push({type: 'text', text: t});
+      }
+    }
+    if (!blocks.length) continue;
+    const last = out[out.length - 1];
+    if (last && last.role === role) last.content.push(...blocks);	// the API wants user and assistant in turn
+    else out.push({role, content: blocks});
+  }
+  if (!openai && out.length && out[0].role === 'assistant') out.unshift({role: 'user', content: [{type: 'text', text: '(start)'}]});
+  return out;
+}
+
+// a response whose parts come as the stream does; stream and text can each be read (once or more)
+function lmResponse () {
+  const parts = [];
+  let done = false, error = null;
+  const waiters = [];
+  const wake = () => waiters.splice(0).forEach((w) => w());
+  const iter = (map) => ({
+    [Symbol.asyncIterator] () {
+      let i = 0;
+      return {
+        async next () {
+          for (;;) {
+            while (i < parts.length) {
+              const v = map(parts[i++]);
+              if (v !== undefined) return {value: v, done: false};
+            }
+            if (error) throw error;
+            if (done) return {value: undefined, done: true};
+            await new Promise((r) => waiters.push(r));
+          }
+        },
+      };
+    },
+  });
+  return {
+    push (p) {
+      parts.push(p);
+      wake();
+    },
+    end (e) {
+      done = true;
+      error = e || null;
+      wake();
+    },
+    response: {
+      stream: iter((p) => p),
+      text: iter((p) => (p instanceof LanguageModelTextPart ? p.value : undefined)),
+    },
+  };
+}
+
+async function lmSend (messages, options, token) {
+  const c = lmConfig();
+  if (!c.ok) throw LanguageModelError.NoPermissions('No model: set Chat\'s API key (Chat: Set API Key...) in mme');
+  const o = options || {};
+  const tools = (o.tools || []).map((t) => ({name: t.name, description: t.description || '', schema: t.inputSchema || {type: 'object', properties: {}}}));
+  let url, headers, body;
+  const system = messages.filter((m) => m.role === 3).map((m) => (m.content || []).map(partText).join('')).join('\n') ||
+    'You are a helpful assistant, asked by a Visual Studio Code extension running in the mme code editor.';
+  if (c.openai) {
+    url = c.base + '/chat/completions';
+    headers = {'content-type': 'application/json'};
+    if (c.key) headers.authorization = 'Bearer ' + c.key;
+    body = {model: c.model, stream: true, messages: [{role: 'system', content: system}, ...lmMessages(messages, true)]};
+    if (tools.length) body.tools = tools.map((t) => ({type: 'function', function: {name: t.name, description: t.description, parameters: t.schema}}));
+  } else {
+    url = c.base + '/v1/messages';
+    headers = {'content-type': 'application/json', 'anthropic-version': '2023-06-01'};
+    if (c.bearer) headers.authorization = 'Bearer ' + c.key;
+    else headers['x-api-key'] = c.key;
+    if (c.fallbacks) headers['anthropic-beta'] = 'server-side-fallback-2026-07-01';
+    body = {model: c.model, max_tokens: 64000, stream: true, system, messages: lmMessages(messages, false)};
+    if (c.fallbacks) body.fallbacks = 'default';
+    if (tools.length) body.tools = tools.map((t) => ({name: t.name, description: t.description, input_schema: t.schema}));
+    if (tools.length && o.toolMode === 2) body.tool_choice = {type: 'any'};
+  }
+  const ac = new AbortController();
+  if (token && token.onCancellationRequested) token.onCancellationRequested(() => ac.abort());
+  const res = await fetch(url, {method: 'POST', headers, body: JSON.stringify(body), signal: ac.signal});
+  if (!res.ok) {
+    let msg = res.status + ' ' + res.statusText;
+    try {
+      const j = await res.json();
+      msg = (j.error && (j.error.message || j.error)) || msg;
+    } catch (e) {
+      // not JSON
+    }
+    throw res.status === 401 || res.status === 403 ? LanguageModelError.NoPermissions(String(msg)) : new LanguageModelError(String(msg));
+  }
+  const out = lmResponse();
+  (async () => {
+    const dec = new TextDecoder();
+    const reader = res.body.getReader();
+    let buf = '';
+    const calls = new Map();	// index -> {id, name, json}
+    const line = (data) => {
+      if (!data || data === '[DONE]') return;
+      let j;
+      try {
+        j = JSON.parse(data);
+      } catch (e) {
+        return;
+      }
+      if (c.openai) {
+        const d = j.choices && j.choices[0] && j.choices[0].delta;
+        if (!d) return;
+        if (d.content) out.push(new LanguageModelTextPart(d.content));
+        for (const tc of d.tool_calls || []) {
+          const k = calls.get(tc.index) || {id: '', name: '', json: ''};
+          if (tc.id) k.id = tc.id;
+          if (tc.function && tc.function.name) k.name = tc.function.name;
+          if (tc.function && tc.function.arguments) k.json += tc.function.arguments;
+          calls.set(tc.index, k);
+        }
+        return;
+      }
+      if (j.type === 'content_block_start' && j.content_block && j.content_block.type === 'tool_use')
+        calls.set(j.index, {id: j.content_block.id, name: j.content_block.name, json: ''});
+      else if (j.type === 'content_block_delta' && j.delta) {
+        if (j.delta.type === 'text_delta') out.push(new LanguageModelTextPart(j.delta.text));
+        else if (j.delta.type === 'input_json_delta' && calls.has(j.index)) calls.get(j.index).json += j.delta.partial_json;
+      } else if (j.type === 'error') throw new LanguageModelError(j.error && j.error.message ? j.error.message : 'error');
+    };
+    try {
+      for (;;) {
+        const {value, done} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream: true});
+        let i;
+        while ((i = buf.indexOf('\n')) >= 0) {
+          const l = buf.slice(0, i).replace(/\r$/, '');
+          buf = buf.slice(i + 1);
+          if (l.startsWith('data:')) line(l.slice(5).trim());
+        }
+      }
+      for (const k of calls.values()) {
+        let input = {};
+        try {
+          input = k.json ? JSON.parse(k.json) : {};
+        } catch (e) {
+          input = {};
+        }
+        out.push(new LanguageModelToolCallPart(k.id, k.name, input));
+      }
+      out.end();
+    } catch (e) {
+      out.end(e instanceof LanguageModelError ? e : new LanguageModelError(String(e && e.message ? e.message : e)));
+    }
+  })();
+  return out.response;
+}
+
+function lmModel () {
+  const c = lmConfig();
+  return {
+    id: 'mme-' + c.model, name: c.model + ' (mme Chat)', vendor: c.openai ? 'openai' : 'anthropic', family: c.model,
+    version: c.model, maxInputTokens: 200000,
+    sendRequest: (messages, options, token) => lmSend(messages, options, token),
+    countTokens: async (x) => Math.ceil((typeof x === 'string' ? x : (x.content || []).map(partText).join('')).length / 4),
+  };
+}
+
+const onDidChangeChatModels = new EventEmitter();
+const lmTools = new Map();	// name -> {tool, info}
+
+function lmToolInfos () {	// contributes.languageModelTools of the running extensions, with a tool registered
+  const out = [];
+  for (const e of exts)
+    for (const t of (e.pkg.contributes && e.pkg.contributes.languageModelTools) || [])
+      if (lmTools.has(t.name))
+        out.push({name: t.name, description: l10nString(e, t.modelDescription || t.userDescription || t.displayName || ''),
+          inputSchema: t.inputSchema, tags: t.tags || []});
+  for (const [name] of lmTools) if (!out.some((x) => x.name === name)) out.push({name, description: '', inputSchema: undefined, tags: []});
+  return out;
+}
+
+const lm = {
+  selectChatModels: async () => (lmConfig().ok ? [lmModel()] : []),	// whichever vendor or family is asked for: mme's model
+  onDidChangeChatModels: onDidChangeChatModels.event,
+  get tools () {
+    return lmToolInfos();
+  },
+  registerTool (name, tool) {
+    lmTools.set(name, {tool});
+    return new Disposable(() => lmTools.delete(name));
+  },
+  async invokeTool (name, options, token) {
+    const t = lmTools.get(name);
+    if (!t) throw new Error('No tool ' + name);
+    if (typeof t.tool.prepareInvocation === 'function') await t.tool.prepareInvocation({input: options.input}, token);
+    return t.tool.invoke(options, token || new CancellationTokenSource().token);
+  },
+  registerMcpServerDefinitionProvider: () => new Disposable(() => {}),
+};
+
+// chat participants: "Ask @name..." in the palette; the answer streams into an Output channel of its own
+const chatParticipants = new Map();	// id -> participant
+
+function chatParticipantList () {	// contributes.chatParticipants: {id, name, fullName, ext}
+  const out = [];
+  for (const e of exts)
+    for (const p of (e.pkg.contributes && e.pkg.contributes.chatParticipants) || [])
+      if (p.id) out.push({id: p.id, name: p.name || p.id, fullName: l10nString(e, p.fullName || p.name || p.id), ext: e,
+        commands: (p.commands || []).map((c) => c.name)});
+  return out;
+}
+
+function chatParticipantCommands () {
+  return chatParticipantList().map((p) => ({id: '_mme.chat.' + p.id, title: 'Ask @' + p.name + '...', category: p.fullName, ext: p.ext.id}));
+}
+
+async function askParticipant (id) {
+  const info = chatParticipantList().find((p) => p.id === id);
+  if (!chatParticipants.has(id)) await activateOn('onChatParticipant:' + id);
+  const part = chatParticipants.get(id);
+  if (!part) {
+    window.showWarningMessage('@' + (info ? info.name : id) + ' is not there (is its extension running?)');
+    return;
+  }
+  const q = await showInputBox({title: 'Ask @' + (info ? info.name : id), prompt: info && info.commands.length ? '/' + info.commands.join(', /') + ' or a question' : 'A question'});
+  if (!q) return;
+  let command, prompt = q;
+  const m = /^\/(\S+)\s*([\s\S]*)$/.exec(q);
+  if (m && info && info.commands.includes(m[1])) {
+    command = m[1];
+    prompt = m[2];
+  }
+  const ch = createOutputChannel('Chat: @' + (info ? info.name : id));
+  ch.appendLine('> ' + q);	// the channel is there once it has words: then shown
+  ch.appendLine('');
+  ch.show(true);
+  const stream = {
+    markdown: (s) => ch.append(typeof s === 'string' ? s : s && s.value ? s.value : ''),
+    anchor: (u, title) => ch.append(title || toUri(u).toString()),
+    button: (c) => ch.appendLine('[' + (c.title || c.command) + ']'),
+    filetree: () => {},
+    progress: (s) => ch.appendLine('... ' + s),
+    reference: (u) => ch.appendLine('reference: ' + (u && u.uri ? u.uri : u)),
+    push: (p) => ch.append(p && p.value ? (p.value.value !== undefined ? p.value.value : String(p.value)) : ''),
+    warning: (s) => ch.appendLine('warning: ' + (s && s.value ? s.value : s)),
+    confirmation: () => {},
+    codeblockUri: () => {},
+    textEdit: () => {},
+  };
+  const request = {prompt, command, references: [], toolReferences: [], toolInvocationToken: undefined, model: lmModel(), id: crypto.randomUUID()};
+  try {
+    const r = await part.requestHandler(request, {history: []}, stream, new CancellationTokenSource().token);
+    if (r && r.errorDetails) ch.appendLine('\n[error] ' + r.errorDetails.message);
+  } catch (e) {
+    ch.appendLine('\n[error] ' + (e && e.message ? e.message : e));
+  }
+  ch.appendLine('');
+}
+
+const chatNs = {
+  createChatParticipant (id, requestHandler) {
+    const p = {id, requestHandler, iconPath: undefined, followupProvider: undefined, onDidReceiveFeedback: stubEvent(),
+      dispose () {
+        chatParticipants.delete(id);
+      }};
+    chatParticipants.set(id, p);
+    return p;
+  },
+};
+
+
+// ----------------------------------------------------------------- notebook kernels: the extensions' in mme's notebooks
+
+// notebooks.createNotebookController: in mme's notebook editor, the kernel picker (the toolbar's kernel name)
+// lists it; a cell run with it comes here (mme/nbExec), its executeHandler runs, and what its execution
+// puts out goes back as the messages mme's own kernel sends (mme/nbMsg: stream, display, error, done).
+const NotebookCellKind = {Markup: 1, Code: 2};
+const NotebookControllerAffinity = {Default: 1, Preferred: 2};
+const NotebookCellStatusBarAlignment = {Left: 1, Right: 2};
+const NotebookEditorRevealType = {Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3};
+
+class NotebookCellOutputItem {
+  constructor (data, mime) {
+    this.data = data;
+    this.mime = mime;
+  }
+  static text (v, mime) {
+    return new NotebookCellOutputItem(Buffer.from(String(v)), mime || 'text/plain');
+  }
+  static json (v, mime) {
+    return new NotebookCellOutputItem(Buffer.from(JSON.stringify(v, null, 2)), mime || 'text/x-json');
+  }
+  static stdout (v) {
+    return NotebookCellOutputItem.text(v, 'application/vnd.code.notebook.stdout');
+  }
+  static stderr (v) {
+    return NotebookCellOutputItem.text(v, 'application/vnd.code.notebook.stderr');
+  }
+  static error (e) {
+    return new NotebookCellOutputItem(Buffer.from(JSON.stringify({name: e && e.name || 'Error', message: e && e.message || String(e),
+      stack: e && e.stack || ''})), 'application/vnd.code.notebook.error');
+  }
+}
+
+class NotebookCellOutput {
+  constructor (items, id, metadata) {
+    this.items = items || [];
+    this.id = id || crypto.randomUUID();
+    this.metadata = metadata || {};
+  }
+}
+
+class NotebookRange {
+  constructor (start, end) {
+    this.start = start;
+    this.end = end;
+    this.isEmpty = start === end;
+  }
+}
+
+const nbControllers = new Map();	// id -> controller
+
+function sendControllers () {
+  notify('mme/nbControllers', {controllers: [...nbControllers.values()].map((c) => ({id: c.id, label: c.label,
+    description: c.description || c.detail || '', type: c.notebookType}))});
+}
+
+// an output as mme's kernel messages (nbSend puts the cell's id in)
+function outputToMsgs (o) {
+  const out = [];
+  const data = {};
+  for (const it of (o && o.items) || []) {
+    const text = Buffer.from(it.data || []).toString('utf8');
+    if (it.mime === 'application/vnd.code.notebook.stdout') out.push({type: 'stream', name: 'stdout', text});
+    else if (it.mime === 'application/vnd.code.notebook.stderr') out.push({type: 'stream', name: 'stderr', text});
+    else if (it.mime === 'application/vnd.code.notebook.error') {
+      let e = {};
+      try {
+        e = JSON.parse(text);
+      } catch (err) {
+        e = {name: 'Error', message: text};
+      }
+      out.push({type: 'error', ename: e.name || 'Error', evalue: e.message || '', traceback: String(e.stack || '').split('\n')});
+    } else if (/^image\/(png|jpeg|gif)$/.test(it.mime)) data[it.mime] = Buffer.from(it.data || []).toString('base64');
+    else data[it.mime] = text;
+  }
+  if (Object.keys(data).length) out.push({type: 'display', data});
+  return out;
+}
+
+function nbSend (cell, msg) {
+  if (cell && cell._mme) notify('mme/nbMsg', {path: cell._mme.path, msg: Object.assign({id: cell._mme.id}, msg)});
+}
+
+function createNotebookCellExecution (ctrl, cell) {
+  const cts = new CancellationTokenSource();
+  let order;
+  const exec = {
+    cell, token: cts.token,
+    get executionOrder () {
+      return order;
+    },
+    set executionOrder (n) {
+      order = n;
+    },
+    start () {},
+    end (success) {
+      if (success === false && !cell._mme.errored) cell._mme.errored = true;
+      nbSend(cell, {type: 'done', count: order || 0});
+      if (cell._mme) nbRunning.delete(cell._mme.path + '\n' + cell._mme.id);
+    },
+    async clearOutput (c) {
+      nbSend(c || cell, {type: 'clear'});
+    },
+    async replaceOutput (outs, c) {
+      nbSend(c || cell, {type: 'clear'});
+      for (const o of [].concat(outs || [])) for (const m of outputToMsgs(o)) nbSend(c || cell, m);
+    },
+    async appendOutput (outs, c) {
+      for (const o of [].concat(outs || [])) for (const m of outputToMsgs(o)) nbSend(c || cell, m);
+    },
+    async replaceOutputItems (items) {
+      for (const m of outputToMsgs({items: [].concat(items || [])})) nbSend(cell, m);
+    },
+    async appendOutputItems (items) {
+      for (const m of outputToMsgs({items: [].concat(items || [])})) nbSend(cell, m);
+    },
+  };
+  if (cell._mme) nbRunning.set(cell._mme.path + '\n' + cell._mme.id, {exec, cts, ctrl});
+  return exec;
+}
+const nbRunning = new Map();	// "path\nid" -> {exec, cts, ctrl}
+
+function createNotebookController (id, notebookType, label, handler) {
+  const onSel = new EventEmitter();
+  const c = {
+    id, notebookType, label, description: undefined, detail: undefined, supportedLanguages: undefined,
+    supportsExecutionOrder: true, executeHandler: handler, interruptHandler: undefined,
+    onDidChangeSelectedNotebooks: onSel.event, _onSel: onSel,
+    createNotebookCellExecution: (cell) => createNotebookCellExecution(c, cell),
+    updateNotebookAffinity () {},
+    dispose () {
+      nbControllers.delete(id);
+      sendControllers();
+    },
+  };
+  nbControllers.set(id, c);
+  setTimeout(sendControllers, 0);	// its label, description set just after it is made
+  return c;
+}
+
+// the notebook and the one cell mme runs, as an extension sees them
+function nbObjects (p) {
+  const uri = Uri.file(p.path || 'untitled.ipynb');
+  const cellUri = uri.with({scheme: 'vscode-notebook-cell', fragment: 'C' + p.id});
+  const notebook = {uri, notebookType: p.type || 'jupyter-notebook', version: 1, isDirty: false, isUntitled: !p.path, isClosed: false,
+    metadata: {}, get cellCount () {
+      return 1;
+    }, cellAt: () => cell, getCells: () => [cell], save: async () => true};
+  const cell = {index: p.index || 0, kind: 2, notebook, metadata: {}, outputs: [], executionSummary: undefined,
+    document: new TextDocument(cellUri, p.language || 'python', 1, p.code || ''), _mme: {path: p.path, id: p.id}};
+  return {notebook, cell};
+}
+
+async function nbExec (p) {	// mme/nbExec {controller, path, id, code, language}
+  const c = nbControllers.get(p.controller);
+  const {notebook, cell} = nbObjects(p);
+  if (!c) {
+    nbSend(cell, {type: 'error', ename: 'Kernel', evalue: 'The kernel ' + p.controller + ' is not there (is its extension running?)', traceback: []});
+    nbSend(cell, {type: 'done', count: 0});
+    return;
+  }
+  if (!c._selected) {
+    c._selected = true;
+    c._onSel.fire({notebook, selected: true});
+  }
+  try {
+    await c.executeHandler.call(c, [cell], notebook, c);
+  } catch (e) {
+    nbSend(cell, {type: 'error', ename: e && e.name || 'Error', evalue: e && e.message || String(e), traceback: []});
+    nbSend(cell, {type: 'done', count: 0});
+  }
+}
+
+async function nbInterrupt (p) {	// mme/nbInterrupt {controller, path}
+  const c = nbControllers.get(p.controller);
+  for (const [k, r] of nbRunning)
+    if (k.startsWith(p.path + '\n')) r.cts.cancel();
+  if (c && typeof c.interruptHandler === 'function') {
+    try {
+      await c.interruptHandler(nbObjects({path: p.path, id: 0}).notebook);
+    } catch (e) {
+      log('[error] interrupt: ' + (e && e.message ? e.message : e));
+    }
+  }
+}
+
+const notebooksNs = {
+  createNotebookController,
+  registerNotebookSerializer: () => new Disposable(() => {}),	// mme reads and writes .ipynb itself
+  registerNotebookCellStatusBarItemProvider: () => new Disposable(() => {}),
+  createRendererMessaging: () => ({onDidReceiveMessage: stubEvent(), postMessage: async () => false}),
+  onDidOpenNotebookDocument: stubEvent(), onDidCloseNotebookDocument: stubEvent(),
 };
 
 
@@ -4431,7 +5072,14 @@ const debug = spare({
     debugAdapterFactories.set(type, factory);
     return new Disposable(() => debugAdapterFactories.delete(type));
   },
-  registerDebugAdapterTrackerFactory: () => new Disposable(() => {}),	// the messages go between mme and the adapter
+  registerDebugAdapterTrackerFactory (type, factory) {	// mme sends it the session's messages (mme/dapIn, mme/dapOut)
+    const x = {type, factory};
+    debugTrackerFactories.push(x);
+    return new Disposable(() => {
+      const i = debugTrackerFactories.indexOf(x);
+      if (i >= 0) debugTrackerFactories.splice(i, 1);
+    });
+  },
   startDebugging,
   stopDebugging: async () => notify('mme/stopDebugging', {}),
   addBreakpoints () {},
@@ -4457,12 +5105,15 @@ const vscodeApi = spare({
   InlayHintLabelPart, FoldingRange, SelectionRange, DocumentLink, Color, ColorInformation, ColorPresentation, LinkedEditingRanges,
   SemanticTokensLegend, SemanticTokens, SemanticTokensBuilder, CallHierarchyItem, TypeHierarchyItem, ThemeIcon, ThemeColor,
   RelativePattern, TreeItem, FileSystemError, TestRunRequest, TestMessage, TestTag, TaskGroup, ShellExecution, ProcessExecution, CustomExecution, Task, DebugAdapterExecutable,
-  DebugAdapterServer, DebugAdapterNamedPipeServer, DebugAdapterInlineImplementation, NotebookCellData, NotebookData, LanguageModelError, TextDocument, TextLine,
+  DebugAdapterServer, DebugAdapterNamedPipeServer, DebugAdapterInlineImplementation, LanguageModelChatMessage,
+  LanguageModelTextPart, LanguageModelToolCallPart, LanguageModelToolResultPart, LanguageModelToolResult, LanguageModelPromptTsxPart,
+  LanguageModelDataPart, LanguageModelChatMessageRole, LanguageModelChatToolMode, NotebookCellOutputItem, NotebookCellOutput,
+  NotebookRange, NotebookCellKind, NotebookControllerAffinity, NotebookCellStatusBarAlignment, NotebookEditorRevealType, NotebookCellData, NotebookData, LanguageModelError, TextDocument, TextLine,
   ...enums,
   window, workspace, languages, commands: commandsNs, env, extensions: extensionsNs, tasks, debug, l10n,
   scm: spare({createSourceControl: undefined, inputBox: undefined}, 'scm'),
   comments: spare({}, 'comments'), authentication: spare(authentication, 'authentication'),
-  notebooks: spare({}, 'notebooks'), tests: spare({createTestController}, 'tests'), chat: spare({}, 'chat'), lm: spare({tools: []}, 'lm'),
+  notebooks: spare(notebooksNs, 'notebooks'), tests: spare({createTestController}, 'tests'), chat: spare(chatNs, 'chat'), lm: spare(lm, 'lm'),
 }, '');
 
 
@@ -4578,6 +5229,8 @@ function readExtension (dir) {
   for (const list of Object.values(c.views || {})) for (const v of list || []) if (v.id) events.push('onView:' + v.id);
   for (const ce of c.customEditors || []) if (ce.viewType) events.push('onCustomEditor:' + ce.viewType);
   for (const td of c.taskDefinitions || []) if (td.type) events.push('onTaskType:' + td.type);
+  for (const cp of c.chatParticipants || []) if (cp.id) events.push('onChatParticipant:' + cp.id);
+  for (const t of c.languageModelTools || []) if (t.name) events.push('onLanguageModelTool:' + t.name);
   const props = [];
   const confs = Array.isArray(c.configuration) ? c.configuration : c.configuration ? [c.configuration] : [];
   for (const cf of confs) for (const [k, v] of Object.entries(cf.properties || {})) {
@@ -4707,7 +5360,7 @@ async function start () {
     const cat = typeof c.category === 'object' ? c.category.value : c.category;
     cmds.push({id: c.command, title: l10nString(e, t), category: l10nString(e, cat) || '', ext: e.id});
   }
-  cmds.push(...webviewViewCommands(), ...customEditorCommands());	// "Open <view> (in the browser)", "Reopen Active File With ..."
+  cmds.push(...webviewViewCommands(), ...customEditorCommands(), ...chatParticipantCommands());	// "Open <view> (in the browser)", "Reopen Active File With ..."
   const keys = [];
   for (const e of exts) for (const k of (e.pkg.contributes && e.pkg.contributes.keybindings) || []) {
     const key = isWin ? k.win || k.key : process.platform === 'darwin' ? k.mac || k.key : k.linux || k.key;
@@ -4814,6 +5467,11 @@ async function dispatch (msg) {
     case 'mme/provideTasks': provideTasksToMme(); break;	// Run Task: the extensions' tasks
     case 'mme/debugResolve': resolveDebug(params || {}); break;	// a launch configuration of an extension's type
     case 'mme/debugEnded': debugEnded(); break;
+    case 'mme/nbExec': nbExec(params || {}); break;	// a notebook cell, run with an extension's kernel
+    case 'mme/nbInterrupt': nbInterrupt(params || {}); break;
+    case 'mme/dapIn': dapIn(params || {}); break;
+    case 'mme/dapOut': dapOut(params || {}); break;
+    case 'mme/debugResponse': debugResponse(params || {}); break;
     case 'mme/testDiscover': discoverTests(); break;	// the Testing view: the extensions' tests
     case 'mme/testRun': runTestsFromMme(params || {}); break;
     case 'mme/testCancel': cancelTestRuns(); break;

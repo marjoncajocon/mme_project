@@ -1302,6 +1302,7 @@ void tree_menu (int row, int x, int y);	/* the right button */
 void tree_wheel (int d);
 void mme_show_trees (void);	/* mme.c: the view shown (treeView.reveal) */
 void lsp_ext_notify (const char *method, const char *params);	/* elsp.c: a notification to the extension host */
+void lsp_ext_start (void);	/* the host started when no document is open (a notebook's kernels) */
 int lsp_ext_wait (int ms, int (*done) (void));	/* its messages read until done() or ms */
 void task_ext_list (const Json *tasks);	/* etask.c: mme/tasks, the extensions' tasks */
 void test_ext_items (const Json *tests);	/* etest.c: mme/tests, the extensions' test controllers' */
@@ -1311,6 +1312,9 @@ void test_ext_end (void);	/* mme/testEnd */
 int ehost_debug_type (const char *type);	/* ehost.c: an extension's debugger has this type */
 Json *ehost_debug_resolve (const char *config);	/* through the extension: {config, adapter} | {error}; NULL no answer */
 void dbg_console (const char *s);	/* edebug.c: text in the DEBUG CONSOLE (debug.activeDebugConsole) */
+void dbg_ext_request (const Json *p);	/* mme/debugRequest: DebugSession.customRequest */
+void nb_ext_controllers (const Json *list);	/* enb.c: mme/nbControllers, the extensions' notebook kernels */
+void nb_ext_message (const Json *p);	/* mme/nbMsg: their output */
 void task_ext_run (const Json *task);	/* mme/runTask: tasks.executeTask */
 int ehost_message (const char *method, const Json *params);	/* elsp.c: an mme/... notification of the host */
 int ehost_request (const char *method, const Json *params, Buf *result);	/* elsp.c: an mme/... request; its result as JSON */

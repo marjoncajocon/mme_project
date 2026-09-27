@@ -943,6 +943,25 @@ SCENARIOS = [
          "extension's configuration provider resolves it (adds its greeting) and its inline adapter (written in "
          "JavaScript, reached through the host) runs the session: its output is in the DEBUG CONSOLE",
          exts=[("acme.web", "acme.web")]),
+    Scen("ext-host-language-model", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:acme: ask the model", "w:700", "k:" + ENTER, "w:3000", "d",
+          "k:" + CTRL_SHIFT_P, "k:ask @acme", "w:700", "k:" + ENTER, "w:1000", "k:/shout hi", "k:" + ENTER, "w:3000", "d"],
+         "vscode.lm: an extension asking for a model (whatever vendor) gets mme's Chat model (the stub Messages API "
+         "here): its streamed answer, and a tool it registered (invokeTool); its chat participant is \"Ask @acme...\" "
+         "in the palette, /shout its command, the answer in the Output channel \"Chat: @acme\"",
+         exts=[("acme.web", "acme.web")], stub_claude="ok"),
+    Scen("ext-host-language-model-openai", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:acme: ask the model", "w:700", "k:" + ENTER, "w:3000", "d"],
+         "vscode.lm with mme.chat.provider \"openai\": the extension's request goes to the OpenAI-compatible API "
+         "(the stub's chat/completions, its bearer token, the system prompt first) and its streamed answer comes back",
+         exts=[("acme.web", "acme.web")], stub_claude="openai"),
+    Scen("ext-host-notebook-kernel", "lang/nb.ipynb",
+         ["w:5000"] + click(112, 3) + ["w:700", "d", "k:" + DOWN + ENTER, "w:800",
+          "k:" + DOWN, "k:" + CTRL_ENTER, "w:2000", "d"],
+         "an extension's notebook kernel (notebooks.createNotebookController): the toolbar's kernel name picks it, "
+         "and a cell run with it runs in the extension: its stdout and its result are the cell's outputs, its "
+         "execution order the cell's count",
+         exts=[("acme.web", "acme.web")], private=True),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

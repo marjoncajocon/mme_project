@@ -45,7 +45,7 @@ typedef int Sock;
 
 enum { RQ_INIT, RQ_LAUNCH, RQ_SETBP, RQ_CONFDONE, RQ_THREADS, RQ_STACK, RQ_SCOPES,
        RQ_VARS, RQ_WATCH, RQ_REPL, RQ_HOVER, RQ_STEP, RQ_DISCONNECT, RQ_SETVAR, RQ_GOTOT, RQ_GOTO,
-       RQ_EXCINFO, RQ_DBINFO, RQ_SETDBP, RQ_OTHER };
+       RQ_EXCINFO, RQ_DBINFO, RQ_SETDBP, RQ_CUSTOM, RQ_OTHER };	/* RQ_CUSTOM: an extension's customRequest */
 
 typedef struct Req {
   int seq, kind;
@@ -135,6 +135,7 @@ static struct {
   int cap_cond, cap_hit, cap_log, cap_setvar, cap_goto, cap_excinfo, cap_exc, cap_data;	/* what the adapter can */
   char *exc_title, *exc_desc;	/* stopped on an exception: what it says (the peek) */
   int ext;	/* an extension's debugger: the host is told when it ends */
+  int track;	/* the host wants the messages (its trackers, its custom events) */
   int noproc;	/* connected to a port only: no adapter process of mme's */
 } D;
 
@@ -501,10 +502,24 @@ static int sock_ready (Sock s) {
 }
 
 
+/* a message to the host for its debug adapter trackers (method: mme/dapOut, mme/dapIn) */
+static void to_host (const char *method, const char *msg, size_t n) {
+  Buf b;
+  buf_init(&b);
+  buf_puts(&b, "{\"message\":");
+  buf_putn(&b, msg, n);
+  buf_puts(&b, "}");
+  buf_putc(&b, '\0');
+  lsp_ext_notify(method, b.s);
+  buf_free(&b);
+}
+
+
 static void send_msg (const Buf *body) {
   char hdr[64];
   int n = snprintf(hdr, sizeof(hdr), "Content-Length: %lu\r\n\r\n", (unsigned long)body->len);
   trace(">> ", body->s, body->len);
+  if (D.track) to_host("mme/dapOut", body->s, body->len);
   if (D.sock != NO_SOCK) {
     const char *parts[2];
     size_t lens[2], i;
@@ -1293,6 +1308,7 @@ static int ext_adapter (Json **cfg, int nodebug, char ***argv, char **cwd) {
   free(D.request);
   D.request = xstrdup(json_str(json_get(*cfg, "request"), "launch"));
   set_args(*cfg, nodebug);
+  D.track = json_bool(json_get(res, "track"), 0);
   ad = json_get(res, "adapter");
   kind = json_str(json_get(ad, "kind"), "");
   if (strcmp(kind, "server") == 0) {	/* a port (an inline adapter's comes through the host) */
@@ -1345,9 +1361,31 @@ void dbg_console (const char *s) {
 }
 
 
+/* mme/debugRequest: an extension's DebugSession.customRequest, to the adapter; its answer goes back */
+void dbg_ext_request (const Json *p) {
+  long id = lnum(json_get(p, "id"), 0);
+  const char *cmd = json_str(json_get(p, "command"), "");
+  if (!D.on || !D.ready || !cmd[0]) {
+    char m[96];
+    snprintf(m, sizeof(m), "{\"id\":%ld,\"success\":false,\"message\":\"no debug session\",\"body\":null}", id);
+    lsp_ext_notify("mme/debugResponse", m);
+    return;
+  }
+  {
+    Buf b;
+    buf_init(&b);
+    if (json_get(p, "args")) json_write(&b, json_get(p, "args"));
+    buf_putc(&b, '\0');
+    request(cmd, b.len > 1 ? b.s : "{}", RQ_CUSTOM, id, NULL);
+    buf_free(&b);
+  }
+}
+
+
 static int dbg_start (int nodebug) {
   char *xcwd = NULL;
   int ext = 0;
+  D.track = 0;
   if (!trust_require(nodebug ? "Running" : "Debugging")) return -1;	/* Restricted Mode */
   Json *cfg, *m;
   char *cmd, **argv, *root;
@@ -1750,6 +1788,21 @@ static void got_response (const Json *msg) {
   memmove(D.req + i, D.req + i + 1, (size_t)(D.nreq - i - 1) * sizeof(Req));
   D.nreq--;
   switch (r.kind) {
+    case RQ_CUSTOM: {	/* an extension's customRequest: the answer back to it */
+      Buf b;
+      const char *m = json_str(json_get(msg, "message"), "");
+      buf_init(&b);
+      buf_printf(&b, "{\"id\":%ld,\"success\":%s,\"message\":", r.arg, ok ? "true" : "false");
+      json_put_str(&b, m, strlen(m));
+      buf_puts(&b, ",\"body\":");
+      if (body) json_write(&b, body);
+      else buf_puts(&b, "null");
+      buf_puts(&b, "}");
+      buf_putc(&b, '\0');
+      lsp_ext_notify("mme/debugResponse", b.s);
+      buf_free(&b);
+      break;
+    }
     case RQ_INIT:
       if (!ok) {
         toast(1, "The debug adapter failed: %s", json_str(json_get(msg, "message"), "initialize"));
@@ -1882,6 +1935,13 @@ static void got_response (const Json *msg) {
 
 static void got_message (const Json *msg) {
   const char *type = json_str(json_get(msg, "type"), "");
+  if (D.track) {
+    Buf b;
+    buf_init(&b);
+    json_write(&b, msg);
+    to_host("mme/dapIn", b.s, b.len);
+    buf_free(&b);
+  }
   if (strcmp(type, "event") == 0) got_event(msg);
   else if (strcmp(type, "response") == 0) got_response(msg);
   else if (strcmp(type, "request") == 0) refuse(msg);
