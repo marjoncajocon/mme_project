@@ -9,11 +9,11 @@
 |       5  second paragraph starts here
 |      6  it has two lines
 |       7  last line of the file
-|      8
+|      8
+|
+| 
 |
 | 
-|
-|
 |
 |
 |

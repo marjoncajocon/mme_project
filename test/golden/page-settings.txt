@@ -9,11 +9,11 @@
 |
 |     Commonly Used           │   Commonly Used                                                                        ▐
 |      Text Editor             │
-|       Formatting            │   Editor: Font Size
+|       Formatting            │   Editor: Font Size
 |        Minimap               │   Controls the font size in pixels of the code editor and the diff viewer (mme-sdl);
-|       Suggestions           │   the rest of the window has Mme › Ui: Font Size. In a terminal the terminal's font
+|       Suggestions           │   the rest of the window has Mme › Ui: Font Size. In a terminal the terminal's font
 |        Files                 │   is used.
-|      Workbench               │    14
+|     Workbench               │    14
 |        Appearance            │
 |      Features                │   Editor: Font Family
 |        Explorer              │   Controls the font family of the code editor and the diff viewer (mme-sdl; the

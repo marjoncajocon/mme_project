@@ -9,11 +9,11 @@
 |                                 │
 |                                │                              Open File...   Ctrl+O
 |                                 │
-|                                │                            Open Folder...
+|                                │                            Open Folder...
 |
-|                                The preLaunchTask 'fail' terminated with exit code 3.
+|                                The preLaunchTask 'fail' terminated with exit code 3.
 |
-|
+| 
 |
 |                                                Debug Anyway     Show Errors     Abort
 |                                                                                          fail ──C:\WIN──────────
@@ -40,11 +40,11 @@
 |          counter: 7             │   5
 |▎    WATCH                    │   6                                                                                 ▬
 |  ●      Add Expression         │   7  main()
-|     CALL STACK                │   8
+|     CALL STACK                │   8
 |       main     PAUSED ON ENTRY │
-|       main         prog.py  2 │
+|       main         prog.py  2 │
 |      BREAKPOINTS               │
-|                                 │
+|                                │
 |                                 │
 |                                 │
 |                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────

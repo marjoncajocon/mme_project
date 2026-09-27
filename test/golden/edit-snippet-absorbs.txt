@@ -9,11 +9,11 @@
 |      21  static Point make (int x, int y) {                                                               ⠟⠛
 |     22  │   Point p;                                                                                     ⣿⡏⠉⠁
 |      23  │   p.x = x;                                                                                     ⣋⣁⣀⡀
-|     24  │   p.y = y;                                                                                     ⣿⠿⠗
+|     24  │   p.y = y;                                                                                     ⣿⠿⠗
 |      25  │   return p;                                                                                    ⡹⠿⠿⠃
-|     26  }                                                                                                ⠟⠛⠛⠋⠉⠉
+|     26  }                                                                                                ⠟⠛⠛⠋⠉⠉
 |      27                                                                                                   ⡭⠍⠉⠁
-|      28  int main (int argc, char **argv) {
+|     28  int main (int argc, char **argv) {
 |      29  │   Point p = make(1, 2);
 |      30  │   const char *name = "mme";
 |      31  │   double ratio = 1.5;

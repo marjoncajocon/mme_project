@@ -10,7 +10,8 @@
 **
 ** VS Code's Emmet commands are here too: Wrap with Abbreviation (the
 ** selection goes into the innermost last element; "ul>li*" puts each line
-** in an li of its own), Balance (outward) and (inward), Update Tag, Remove
+** in an li of its own, $# is where a line goes; the editor shows it as the
+** abbreviation is typed), Balance (outward) and (inward), Update Tag, Remove
 ** Tag and Go to Matching Pair, on the tags of the text around the cursor.
 */
 
@@ -391,9 +392,29 @@ typedef struct Out {
 } Out;
 
 
-/* text for a snippet body: $ } \ escaped; $$$ numbers were already done */
+static void put_raw (Out *o, const char *s) {
+  for (; *s; s++) {
+    if (*s == '$' || *s == '}' || *s == '\\') buf_putc(&o->b, '\\');
+    buf_putc(&o->b, *s);
+  }
+}
+
+
+/* text for a snippet body: $ } \ escaped; $$$ numbers were already done; $# is the text wrapped */
 static void put_lit (Out *o, const char *s) {
   for (; *s; s++) {
+    if (s[0] == '$' && s[1] == '#') {	/* a[href=$#]: the line there (or all of them) */
+      int q;
+      s++;
+      if (o->wl == NULL) continue;
+      if (o->each >= 0) put_raw(o, o->wl[o->line]);
+      else
+        for (q = 0; q < o->nwl; q++) {
+          if (q) buf_putc(&o->b, '\n');
+          put_raw(o, o->wl[q]);
+        }
+      continue;
+    }
     if (*s == '$' || *s == '}' || *s == '\\') buf_putc(&o->b, '\\');
     buf_putc(&o->b, *s);
   }
@@ -411,6 +432,11 @@ static char *number (const char *s, int i, int n) {
       while (*s == '$') {
         w++;
         s++;
+      }
+      if (*s == '#' && w == 1) {	/* $#: the text wrapped, not a number */
+        buf_puts(&b, "$#");
+        s++;
+        continue;
       }
       if (*s == '@') {
         s++;
@@ -602,12 +628,12 @@ static void emit_node (Parser *p, Out *o, int k, const char *parent, int depth, 
   }
   else if (o->wl && k == o->target) {	/* the text wrapped: a line of it into each copy, or all of it */
     int from = o->each >= 0 ? o->line : 0, to = o->each >= 0 ? o->line + 1 : o->nwl, q;
-    if (to - from == 1) put_lit(o, o->wl[from]);
+    if (to - from == 1) put_raw(o, o->wl[from]);
     else {
       for (q = from; q < to; q++) {
         buf_putc(&o->b, '\n');
         indent(o, depth + 1);
-        put_lit(o, o->wl[q]);
+        put_raw(o, o->wl[q]);
       }
       buf_putc(&o->b, '\n');
       indent(o, depth);
@@ -704,6 +730,8 @@ static char *wrap_html (const char *abbr, size_t n, int mode, char **wl, int nwl
   for (k = 0; k < p.n && o.each < 0; k++)
     if (p.v[k].rep && p.v[k].name) o.each = k;
   o.target = deepest_last(&p, o.each >= 0 ? o.each : root);
+  for (k = 0; k + 1 < (int)n; k++)	/* $# says where the text goes: not in the element too */
+    if (abbr[k] == '$' && abbr[k + 1] == '#') o.target = -1;
   emit_list(&p, &o, p.v[root].kid, p.v[root].nkid, NULL, 0, 1, 1, kids_block(&p, root, NULL) || nwl > 1, &first);
   free_nodes(&p);
   if (o.b.len >= EMMET_MAX) {
@@ -1215,10 +1243,41 @@ static int wrap_lines (const char *t, int each, char ***out) {
 }
 
 
+/* the snippet body of text wrapped with abbr, NULL: not an abbreviation */
+static char *wrap_body (const char *abbr, const char *text, int mode) {
+  char *body, **wl;
+  int nwl, k, each = strchr(abbr, '*') != NULL;
+  nwl = wrap_lines(text, each, &wl);	/* li* wraps each line: they are trimmed then */
+  body = nwl && *abbr ? wrap_html(abbr, strlen(abbr), mode, wl, nwl) : NULL;
+  for (k = 0; k < nwl; k++) free(wl[k]);
+  free(wl);
+  return body;
+}
+
+
+/* VS Code's preview: the text wrapped with what is typed so far, in the editor */
+static struct {
+  Pos a, b;
+  const char *text;
+  int mode;
+} g_wrap;
+
+
+static int wrap_tick (Pick *p, int changed) {
+  char *body;
+  if (!changed) return 0;
+  body = wrap_body(p->text, g_wrap.text, g_wrap.mode);
+  editor_preview(g_wrap.a, g_wrap.b, body);	/* not one (yet): the text as it was */
+  free(body);
+  return 0;
+}
+
+
 static void wrap_abbreviation (const EdCtx *c, int mode) {
   Pos a = c->a, b = c->b;
-  char *text, *abbr, *body, **wl;
-  int nwl, k, each;
+  char *text, *body;
+  Pick p;
+  int r;
   if (!c->sel) {	/* no selection: the line, without its indent */
     const char *line;
     size_t len, x = 0;
@@ -1239,26 +1298,23 @@ static void wrap_abbreviation (const EdCtx *c, int mode) {
     b = doc_clamp(c->doc, b);
   }
   text = doc_text(c->doc, a, b, NULL);
-  abbr = ask_text("Enter Abbreviation", NULL);	/* VS Code's prompt */
-  if (abbr == NULL || !*abbr || text == NULL) {
-    free(abbr);
-    free(text);
-    return;
+  if (text == NULL) return;
+  g_wrap.a = a;
+  g_wrap.b = b;
+  g_wrap.text = text;
+  g_wrap.mode = mode;
+  pick_init(&p, "Enter Abbreviation");	/* VS Code's prompt */
+  p.hint = "Press 'Enter' to confirm or 'Escape' to cancel";
+  p.on_tick = wrap_tick;
+  r = pick_run(&p);
+  editor_preview(a, b, NULL);	/* Esc: as it was; Enter: in for real, one undo step */
+  if (r == PICK_TEXT && p.text[0]) {
+    body = wrap_body(p.text, text, mode);
+    if (body == NULL) toast(0, "Emmet: '%s' is not an abbreviation", p.text);
+    else editor_snippet(a, b, body);
+    free(body);
   }
-  each = strchr(abbr, '*') != NULL;
-  nwl = wrap_lines(text, 0, &wl);
-  if (each) {	/* li* wraps each line: they are trimmed then */
-    for (k = 0; k < nwl; k++) free(wl[k]);
-    free(wl);
-    nwl = wrap_lines(text, 1, &wl);
-  }
-  body = nwl ? wrap_html(abbr, strlen(abbr), mode, wl, nwl) : NULL;
-  if (body == NULL) toast(0, "Emmet: '%s' is not an abbreviation", abbr);
-  else editor_snippet(a, b, body);
-  for (k = 0; k < nwl; k++) free(wl[k]);
-  free(wl);
-  free(body);
-  free(abbr);
+  pick_free(&p);
   free(text);
 }
 

@@ -9,11 +9,11 @@
 |      demo.go                  ▐│   5                                                                     ⠟⠛
 |     doc.md                   ▐│   6  #define MAXN 64                                                    ⣿⡏⠉⠁
 |      edit.c                   ▐│   7                                                                     ⣋⣁⣀⡀
-|     fold.c                   ▐│   8  typedef struct Point {                                             ⣿⠿⠗
+|     fold.c                   ▐│   8  typedef struct Point {                                             ⣿⠿⠗
 |      latin1.c                 ▐│   9  │   int x;                                                         ⡹⠿⠿⠃
-|     nb.ipynb                 ▐│  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|     nb.ipynb                 ▐│  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
 |      plain.txt                ▐│  11  } Point;
-|      site.css                 ▐│  12
+|     site.css                 ▐│  12
 |      sticky.c                 ▐│  13  static int total = 0;
 |      util.py                  ▐│  14
 |      wrap.js                  ▐│  15  /* adds two numbers and remembers the sum */
@@ -40,11 +40,11 @@
 |      demo.go                  ▐│   5                                                                     ⠟⠛
 |     doc.md                   ▐│   6  #define MAXN 64                                                    ⣿⡏⠉⠁
 |      edit.c                   ▐│   7                                                                     ⣋⣁⣀⡀
-|     fold.c                   ▐│   8  typedef struct Point {                                             ⣿⠿⠗
+|     fold.c                   ▐│   8  typedef struct Point {                                             ⣿⠿⠗
 |      latin1.c                 ▐│   9  │   int x;                                                         ⡹⠿⠿⠃
-|     nb.ipynb                 ▐│  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|     nb.ipynb                 ▐│  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
 |      plain.txt                ▐│  11  } Point;
-|      site.css                 ▐│  12
+|     site.css                 ▐│  12
 |      sticky.c                 ▐│  13  static int total = 0;
 |      util.py                  ▐│  14
 |      wrap.js                  ▐│  15  /* adds two numbers and remembers the sum */

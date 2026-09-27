@@ -9,13 +9,13 @@
 |                                 │
 |                                │
 |                                 │
-|                                │                        Command Palette...   Ctrl+Shift+P
+|                                │                        Command Palette...   Ctrl+Shift+P
 |                                 │
-|                                │                             Go to File...   Ctrl+P
+|                                │                             Go to File...   Ctrl+P
 |                                 │
-|▎                               │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
-|                                 │                            Open Folder...
+|▎                               │                            Open Folder...
 |                                 │
 |                                 │                           Open Project...   Ctrl+R
 |                                 │
@@ -40,13 +40,13 @@
 |
 | 
 |
-|                                          Command Palette...   Ctrl+Shift+P
+|                                          Command Palette...   Ctrl+Shift+P
 |
-|                                               Go to File...   Ctrl+P
+|                                               Go to File...   Ctrl+P
 |
-|                                                Open File...   Ctrl+O
+|                                                Open File...   Ctrl+O
 |
-|                                               Open Folder...
+|                                              Open Folder...
 |
 |                                              Open Project...   Ctrl+R
 |
@@ -71,11 +71,11 @@
 |      many                      │
 |     src                       │                              Open File...   Ctrl+O
 |      app.js                    │
-|     main.c                    │                            Open Folder...
+|     main.c                    │                            Open Folder...
 |      package.json              │
-|     readme.md                 │                           Open Project...   Ctrl+R
+|     readme.md                 │                           Open Project...   Ctrl+R
 |      site.css                  │
-|                                 │                                  New File   Ctrl+N
+|                                │                                  New File   Ctrl+N
 |                                 │
 |                                 │
 |                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: cmd ──C:\Wind──────────

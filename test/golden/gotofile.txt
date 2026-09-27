@@ -9,11 +9,11 @@
 |      many                      │
 |     src                       │
 |      app.js                    │
-|     main.c                    │                        Command Palette...   Ctrl+Shift+P
+|     main.c                    │                        Command Palette...   Ctrl+Shift+P
 |      package.json              │
-|     readme.md                 │                             Go to File...   Ctrl+P
+|     readme.md                 │                             Go to File...   Ctrl+P
 |      site.css                  │
-|                                 │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
 |                                 │                            Open Folder...
 |                                 │
@@ -40,11 +40,11 @@
 |      many                      │
 |     src                       │
 |      app.js                    │
-|     main.c                    │                        Command Palette...   Ctrl+Shift+P
+|     main.c                    │                        Command Palette...   Ctrl+Shift+P
 |      package.json              │
-|     readme.md                 │                             Go to File...   Ctrl+P
+|     readme.md                 │                             Go to File...   Ctrl+P
 |      site.css                  │
-|                                 │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
 |                                 │                            Open Folder...
 |                                 │

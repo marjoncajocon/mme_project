@@ -9,11 +9,11 @@
 |      many                      │
 |     src                       │
 |        alpha.c                 │
-|       beta.c                  │                        Command Palette...   Ctrl+Shift+P
+|       beta.c                  │                        Command Palette...   Ctrl+Shift+P
 |        gamma.h                 │
-|     app.js                    │                             Go to File...   Ctrl+P
+|     app.js                    │                             Go to File...   Ctrl+P
 |      main.c                    │
-|      package.json              │                              Open File...   Ctrl+O
+|     package.json              │                              Open File...   Ctrl+O
 |      readme.md                 │
 |      site.css                  │                            Open Folder...
 |                                 │
@@ -40,11 +40,11 @@
 |        guide.md                │
 |     many                      │
 |      src                       │
-|       alpha.c                 │                        Command Palette...   Ctrl+Shift+P
+|       alpha.c                 │                        Command Palette...   Ctrl+Shift+P
 |        beta.c                  │
-|       gamma.h                 │                             Go to File...   Ctrl+P
+|       gamma.h                 │                             Go to File...   Ctrl+P
 |      app.js                    │
-|      main.c                    │                              Open File...   Ctrl+O
+|     main.c                    │                              Open File...   Ctrl+O
 |      package.json              │
 |      readme.md                 │                            Open Folder...
 |      site.css                  │

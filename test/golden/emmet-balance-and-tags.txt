@@ -9,11 +9,11 @@
 |      page.html                 │   5  │   │   <p>Hello <b>world</b></p>
 |     util.c                    │   6  │   │   <img src="a.png">
 |      util.h                    │   7  │   </div>
-|                                │   8  apples
+|                                │   8  apples
 |                                 │   9  pears                                                                          ▬
-|                                │  10  plums
+|                                │  10  plums
 |                                 │  11  </body>
-|                                 │  12  </html>
+|                                │  12  </html>
 |                                 │  13
 |                                 │
 |                                 │
@@ -40,11 +40,11 @@
 |      page.html                 │   5  │   │   <p>Hello <b>world</b></p>
 |     util.c                    │   6  │   │   <img src="a.png">
 |      util.h                    │   7  │   </div>
-|                                │   8  apples
+|                                │   8  apples
 |                                 │   9  pears                                                                          ▬
-|                                │  10  plums
+|                                │  10  plums
 |                                 │  11  </body>
-|                                 │  12  </html>
+|                                │  12  </html>
 |                                 │  13
 |                                 │
 |                                 │
@@ -71,11 +71,11 @@
 |      page.html                 │   5  │   │   <p>Hello <strong>world</strong></p>
 |     util.c                    │   6  │   │   <img src="a.png">
 |      util.h                    │   7  │   </div>
-|                                │   8  apples
+|                                │   8  apples
 |                                 │   9  pears                                                                          ▬
-|                                │  10  plums
+|                                │  10  plums
 |                                 │  11  </body>
-|                                 │  12  </html>
+|                                │  12  </html>
 |                                 │  13
 |                                 │
 |                                 │
@@ -102,11 +102,11 @@
 |      page.html                 │   5  │   │   <p>Hello <strong>world</strong></p>
 |     util.c                    │   6  │   │   <img src="a.png">
 |      util.h                    │   7  │   </div>
-|                                │   8  apples
+|                                │   8  apples
 |                                 │   9  pears
-|                                │  10  plums
+|                                │  10  plums
 |                                 │  11  </body>
-|                                 │  12  </html>
+|                                │  12  </html>
 |                                 │  13                                                                                 ─
 |                                 │
 |                                 │
@@ -133,11 +133,11 @@
 |      page.html                 │   5  │   <img src="a.png">
 |     util.c                    │   6  apples
 |      util.h                    │   7  pears
-|                                │   8  plums
+|                                │   8  plums
 |                                 │   9  </body>
-|                                │  10  </html>
+|                                │  10  </html>
 |                                 │  11
-|                                 │                                                                                     ─
+|                                │                                                                                     ─
 |                                 │
 |                                 │
 |                                 │

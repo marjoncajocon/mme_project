@@ -9,11 +9,11 @@
 |      16  static int add (int a, int b) {                                                                  ⠟⠛
 |     17  │   total += a + : intb;                                                                         ⣿⡏⠉⠁
 |      18  │   return a + b;                                                                                ⣋⣁⣀⡀
-|     19  }                                                                                                ⣿⠿⠗         ▬
+|     19  }                                                                                                ⣿⠿⠗         ▬
 |      20                                                                                                   ⡹⠿⠿⠃
-|     21  static Point make (int x, int y) {                                                               ⠟⠛⠛⠋⠉⠉
+|     21  static Point make (int x, int y) {                                                               ⠟⠛⠛⠋⠉⠉
 |      22  │   Point p;
-|      23  │   p.x = x;
+|     23  │   p.x = x;
 |      24  │   p.y = y;
 |      25  │   return p;
 |      26  }

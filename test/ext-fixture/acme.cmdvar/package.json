@@ -1,0 +1,10 @@
+{
+  "name": "cmdvar",
+  "publisher": "acme",
+  "displayName": "Acme Command Variable",
+  "description": "Commands that give a value, for tasks.json's ${command:id} (the task-command-variable scenario)",
+  "version": "0.0.1",
+  "engines": {"vscode": "^1.80.0"},
+  "main": "./extension.js",
+  "activationEvents": ["onCommand:cmdvar.buildName", "onCommand:cmdvar.number"]
+}

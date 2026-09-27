@@ -9,7 +9,7 @@
 {868686}    {6e7681}   9  {569cd6}class {4ec9b0}Shape{cccccc}:
 {868686} ?  {6e7681}  10  {404040}?   {ce9178}"""A shape."""
 {868686}    {6e7681}  11  {404040}?
-{868686}    {6e7681}  12  {404040}?   {569cd6}def {dcdcaa}__init__{ffd700}({569cd6}self{cccccc}, {9cdcfe}sides{cccccc}: {4ec9b0}int {cccccc}= {b5cea8}3{ffd700}){cccccc}:
+{868686} ?  {6e7681}  12  {404040}?   {569cd6}def {dcdcaa}__init__{ffd700}({569cd6}self{cccccc}, {9cdcfe}sides{cccccc}: {4ec9b0}int {cccccc}= {b5cea8}3{ffd700}){cccccc}:
 {868686}    {6e7681}  13  {404040}?   ?   {569cd6}self{cccccc}.{9cdcfe}sides {cccccc}= {9cdcfe}sides
 {868686}    {6e7681}  14  {404040}?
 {868686}    {6e7681}  15  {404040}?   {569cd6}def {dcdcaa}describe{ffd700}({569cd6}self{ffd700}) {cccccc}-> {4ec9b0}str{cccccc}:

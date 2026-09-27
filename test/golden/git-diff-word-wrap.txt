@@ -9,11 +9,11 @@
 |  2   GRAPH                     │  6                                       │  6
 |    ◉   main  third commit: ad │  7   int keep_two (void) {               │  7   int keep_two (void) {
 |     ● second commit: notes.md r │  8       return 2;                       │  8       return 2;
-|    ● first commit: tracked.c a │  9   }                                   │  9   }
+|    ● first commit: tracked.c a │  9   }                                   │  9   }
 |                                 │ 10                                       │ 10
-|                                │ 11   int changed_here (void) {           │ 11   int changed_here (void) {
+|                                │ 11   int changed_here (void) {           │ 11   int changed_here (void) {
 |                                 │▎12 -     return 3;                       → 12 +     return 33;
-|                                 │ 13   }                                   │ 13   }                                   ▌
+|                                │ 13   }                                   │ 13   }                                   ▌
 |                                 │ 14                                       │ 14
 |                                 │ 15 - int deleted_below (void) {          → 15 + int added_function (void) {
 |                                 │ 16 -     return 4;                       │ 16 +     return 99;                      ▌

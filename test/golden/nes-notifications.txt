@@ -9,11 +9,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Point;
-|      12                                                                                                               ─
+|     12                                                                                                               ─
 |     13  static int total = 0;
 |          static int total = 7;
 |      14
@@ -40,11 +40,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Point;
-|      12
+|     12
 |     13  static int total = 7;
 |      14
 |      15  /* adds two numbers and remembers the sum */

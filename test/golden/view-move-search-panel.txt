@@ -7,11 +7,11 @@
 |      deep/one/two              │
 |     docs                      │                             Go to File...   Ctrl+P
 |      many                      │
-|     src                       │                              Open File...   Ctrl+O
+|     src                       │                              Open File...   Ctrl+O
 |      app.js                    │
-|     main.c                    │                            Open Folder...
+|     main.c                    │                            Open Folder...
 |      package.json              │
-|      readme.md                 │                           Open Project...   Ctrl+R
+|     readme.md                 │                           Open Project...   Ctrl+R
 |      site.css                  │
 |                                 │                                  New File   Ctrl+N
 |                                 │
@@ -40,11 +40,11 @@
 |        /* main.c - a small C fi │
 |       int main (int argc, char │                              Open File...   Ctrl+O
 |       readme.md            1  │
-|       int main (void) {        │                            Open Folder...
+|       int main (void) {        │                            Open Folder...
 |                                 │
-|                                │                           Open Project...   Ctrl+R
+|                                │                           Open Project...   Ctrl+R
 |                                 │
-|                                 │                                  New File   Ctrl+N
+|                                │                                  New File   Ctrl+N
 |                                 │
 |                                 │
 |                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── Filter (e.g. text,  ────────

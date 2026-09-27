@@ -9,13 +9,13 @@
 |       acm  Disable   Uninstall  │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Monokai Dark              │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A dark color theme        │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Acme Web  running         │   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|                                │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎                               │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acm  Disable   Uninstall  │  11  plain text line 11 with several words on it                                    ▬
-|                                │  12  plain text line 12 with several words on it                                    ▬
+|                                │  12  plain text line 12 with several words on it                                    ▬
 |                                 │  13  plain text line 13 with several words on it                                    ▬
-|                                 │  14  plain text line 14 with several words on it                                    ▬
+|                                │  14  plain text line 14 with several words on it                                    ▬
 |                                 │  15  plain text line 15 with several words on it                                    ▬
 |                                 │  16  plain text line 16 with several words on it                                    ▬
 |                                 │  17  plain text line 17 with several words on it                                    ▬
@@ -40,13 +40,13 @@
 |       acme  Enable   Uninstall  │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Monokai Dark              │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A dark color theme        │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Acme Web  running         │   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|                                │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎                               │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acm  Disable   Uninstall  │  11  plain text line 11 with several words on it                                    ▬
-|                                │  12  plain text line 12 with several words on it                                    ▬
+|                                │  12  plain text line 12 with several words on it                                    ▬
 |                                 │  13  plain text line 13 with several words on it                                    ▬
-|                                 │  14  plain text line 14 with several words on it                                    ▬
+|                                │  14  plain text line 14 with several words on it                                    ▬
 |                                 │  15  plain text line 15 with several words on it                                    ▬
 |                                 │  16  plain text line 16 with several words on it                                    ▬
 |                                 │  17  plain text line 17 with several words on it                                    ▬
@@ -71,13 +71,13 @@
 |       acm  Disable   Uninstall  │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Monokai Dark              │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A dark color theme        │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Acme Web  running         │   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|                                │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎                               │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acm  Disable   Uninstall  │  11  plain text line 11 with several words on it                                    ▬
-|                                │  12  plain text line 12 with several words on it                                    ▬
+|                                │  12  plain text line 12 with several words on it                                    ▬
 |                                 │  13  plain text line 13 with several words on it                                    ▬
-|                                 │  14  plain text line 14 with several words on it                                    ▬
+|                                │  14  plain text line 14 with several words on it                                    ▬
 |                                 │  15  plain text line 15 with several words on it                                    ▬
 |                                 │  16  plain text line 16 with several words on it                                    ▬
 |                                 │  17  plain text line 17 with several words on it                                    ▬
@@ -102,11 +102,11 @@
 |       acm  Disable   Uninstall  │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Monokai Dark              │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A dark color theme        │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall  │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Acme Web  disabled        │   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|                                │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎                               │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acme  Enable   Uninstall  │  11  plain text line 11 with several words on it                                    ▬
-|                                 │  12  plain text line 12 with several words on it                                    ▬
+|                                │  12  plain text line 12 with several words on it                                    ▬
 |                                 │  13  plain text line 13 with several words on it                                    ▬
 |                                 │  14  plain text line 14 with several words on it                                    ▬
 |                                 │  15  plain text line 15 with several words on it                                    ▬

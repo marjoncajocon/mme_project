@@ -9,11 +9,11 @@
 |      many                      │   5                                                                     ⠟⠛
 |     src                       │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
 |      app.js                    │   7                                                                     ⣋⣁⣀⡀
-|     main.c                    │   8  typedef struct Point {                                             ⣿⠿⠗
+|     main.c                    │   8  typedef struct Point {                                             ⣿⠿⠗
 |      package.json              │   9  │   int x;                                                         ⡹⠿⠿⠃
-|     readme.md                 │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|     readme.md                 │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
 |      site.css                  │  11  } Point;
-|                                 │  12
+|                                │  12
 |                                 │  13  static int total = 0;
 |                                 │  14
 |                                 │  15  /* adds two numbers and remembers the sum */

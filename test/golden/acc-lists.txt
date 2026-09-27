@@ -9,11 +9,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁        ▬
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Point;
-|      12
+|     12
 |      13  static int total = 0;
 |      14                                                                                                               ▬
 |      15  /* adds two numbers and remembers the sum */                                                                 ▬
@@ -31,10 +31,10 @@
 |                                                                             Ln 1, Col 2  Tab Size: 4  UTF-8  LF  C  
 exited=0
 ---- speech
-New File, Ctrl+N, 1 of 465
-Type, 1 of 377
-Toggle Terminal, Ctrl+`, 1 of 255
-Toggle Terminal, Ctrl+`, 1 of 77
+New File, Ctrl+N, 1 of 467
+Type, 1 of 379
+Toggle Terminal, Ctrl+`, 1 of 257
+Toggle Terminal, Ctrl+`, 1 of 78
 Toggle Terminal, Ctrl+`, 1 of 38
 Toggle Terminal, Ctrl+`, 1 of 32
 Toggle Minimap, 2 of 32

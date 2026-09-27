@@ -9,11 +9,11 @@
 |       5  │/* typed here */                                                                                ⡿⠿⠉⠁
 |      6  │                                                                                                ⣶⡖⠒⠂
 |       7  #define MAXN 64                                                                                  ⠟⠃
-|      8                                                                                                   ⣿⣿⡯⠁
+|      8                                                                                                   ⣿⣿⡯⠁
 |       9  typedef struct Point {                                                                           ⢻⣶⣶⠆
-|     10  │   int x;                                                                                       ⡷⠶⠶⠖⠒⠒
+|     10  │   int x;                                                                                       ⡷⠶⠶⠖⠒⠒
 |      11  │   int y;
-|      12  } Point;
+|     12  } Point;
 |      13
 |      14  static int total = 0;
 |      15
@@ -40,11 +40,11 @@
 |       5 │/* typed here                                                                                   ⡿⠿⠉⠁
 |      6  │                                                                                                ⣶⡖⠒⠂
 |       7  #define MAXN 64                                                                                  ⠟⠃
-|      8                                                                                                   ⣿⣿⡯⠁
+|      8                                                                                                   ⣿⣿⡯⠁
 |       9  typedef struct Point {                                                                           ⢻⣶⣶⠆
-|     10  │   int x;                                                                                       ⡷⠶⠶⠖⠒⠒
+|     10  │   int x;                                                                                       ⡷⠶⠶⠖⠒⠒
 |      11  │   int y;
-|      12  } Point;
+|     12  } Point;
 |      13
 |      14  static int total = 0;
 |      15
@@ -71,11 +71,11 @@
 |       5  │/* typed here */                                                                                ⡿⠿⠉⠁
 |      6  │                                                                                                ⣶⡖⠒⠂
 |       7  #define MAXN 64                                                                                  ⠟⠃
-|      8                                                                                                   ⣿⣿⡯⠁
+|      8                                                                                                   ⣿⣿⡯⠁
 |       9  typedef struct Point {                                                                           ⢻⣶⣶⠆
-|     10  │   int x;                                                                                       ⡷⠶⠶⠖⠒⠒
+|     10  │   int x;                                                                                       ⡷⠶⠶⠖⠒⠒
 |      11  │   int y;
-|      12  } Point;
+|     12  } Point;
 |      13
 |      14  static int total = 0;
 |      15

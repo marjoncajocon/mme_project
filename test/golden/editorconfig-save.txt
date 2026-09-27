@@ -9,11 +9,11 @@
 |      .editorconfig             │
 |     cafe.latin                │
 |      four.c                    │
-|     main.go                   │
+|     main.go                   │
 |      num2.txt                  │
-|     num4.txt                  │
+|     num4.txt                  │
 |      save.txt                  │
-|                                 │
+|                                │
 |                                 │
 |                                 │
 |                                 │

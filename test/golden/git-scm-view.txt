@@ -9,11 +9,11 @@
 |  2   GRAPH                     │
 |    ◉   main  third commit: ad │
 |     ● second commit: notes.md r │
-|    ● first commit: tracked.c a │                        Command Palette...   Ctrl+Shift+P
+|    ● first commit: tracked.c a │                        Command Palette...   Ctrl+Shift+P
 |                                 │
-|                                │                             Go to File...   Ctrl+P
+|                                │                             Go to File...   Ctrl+P
 |                                 │
-|                                 │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
 |                                 │                            Open Folder...
 |                                 │

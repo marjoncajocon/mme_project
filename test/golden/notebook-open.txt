@@ -9,11 +9,11 @@
 |    ▎        Some bold text.
 | 
 |    ▎  [1] x = 6 * 7
-|   ▎      print('hello')
+|   ▎      print('hello')
 |    ▎      x
-|   ▎      hello
+|   ▎      hello
 |    ▎      42
-|
+| 
 |    ▎  [2] 1 / 0
 |    ▎      Traceback (most recent call last):
 |    ▎      ZeroDivisionError: division by zero

@@ -9,13 +9,13 @@
 |    ▎        Some bold text.
 | 
 |    ▎  [1] x = 6 * 7
-|   ▎      print('hello')
+|   ▎      print('hello')
 |    ▎      x
-|   ▎      hello
+|   ▎      hello
 |    ▎      42
-| 
+| 
 |    ▎  [2] 1 / 0
-|    ▎      Traceback (most recent call last):
+|   ▎      Traceback (most recent call last):
 |    ▎      ZeroDivisionError: division by zero
 |
 |    ▎  [3] df
@@ -40,13 +40,13 @@
 |    ▎        Some bold text.
 | 
 |    ▎▷ [1] x = 6 * 7
-|   ▎      print('hello')
+|   ▎      print('hello')
 |    ▎      x
-|   ▎      acme ran: x = 6 * 7
+|   ▎      acme ran: x = 6 * 7
 |    ▎      the acme result 1
-| 
+| 
 |    ▎  [2] 1 / 0
-|    ▎      Traceback (most recent call last):
+|   ▎      Traceback (most recent call last):
 |    ▎      ZeroDivisionError: division by zero
 |
 |    ▎  [3] df

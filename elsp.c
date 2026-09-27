@@ -23,6 +23,7 @@ enum { RQ_INIT, RQ_COMPLETE, RQ_DEFINE, RQ_HOVER, RQ_SIGNATURE, RQ_RENAME, RQ_AC
        RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE, RQ_NEDIT,
        RQ_SIGNIN, RQ_SIGNOUT, RQ_CHECK, RQ_DEVICE, RQ_PULL, RQ_COLOR, RQ_COLOR_PRES, RQ_LINK,
        RQ_LINK_RESOLVE, RQ_WILL_RENAME, RQ_INLAY_RESOLVE,
+       RQ_CMDVAL,
        RQ_OTHER };
 
 typedef struct Req {
@@ -2645,6 +2646,53 @@ int lsp_ext_command (const char *id, const char *args) {
 }
 
 
+static int g_cv_got;	/* ${command:id}: the host answered */
+static char *g_cv;	/* and what: the command's result as JSON, or "!" and why it failed */
+
+
+static int cv_got (void) {
+  return g_cv_got;
+}
+
+
+/* the host's answer to lsp_ext_command_value */
+static void cmd_value (const Json *msg) {
+  const Json *e = json_get(msg, "error"), *r = json_get(msg, "result");
+  Buf b;
+  buf_init(&b);
+  if (e) buf_printf(&b, "!%s", json_str(json_get(e, "message"), "The command failed"));
+  else if (r) json_write(&b, r);
+  else buf_puts(&b, "null");
+  buf_putc(&b, '\0');
+  free(g_cv);
+  g_cv = buf_take(&b);
+  g_cv_got = 1;
+}
+
+
+/* ${command:id} (etask.c): an extension's command run by the host, what it gave as JSON ("null": nothing), or "!"
+** and the error it threw; NULL: no host, or no answer (it may ask first: a quick pick, so a minute is waited) */
+char *lsp_ext_command_value (const char *id) {
+  Srv *s;
+  Buf b;
+  char *r;
+  if (!lsp_ext_ready(15000) || (s = ext_srv()) == NULL) return NULL;	/* started for it, as VS Code activates on it */
+  buf_init(&b);
+  buf_puts(&b, "{\"command\":");
+  json_put_str(&b, id, strlen(id));
+  buf_puts(&b, ",\"arguments\":[]}");
+  free(g_cv);
+  g_cv = NULL;
+  g_cv_got = 0;
+  request(s, "workspace/executeCommand", b.s, RQ_CMDVAL, NULL);
+  buf_free(&b);
+  if (!lsp_ext_wait(60000, cv_got)) return NULL;
+  r = g_cv;
+  g_cv = NULL;
+  return r;
+}
+
+
 /* a notification of mme's own to the host (etree.c: mme/treeExpand ...); nothing when it is not running */
 void lsp_ext_notify (const char *method, const char *params) {
   Srv *s = ext_srv();
@@ -3678,6 +3726,7 @@ static void handle (Srv *s, const Json *msg) {
     }
     else if (r.kind == RQ_SIGNIN) auth_prompt(s, json_get(msg, "result"));
     else if (r.kind == RQ_DEVICE) auth_done(s, msg);
+    else if (r.kind == RQ_CMDVAL) cmd_value(msg);
     else if (r.kind == RQ_CHECK) auth_account(json_get(msg, "result"));
     else if (r.kind == RQ_SIGNOUT) {
       g_auth.msg[0] = '\0';	/* whatever it last said about itself is past */

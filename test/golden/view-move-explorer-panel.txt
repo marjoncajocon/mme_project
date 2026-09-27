@@ -7,11 +7,11 @@
 |                                 │
 |                                │                             Go to File...   Ctrl+P
 |                                 │
-|                                │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
-|                                │                            Open Folder...
+|                                │                            Open Folder...
 |                                 │
-|                                 │                           Open Project...   Ctrl+R
+|                                │                           Open Project...   Ctrl+R
 |                                 │
 |                                 │                                  New File   Ctrl+N
 |                                 │
@@ -38,11 +38,11 @@
 |                                 │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
 |                                │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
 |                                 │   5  │ --gap: 8px;                                                      ⠟⠛⠋
-|                                │   6  }                                                                  ⡿⠭⠭
+|                                │   6  }                                                                  ⡿⠭⠭
 |                                 │   7                                                                     ⠁
-|                                │   8  body {
+|                                │   8  body {
 |                                 │   9  │ background: var(--bg);
-|                                 │  10  │ color: var(--fg);
+|                                │  10  │ color: var(--fg);
 |                                 │  11  │ font-family: "Segoe UI", sans-serif;
 |                                 │  12  │ margin: 0;
 |                                 │  13  }
@@ -69,11 +69,11 @@
 |                                 │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
 |                                │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
 |                                 │   5  │ --gap: 8px;                                                      ⠟⠛⠋
-|                                │   6  }                                                                  ⡿⠭⠭
+|                                │   6  }                                                                  ⡿⠭⠭
 |                                 │   7                                                                     ⠁
-|                                │   8  body {
+|                                │   8  body {
 |                                 │   9  │ background: var(--bg);
-|                                 │  10  │ color: var(--fg);
+|                                │  10  │ color: var(--fg);
 |                                 │  11  │ font-family: "Segoe UI", sans-serif;
 |                                 │  12  │ margin: 0;
 |                                 │  13  }
@@ -100,11 +100,11 @@
 |                                 │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
 |                                │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
 |                                 │   5  │ --gap: 8px;                                                      ⠟⠛⠋
-|                                │   6  }                                                                  ⡿⠭⠭
+|                                │   6  }                                                                  ⡿⠭⠭
 |                                 │   7                                                                     ⠁
-|                                │   8  body {
+|                                │   8  body {
 |                                 │   9  │ background: var(--bg);
-|                                 │  10  │ color: var(--fg);
+|                                │  10  │ color: var(--fg);
 |                                 │  11  │ font-family: "Segoe UI", sans-serif;
 |                                 │  12  │ margin: 0;
 |                                 │  13  }
@@ -133,11 +133,11 @@
 |      many                      │   5  │ --gap: 8px;                                                      ⠟⠛⠋
 |     src                       │   6  }                                                                  ⡿⠭⠭
 |      app.js                    │   7                                                                     ⠁
-|     main.c                    │   8  body {
+|     main.c                    │   8  body {
 |      package.json              │   9  │ background: var(--bg);
-|     readme.md                 │  10  │ color: var(--fg);
+|     readme.md                 │  10  │ color: var(--fg);
 |      site.css                  │  11  │ font-family: "Segoe UI", sans-serif;
-|                                 │  12  │ margin: 0;
+|                                │  12  │ margin: 0;
 |                                 │  13  }
 |                                 │  14
 |                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── Filter (e.g. text,  ────────

@@ -9,11 +9,11 @@
 |      many                     ▐│
 |       file00.txt             ▐│
 |        file01.txt             ▐│
-|       file02.txt             ▐│                        Command Palette...   Ctrl+Shift+P
+|       file02.txt             ▐│                        Command Palette...   Ctrl+Shift+P
 |        file03.txt             ▐│
-|       file04.txt             ▐│                             Go to File...   Ctrl+P
+|       file04.txt             ▐│                             Go to File...   Ctrl+P
 |        file05.txt             ▐│
-|        file06.txt             ▐│                              Open File...   Ctrl+O
+|       file06.txt             ▐│                              Open File...   Ctrl+O
 |        file07.txt              │
 |        file08.txt              │                            Open Folder...
 |        file09.txt              │
@@ -40,11 +40,11 @@
 |        file08.txt              │
 |       file09.txt              │
 |        file10.txt             ▐│
-|       file11.txt             ▐│                        Command Palette...   Ctrl+Shift+P
+|       file11.txt             ▐│                        Command Palette...   Ctrl+Shift+P
 |        file12.txt             ▐│
-|       file13.txt             ▐│                             Go to File...   Ctrl+P
+|       file13.txt             ▐│                             Go to File...   Ctrl+P
 |        file14.txt             ▐│
-|        file15.txt             ▐│                              Open File...   Ctrl+O
+|       file15.txt             ▐│                              Open File...   Ctrl+O
 |        file16.txt             ▐│
 |        file17.txt             ▐│                            Open Folder...
 |        file18.txt             ▐│

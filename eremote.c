@@ -362,22 +362,33 @@ static char *script_put (const char *name, const Buf *s) {
 }
 
 
-/* a program's output and its errors, both; its exit code (-1: it did not start) */
+/*
+** A program's output and its errors, both; its exit code (-1: it did not
+** start). Its input is empty: wsl.exe without WSL, with no input and no
+** console (mme-sdl's children have none), waits for a key forever.
+*/
 static int capture (char **argv, Buf *out) {
-  int fds[2], io[3];
+  int fds[2], io[3], null;
   OsProc proc;
   long pid, n;
   char chunk[4096];
   if (os_pipe(fds) != 0) return -1;
-  io[0] = -1;
+#ifdef _WIN32
+  null = os_open("NUL", OS_READ);
+#else
+  null = os_open("/dev/null", OS_READ);
+#endif
+  io[0] = null;
   io[1] = fds[1];
   io[2] = fds[1];
   if (os_spawn(argv[0], argv, NULL, io, 3, &proc, &pid) != 0) {
     os_close(fds[0]);
     os_close(fds[1]);
+    if (null >= 0) os_close(null);
     return -1;
   }
   os_close(fds[1]);
+  if (null >= 0) os_close(null);
   while ((n = os_read(fds[0], chunk, sizeof(chunk))) > 0) buf_putn(out, chunk, (size_t)n);
   os_close(fds[0]);
   buf_putc(out, '\0');
@@ -1471,87 +1482,662 @@ static void remote_menu (void) {
 }
 
 
-static void open_remote (const char *what, const char *arg) {
+/* a window of its own (--remote=arg); here: this one closes when it opened (VS Code's Current Window); 0 opened */
+static int open_remote (const char *what, const char *arg, int here) {
   char *a = (char *)xmalloc(strlen(arg) + 16);
+  int r;
   sprintf(a, "--remote=%s", arg);
-  if (term_new_window(a) != 0) toast(1, "%s: a window could not be opened here (run mme-sdl, or mme in mmc-term).", what);
+  r = term_new_window(a);
+  if (r != 0) toast(1, "%s: a window could not be opened here (run mme-sdl, or mme in mmc-term).", what);
+  else if (here) mme_command(CMD_CLOSE_WINDOW);
+  free(a);
+  return r;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The Remote Explorer (View: Show Remote Explorer): VS Code's view with
+** its icon in the activity bar (codicon remote-explorer). Its dropdown
+** picks the targets shown: Remotes (Tunnels/SSH) are the SSH TARGETS
+** (~/.ssh/config's hosts, as Connect to Host lists them), WSL Targets the
+** distros (wsl.exe -l -q), Dev Containers the containers (docker ps -a,
+** a dev container by its devcontainer.local_folder label). A target's row
+** has VS Code's inline actions, Connect (a container: Attach) in Current
+** Window and in New Window; a section's title has Refresh, and SSH's Add
+** New SSH Host... and Open SSH Config File. Nothing is read before the
+** view first shows, and wsl.exe and docker run on a thread (either can
+** take seconds, or hang while its service starts): the view says
+** Loading... meanwhile. The dropdown's choice is kept in
+** mme-data/state/remote-explorer.
+** ===================================================================
+*/
+
+enum { RX_SSH, RX_WSL, RX_DOCKER, RX_N };
+
+static const char *const rx_type[RX_N] = {"Remotes (Tunnels/SSH)", "WSL Targets", "Dev Containers"};
+static const char *const rx_head[RX_N] = {"SSH TARGETS", "WSL TARGETS", "DEV CONTAINERS"};
+
+typedef struct RxTarget {
+  char *name;	/* the host, the distro, the container */
+  char *label, *desc;	/* what its row says */
+  char *config;	/* a dev container's devcontainer.json ("": attached as any container) */
+  int running;	/* a container's */
+} RxTarget;
+
+typedef struct RxJob {	/* wsl.exe or docker, on a thread: what it said */
+  int kind;
+  int rc;	/* 0 read, -1 failed (err), -2 the program is not here */
+  int done;	/* under g_rx_mx */
+  Vec lines;
+  char err[400];
+} RxJob;
+
+static struct {
+  int state;	/* 0 not read yet, 1 being read, 2 read */
+  int open;	/* its targets shown */
+  RxTarget *t;
+  int n;
+  char msg[400];	/* no targets: why ("WSL is not installed.") */
+  RxJob *job;
+  Thread *th;
+} g_rx[RX_N] = {{0, 1, NULL, 0, "", NULL, NULL}, {0, 1, NULL, 0, "", NULL, NULL}, {0, 1, NULL, 0, "", NULL, NULL}};
+
+static Mutex *g_rx_mx;
+static int g_rx_kind = -1;	/* the dropdown's; -1: not read yet */
+static int g_rx_sel, g_rx_top, g_rx_h = 1, g_rx_x, g_rx_y, g_rx_w = 30;
+
+#define RX_HEAD	1	/* "REMOTE EXPLORER" */
+enum { RR_DROP, RR_HEAD, RR_TARGET, RR_MSG };	/* the rows: the dropdown, the section's title, its targets */
+
+
+static void rx_worker (void *ud) {
+  RxJob *j = (RxJob *)ud;
+  if (j->kind == RX_WSL) j->rc = wsl_distros(&j->lines, j->err, sizeof(j->err));
+  else {
+    static const char *const args[] = {"ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}\t"
+                                       "{{.Label \"devcontainer.local_folder\"}}\t{{.Label \"devcontainer.config_file\"}}", NULL};
+    char *docker = find_program("docker");
+    if (docker == NULL) j->rc = -2;
+    else j->rc = docker_lines(args, &j->lines, j->err, sizeof(j->err));
+    free(docker);
+  }
+  mx_lock(g_rx_mx);
+  j->done = 1;
+  mx_unlock(g_rx_mx);
+}
+
+
+static void rx_clear (int kind) {
+  int i;
+  for (i = 0; i < g_rx[kind].n; i++) {
+    free(g_rx[kind].t[i].name);
+    free(g_rx[kind].t[i].label);
+    free(g_rx[kind].t[i].desc);
+    free(g_rx[kind].t[i].config);
+  }
+  free(g_rx[kind].t);
+  g_rx[kind].t = NULL;
+  g_rx[kind].n = 0;
+  g_rx[kind].msg[0] = '\0';
+}
+
+
+static void rx_add (int kind, const char *name, const char *label, const char *desc, const char *config, int running) {
+  RxTarget *t;
+  g_rx[kind].t = (RxTarget *)xrealloc(g_rx[kind].t, (size_t)(g_rx[kind].n + 1) * sizeof(RxTarget));
+  t = &g_rx[kind].t[g_rx[kind].n++];
+  t->name = xstrdup(name);
+  t->label = xstrdup(label);
+  t->desc = xstrdup(desc);
+  t->config = xstrdup(config);
+  t->running = running;
+}
+
+
+/* "name \t state \t status \t image \t local_folder \t config_file": the dev containers first, as VS Code's */
+static void rx_containers (const Vec *lines) {
+  int pass;
+  size_t i;
+  for (pass = 0; pass < 2; pass++)
+    for (i = 0; i < lines->n; i++) {
+      char *f[6], *s = xstrdup(lines->v[i]), *p = s, desc[400];
+      const char *base;
+      int k;
+      for (k = 0; k < 6; k++) {
+        f[k] = p;
+        if (p && (p = strchr(p, '\t')) != NULL) *p++ = '\0';
+      }
+      for (k = 0; k < 6; k++)
+        if (f[k] == NULL) f[k] = (char *)"";
+      if (*f[0] && (*f[4] != '\0') == (pass == 0)) {
+        base = f[4] + strlen(f[4]);	/* the folder's name (a Windows or a Linux path) */
+        while (base > f[4] && (base[-1] == '/' || base[-1] == '\\')) base--;
+        while (base > f[4] && base[-1] != '/' && base[-1] != '\\') base--;
+        snprintf(desc, sizeof(desc), "%s  %s", *f[4] ? f[0] : f[3], f[2]);
+        if (*f[4]) {
+          char *label = xstrdup(base), *e = label + strlen(label);
+          while (e > label && (e[-1] == '/' || e[-1] == '\\')) *--e = '\0';
+          rx_add(RX_DOCKER, f[0], *label ? label : f[0], desc, f[5], strcmp(f[1], "running") == 0);
+          free(label);
+        }
+        else rx_add(RX_DOCKER, f[0], f[0], desc, "", strcmp(f[1], "running") == 0);
+      }
+      free(s);
+    }
+}
+
+
+/* a job ended: its targets, or why there are none */
+static void rx_took (RxJob *j) {
+  int kind = j->kind;
+  size_t i;
+  rx_clear(kind);
+  if (kind == RX_WSL) {
+    if (j->rc == 0)
+      for (i = 0; i < j->lines.n; i++) rx_add(RX_WSL, j->lines.v[i], j->lines.v[i], i == 0 ? "default distro" : "", "", 0);
+    else if (strstr(j->err, "no distribution") || strstr(j->err, "no installed distributions"))
+      snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "No WSL distributions are installed (wsl.exe --install -d Ubuntu).");
+    else if (strstr(j->err, "not installed") || strstr(j->err, "not found") || strstr(j->err, "-l failed") ||
+             strstr(j->err, "could not be started") || strstr(j->err, "Windows only"))
+      snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "WSL is not installed. Install it: wsl.exe --install");
+    else snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "WSL: %s", j->err);
+  }
+  else if (j->rc == -2) snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "Docker is not installed (docker was not found in PATH).");
+  else if (j->rc != 0)
+    snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "Docker is not running%s%s", j->err[0] ? ": " : ".", j->err);
+  else {
+    rx_containers(&j->lines);
+    if (g_rx[kind].n == 0) snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "No containers (docker ps -a lists none).");
+  }
+  vec_free(&j->lines);
+  free(j);
+}
+
+
+/* the targets of kind read (again): the hosts at once, the others on a thread */
+static void rx_load (int kind) {
+  RxJob *j;
+  if (g_rx[kind].state == 1) return;	/* being read */
+  if (kind == RX_SSH) {
+    Vec hosts;
+    size_t i;
+    rx_clear(kind);
+    vec_init(&hosts);
+    config_hosts(&hosts);
+    for (i = 0; i < hosts.n; i++) rx_add(RX_SSH, hosts.v[i], hosts.v[i], "", "", 0);
+    vec_free(&hosts);
+    if (g_rx[kind].n == 0) snprintf(g_rx[kind].msg, sizeof(g_rx[kind].msg), "No SSH hosts in ~/.ssh/config. Add one with Add New SSH Host... (+).");
+    g_rx[kind].state = 2;
+    return;
+  }
+  if (g_rx_mx == NULL) g_rx_mx = mx_new();
+  j = (RxJob *)xmalloc(sizeof(RxJob));
+  memset(j, 0, sizeof(*j));
+  j->kind = kind;
+  vec_init(&j->lines);
+  g_rx[kind].state = 1;
+  g_rx[kind].job = j;
+  if ((g_rx[kind].th = th_start(rx_worker, j)) == NULL) rx_worker(j);	/* no thread: here */
+}
+
+
+/* the main loop: a job that ended is taken; 1 something changed */
+int remote_view_idle (void) {
+  int kind, changed = 0;
+  for (kind = 0; kind < RX_N; kind++) {
+    RxJob *j = g_rx[kind].job;
+    int done;
+    if (j == NULL) continue;
+    mx_lock(g_rx_mx);
+    done = j->done;
+    mx_unlock(g_rx_mx);
+    if (!done) continue;
+    th_join(g_rx[kind].th);
+    g_rx[kind].th = NULL;
+    g_rx[kind].job = NULL;
+    g_rx[kind].state = 2;
+    rx_took(j);
+    changed = 1;
+  }
+  return changed;
+}
+
+
+static int rx_types (int *types) {	/* the dropdown's choices (WSL: Windows only) */
+  int n = 0;
+  types[n++] = RX_SSH;
+#ifdef _WIN32
+  types[n++] = RX_WSL;
+#endif
+  types[n++] = RX_DOCKER;
+  return n;
+}
+
+
+static int rx_kind (void) {
+  if (g_rx_kind < 0) {	/* what it was */
+    char *f = data_path("state" MMC_SEPS "remote-explorer"), *s = read_file(f, NULL);
+    int k;
+    g_rx_kind = RX_SSH;
+    for (k = 0; s && k < RX_N; k++)
+      if (strncmp(s, rx_type[k], strlen(rx_type[k])) == 0) g_rx_kind = k;
+#ifndef _WIN32
+    if (g_rx_kind == RX_WSL) g_rx_kind = RX_SSH;
+#endif
+    free(s);
+    free(f);
+  }
+  return g_rx_kind;
+}
+
+
+static void rx_set_kind (int kind) {
+  char *d = data_path("state"), *f = path_join(d, "remote-explorer");
+  int fd;
+  g_rx_kind = kind;
+  g_rx_sel = 0;
+  g_rx_top = 0;
+  mkdir_p(d);
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, rx_type[kind], strlen(rx_type[kind]));
+    os_write(fd, "\n", 1);
+    os_close(fd);
+  }
+  free(f);
+  free(d);
+}
+
+
+/* what the section says when it has no targets: its lines at the view's width (at, len: of each, at most max) */
+static int rx_msg (int *at, int *len, int max) {
+  const char *m = g_rx[rx_kind()].state == 1 ? "Loading..." : g_rx[rx_kind()].msg;
+  int w = g_rx_w - 4, n = 0, i = 0, e = (int)strlen(m);
+  if (w < 10) w = 10;
+  while (i < e && n < max) {
+    int j = e - i <= w ? e : i + w, k;
+    if (j < e) {	/* at the last space that fits */
+      for (k = j; k > i && m[k] != ' '; k--) ;
+      if (k > i) j = k;
+    }
+    at[n] = i;
+    len[n++] = j - i;
+    for (i = j; i < e && m[i] == ' '; i++) ;
+  }
+  return n > 0 ? n : 1;
+}
+
+
+static int rx_rows (void) {
+  int kind = rx_kind(), n = 2, at[8], len[8];
+  if (g_rx[kind].open) n += g_rx[kind].n > 0 ? g_rx[kind].n : rx_msg(at, len, 8);
+  if (g_rx_sel >= n) g_rx_sel = n - 1;
+  if (g_rx_sel < 0) g_rx_sel = 0;
+  return n;
+}
+
+
+static int rx_row_kind (int k) {
+  int kind = rx_kind();
+  if (k == 0) return RR_DROP;
+  if (k == 1) return RR_HEAD;
+  return g_rx[kind].n > 0 ? RR_TARGET : RR_MSG;
+}
+
+
+/* the title's actions, from the right: Refresh, then SSH's Open SSH Config File, Add New SSH Host... */
+static const uint32_t rx_act_icon[3] = {0xEB37, 0xEAF8, 0xEA60};	/* codicons refresh, gear, add */
+
+
+void remote_view_draw (int x, int y, int w, int h, int focus) {
+  int kind = rx_kind(), n, row;
+  uint32_t bg = ui_color(C_SIDE_BG);
+  g_rx_x = x;
+  g_rx_y = y;
+  g_rx_w = w;
+  if (g_rx[kind].state == 0) rx_load(kind);	/* shown the first time */
+  scr_box(x, y, w, h, S_SIDE);
+  if (h <= RX_HEAD) return;
+  scr_puts(x + 2, y, "REMOTE EXPLORER", S_SIDE_HEAD);
+  n = rx_rows();
+  g_rx_h = h - RX_HEAD;
+  if (g_rx_sel < g_rx_top) g_rx_top = g_rx_sel;
+  if (g_rx_sel >= g_rx_top + g_rx_h) g_rx_top = g_rx_sel - g_rx_h + 1;
+  if (g_rx_top < 0) g_rx_top = 0;
+  for (row = 0; row < g_rx_h; row++) {
+    int k = g_rx_top + row, sy = y + RX_HEAD + row, st, cx = x + 1, right = x + w - 1, rk;
+    if (k >= n) break;
+    rk = rx_row_kind(k);
+    st = (k == g_rx_sel && focus) ? S_SIDE_SEL : (k == g_rx_sel ? S_SIDE_CUR : S_SIDE);
+    scr_fill(x, sy, w, st);
+    if (rk == RR_DROP) {	/* the dropdown: " Remotes (Tunnels/SSH)  ⌄ " */
+      char t[80];
+      snprintf(t, sizeof(t), " %s  \xE2\x8C\x84 ", rx_type[kind]);
+      scr_putsw(x + 2, sy, w - 3, t, st == S_SIDE ? S_INPUT : st);
+    }
+    else if (rk == RR_HEAD) {
+      int a, na = kind == RX_SSH ? 3 : 1;
+      for (a = 0; a < na && w > 20; a++) {
+        right -= 2;
+        scr_put(right, sy, rx_act_icon[a], st == S_SIDE ? S_SIDE_HEAD : st);
+      }
+      cx += scr_put(cx, sy, g_rx[kind].open ? 0xEAB4 : 0xEAB6, st == S_SIDE ? S_SIDE_HEAD : st) + 1;	/* chevron */
+      cx += scr_putsw(cx, sy, right - cx - 1, rx_head[kind], st == S_SIDE ? S_SIDE_TITLE : st) + 1;
+      if (g_rx[kind].n > 0 && cx < right - 4) {
+        char b[16];
+        snprintf(b, sizeof(b), "%d", g_rx[kind].n);
+        scr_putsw(cx, sy, right - cx - 1, b, st == S_SIDE ? S_SIDE_DIM : st);
+      }
+    }
+    else if (rk == RR_MSG) {	/* its line k - 2 */
+      const char *m = g_rx[kind].state == 1 ? "Loading..." : g_rx[kind].msg;
+      int at[8], len[8];
+      char t[400];
+      if (k - 2 < rx_msg(at, len, 8) && m[0]) {
+        snprintf(t, sizeof(t), "%.*s", len[k - 2], m + at[k - 2]);
+        scr_putsw(x + 3, sy, w - 4, t, st == S_SIDE ? S_SIDE_DIM : st);
+      }
+    }
+    else {
+      const RxTarget *t = &g_rx[kind].t[k - 2];
+      uint32_t icon = kind == RX_SSH ? 0xEA7A : kind == RX_WSL ? 0xEBC6 : t->running ? 0xEB7B : 0xEB7A;	/* vm, terminal-linux, vm-running, vm-outline */
+      cx += 2;
+      if (kind == RX_DOCKER && t->running && st == S_SIDE) cx += scr_put_rgb(cx, sy, icon, 0x89D185, bg, 0) + 1;	/* green: running */
+      else cx += scr_put(cx, sy, icon, st) + 1;
+      if (k == g_rx_sel && w > 16) {	/* the inline actions: in Current Window (arrow-right), in New Window (empty-window) */
+        right -= 2;
+        scr_put(right, sy, 0xEAE4, st);
+        right -= 2;
+        scr_put(right, sy, 0xEA9C, st);
+      }
+      cx += scr_putsw(cx, sy, right - cx - 1, t->label, st) + 1;
+      if (t->desc[0] && cx < right - 2) scr_putsw(cx, sy, right - cx - 1, t->desc, st == S_SIDE ? S_SIDE_DIM : st);
+    }
+  }
+  side_bar(x, y + RX_HEAD, w, g_rx_h, (size_t)n, (size_t)g_rx_top, (size_t)g_rx_h);
+}
+
+
+/* Remote-SSH: Add New SSH Host...: "ssh user@host -p 22 -i key -A" as a Host block of ~/.ssh/config */
+static char *ssh_config_path (int make) {
+  char *home = os_getenv("HOME"), *d, *f;
+  if (home == NULL) home = os_getenv("USERPROFILE");
+  if (home == NULL) return NULL;
+  d = path_join(home, ".ssh");
+  f = path_join(d, "config");
+  if (make) {
+    OsStat st;
+    mkdir_p(d);
+    if (os_stat(f, &st) != 0 || !st.exists) {
+      int fd = os_open(f, OS_WRITE);
+      if (fd >= 0) os_close(fd);
+    }
+  }
+  free(d);
+  free(home);
+  return f;
+}
+
+
+static void add_host_done (void *ud, int choice) {	/* "Host added!": Open Config, Connect */
+  char *host = (char *)ud;
+  if (choice == 0) mme_command(CMD_SSH_OPEN_CONFIG);
+  else if (choice == 1) {
+    char *a = (char *)xmalloc(strlen(host) + 8);
+    sprintf(a, "%s::~", host);
+    open_remote("Remote-SSH", a, 0);
+    free(a);
+  }
+  free(host);
+}
+
+
+static void ssh_add_host (void) {
+  static const char *const act[] = {"Open Config", "Connect"};
+  char *cmd = ask_text("Enter SSH Connection Command (ssh hello@microsoft.com -A)", ""), *f, *old, *w[32], *p;
+  const char *user = NULL, *port = NULL, *key = NULL, *jump = NULL, *dest = NULL;
+  int nw = 0, i, agent = 0, fd;
+  size_t on = 0;
+  Buf b;
+  if (cmd == NULL) return;
+  for (p = strtok(cmd, " \t"); p && nw < 32; p = strtok(NULL, " \t")) w[nw++] = p;
+  for (i = nw > 0 && strcmp(w[0], "ssh") == 0 ? 1 : 0; i < nw; i++) {
+    if (strcmp(w[i], "-A") == 0) agent = 1;
+    else if (strcmp(w[i], "-p") == 0 && i + 1 < nw) port = w[++i];
+    else if (strcmp(w[i], "-i") == 0 && i + 1 < nw) key = w[++i];
+    else if (strcmp(w[i], "-l") == 0 && i + 1 < nw) user = w[++i];
+    else if (strcmp(w[i], "-J") == 0 && i + 1 < nw) jump = w[++i];
+    else if (w[i][0] == '-') {
+      if (strchr("bcDEeFIiLlmOoQRSWw", w[i][1]) && w[i][2] == '\0' && i + 1 < nw) i++;	/* ssh's options with a value */
+    }
+    else if (dest == NULL) dest = w[i];
+  }
+  if (dest == NULL || *dest == '\0') {
+    toast(1, "Remote-SSH: the command has no host (ssh user@host).");
+    free(cmd);
+    return;
+  }
+  if ((p = strchr(dest, '@')) != NULL) {
+    *p = '\0';
+    user = dest;
+    dest = p + 1;
+  }
+  if ((f = ssh_config_path(1)) == NULL) {
+    toast(1, "Remote-SSH: there is no home folder for ~/.ssh/config (HOME, USERPROFILE).");
+    free(cmd);
+    return;
+  }
+  old = read_file(f, &on);
+  buf_init(&b);
+  if (old && on > 0) buf_puts(&b, old[on - 1] == '\n' ? "\n" : "\n\n");	/* a line between it and the one before */
+  buf_printf(&b, "Host %s\n  HostName %s\n", dest, dest);
+  if (user && *user) buf_printf(&b, "  User %s\n", user);
+  if (port) buf_printf(&b, "  Port %s\n", port);
+  if (key) buf_printf(&b, "  IdentityFile %s\n", key);
+  if (jump) buf_printf(&b, "  ProxyJump %s\n", jump);
+  if (agent) buf_puts(&b, "  ForwardAgent yes\n");
+  if ((fd = os_open(f, OS_APPEND)) >= 0) {
+    os_write(fd, b.s, b.len);
+    os_close(fd);
+    g_rx[RX_SSH].state = 0;	/* read again */
+    toast_ask(0, "Remote-SSH", "Host added!", act, 2, add_host_done, xstrdup(dest));
+  }
+  else toast(1, "Remote-SSH: %s could not be written.", f);
+  buf_free(&b);
+  free(old);
+  free(f);
+  free(cmd);
+}
+
+
+/* Remote-SSH: Open SSH Configuration File...: ~/.ssh/config (made when there is none) */
+static void ssh_open_config (void) {
+  char *f = ssh_config_path(1);
+  if (f) open_path(f);
+  else toast(1, "Remote-SSH: there is no home folder for ~/.ssh/config (HOME, USERPROFILE).");
+  free(f);
+}
+
+
+/* a target's window: in this one (it closes when the other opened) or a new one */
+static void rx_connect (int kind, const RxTarget *t, int here) {
+  char *a;
+  if (kind != RX_SSH && *where()) {
+    toast(1, "%s: it opens a window on this computer; run it in a local window.", kind == RX_WSL ? "WSL" : "Dev Containers");
+    return;
+  }
+  if (kind == RX_WSL) {
+    if (wsl_window(t->name, "~") == 0 && here) mme_command(CMD_CLOSE_WINDOW);
+    return;
+  }
+  if (kind == RX_DOCKER && t->config[0]) {	/* a dev container: its folder in it, as Reopen in Container */
+    if (devc_window(t->config, 0) == 0 && here) mme_command(CMD_CLOSE_WINDOW);
+    return;
+  }
+  a = (char *)xmalloc(strlen(t->name) + 32);
+  if (kind == RX_SSH) sprintf(a, "%s::~", t->name);
+  else sprintf(a, "attached-container+%s::", t->name);
+  if (open_remote(kind == RX_SSH ? "Remote-SSH" : "Dev Containers", a, here) == 0 && !here)
+    toast(0, "%s: connecting to %s in a new window...", kind == RX_SSH ? "Remote-SSH" : "Dev Containers", t->name);
   free(a);
 }
 
 
-/*
-** View: Show Remote Explorer: VS Code's Remote Explorer as a list, the
-** targets of each: the SSH hosts (~/.ssh/config), the WSL distros, the
-** containers (docker ps -a; a dev container's reopens its folder).
-*/
-static void remote_explorer (void) {
-  static const char *const args[] = {"ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Label \"devcontainer.config_file\"}}", NULL};
-  Vec hosts, distros, cont, what;
-  Pick p;
-  size_t i;
-  int r;
-  char err[400], *docker = find_program("docker");
-  vec_init(&hosts);
-  vec_init(&distros);
-  vec_init(&cont);
-  vec_init(&what);
-  config_hosts(&hosts);
-#ifdef _WIN32
-  wsl_distros(&distros, err, sizeof(err));
-#endif
-  if (docker) docker_lines(args, &cont, err, sizeof(err));
-  pick_init(&p, "Remote Explorer");
-  p.keep_order = 1;
-  for (i = 0; i < hosts.n; i++) {
-    pick_add(&p, hosts.v[i], "SSH", 0xEB3A);
-    vec_push(&what, xstrdup(""));
-  }
-  for (i = 0; i < distros.n; i++) {
-    pick_add(&p, distros.v[i], i == 0 ? "WSL Targets  (default distro)" : "WSL Targets", 0xEBC6);
-    vec_push(&what, xstrdup(""));
-  }
-  for (i = 0; i < cont.n; i++) {	/* name \t state \t devcontainer.json */
-    char *t1 = strchr(cont.v[i], '\t'), *t2 = NULL, d[300];
-    if (t1) {
-      *t1++ = '\0';
-      if ((t2 = strchr(t1, '\t')) != NULL) *t2++ = '\0';
-    }
-    snprintf(d, sizeof(d), "Dev Containers  %s%s", t1 ? t1 : "", t2 && *t2 ? "  (dev container)" : "");
-    pick_add(&p, cont.v[i], d, 0xEB50);
-    vec_push(&what, xstrdup(t2 ? t2 : ""));	/* its devcontainer.json, or "": attach */
-  }
-  p.hint = docker ? "No remote targets: ~/.ssh/config has no hosts, WSL no distros, docker no containers."
-                  : "No remote targets: ~/.ssh/config has no hosts and WSL no distros (docker was not found).";
-  r = pick_run(&p);
-  pick_free(&p);
-  if (r >= 0 && (size_t)r < hosts.n) {
-    char *folder = ask_text("Remote-SSH: the folder to open on the host", "~");
-    if (folder) {
-      char *a = (char *)xmalloc(strlen(hosts.v[r]) + strlen(folder) + 8);
-      sprintf(a, "%s::%s", hosts.v[r], *folder ? folder : "~");
-      open_remote("Remote-SSH", a);
-      free(a);
-      free(folder);
-    }
-  }
-  else if (r >= 0 && (size_t)r < hosts.n + distros.n) wsl_window(distros.v[r - (int)hosts.n], "~");
-  else if (r >= 0) {
-    const char *name = cont.v[r - (int)hosts.n - (int)distros.n], *config = what.v[r];
-    if (*config) devc_window(config, 0);
-    else {
-      char *a = (char *)xmalloc(strlen(name) + 32);
-      sprintf(a, "attached-container+%s::", name);
-      open_remote("Dev Containers", a);
-      free(a);
-    }
-  }
-  free(docker);
-  vec_free(&hosts);
-  vec_free(&distros);
-  vec_free(&cont);
-  vec_free(&what);
+/* the section title's action a (rx_act_icon) */
+static void rx_title_act (int a) {
+  if (a == 0) rx_load(rx_kind());
+  else if (a == 1) ssh_open_config();
+  else ssh_add_host();
 }
 
+
+/* the dropdown: which targets are shown */
+static void rx_drop (int x, int y) {
+  const char *label[RX_N];
+  int flags[RX_N], types[RX_N], n = rx_types(types), i, r, w;
+  for (i = 0; i < n; i++) {
+    label[i] = rx_type[types[i]];
+    flags[i] = types[i] == rx_kind() ? MF_CHECK : 0;
+  }
+  if (x + (w = popup_width(label, flags, n)) > scr_cols()) x = scr_cols() - w;
+  r = popup_list(x, y, label, flags, n);
+  if (r >= 0 && r < n) rx_set_kind(types[r]);
+}
+
+
+/* row k's menu at x, y (the right button, Shift+F10): VS Code's actions of a target or of its section */
+static void rx_menu (int k, int x, int y) {
+  const char *label[8], *keys[8];
+  int act[8], n = 0, kind = rx_kind(), rk, r;
+  const char *verb = kind == RX_DOCKER ? "Attach" : "Connect";
+  char cur[40], nw[40];
+  rx_rows();
+  rk = rx_row_kind(k);
+  if (rk == RR_DROP) {
+    rx_drop(x, y);
+    return;
+  }
+  snprintf(cur, sizeof(cur), "%s in Current Window", verb);
+  snprintf(nw, sizeof(nw), "%s in New Window", verb);
+  if (rk == RR_TARGET) {
+    label[n] = cur;
+    act[n++] = 10;
+    label[n] = nw;
+    act[n++] = 11;
+    label[n] = NULL;
+    act[n++] = -1;
+  }
+  if (kind == RX_SSH) {
+    label[n] = "Add New SSH Host...";
+    act[n++] = 2;
+    label[n] = "Open SSH Config File";
+    act[n++] = 1;
+  }
+  label[n] = "Refresh";
+  act[n++] = 0;
+  for (r = 0; r < n; r++) keys[r] = "";
+  r = context_menu(x, y, label, keys, n);
+  if (r < 0 || r >= n || act[r] < 0) return;
+  if (act[r] >= 10) rx_connect(kind, &g_rx[kind].t[k - 2], act[r] == 10);
+  else rx_title_act(act[r]);
+}
+
+
+int remote_view_key (int k, SideAct *act) {
+  int code = KEY_CODE(k), n, kind = rx_kind(), rk;
+  act->what = SA_NONE;
+  n = rx_rows();
+  rk = rx_row_kind(g_rx_sel);
+  switch (code) {
+    case K_UP: if (g_rx_sel > 0) g_rx_sel--; return 1;
+    case K_DOWN: if (g_rx_sel + 1 < n) g_rx_sel++; return 1;
+    case K_PGUP: g_rx_sel = g_rx_sel > g_rx_h ? g_rx_sel - g_rx_h : 0; return 1;
+    case K_PGDN: g_rx_sel = g_rx_sel + g_rx_h < n ? g_rx_sel + g_rx_h : n - 1; return 1;
+    case K_HOME: g_rx_sel = 0; return 1;
+    case K_END: g_rx_sel = n - 1; return 1;
+    case K_LEFT:
+      if (rk == RR_HEAD) g_rx[kind].open = 0;
+      else if (rk != RR_DROP) g_rx_sel = 1;	/* to its section */
+      return 1;
+    case K_RIGHT:
+      if (rk == RR_HEAD) {
+        if (!g_rx[kind].open) g_rx[kind].open = 1;
+        else if (n > 2) g_rx_sel = 2;	/* to its first target */
+      }
+      return 1;
+    case K_ENTER: case ' ':
+      if (rk == RR_DROP) rx_drop(g_rx_x + 2, g_rx_y + RX_HEAD + 1 + g_rx_sel - g_rx_top);
+      else if (rk == RR_HEAD) g_rx[kind].open = !g_rx[kind].open;
+      else if (rk == RR_TARGET && code == K_ENTER) rx_connect(kind, &g_rx[kind].t[g_rx_sel - 2], 0);	/* in a new window: this one stays */
+      return 1;
+    case K_F5: rx_load(kind); return 1;
+    case K_F10:
+      if (k & KM_SHIFT) {	/* Shift+F10: the row's menu, under it */
+        rx_menu(g_rx_sel, g_rx_x + (g_rx_w > 8 ? g_rx_w / 2 : 2), g_rx_y + RX_HEAD + 1 + g_rx_sel - g_rx_top);
+        return 1;
+      }
+      break;
+  }
+  return 0;
+}
+
+
+void remote_view_click (int row, int col, SideAct *act) {
+  int w = side_width(), k, n, kind = rx_kind(), rk;
+  act->what = SA_NONE;
+  if (row < RX_HEAD) return;
+  n = rx_rows();
+  k = g_rx_top + row - RX_HEAD;
+  if (k >= n) return;
+  g_rx_sel = k;
+  rk = rx_row_kind(k);
+  if (rk == RR_DROP) rx_drop(g_rx_x + 2, g_rx_y + row + 1);
+  else if (rk == RR_HEAD) {
+    int na = kind == RX_SSH ? 3 : 1;	/* the title's actions: 2 columns each, from the right */
+    if (w > 20 && col <= w - 2 && col >= w - 3 - 2 * (na - 1)) rx_title_act((w - 2 - col) / 2);
+    else g_rx[kind].open = !g_rx[kind].open;
+  }
+  else if (rk == RR_TARGET && w > 16 && col >= w - 5 && col < w - 1)	/* its inline actions */
+    rx_connect(kind, &g_rx[kind].t[k - 2], col < w - 3);
+}
+
+
+/* the right button on a row: its menu */
+void remote_view_menu (int row, int x, int y) {
+  int k;
+  if (row < RX_HEAD) return;
+  k = g_rx_top + row - RX_HEAD;
+  if (k >= rx_rows()) return;
+  g_rx_sel = k;
+  rx_menu(k, x, y);
+}
+
+
+void remote_view_scroll_to (size_t top) {	/* its scrollbar dragged */
+  int n = rx_rows();
+  g_rx_top = (int)top;
+  if (g_rx_top > n - g_rx_h) g_rx_top = n - g_rx_h;
+  if (g_rx_top < 0) g_rx_top = 0;
+  if (g_rx_sel < g_rx_top) g_rx_sel = g_rx_top;
+  if (g_rx_sel >= g_rx_top + g_rx_h) g_rx_sel = g_rx_top + g_rx_h - 1;
+}
+
+
+void remote_view_wheel (int d) {
+  int top = g_rx_top + d * wheel_step(0);
+  remote_view_scroll_to((size_t)(top < 0 ? 0 : top));
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The commands
+** ===================================================================
+*/
 
 void remote_command (int cmd) {
   char *c, *d;
@@ -1567,7 +2153,8 @@ void remote_command (int cmd) {
   }
   switch (cmd) {
     case CMD_REMOTE_MENU: remote_menu(); break;
-    case CMD_REMOTE_EXPLORER: remote_explorer(); break;
+    case CMD_SSH_ADD_HOST: ssh_add_host(); break;
+    case CMD_SSH_OPEN_CONFIG: ssh_open_config(); break;
     case CMD_REMOTE_CLOSE:
       if (*where()) leave("close-remote");
       else toast(0, "This window is not connected to a remote.");

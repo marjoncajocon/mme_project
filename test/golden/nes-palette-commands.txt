@@ -9,11 +9,11 @@
 |       5         View: Join Editor Group with Next Group                                                   ⠟⠛
 |      6  #defi  Search Editor: Toggle Context Lines  Alt+L                                                ⣿⡏⠉⠁
 |       7         Accept Next Word Of Inline Suggestion  Ctrl+Right                                         ⣋⣁⣀⡀
-|      8  typed  Search Editor: Increase Context Lines  Alt+=                                              ⣿⠿⠗
+|      8  typed  Search Editor: Increase Context Lines  Alt+=                                              ⣿⠿⠗
 |       9  │   i  Search Editor: Decrease Context Lines  Alt+-                                              ⡹⠿⠿⠃
-|     10  │   i  View: Reopen Editor With Hex Editor                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   i  View: Reopen Editor With Hex Editor                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Poi  Terminal: Run Selected Text In Active Terminal
-|      12
+|     12
 |      13  static int total = 0;
 |      14
 |      15  /* adds two numbers and remembers the sum */

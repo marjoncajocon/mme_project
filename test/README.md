@@ -35,6 +35,7 @@ so their timings mean something.
 | `stublsp.py` | a fake language server that always answers the same thing, and stands in for GitHub Copilot's account surface |
 | `stubclaude.py` | a fake Anthropic Messages API on a local port: checks the request, streams a canned answer (or a 401, a 529, a refusal) for the `chat-*` scenarios |
 | `browser/` | a no-op `rundll32.exe` (and its source) that the sign-in scenarios put in front of the PATH, so opening a URL never opens a browser |
+| `remote/` | `fake.c`: `wsl.exe` and `docker.exe` saying what a `remote-explorer-*` scenario wants (fake_remote=) |
 | `try.py` | scratch driver for working out a scenario's steps: `python try.py [-p] <target> <steps...>` |
 | `hx.c` / `hx.exe` | `../harness.c` with background and attribute dumps added |
 | `tree/` | a copy of the editor sources; `bin/mme.exe` is built from it |
@@ -151,6 +152,14 @@ Scen("view-folding", "lang/fold.c",
   takes the first `rundll32` on the PATH, so the sign-in scenarios hand the
   device-flow page to a program that writes it to `$MME_URLLOG` and exits
   instead of to a real browser window.
+* **fake_remote={"wsl": ..., "docker": ..., "ssh": ...}** — `remote/fake.exe`
+  (remote/fake.c, built by build.bat or on first use) copied as `wsl.exe` and
+  `docker.exe` in front of a PATH of System32 only, saying what
+  `MME_FAKE_WSL` / `MME_FAKE_DOCKER` hold ("Ubuntu,Debian", "none", "empty";
+  docker ps lines with `;` and `|`, "down"; docker None: no docker at all),
+  HOME a folder of the scenario's whose `.ssh/config` is "ssh". What they
+  were asked follows the screens as `---- fake` lines (the Remote Explorer
+  runs them only when their targets are first shown).
 * **stub_claude="ok"** — run `stubclaude.py --mode=` (`ok`, `401`, `529`,
   `refusal`) on a free port and point `mme.chat.baseUrl` at it, with a dummy
   `mme.chat.apiKey`. Every run drops `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`

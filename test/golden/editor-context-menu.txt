@@ -9,11 +9,11 @@
 |       5     Go to References       Shift+F12                                                                          ─
 |      6     Peek Definition          Alt+F12
 |           ────────────────────────────────────
-|            Rename Symbol                 F2
+|            Rename Symbol                 F2
 |             Change All Occurrences   Ctrl+F2
-|            Format Document      Shift+Alt+F
+|            Format Document      Shift+Alt+F
 |             Refactor...         Ctrl+Shift+R
-|             Source Action...
+|            Source Action...
 |           ────────────────────────────────────
 |             Cut                       Ctrl+X
 |             Copy                      Ctrl+C

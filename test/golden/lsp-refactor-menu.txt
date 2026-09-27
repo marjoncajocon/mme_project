@@ -9,11 +9,11 @@
 |      page.htm   Inline variable                                                               Inline
 |     util.c     Convert to named parameters                                                  Rewrite
 |      util.h     Move to util.c                                                                  Move
-| 
+| 
+|                                 │
+|                                │
 |                                 │
 |                                │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │
@@ -40,11 +40,11 @@
 |      page.html                 │   5  }
 |     util.c                    │   6
 |      util.h                    │
+|                                │
+|                                 │
 |                                │
 |                                 │
 |                                │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │

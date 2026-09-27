@@ -1,0 +1,94 @@
+---- cursor 119,21
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: cmd var ──C:\──────────
+|                                 │ name is from-the-extension
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: cmd var ──C:\──────────
+|                                 │ name is from-the-extension
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │
+|                                 │
+|                                 │
+|                                 │                         Cannot substitute command variable 'cmdvar.number'      
+|                                 │                          because command did not return a result of type
+|   ─────────────────────────────│                          string.
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: cmd var ──C:\──────────
+|                                 │ name is from-the-extension
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                              command 'nope.missing' not found   
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

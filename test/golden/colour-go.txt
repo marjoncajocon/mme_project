@@ -9,7 +9,7 @@
 {868686}    {6e7681}   9                                                                                                               {434343}
 {868686} ?  {6e7681}  10  {6a9955}// ErrEmpty is returned for an empty name.                                                                   {434343}
 {868686}    {6e7681}  11  {569cd6}var {9cdcfe}ErrEmpty {d4d4d4}= {9cdcfe}errors{cccccc}.{dcdcaa}New{ffd700}({ce9178}"empty name"{ffd700})                                                                      {434343}
-{868686}    {6e7681}  12                                                                                                               {434343}
+{868686} ?  {6e7681}  12                                                                                                               {434343}
 {868686}    {6e7681}  13  {569cd6}const {4fc1ff}Greeting {d4d4d4}= {ce9178}"hello"                                                                                     {434343}
 {868686}    {6e7681}  14                                                                                                               {434343}
 {868686}    {6e7681}  15  {569cd6}type {4ec9b0}Person {569cd6}struct {ffd700}{                                                                                         {434343}

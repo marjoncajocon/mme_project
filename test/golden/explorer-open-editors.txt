@@ -9,11 +9,11 @@
 |      deep/one/two              │   5  ## A list                                                          ⠏⠁
 |     docs                      │   6                                                                     ⠿⠿
 |      many                      │   7  - one                                                              ⠥
-|     src                       │   8  - two
+|     src                       │   8  - two
 |      app.js                    │   9  │ - nested
-|     main.c                    │  10  1. first
+|     main.c                    │  10  1. first
 |      package.json              │  11  2. second
-|      readme.md                 │  12
+|     readme.md                 │  12
 |      site.css                  │  13  > a quote
 |                                 │  14
 |                                 │  15  ```c

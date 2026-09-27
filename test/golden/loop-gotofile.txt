@@ -9,11 +9,11 @@
 |  2   sub                     M │
 |     top.c                     │
 |                                 │
-|                                │                        Command Palette...   Ctrl+Shift+P
+|                                │                        Command Palette...   Ctrl+Shift+P
 |                                 │
-|                                │                             Go to File...   Ctrl+P
+|                                │                             Go to File...   Ctrl+P
 |                                 │
-|                                 │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
 |                                 │                            Open Folder...
 |                                 │

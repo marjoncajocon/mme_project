@@ -3087,6 +3087,7 @@
   "    return {items};\n",
   "  },\n",
   "  async 'workspace/executeCommand' (p) {\n",
+  "    await extsRead;\t// asked as the host starts (a task's ${command:id}): the extensions known first, to activate\n",
   "    const r = await executeCommand(p.command, ...(p.arguments || []));\n",
   "    return plain(r === undefined ? null : r);\n",
   "  },\n",

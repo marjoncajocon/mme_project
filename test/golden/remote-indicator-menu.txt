@@ -9,11 +9,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Point;
-|      12
+|     12
 |      13  static int total = 0;
 |      14
 |      15  /* adds two numbers and remembers the sum */
@@ -40,11 +40,11 @@
 |       5         Open Folder in WSL...  WSL                                                                ⠟⠛
 |      6  #defi  Reopen Folder in WSL  WSL                                                                 ⣿⡏⠉⠁
 |       7         Reopen in Container  Dev Containers                                                       ⣋⣁⣀⡀
-|      8  typed  Open Folder in Container...  Dev Containers                                               ⣿⠿⠗
+|      8  typed  Open Folder in Container...  Dev Containers                                               ⣿⠿⠗
 |       9  │   i  Attach to Running Container...  Dev Containers                                            ⡹⠿⠿⠃
-|     10  │   i  Rebuild and Reopen in Container  Dev Containers                                           ⠟⠛⠛⠋⠉⠉
+|     10  │   i  Rebuild and Reopen in Container  Dev Containers                                           ⠟⠛⠛⠋⠉⠉
 |      11  } Poi
-|      12
+|     12
 |      13  static int total = 0;
 |      14
 |      15  /* adds two numbers and remembers the sum */

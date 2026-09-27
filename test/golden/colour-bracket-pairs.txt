@@ -9,7 +9,7 @@
 {868686}    {6e7681}   9  {404040}? {c586c0}return {9cdcfe}text{cccccc};
 {868686} ?  {6e7681}  10  {ffd700}}
 {868686}    {6e7681}  11
-{868686}    {6e7681}  12  {569cd6}class {4ec9b0}Box {ffd700}{
+{868686} ?  {6e7681}  12  {569cd6}class {4ec9b0}Box {ffd700}{
 {868686}    {6e7681}  13  {404040}? {569cd6}constructor{da70d6}({9cdcfe}w{cccccc}, {9cdcfe}h{da70d6}) {
 {868686}    {6e7681}  14  {404040}? ? {569cd6}this{cccccc}.{9cdcfe}w {d4d4d4}= {9cdcfe}w{cccccc};
 {868686}    {6e7681}  15  {404040}? ? {569cd6}this{cccccc}.{9cdcfe}h {d4d4d4}= {9cdcfe}h{cccccc};

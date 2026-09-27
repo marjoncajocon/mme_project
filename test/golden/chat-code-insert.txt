@@ -9,11 +9,11 @@
 |       5  static int twice (int n) {                        ⣿⣿⠛⠋⠁        │
 |      6  │   return n * 2;                                 ⣥⡤⠤⠄         │   Claude
 |       7  }                                                 ⡿⠇           │
-|      8  #define MAXN 64                                   ⣶⣶⣖⠂         │  Answer 1. I see edit.c, lines 1-25.
+|      8  #define MAXN 64                                   ⣶⣶⣖⠂         │  Answer 1. I see edit.c, lines 1-25.
 |       9                                                    ⢿⣭⣥⡄         │
-|     10  typedef struct Point {                            ⣮⣭⣭⡤⠤⠤       │  Use a helper:
+|     10  typedef struct Point {                            ⣮⣭⣭⡤⠤⠤       │  Use a helper:
 |      11  │   int x;                                        ⠁            │
-|      12  │   int y;                                                     │                        Copy  Insert  Apply
+|     12  │   int y;                                                     │                        Copy  Insert  Apply
 |      13  } Point;                                                       │    static int twice (int n) {
 |      14                                                                 │        return n * 2;
 |      15  static int total = 0;                                          │    }

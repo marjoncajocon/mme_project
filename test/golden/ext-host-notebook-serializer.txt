@@ -9,11 +9,11 @@
 |    ▎  [ ] hello from acme
 | 
 |           + Code    + Markdown
+| 
+|
 | 
 |
 | 
-|
-|
 |
 |
 |
@@ -40,11 +40,11 @@
 |    ▎▷ [ ] hello from acme
 |   ▎      HELLO FROM ACME
 |    ▎      [application/x-acme: Notebook: Open Output in Browser shows it]
-| 
+| 
 |           + Code    + Markdown
+| 
+|
 | 
-|
-|
 |
 |
 |
@@ -71,11 +71,11 @@
 |    ▎  [ ] say hello from acme
 | 
 |           + Code    + Markdown
+| 
+|
 | 
 |
 | 
-|
-|
 |
 |
 |

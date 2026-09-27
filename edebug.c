@@ -1357,7 +1357,7 @@ static void ask_disasm (int show);
 
 static void got_disasm (int ok, const Json *msg, const Json *body, int show);
 
-static void got_memory (int ok, const Json *msg, const Json *body);
+static void got_memory (int ok, const Json *body, const char *tag);
 
 static void got_completions (int ok, const Json *body, const char *text);
 
@@ -2211,6 +2211,7 @@ static void got_event (const Json *msg) {
     D.thread = lnum(json_get(body, "threadId"), (double)D.thread);
     snprintf(D.reason, sizeof(D.reason), "%s", json_str(json_get(body, "reason"), "pause"));
     drop_temp(1);
+    hex_mem_stale();	/* the memory shown is read again */
     request("threads", NULL, RQ_THREADS, 0, NULL);
     ask_stack();
     if (strcmp(D.reason, "exception") == 0) {
@@ -2227,6 +2228,7 @@ static void got_event (const Json *msg) {
       }
     }
   }
+  else if (strcmp(ev, "memory") == 0) hex_mem_stale();	/* the adapter says memory changed: shown, it is read again */
   else if (strcmp(ev, "continued") == 0) {
     clear_stop();
     if (FOC) on_debug(DE_CONT, NULL, 0);
@@ -2344,7 +2346,7 @@ static void got_response (const Json *msg) {
       break;
     case RQ_COMPL: got_completions(ok, body, r.path); break;
     case RQ_DISASM: got_disasm(ok, msg, body, (int)r.arg); break;
-    case RQ_READMEM: got_memory(ok, msg, body); break;
+    case RQ_READMEM: got_memory(ok, body, r.path); break;
     case RQ_WATCH: {
       int w = FOC ? wrow_of((int)r.arg) : -1;
       if (w < 0) break;
@@ -2873,52 +2875,58 @@ static size_t b64_decode (const char *s, unsigned char *out) {
 }
 
 
-/* View Binary Data: a variable's memory (readMemory), in the hex viewer */
+/*
+** View Binary Data: a variable's memory in the hex viewer, like VS Code's
+** memory inspector: the addresses around it, read (readMemory) a page at a
+** time as they are shown (ehex.c asks with dbg_read_memory).
+*/
 static void view_memory (const Var *v) {
-  Buf b;
   if (v->mem == NULL) return;
   if (!D.cap_mem) {
     toast(0, "The debug adapter does not support reading memory");
     return;
   }
-  buf_init(&b);
-  buf_puts(&b, "{\"memoryReference\":");
-  json_put_str(&b, v->mem, strlen(v->mem));
-  buf_puts(&b, ",\"offset\":0,\"count\":1024}");
-  request("readMemory", b.s, RQ_READMEM, 0, v->name);
-  buf_free(&b);
+  on_debug(DE_MEMORY, v->mem, 0);
 }
 
 
-static void got_memory (int ok, const Json *msg, const Json *body) {
-  const char *addr = json_str(json_get(body, "address"), "0"), *data = json_str(json_get(body, "data"), "");
+/* readMemory of count bytes at the reference's offset (the address at, said again with the answer); -1: not now */
+int dbg_read_memory (const char *mref, long long offset, unsigned long long at, unsigned count) {
+  Buf b, tag;
+  if (!dbg_stopped() || !D.cap_mem) return -1;
+  buf_init(&b);
+  buf_puts(&b, "{\"memoryReference\":");
+  json_put_str(&b, mref, strlen(mref));
+  buf_printf(&b, ",\"offset\":%lld,\"count\":%u}", offset, count);
+  buf_init(&tag);
+  buf_printf(&tag, "%llx %u %s", at, count, mref);	/* its request's path: where, how many, the reference */
+  request("readMemory", b.s, RQ_READMEM, 0, tag.s);
+  buf_free(&tag);
+  buf_free(&b);
+  return 0;
+}
+
+
+/* its answer, to the memory views (unreadableBytes: what could not be read after the bytes) */
+static void got_memory (int ok, const Json *body, const char *tag) {
+  const char *data = json_str(json_get(body, "data"), ""), *mref;
+  const Json *skip;
+  unsigned long long at, daddr;
+  unsigned count;
   unsigned char *bytes;
   size_t n;
-  char name[96], *d, *f;
-  int fd;
-  if (!ok) {
-    toast(1, "%s", json_str(json_get(msg, "message"), "The memory could not be read"));
-    return;
-  }
+  char *e;
+  if (tag == NULL) return;
+  at = strtoull(tag, &e, 16);
+  count = (unsigned)strtoul(e, &e, 10);
+  mref = *e == ' ' ? e + 1 : e;
+  daddr = ok ? strtoull(json_str(json_get(body, "address"), "0"), NULL, 0) : at;
   bytes = (unsigned char *)xmalloc(strlen(data) + 1);
-  n = b64_decode(data, bytes);
-  if (n == 0) {
-    toast(0, "No memory could be read at %s", addr);
-    free(bytes);
-    return;
-  }
-  d = data_path("debug");
-  mkdir_p(d);
-  snprintf(name, sizeof(name), "memory-%.64s.bin", addr);
-  f = path_join(d, name);
-  if ((fd = os_open(f, OS_WRITE)) >= 0) {
-    os_write(fd, bytes, n);
-    os_close(fd);
-    on_debug(DE_MEMORY, f, (size_t)strtoull(addr, NULL, 0));
-  }
+  n = ok ? b64_decode(data, bytes) : 0;
+  skip = json_get(body, "unreadableBytes");
+  hex_mem_got(mref, at, count, ok, daddr, bytes, n,
+              ok && skip && skip->type == J_NUM && skip->num > 0 ? (unsigned long long)skip->num : 0);
   free(bytes);
-  free(f);
-  free(d);
 }
 
 

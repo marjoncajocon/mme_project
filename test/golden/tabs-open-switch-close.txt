@@ -9,11 +9,11 @@
 |      many                      │   5  │ --gap: 8px;                                                      ⠟⠛⠋
 |     src                       │   6  }                                                                  ⡿⠭⠭
 |      app.js                    │   7                                                                     ⠁
-|     main.c                    │   8  body {
+|     main.c                    │   8  body {
 |      package.json              │   9  │ background: var(--bg);
-|     readme.md                 │  10  │ color: var(--fg);
+|     readme.md                 │  10  │ color: var(--fg);
 |      site.css                  │  11  │ font-family: "Segoe UI", sans-serif;
-|                                 │  12  │ margin: 0;
+|                                │  12  │ margin: 0;
 |                                 │  13  }
 |                                 │  14
 |                                 │  15  .card > h2,
@@ -40,11 +40,11 @@
 |      many                      │   5                                                                     ⠟⠛
 |     src                       │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
 |      app.js                    │   7                                                                     ⣋⣁⣀⡀
-|     main.c                    │   8  typedef struct Point {                                             ⣿⠿⠗
+|     main.c                    │   8  typedef struct Point {                                             ⣿⠿⠗
 |      package.json              │   9  │   int x;                                                         ⡹⠿⠿⠃
-|     readme.md                 │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|     readme.md                 │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
 |      site.css                  │  11  } Point;
-|                                 │  12
+|                                │  12
 |                                 │  13  static int total = 0;
 |                                 │  14
 |                                 │  15  /* adds two numbers and remembers the sum */
@@ -71,11 +71,11 @@
 |      many                      │   5  ## A list                                                          ⠏⠁
 |     src                       │   6                                                                     ⠿⠿
 |      app.js                    │   7  - one                                                              ⠥
-|     main.c                    │   8  - two
+|     main.c                    │   8  - two
 |      package.json              │   9  │ - nested
-|     readme.md                 │  10  1. first
+|     readme.md                 │  10  1. first
 |      site.css                  │  11  2. second
-|                                 │  12
+|                                │  12
 |                                 │  13  > a quote
 |                                 │  14
 |                                 │  15  ```c

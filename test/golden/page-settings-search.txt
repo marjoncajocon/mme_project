@@ -9,11 +9,11 @@
 |
 |     Text Editor (6)         │   Editor › Minimap: Enabled                                                            ▐
 |        Minimap (6)           │    Controls whether the minimap is shown.                                             ▐
-|                             │                                                                                        ▐
+|                             │                                                                                        ▐
 |                              │   Editor › Minimap: Side                                                               ▐
-|                             │   Controls the side where to render the minimap.                                       ▐
+|                             │   Controls the side where to render the minimap.                                       ▐
 |                              │    right                                                                              ▐
-|                              │                                                                                        ▐
+|                             │                                                                                        ▐
 |                              │   Editor › Minimap: Show Slider                                                        ▐
 |                              │   Controls when the minimap slider is shown.                                           ▐
 |                              │    mouseover                                                                          ▐

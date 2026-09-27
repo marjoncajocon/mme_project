@@ -9,11 +9,11 @@
 |  2   sub                     M │    1: int lib (void) { return 2; } /* needle */
 |     top.c                     │
 |                                 │  sub/inner.txt:
-|                                │    1: the needle in sub
+|                                │    1: the needle in sub
 |                                 │
-|                                │  sub/new.txt:
+|                                │  sub/new.txt:
 |                                 │    1: untracked, with a needle
-|                                 │
+|                                │
 |                                 │  top.c:
 |                                 │    1: int top (void) { return 1; } /* needle */
 |                                 │

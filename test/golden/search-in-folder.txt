@@ -9,11 +9,11 @@
 |        NeedleWord lives here to▐│
 |      file00.txt many      1 ▐│
 |        row 00 NeedleWord       ▐│
-|      file01.txt many      1 ▐│                        Command Palette...   Ctrl+Shift+P
+|      file01.txt many      1 ▐│                        Command Palette...   Ctrl+Shift+P
 |        row 01 NeedleWord       ▐│
-|      file02.txt many      1  │                             Go to File...   Ctrl+P
+|      file02.txt many      1  │                             Go to File...   Ctrl+P
 |        row 02 NeedleWord        │
-|       file03.txt many      1  │                              Open File...   Ctrl+O
+|      file03.txt many      1  │                              Open File...   Ctrl+O
 |        row 03 NeedleWord        │
 |       file04.txt many      1  │                            Open Folder...
 |        row 04 NeedleWord        │

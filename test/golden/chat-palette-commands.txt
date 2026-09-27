@@ -9,11 +9,11 @@
 |       5         Chat: Cancel                                                                              ⠟⠛
 |      6  #defi  Chat: Toggle Agent Mode                                                                   ⣿⡏⠉⠁
 |       7         Chat: Set API Key...                                                                      ⣋⣁⣀⡀
-|      8  typed  Chat: Change Model...                                                                     ⣿⠿⠗
+|      8  typed  Chat: Change Model...                                                                     ⣿⠿⠗
 |       9  │   i  Chat: Toggle Implicit Context                                                             ⡹⠿⠿⠃
-|     10  │   i  Change Indentation...                                                                     ⠟⠛⠛⠋⠉⠉
+|     10  │   i  Change Indentation...                                                                     ⠟⠛⠛⠋⠉⠉
 |      11  } Poi  Inline Chat: Start  Ctrl+I
-|      12         Inline Chat: Discard  Escape
+|     12         Inline Chat: Discard  Escape
 |      13  stati  Transpose Characters around the Cursor
 |      14         Inline Chat: Accept Changes  Ctrl+Enter
 |      15  /* ad  Copy Path of Active File  Shift+Alt+C

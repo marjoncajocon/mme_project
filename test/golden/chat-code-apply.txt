@@ -9,11 +9,11 @@
 |       5                                                    ⠟⠛           │
 |      6  #define MAXN 64                                   ⣿⡏⠉⠁         │   Claude
 |       7                                                    ⣋⣁⣀⡀         │
-|      8  typedef struct Point {                            ⣿⠿⠗         ▬│  Answer 1. I see edit.c, lines 16-19.
+|      8  typedef struct Point {                            ⣿⠿⠗         ▬│  Answer 1. I see edit.c, lines 16-19.
 |       9  │   int x;                                        ⡹⠿⠿⠃         │
-|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉      ▬│  Use a helper:
+|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉      ▬│  Use a helper:
 |      11  } Point;                                                       │
-|      12                                                                 │                        Copy  Insert  Apply
+|     12                                                                 │                        Copy  Insert  Apply
 |      13  static int total = 0;                                         ▬│    static int twice (int n) {
 |      14                                                                 │        return n * 2;
 |      15  /* adds two numbers and remembers the sum */                   │    }
@@ -40,11 +40,11 @@
 |       5                                                    ⣋⣉⣀⡀         │
 |      6  #define MAXN 64                                   ⣿⡇           │   Claude
 |       7                                                    ⣥⣤⡤⠄         │
-|      8  typedef struct Point {                            ⣿⣛⣋⡀         │  Answer 1. I see edit.c, lines 16-19.
+|      8  typedef struct Point {                            ⣿⣛⣋⡀         │  Answer 1. I see edit.c, lines 16-19.
 |       9  │   int x;                                        ⣜⣛⣛⣁⣀⣀       │
-|     10  │   int y;                                        ⠋⠉⠉⠁         │  Use a helper:
+|     10  │   int y;                                        ⠋⠉⠉⠁         │  Use a helper:
 |      11  } Point;                                                      ─│
-|      12                                                                 │                        Copy  Insert  Apply
+|     12                                                                 │                        Copy  Insert  Apply
 |      13  static int total = 0;                                          │    static int twice (int n) {
 |      14                                                                 │        return n * 2;
 |      15  /* adds two numbers and remembers the sum */                   │    }

@@ -9,11 +9,11 @@
 |       acme           Uninstall ▐│   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Theme 10                 ▐│   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A color theme            ▐│   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall ▐│   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall ▐│   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Theme 02                 ▐│   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|      A color theme            ▐│  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎     A color theme            ▐│  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acme           Uninstall ▐│  11  plain text line 11 with several words on it                                    ▬
-|      Theme 03                 ▐│  12  plain text line 12 with several words on it                                    ▬
+|     Theme 03                 ▐│  12  plain text line 12 with several words on it                                    ▬
 |       A color theme            ▐│  13  plain text line 13 with several words on it                                    ▬
 |       acme           Uninstall ▐│  14  plain text line 14 with several words on it                                    ▬
 |      Theme 04                 ▐│  15  plain text line 15 with several words on it                                    ▬
@@ -40,11 +40,11 @@
 |       acme           Uninstall  │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Theme 03                  │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A color theme             │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall ▐│   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall ▐│   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Theme 04                 ▐│   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|      A color theme            ▐│  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎     A color theme            ▐│  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acme           Uninstall ▐│  11  plain text line 11 with several words on it                                    ▬
-|      Theme 05                 ▐│  12  plain text line 12 with several words on it                                    ▬
+|     Theme 05                 ▐│  12  plain text line 12 with several words on it                                    ▬
 |       A color theme            ▐│  13  plain text line 13 with several words on it                                    ▬
 |       acme           Uninstall ▐│  14  plain text line 14 with several words on it                                    ▬
 |      Theme 06                 ▐│  15  plain text line 15 with several words on it                                    ▬
@@ -71,11 +71,11 @@
 |       acme           Uninstall ▐│   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |     Theme 10                 ▐│   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       A color theme            ▐│   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|▎     acme           Uninstall ▐│   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      acme           Uninstall ▐│   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |      Theme 02                 ▐│   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
-|      A color theme            ▐│  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎     A color theme            ▐│  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
 |       acme           Uninstall ▐│  11  plain text line 11 with several words on it                                    ▬
-|      Theme 03                 ▐│  12  plain text line 12 with several words on it                                    ▬
+|     Theme 03                 ▐│  12  plain text line 12 with several words on it                                    ▬
 |       A color theme            ▐│  13  plain text line 13 with several words on it                                    ▬
 |       acme           Uninstall ▐│  14  plain text line 14 with several words on it                                    ▬
 |      Theme 04                 ▐│  15  plain text line 15 with several words on it                                    ▬

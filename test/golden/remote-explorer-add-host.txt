@@ -1,0 +1,95 @@
+---- cursor 119,8
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      REMOTE EXPLORER            │  edit.c  
+|      Remotes (Tunnels/SSH)  ⌄  │  edit.c
+|      SSH TARGETS 1          │   1  /* edit.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|       old-box                              de <stdio.h>                                                 ⣒⣂⡀
+|                     Add New SSH Host...      de <stdlib.h>                                                ⠿
+|                    Open SSH Config File     de <string.h>                                                ⣭⣭⣥⡤⠄
+|                     Refresh                                                                               ⠟⠛
+|                                             e MAXN 64                                                    ⣿⡏⠉⠁
+|                                 │   7                                                                     ⣋⣁⣀⡀
+|▎                               │   8  typedef struct Point {                                             ⣿⠿⠗
+|                                 │   9  │   int x;                                                         ⡹⠿⠿⠃
+|                                │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|                                 │  11  } Point;
+|                                │  12
+|                                 │  13  static int total = 0;
+|                                 │  14
+|                                 │  15  /* adds two numbers and remembers the sum */
+|                                 │  16  static int add (int a, int b) {
+|                                 │  17  │   total += a + b;
+|                                 │  18  │   return a + b;
+|                                 │  19  }
+|                                 │  20
+|                                 │  21  static Point make (int x, int y) {
+|                                 │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|                                │  25  │   return p;
+|                                 │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      REMOTE EXPLORER            │  edit.c  
+|      Remotes (Tunnels/SSH)  ⌄  │  edit.c
+|      SSH TARGETS 2          │   1  /* edit.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|       old-box                 │   2  #include <stdio.h>                                                 ⣒⣂⡀
+|        example.com             │   3  #include <stdlib.h>                                                ⠿
+|                                │   4  #include <string.h>                                                ⣭⣭⣥⡤⠄
+|                                 │   5                                                                     ⠟⠛
+|                                │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|                                 │   7                                                                     ⣋⣁⣀⡀
+|▎                               │   8  typedef struct Point {                                             ⣿⠿⠗
+|                                 │   9  │   int x;                                                         ⡹⠿⠿⠃
+|                                │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|                                 │  11  } Point;
+|                                │  12
+|                                 │  13  static int total = 0;
+|                                 │  14
+|                                 │  15  /* adds two numbers and remembers the sum */
+|                                 │  16  static int add (int a, int b) {
+|                                 │  17  │   total += a + b;
+|                                 │  18  │   return a + b;
+|                                 │  19  }
+|                                 │  20
+|                                 │  21  static Point make (int x, int y) {
+|                                 │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;       Host added!                                            
+|                                │  25  │   return p;       Source: Remote-SSH                 Open Config   Connect
+|                                 │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      REMOTE EXPLORER            │  edit.c      config  
+|      Remotes (Tunnels/SSH)  ⌄  │ <CRUMBS of the scenario's home/.ssh/config>
+|      SSH TARGETS 2          │   1 Host old-box                                                       ⣛⣓          ▬
+|       old-box                 │   2  │ HostName 10.1.1.1                                                ⣿⣏⠁
+|        example.com             │   3  │
+|                                │   4  Host example.com
+|                                 │   5  │ HostName example.com
+|                                │   6  │ User hello
+|                                 │   7  │ Port 2222
+|▎                               │   8  │ ForwardAgent yes
+|                                 │   9                                                                                 ▬
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                         Host added!                                            
+|                                │                          Source: Remote-SSH                 Open Config   Connect
+|                                 │
+|                                                                      Ln 1, Col 1  Spaces: 2  UTF-8  LF  Plain Text  
+exited=0
+---- fake

@@ -9,11 +9,11 @@
 |       5  NEW
 |      6  last line of the file
 |       7
+| 
+|
 | 
 |
 | 
-|
-|
 |
 |
 |

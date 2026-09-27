@@ -742,7 +742,15 @@ DBG_TASKS = r"""{
      "problemMatcher": {"owner": "demo", "fileLocation": ["relative", "${workspaceFolder}"],
        "pattern": {"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5}}},
-    {"label": "fail", "type": "shell", "command": "echo failing on purpose && exit 3"}
+    {"label": "fail", "type": "shell", "command": "echo failing on purpose && exit 3"},
+    {"label": "p first", "type": "shell", "command": "echo first output"},
+    {"label": "p second", "type": "shell", "command": "echo second output"},
+    {"label": "p cleared", "type": "shell", "command": "echo cleared output", "presentation": {"clear": true}},
+    {"label": "p quiet", "type": "shell", "command": "echo quiet end", "presentation": {"showReuseMessage": false}},
+    {"label": "p closing", "type": "shell", "command": "echo closing", "presentation": {"close": true}},
+    {"label": "cmd var", "type": "shell", "command": "echo name is ${command:cmdvar.buildName}"},
+    {"label": "cmd number", "type": "shell", "command": "echo ${command:cmdvar.number}"},
+    {"label": "cmd missing", "type": "shell", "command": "echo ${command:nope.missing}"}
   ]
 }
 """

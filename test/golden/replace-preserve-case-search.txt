@@ -9,11 +9,11 @@
 |       case.txt              │
 |       foobaz Foo FOO fOO       │
 |        foo FooBaz FOO fOO       │
-|       foo Foo FOOBAZ fOO       │                        Command Palette...   Ctrl+Shift+P
+|       foo Foo FOOBAZ fOO       │                        Command Palette...   Ctrl+Shift+P
 |        foo Foo FOO fOObaz       │
-|       foobaz-bar Foo-Bar FOO-B │                             Go to File...   Ctrl+P
+|       foobaz-bar Foo-Bar FOO-B │                             Go to File...   Ctrl+P
 |        foo-bar FooBaz-Bar FOO-B │
-|        foo-bar Foo-Bar FOOBAZ-B │                              Open File...   Ctrl+O
+|       foo-bar Foo-Bar FOOBAZ-B │                              Open File...   Ctrl+O
 |        foobaz_bar Foo_Bar FOO_B │
 |        foo_bar FooBaz_Bar FOO_B │                            Open Folder...
 |        foo_bar Foo_Bar FOOBAZ_B │
@@ -41,11 +41,11 @@
 |       case.txt              │
 |       foobaz Foo FOO fOO       │
 |        foo FooBaz FOO fOO       │
-|       foo Foo FOOBAZ fOO       │                        Command Palette...   Ctrl+Shift+P
+|       foo Foo FOOBAZ fOO       │                        Command Palette...   Ctrl+Shift+P
 |        foo Foo FOO fOObaz
-|       foobaz-bar Foo-Bar FOO-B    Replace 10 occurrences across 1 file with 'baz'?
+|       foobaz-bar Foo-Bar FOO-B    Replace 10 occurrences across 1 file with 'baz'?
 |        foo-bar FooBaz-Bar FOO-B
-|        foo-bar Foo-Bar FOOBAZ-B
+|       foo-bar Foo-Bar FOOBAZ-B
 |        foobaz_bar Foo_Bar FOO_B
 |        foo_bar FooBaz_Bar FOO_B                                  Replace     Cancel
 |        foo_bar Foo_Bar FOOBAZ_B
@@ -72,11 +72,11 @@
 |                                 │
 |                                │
 |                                 │
-|                                │                        Command Palette...   Ctrl+Shift+P
+|                                │                        Command Palette...   Ctrl+Shift+P
 |                                 │
-|                                │                             Go to File...   Ctrl+P
+|                                │                             Go to File...   Ctrl+P
 |                                 │
-|                                 │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
 |                                 │                            Open Folder...
 |                                 │

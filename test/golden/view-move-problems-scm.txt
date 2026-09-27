@@ -9,13 +9,13 @@
 |  2                              │
 |                                │
 |                                 │
-|                                │                        Command Palette...   Ctrl+Shift+P
+|                                │                        Command Palette...   Ctrl+Shift+P
 |                                 │
-|                                │                             Go to File...   Ctrl+P
+|                                │                             Go to File...   Ctrl+P
 |                                 │
-|▎                               │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
-|                                 │                            Open Folder...
+|▎                               │                            Open Folder...
 |                                 │
 |                                 │                           Open Project...   Ctrl+R
 |                                 │
@@ -38,13 +38,13 @@
 |                                 │
 |                                │                             Go to File...   Ctrl+P
 |                                 │
-|                                │                              Open File...   Ctrl+O
+|                                │                              Open File...   Ctrl+O
 |                                 │
-|                                │                            Open Folder...
+|                                │                            Open Folder...
 |                                 │
-|▎                               │                           Open Project...   Ctrl+R
+|                                │                           Open Project...   Ctrl+R
 |                                 │
-|                                 │                                  New File   Ctrl+N
+|▎                               │                                  New File   Ctrl+N
 |                                 │
 |                                 │
 |                                 │── OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ SOURCE CONTROL ─────────────────────────────
@@ -69,13 +69,13 @@
 |                                 │
 |                                │
 |                                 │
+|                                │
+|                                 │
 |                                │
 |                                 │
 |                                │
 |                                 │
 |▎                               │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │── OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ SOURCE CONTROL ─────────────────────────────
@@ -100,13 +100,13 @@
 |                 Primary Side Bar
 | 
 |                                 │
+|                                │
+|                                 │
 |                                │
 |                                 │
 |                                │
 |                                 │
 |▎                               │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │── OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ SOURCE CONTROL ─────────────────────────────
@@ -133,13 +133,13 @@
 |  2   GRAPH                     │
 |    ◉   main  third commit: ad │
 |     ● second commit: notes.md r │
-|    ● first commit: tracked.c a │
+|    ● first commit: tracked.c a │
+|                                 │
+|                                │
 |                                 │
 |                                │
 |                                 │
 |                                │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │

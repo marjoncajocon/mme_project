@@ -9,7 +9,7 @@
 {868686}    {6e7681}   9  {404040}? {9cdcfe}background{cccccc}: {dcdcaa}var{da70d6}({9cdcfe}--bg{da70d6}){cccccc};
 {868686} ?  {6e7681}  10  {404040}? {9cdcfe}color{cccccc}: {dcdcaa}var{da70d6}({9cdcfe}--fg{da70d6}){cccccc};
 {868686}    {6e7681}  11  {404040}? {9cdcfe}font-family{cccccc}: {ce9178}"Segoe UI"{cccccc}, {ce9178}sans-serif{cccccc};
-{868686}    {6e7681}  12  {404040}? {9cdcfe}margin{cccccc}: {b5cea8}0{cccccc};
+{868686} ?  {6e7681}  12  {404040}? {9cdcfe}margin{cccccc}: {b5cea8}0{cccccc};
 {868686}    {6e7681}  13  {ffd700}}
 {868686}    {6e7681}  14
 {868686}    {6e7681}  15  {d7ba7d}.card {d4d4d4}> {d7ba7d}h2{cccccc},

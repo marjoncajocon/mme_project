@@ -87,8 +87,65 @@ void term_size (int *cols, int *rows) {
 }
 
 
+/*
+** A paste is read in bulk: a byte at a time it is a system call each (on
+** Windows a ReadConsoleW for each character), and a megabyte took seconds.
+** What such a read brought past the paste's end is kept here for the keys.
+** On Windows os_tty_getbyte keeps the rest of a character's UTF-8 to itself:
+** the console is read directly only when it has none, which is so after it
+** gave an ASCII byte (a character is one ReadConsoleW, two for a surrogate
+** pair, and an ASCII byte can only be the last of what one gives).
+*/
+static struct {
+  char *s;
+  size_t len, at;
+  int clear;	/* os_tty_getbyte holds nothing back */
+} g_ahead;
+
+
+/* the next byte typed, -1: none (the end of the input) */
+static int tty_byte (void) {
+  int c;
+  if (g_ahead.at < g_ahead.len) return (unsigned char)g_ahead.s[g_ahead.at++];
+  c = os_tty_getbyte();
+#ifdef _WIN32
+  g_ahead.clear = c >= 0 && c < 0x80;	/* after -1 (a Ctrl-Z) it still has the 26 */
+#else
+  g_ahead.clear = 1;
+#endif
+  return c;
+}
+
+
+/* more of a paste at once into g_ahead: at least a byte (it waits for one); 0: it cannot */
+static int tty_bulk (void) {
+  enum { N = 16384 };
+  long n = 0;
+  if (!g_ahead.clear || g_ahead.at < g_ahead.len) return 0;
+  if (g_ahead.s == NULL) g_ahead.s = (char *)xmalloc(3 * N + 8);
+  g_ahead.len = g_ahead.at = 0;
+#ifdef _WIN32
+  {
+    static wchar_t w[N + 1];
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD got = 0, more = 0;
+    if (!ReadConsoleW(h, w, N, &got, NULL) || got == 0) return 0;	/* raw mode: what is there, up to N */
+    if (w[got - 1] >= 0xD800 && w[got - 1] <= 0xDBFF && ReadConsoleW(h, w + got, 1, &more, NULL))
+      got += more;	/* a surrogate pair is not cut in two */
+    n = WideCharToMultiByte(CP_UTF8, 0, w, (int)got, g_ahead.s, 3 * N + 8, NULL, NULL);
+  }
+#else
+  n = os_read(0, g_ahead.s, 3 * N);
+#endif
+  if (n <= 0) return 0;
+  g_ahead.len = (size_t)n;
+  return 1;
+}
+
+
 /* 1: a byte can be read now, 0: nothing came in ms (ms < 0: wait) */
 static int ready (int ms) {
+  if (g_ahead.at < g_ahead.len) return 1;	/* read with a paste */
 #ifdef _WIN32
   /* the console handle is also signaled by focus and key-up events, and
   ** ReadConsole would then block: drop those, look only for typed keys
@@ -124,10 +181,10 @@ static int ready (int ms) {
 static int getb (int ms) {
   int c;
   if (ms >= 0 && !ready(ms)) return -1;
-  c = os_tty_getbyte();
+  c = tty_byte();
 #ifdef _WIN32
   /* a lone Ctrl-Z is "end of input" to mos.c: -1 first, then the 26 */
-  if (c < 0) c = os_tty_getbyte();
+  if (c < 0) c = tty_byte();
 #endif
   if (c < 0) exit(1);	/* the terminal is gone */
   return c;
@@ -368,7 +425,7 @@ static int read_utf8 (int c) {
   uint32_t cp;
   s[0] = (char)c;
   for (i = 1; i < n; i++) {
-    int b = os_tty_getbyte();
+    int b = tty_byte();
     if (b < 0) return 0xFFFD;
     s[i] = (char)b;
   }
@@ -483,7 +540,13 @@ static void read_paste (Buf *b) {
   static const char end[] = "\033[201~";
   size_t match = 0;
   int c, cr = 0;
-  while (match < sizeof(end) - 1 && (c = os_tty_getbyte()) >= 0) {
+  while (match < sizeof(end) - 1) {
+    if (g_ahead.at == g_ahead.len) tty_bulk();	/* the rest in bulk, when it can */
+    c = tty_byte();
+#ifdef _WIN32
+    if (c < 0) c = tty_byte();	/* a Ctrl-Z pasted: -1 first, then the 26 */
+#endif
+    if (c < 0) break;
     if (c == end[match]) {
       match++;
       continue;

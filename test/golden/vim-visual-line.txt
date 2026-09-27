@@ -9,11 +9,11 @@
 |       5  │
 |      6  second paragraph starts here
 |       7  it has two lines
-|      8  last line of the file
+|      8  last line of the file
 |       9
+| 
+|
 | 
-|
-|
 |
 |
 |
@@ -40,11 +40,11 @@
 |       5  │
 |      6  second paragraph starts here
 |       7  it has two lines
-|      8  last line of the file
+|      8  last line of the file
 |       9  The quick brown fox jumps over the lazy dog.
-|     10  one two three four five six
+|     10  one two three four five six
 |      11
-|
+| 
 |
 |
 |
@@ -71,11 +71,11 @@
 |       5  │
 |      6  second paragraph starts here
 |       7  it has two lines
-|      8  last line of the file
+|      8  last line of the file
 |       9  The quick brown fox jumps over the lazy dog.
-|     10  one two three four five six
+|     10  one two three four five six
 |      11
-|
+| 
 |
 |
 |

@@ -9,11 +9,11 @@
 |       5         Open Project...  Ctrl+R                                                                   ⠟⠛
 |      6  #defi  Save  Ctrl+S                                                                              ⣿⡏⠉⠁
 |       7         Save As...  Ctrl+Shift+S                                                                  ⣋⣁⣀⡀
-|      8  typed  Close Editor  Ctrl+W                                                                      ⣿⠿⠗
+|      8  typed  Close Editor  Ctrl+W                                                                      ⣿⠿⠗
 |       9  │   i  Exit  Ctrl+Q                                                                              ⡹⠿⠿⠃
-|     10  │   i  Undo  Ctrl+Z                                                                              ⠟⠛⠛⠋⠉⠉
+|     10  │   i  Undo  Ctrl+Z                                                                              ⠟⠛⠛⠋⠉⠉
 |      11  } Poi  Redo  Ctrl+Y
-|      12         Cut  Ctrl+X
+|     12         Cut  Ctrl+X
 |      13  stati  Copy  Ctrl+C
 |      14         Paste  Ctrl+V
 |      15  /* ad  Find  Ctrl+F

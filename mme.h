@@ -354,6 +354,16 @@ char *doc_text (const Doc *d, Pos a, Pos b, size_t *len);
 void doc_group (Doc *d);	/* the next change is a new undo step */
 int doc_undo (Doc *d, Pos *cur);	/* 0: nothing to undo */
 int doc_redo (Doc *d, Pos *cur);
+
+/* a change only looked at (Emmet's Wrap with Abbreviation, as it is typed): undo and redo as they were */
+typedef struct DocMark {
+  size_t undo_n;
+  UndoList redo;
+  long changes, saved;
+} DocMark;
+
+void doc_mark (Doc *d, DocMark *m);	/* the redo steps are kept aside */
+void doc_unmark (Doc *d, DocMark *m);	/* the text is as at the mark again: the steps since go, the redo ones come back */
 void doc_detect_indent (Doc *d);	/* tabs or spaces, how many: from its lines */
 
 void edconf_none (EdConf *c);	/* it says nothing */
@@ -461,7 +471,7 @@ int remote_main (const char *spec);	/* the window of mme --remote=host::folder *
 extern int remote_mode;	/* this window is a remote one */
 extern int remote_close;	/* its x was pressed: 1 asked the remote mme, 2 the window goes */
 /* eremote.c: WSL and Dev Containers too, VS Code's remote indicator and its menu */
-void remote_command (int cmd);	/* CMD_REMOTE_MENU .. CMD_DC_LOCAL */
+void remote_command (int cmd);	/* CMD_REMOTE_MENU .. CMD_DC_LOCAL, CMD_SSH_ADD_HOST, CMD_SSH_OPEN_CONFIG */
 int remote_hidden (int cmd);	/* the palette leaves it out here (WSL's in a WSL window ...) */
 void remote_status (void);	/* the status bar's remote indicator (leftmost) */
 int remote_osc (const char *text);	/* eports.c: the remote mme asks the window (reopen-local, rebuild); 1 taken */
@@ -774,6 +784,7 @@ enum {
   CMD_MOVE_VIEW, CMD_MOVE_FOCUSED_VIEW, CMD_RESET_VIEW_LOCATIONS,	/* View: Move View ... (eside.c's view_in_panel) */
   CMD_NB_VARIABLES,	/* Jupyter: Open Variables View (enb.c) */
   CMD_TASK_TERMINATE, CMD_DEBUG_DISASM,	/* Tasks: Terminate Task (etask.c), Open Disassembly View (edebug.c) */
+  CMD_SSH_ADD_HOST, CMD_SSH_OPEN_CONFIG,	/* Remote-SSH: Add New SSH Host..., Open SSH Configuration File... (eremote.c) */
   CMD_N
 };
 
@@ -860,7 +871,11 @@ int md_link_at (int x, int y, char **link);	/* the link under the mouse; *link t
 
 /* ehex.c - the hex viewer for binaries (read-only, like VS Code's Hex Editor) */
 void *hex_open (const char *path);	/* NULL: too big, or unreadable */
-void hex_set_base (void *page, unsigned long long base);	/* its offsets are addresses from base (a debug memory view) */
+void *hex_mem_open (const char *mref);	/* a debuggee's memory (View Binary Data), read as it is shown */
+const char *hex_mem_ref (void *page);	/* its memoryReference; NULL: a file's page */
+void hex_mem_stale (void);	/* the program stopped: the memory shown is read again */
+void hex_mem_got (const char *mref, unsigned long long at, unsigned count, int ok, unsigned long long daddr,
+                  const unsigned char *b, size_t n, unsigned long long skip);	/* readMemory's answer */
 void hex_close (void *page);
 void hex_reload (void *page);
 size_t hex_size (void *page);
@@ -1046,7 +1061,7 @@ void merge_mouse (const Mouse *m, PageAct *a);
 ** ===================================================================
 */
 
-enum { VIEW_FILES, VIEW_SEARCH, VIEW_GIT, VIEW_DEBUG, VIEW_EXT, VIEW_TEST, VIEW_TREE, VIEW_N };	/* VIEW_TREE: the extensions' tree views */
+enum { VIEW_FILES, VIEW_SEARCH, VIEW_GIT, VIEW_DEBUG, VIEW_EXT, VIEW_TEST, VIEW_TREE, VIEW_REMOTE, VIEW_N };	/* VIEW_TREE: the extensions' tree views */
 
 #define ACT_W	4	/* the activity bar's width */
 
@@ -1151,6 +1166,14 @@ int side_key (int view, int k, SideAct *act);	/* 0: not used */
 void side_click (int view, int row, int col, SideAct *act);
 void side_wheel (int view, int d);
 int side_idle (int view);	/* 1: something changed, draw again */
+/* eremote.c: the Remote Explorer view (VIEW_REMOTE) */
+void remote_view_draw (int x, int y, int w, int h, int focus);
+int remote_view_key (int k, SideAct *act);
+void remote_view_click (int row, int col, SideAct *act);
+void remote_view_menu (int row, int x, int y);	/* the right button on a row */
+void remote_view_wheel (int d);
+void remote_view_scroll_to (size_t top);
+int remote_view_idle (void);	/* wsl.exe's, docker's targets came: 1 */
 /*
 ** eside.c: the views that move between the side bar and the panel (View:
 ** Move View), where they are. The side bar's first (Outline and Timeline
@@ -1158,7 +1181,7 @@ int side_idle (int view);	/* 1: something changed, draw again */
 ** is the extensions' tree view k (etree.c). E.view is VIEW_MOVED + MV_* for
 ** a panel's view moved into the side bar.
 */
-enum { MV_SEARCH, MV_OUTLINE, MV_TIMELINE, MV_EXPLORER, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST,
+enum { MV_SEARCH, MV_OUTLINE, MV_TIMELINE, MV_EXPLORER, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST, MV_REMOTE,
        MV_PROBLEMS, MV_OUTPUT, MV_CONSOLE, MV_TERMINAL, MV_VARS, MV_N };
 #define VIEW_MOVED	16
 int view_in_panel (int v);	/* MV_* (or MV_N + a tree view): 1 it is in the panel */
@@ -1884,6 +1907,7 @@ int lsp_progress_text (int i, char *buf, size_t n);	/* its text; its percentage,
 void lsp_task_diags (const char *path, const Diag *v, size_t n);	/* a task's problems in a file */
 void lsp_task_clear (void);
 int lsp_ext_command (const char *id, const char *args);	/* the extension host runs it; 0: no host */
+char *lsp_ext_command_value (const char *id);	/* ${command:id}: its result as JSON, "!why"; NULL no host */
 void lsp_ext_saved (Doc *d);	/* the host told: the file was saved */
 void lsp_ext_settings (void);	/* the host told: settings.json changed */
 int lsp_running (const char *lang);	/* a server of lang (EXT_LANG ...) runs */
@@ -1935,6 +1959,7 @@ enum { ACT_QUICKFIX, ACT_REFACTOR, ACT_SOURCE };
 void actions_menu (int what, char *const *titles, size_t n);	/* erefactor.c: on_actions's, grouped by kind; one runs */
 int editor_select (Pos a, Pos b);	/* mme.c: a .. b selected in the editor in front (the cursor at b); 0 none */
 int editor_snippet (Pos a, Pos b, const char *body);	/* mme.c: a snippet's body in place of a .. b; 0 none */
+void editor_preview (Pos a, Pos b, const char *body);	/* mme.c: that, only shown; NULL: the editor as it was, undo and all */
 char *open_doc_text (const char *path, size_t *len);	/* mme.c: the editor's text of path, NULL: not open */
 void open_docs_list (Vec *out);	/* mme.c: the paths the editor has open (Search reads these itself) */
 int open_doc_edit (const char *path, const TextEdit *v, size_t n);	/* mme.c: edited there; 0: not open */
@@ -1981,6 +2006,8 @@ void console_paste (const char *s, size_t n);
 void console_wheel (int d);
 void dbg_toolbar_draw (int x, int w, int y);	/* the floating toolbar, while debugging */
 int dbg_toolbar_hit (int x, int y);	/* the command clicked; -1 on it, 0 not */
+int dbg_read_memory (const char *mref, long long offset, unsigned long long at, unsigned count);	/* readMemory
+							** for ehex.c (at: the address, for its answer); -1: not now */
 
 char *vs_subst (const char *s);	/* ${workspaceFolder}, ${file} ... put in */
 void vs_inputs (const Json *inputs);	/* a run begins: its file's "inputs", for ${input:id} (each asked once) */
@@ -2000,6 +2027,8 @@ void editor_save_all (void);	/* every file with changes saved (before a run) */
 void on_debug (int what, const char *path, size_t line);	/* DE_*: the session started, stopped at path:line ... */
 int on_task_terminal (const char *name, const char *cmd, const char *cwd, int id);	/* 0: it runs */
 enum { TT_HIDE = 4, TT_FOCUS = 8 };	/* on_task_run's flags, with a PR_* */
+enum { TT_CLEAR = 16, TT_CLOSE = 32, TT_NOREUSEMSG = 64 };	/* and presentation.clear, close, showReuseMessage false
+							** (panel_run_argv's too) */
 int on_task_run (const char *name, char **argv, const char *echo, const char *cwd, int id, int flags);	/* argv NULL:
 							** only the terminals shown */
 

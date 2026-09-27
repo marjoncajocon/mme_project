@@ -14679,6 +14679,11 @@ static void view_mouse_side (int view, const Mouse *m, int press, int x, int y) 
     tree_menu(m->y - y, m->x, m->y + 1);
     return;
   }
+  if (m->button == 2 && m->press && !m->drag && view == VIEW_REMOTE) {	/* the Remote Explorer: a row's menu */
+    E.focus = g_vw_f;
+    remote_view_menu(m->y - y, m->x, m->y + 1);
+    return;
+  }
   if (m->button == 2 && m->press && !m->drag && view == VIEW_DEBUG && m->y > y + 2) {	/* Run and Debug: a row's menu */
     E.focus = g_vw_f;
     memset(&act, 0, sizeof(act));
@@ -15041,7 +15046,7 @@ static const char *pv_where (int v, char *b, size_t n) {
 
 /* View: Move View (which one, then where) and View: Move Focused View (where) */
 static void pv_move_ask (int focused) {
-  static const int order[] = {MV_EXPLORER, MV_OUTLINE, MV_TIMELINE, MV_SEARCH, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST};
+  static const int order[] = {MV_EXPLORER, MV_OUTLINE, MV_TIMELINE, MV_SEARCH, MV_SCM, MV_DEBUG, MV_REMOTE, MV_EXT, MV_TEST};
   static const int own[] = {MV_PROBLEMS, MV_OUTPUT, MV_CONSOLE, MV_TERMINAL, MV_VARS};
   int mv = focused ? pv_focused() : -1, r, v, n = 0, list[MV_N + PV_TREES];
   char where[80];
@@ -16239,7 +16244,8 @@ static void session_write (int backups) {
       buf_puts(&b, i ? ",\n    {" : "\n    {");
       if (t->page) {
         buf_printf(&b, "\"page\": %d", t->page);
-        if (t->ppath) {	/* a picture or a binary comes back with the session */
+        if (t->ppath && !(t->page == PAGE_HEX && hex_mem_ref(t->pdata))) {	/* a picture or a binary comes back with
+								** the session (a debuggee's memory does not) */
           buf_puts(&b, ", \"path\": ");
           json_put_str(&b, t->ppath, strlen(t->ppath));
         }
@@ -16344,7 +16350,8 @@ static void session_restore (void) {
         page_file_open(page, path, 0);
         continue;
       }
-      if (page == PAGE_SEARCHED || page == PAGE_MDIFF) continue;	/* a Search Editor never saved, a multi-diff: not kept */
+      if (page == PAGE_SEARCHED || page == PAGE_MDIFF || page == PAGE_HEX) continue;	/* a Search Editor never saved, a
+								** multi-diff, a debuggee's memory: not kept */
       if (bk) {
         char *bf = path_join(bd, bk);
         btext = read_file_all(bf, &blen);	/* all of it: a part would be taken for the text */
@@ -18403,9 +18410,12 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_REMOTE_CONNECT: remote_connect(); break;
-    case CMD_REMOTE_MENU: case CMD_REMOTE_CLOSE: case CMD_REMOTE_EXPLORER: case CMD_WSL_CONNECT: case CMD_WSL_DISTRO:
+    case CMD_REMOTE_MENU: case CMD_REMOTE_CLOSE: case CMD_WSL_CONNECT: case CMD_WSL_DISTRO:
     case CMD_WSL_OPEN: case CMD_WSL_REOPEN: case CMD_WSL_WINDOWS: case CMD_DC_REOPEN: case CMD_DC_OPEN: case CMD_DC_ATTACH:
-    case CMD_DC_REBUILD: case CMD_DC_REBUILD_REOPEN: case CMD_DC_LOCAL: remote_command(cmd); break;	/* eremote.c */
+    case CMD_DC_REBUILD: case CMD_DC_REBUILD_REOPEN: case CMD_DC_LOCAL: case CMD_SSH_ADD_HOST: case CMD_SSH_OPEN_CONFIG:
+      remote_command(cmd);	/* eremote.c */
+      break;
+    case CMD_REMOTE_EXPLORER: show_view(VIEW_REMOTE); break;	/* its view (eremote.c) */
     case CMD_SYNC_ON: case CMD_SYNC_OFF: case CMD_SYNC_NOW: case CMD_SYNC_SHOW: case CMD_SYNC_CONFIGURE:
       sync_command(cmd);
       break;
@@ -19498,6 +19508,85 @@ int editor_snippet (Pos a, Pos b, const char *body) {
 }
 
 
+/*
+** Wrap with Abbreviation's preview, as VS Code shows it while the
+** abbreviation is typed: the snippet goes in, and out again with the text,
+** the cursors, the scroll and undo and redo as they were (Esc; Enter puts
+** it in for real, one undo step).
+*/
+static struct {
+  Tab *t;	/* NULL: nothing shown */
+  DocMark m;
+  Pos a;	/* where the text shown starts */
+  size_t tail_y, tail_x;	/* the lines after its end, and the bytes after it in its line */
+  char *was;	/* the text it took the place of */
+  Cur c;
+  size_t top, left, sub;
+  Cur *mc;
+  int nmc, last_kind;
+  size_t *fold, nfold;	/* a fold in the text taken would go with it */
+} PV;
+
+
+void editor_preview (Pos a, Pos b, const char *body) {
+  if (PV.t && PV.t == T) {	/* the last one out */
+    Pos e;
+    e.y = T->doc->n - 1 - PV.tail_y;
+    e.x = row_at(e.y)->len - PV.tail_x;
+    snip_end();
+    T->nmc = 0;
+    ed_delete(PV.a, e);
+    ed_insert(PV.a, PV.was, strlen(PV.was));
+    doc_unmark(T->doc, &PV.m);
+    cur_set(&PV.c);
+    T->top = PV.top;
+    T->left = PV.left;
+    T->sub = PV.sub;
+    if (PV.nmc > T->capmc) {
+      T->capmc = PV.nmc;
+      T->mc = (Cur *)xrealloc(T->mc, (size_t)T->capmc * sizeof(Cur));
+    }
+    if (PV.nmc) memcpy(T->mc, PV.mc, (size_t)PV.nmc * sizeof(Cur));
+    T->nmc = PV.nmc;
+    T->last_kind = PV.last_kind;
+    if (PV.nfold > T->capfold) {
+      T->capfold = PV.nfold;
+      T->fold = (size_t *)xrealloc(T->fold, T->capfold * sizeof(size_t));
+    }
+    if (PV.nfold) memcpy(T->fold, PV.fold, PV.nfold * sizeof(size_t));
+    T->nfold = PV.nfold;
+  }
+  free(PV.was);
+  free(PV.mc);
+  free(PV.fold);
+  memset(&PV, 0, sizeof(PV));
+  if (body == NULL || !HAS_DOC || G->diff || T->page || T->md) return;
+  a = doc_clamp(T->doc, a);
+  b = doc_clamp(T->doc, b);
+  PV.t = T;
+  PV.a = a;
+  PV.tail_y = T->doc->n - 1 - b.y;
+  PV.tail_x = row_at(b.y)->len - b.x;
+  PV.was = doc_text(T->doc, a, b, NULL);
+  cur_get(&PV.c);
+  PV.top = T->top;
+  PV.left = T->left;
+  PV.sub = T->sub;
+  PV.nmc = T->nmc;
+  PV.mc = (Cur *)xmalloc((size_t)(T->nmc + 1) * sizeof(Cur));
+  if (T->nmc) memcpy(PV.mc, T->mc, (size_t)T->nmc * sizeof(Cur));
+  PV.last_kind = T->last_kind;
+  PV.nfold = T->nfold;
+  PV.fold = (size_t *)xmalloc((T->nfold + 1) * sizeof(size_t));
+  if (T->nfold) memcpy(PV.fold, T->fold, T->nfold * sizeof(size_t));
+  doc_mark(T->doc, &PV.m);
+  T->nmc = 0;
+  T->sel = 0;
+  snippet_insert(a, b, body);
+  scroll_to_cursor();
+}
+
+
 /* Inline Chat's answer (or a code block's Apply): text for a .. b of d, drawn as a next edit, to accept */
 int editor_propose (const Doc *d, unsigned long edits, Pos a, Pos b, const char *text) {
   if (!HAS_DOC || T->doc != d || d->edits != edits || G->diff || T->page || T->md) return 0;
@@ -19585,16 +19674,23 @@ void on_debug (int what, const char *path, size_t line) {
           }
         }
       break;
-    case DE_MEMORY:	/* a debugger's memory: the hex viewer, its offsets the addresses */
+    case DE_MEMORY:	/* a debugger's memory (path: its memoryReference): the hex viewer, the offsets addresses */
       if (path == NULL) return;
       for (g = 0; g < G->ntab; g++)	/* open already: read again */
-        if (G->tab[g]->page == PAGE_HEX && G->tab[g]->ppath && m_fncmp(G->tab[g]->ppath, path) == 0) {
+        if (G->tab[g]->page == PAGE_HEX && hex_mem_ref(G->tab[g]->pdata) && strcmp(hex_mem_ref(G->tab[g]->pdata), path) == 0) {
           focus_tab(g);
           hex_reload(T->pdata);
           break;
         }
-      if ((g < G->ntab || page_file_open(PAGE_HEX, path, 0) == 0) && T->page == PAGE_HEX)
-        hex_set_base(T->pdata, (unsigned long long)line);
+      if (g == G->ntab) {
+        char name[96];
+        snprintf(name, sizeof(name), "memory-%.64s.bin", path);
+        tab_new();
+        T->page = PAGE_HEX;
+        T->pdata = hex_mem_open(path);
+        T->ppath = xstrdup(name);
+        G->diff = 0;
+      }
       E.focus = F_EDITOR;
       break;
   }
@@ -19609,7 +19705,7 @@ int on_task_run (const char *name, char **argv, const char *echo, const char *cw
   }
   if (argv == NULL) return 0;	/* presentation.reveal "silent": shown now that it failed */
   layout();
-  if (panel_run_argv(PANEL_COLS, L.panel_h - 1, name, argv, echo, cwd, id, flags & 3) != 0) {
+  if (panel_run_argv(PANEL_COLS, L.panel_h - 1, name, argv, echo, cwd, id, flags & ~(TT_HIDE | TT_FOCUS)) != 0) {
     if (!panel_alive()) E.panel = 0;
     return -1;
   }
@@ -21901,7 +21997,8 @@ const char *when_ctx (const char *key) {
   if (strcmp(key, "scmViewletVisible") == 0) return B(sshown(VIEW_GIT));
   if (strcmp(key, "activeViewlet") == 0) {
     static const char *const v[VIEW_N] = {"workbench.view.explorer", "workbench.view.search",
-                                          "workbench.view.scm", "workbench.view.debug", "workbench.view.extensions"};
+                                          "workbench.view.scm", "workbench.view.debug", "workbench.view.extensions",
+                                          NULL, NULL, "workbench.view.remote"};
     return E.side && E.view >= 0 && E.view < VIEW_N ? v[E.view] : NULL;
   }
   if (strcmp(key, "activePanel") == 0) {

@@ -9,11 +9,11 @@
 |       5         Fold Level 2  Ctrl+K Ctrl+2                                                               ⠟⠛
 |      6  #defi  Fold Level 3  Ctrl+K Ctrl+3                                                               ⣿⡏⠉⠁
 |       7         Fold Level 4  Ctrl+K Ctrl+4                                                               ⣋⣁⣀⡀
-|      8  typed  Fold Level 5  Ctrl+K Ctrl+5                                                               ⣿⠿⠗
+|      8  typed  Fold Level 5  Ctrl+K Ctrl+5                                                               ⣿⠿⠗
 |       9  │   i  Fold Level 6  Ctrl+K Ctrl+6                                                               ⡹⠿⠿⠃
-|     10  │   i  Fold Level 7  Ctrl+K Ctrl+7                                                               ⠟⠛⠛⠋⠉⠉
+|     10  │   i  Fold Level 7  Ctrl+K Ctrl+7                                                               ⠟⠛⠛⠋⠉⠉
 |      11  } Poi  Fold All Regions  Ctrl+K Ctrl+8
-|      12         Fold All Block Comments  Ctrl+K Ctrl+/
+|     12         Fold All Block Comments  Ctrl+K Ctrl+/
 |      13  stati  Open Folder...
 |      14         Find in Folder...  Shift+Alt+F
 |      15  /* ad  Unfold  Ctrl+Shift+]

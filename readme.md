@@ -43,7 +43,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `mme.c` | `main`, the layout, the editor, the commands, the find widget, the dialogs for files |
 | `ebuf.c` | the text: lines, load and save (LF / CRLF kept), undo and redo, indent detection |
 | `eeditorconfig.c` | `.editorconfig`: a file's indent, line ends, charset and whitespace, as VS Code's EditorConfig extension |
-| `eterm.c` | the terminal: raw mode, keys (kitty protocol too), mouse, bracketed paste |
+| `eterm.c` | the terminal: raw mode, keys (kitty protocol too), mouse, bracketed paste (read in bulk: megabytes in a second or so) |
 | `edraw.c` | the screen: a cell grid, only changed lines are sent; VS Code's Dark+ colors |
 | `emenu.c` | the menu bar and menus, the quick input box, the modal dialog, notifications |
 | `eside.c` | the activity bar, the sidebar, the Explorer (folder tree, file icons, git colors) |
@@ -61,7 +61,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `enb.c` | Jupyter notebooks (.ipynb): the notebook editor, its cells and outputs, a kernel (`enb_kernel.h`: mme-kernel.py) |
 | `ewindows.c` | the windows know each other: Exit closes them all, a folder open in one comes to the front there |
 | `egithub.c` | GitHub pull requests and issues (REST API through curl): lists, descriptions, checkout, comments, create |
-| `eremote.c` | Remote-SSH, WSL, Dev Containers: a window whose mme runs on another machine, a distro or a container (installed there when needed); the remote indicator and its menu |
+| `eremote.c` | Remote-SSH, WSL, Dev Containers: a window whose mme runs on another machine, a distro or a container (installed there when needed); the remote indicator and its menu; the Remote Explorer view |
 | `eports.c` | A remote window's forwarded ports: the Ports view, ssh -L for each (a container's: a relay through docker exec), a localhost URL in the terminal forwarded by itself |
 | `esync.c` | Settings Sync: settings.json, keybindings.json, the snippets, the extensions, the UI state and the profiles through a secret GitHub Gist |
 | `eaccess.c` | accessibility: mme's own voice (SAPI, spd-say, say) and VS Code's accessibility signals |
@@ -476,8 +476,15 @@ With no file open the editor shows the keys to start with.
   paused line; it follows each stop, it opens by itself when the frame has
   no source, and with it in front F10 / F11 / Shift+F11 step one instruction
   (supportsSteppingGranularity). A variable's **View Binary Data** (its menu,
-  when the adapter reads memory) shows 1 KB of its memory (readMemory) in the
-  hex viewer, the offsets its addresses; it is read-only.
+  when the adapter reads memory) opens its memory in the hex viewer like VS
+  Code's memory inspector: the whole address space, the offsets the
+  addresses, the cursor on the variable's with the rows around it. The bytes
+  are read (readMemory) 4 KB at a time as they are shown - scrolling, PgUp /
+  PgDn, Ctrl+Home / Ctrl+End, Ctrl+G to an address (hex, or `10#` decimal) -
+  and 64 pages are kept; what the adapter cannot read (its unreadableBytes)
+  shows as `??`. Each stop (and the adapter's `memory` event) reads again
+  what is shown. Ctrl+F looks through the memory read so far. It is
+  read-only (writeMemory is not used).
 - **Data breakpoints** — the right button on a variable (or Shift+F10 on the
   one selected) gives VS Code's menu: Set Value, Copy Value, Add to Watch, and
   Break on Value Change / Read / Access, when the adapter can
@@ -500,15 +507,22 @@ With no file open the editor shows the keys to start with.
   fails stops the ones that need it), `isBackground` (a watcher: it is ready
   when its problem matcher's `background.endsPattern` is printed, and what
   waits for it goes on while it runs), `presentation` (reveal always /
-  silent / never, focus, echo, panel shared / dedicated / new), `hide` and
-  `detail`. A problemMatcher can be one of its own: an owner, a pattern with
+  silent / never, focus, echo, panel shared / dedicated / new, clear, close,
+  showReuseMessage: a finished task's terminal used again keeps what it
+  showed, the new run under it, unless `clear`; `close` closes the terminal
+  when the task ends; `showReuseMessage: false` leaves out "Terminal will be
+  reused by tasks, press any key to close it."), `hide` and `detail`. A problemMatcher can be one of its own: an owner, a pattern with
   its regexp and which group is the file, line, column, severity, message
   (or `location`), several patterns for a problem told over several lines
   (the last with `loop`), fileLocation (relative, absolute, autoDetect, or
   relative to a folder of its own), `$tsc-watch`. Variables: `${input:id}`
   asks the file's `inputs` (promptString, pickString; each once a run),
   `${env:X}`, `${config:editor.tabSize}`, `${userHome}`, `${lineNumber}`
-  besides VS Code's file and folder ones. Tasks: Terminate Task ends one
+  besides VS Code's file and folder ones; `${command:id}` runs the command
+  and puts in the string it gives (an extension's, through the extension
+  host - `${command:cmake.launchTargetPath}` -, or mme's `pickProcess`, a
+  pick of the system's processes giving its id); VS Code's errors when it
+  gives something else or is not there, and nothing runs. Tasks: Terminate Task ends one
   that runs.
 - **Auto Save** — File > Auto Save (files.autoSave): afterDelay saves a file
   files.autoSaveDelay ms after the last change (no format on save, the
@@ -634,7 +648,11 @@ With no file open the editor shows the keys to start with.
   `w100p` → `width: 100%;`, `df`, `posa`, `c#f` → `color: #fff;`, `fz1.5r`.
   VS Code's Emmet commands too, from the Command Palette: **Emmet: Wrap with
   Abbreviation** (the selection, or the line, goes into the innermost last
-  element of the abbreviation; `ul>li*` puts each line in an li of its own),
+  element of the abbreviation; `ul>li.item$*` puts each line in an li of its
+  own, numbered; `$#` is where the line goes instead, `a[href=$#]*` makes each
+  URL a link; as in VS Code the editor shows the text wrapped while the
+  abbreviation is typed, Enter keeps it as one undo step and Escape puts the
+  text, the selection and undo back as they were),
   **Emmet: Balance (outward)** / **(inward)** (the selection grows to the
   tag's content, then the element, and shrinks back), **Emmet: Update Tag**
   (both tags renamed; nothing removes them), **Emmet: Remove Tag** (the tags
@@ -1014,9 +1032,28 @@ With no file open the editor shows the keys to start with.
   Containers' ways in; in a remote window it says where it is ("SSH: host",
   "WSL: Ubuntu", "Dev Container: name", "Container: name") and offers Reopen
   Folder in Windows / Locally, Rebuild Container, Close Remote Connection.
-  "View: Show Remote Explorer" lists the targets: the SSH hosts, the WSL
-  distros, the containers (docker ps -a). Remote Tunnels are not here (they
-  need Microsoft's tunnel service).
+  Remote Tunnels are not here (they need Microsoft's tunnel service).
+- **Remote Explorer** — VS Code's REMOTE EXPLORER view, its icon (codicon
+  remote-explorer) in the activity bar after Run and Debug ("View: Show
+  Remote Explorer"). Its dropdown (Enter on it) picks the targets shown, as
+  VS Code's: Remotes (Tunnels/SSH) are the SSH TARGETS (~/.ssh/config's
+  hosts, as Connect to Host lists them), WSL Targets the distros (`wsl.exe
+  -l -q`, the default first; "WSL is not installed" when it is not), Dev
+  Containers the containers (`docker ps -a`: a dev container by its folder's
+  name, the running ones green; "Docker is not installed / not running"). The
+  selected target shows VS Code's inline actions, Connect in Current Window
+  (→, the new window opens, then this one closes) and Connect in New Window
+  (a container's: Attach in ...); Enter connects in a new window. The
+  section's title has Refresh (F5 too), and SSH's Add New SSH Host... (+: an
+  `ssh user@host -p 22 -i key -A` command becomes a Host block of
+  ~/.ssh/config, then "Host added!" with Open Config and Connect) and Open
+  SSH Config File (the gear; also "Remote-SSH: Add New SSH Host..." and
+  "Remote-SSH: Open SSH Configuration File..." in the palette). The right
+  button or Shift+F10 gives a row's menu with the same actions; Up / Down,
+  Right / Left (into / out of the section, fold it), Home / End move. Nothing
+  runs before the view first shows, and wsl.exe and docker run on a thread
+  (Loading... meanwhile), so a slow WSL or Docker never stops the editor. It
+  moves to the panel with View: Move View like the others.
 - **WSL** (Windows) — "WSL: Connect to WSL" (the default distro), "Connect to
   WSL using Distro..." (wsl.exe -l), "Open Folder in WSL..." and "Reopen
   Folder in WSL" (C:\x is /mnt/c/x; \\\\wsl$\\Distro\\x is that distro's /x)
@@ -1378,8 +1415,9 @@ With no file open the editor shows the keys to start with.
 - **Moving views** — View: Move View (a view, then Panel or Primary Side Bar)
   and View: Move Focused View move any view: the side bar's (the Explorer with
   OPEN EDITORS, Outline, Timeline, Search, Source Control, Run and Debug,
-  Extensions, Testing, and each extension's tree view) into the panel, each a
-  tab of its own whose icon leaves the activity bar, and the panel's
+  Remote Explorer, Extensions, Testing, and each extension's tree view) into
+  the panel, each a tab of its own whose icon leaves the activity bar, and the
+  panel's
   (Problems, Output, Debug Console, Terminal, Jupyter's Variables) into the
   side bar, each with an activity bar icon of its own (VS Code's codicon, the
   problems' count on it). A view works where it is as it does at home: its

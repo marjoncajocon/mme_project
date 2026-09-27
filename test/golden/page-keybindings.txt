@@ -9,11 +9,11 @@
 |       5         Open Folder...                 -  workbench.action.files.openFolder                       ⠟⠛
 |      6  #defi  Open Project...                Ctrl+R  workbench.action.openRecent   Default              ⣿⡏⠉⠁
 |       7         Save                           Ctrl+S  workbench.action.files.save   Default              ⣋⣁⣀⡀
-|      8  typed  Save As...                     Ctrl+Shift+S  workbench.action.files.saveAs   Default      ⣿⠿⠗
+|      8  typed  Save As...                     Ctrl+Shift+S  workbench.action.files.saveAs   Default      ⣿⠿⠗
 |       9  │   i  Close Editor                   Ctrl+W  workbench.action.closeActiveEditor   Default       ⡹⠿⠿⠃
-|     10  │   i  Exit                           Ctrl+Q  workbench.action.quit   Default                    ⠟⠛⠛⠋⠉⠉
+|     10  │   i  Exit                           Ctrl+Q  workbench.action.quit   Default                    ⠟⠛⠛⠋⠉⠉
 |      11  } Poi  Undo                           Ctrl+Z  undo   Default
-|      12         Redo                           Ctrl+Y  redo   Default
+|     12         Redo                           Ctrl+Y  redo   Default
 |      13  stati  Cut                            Ctrl+X  editor.action.clipboardCutAction   Default
 |      14         Copy                           Ctrl+C  editor.action.clipboardCopyAction   Default
 |      15  /* ad  Paste                          Ctrl+V  editor.action.clipboardPasteAction   Default
@@ -40,11 +40,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Point;
-|      12
+|     12
 |      13  static int total = 0;
 |      14
 |      15  /* adds two numbers and remembers the sum */

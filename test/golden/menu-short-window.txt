@@ -9,9 +9,9 @@
 |      Open Workspace from File...                                                                          ⠟⠛
 |     Open Project...                   Ctrl+R                                                             ⣿⡏⠉⠁
 |    ────────────────────────────────────────────                                                           ⣋⣁⣀⡀
-|     Add Folder to Workspace...                                                                           ⣿⠿⠗
+|     Add Folder to Workspace...                                                                           ⣿⠿⠗
 |      Save Workspace As...                                                                                 ⡹⠿⠿⠃
-|   ────────────────────────────────────────────                                                           ⠟⠛⠛⠋⠉⠉
+|   ────────────────────────────────────────────                                                           ⠟⠛⠛⠋⠉⠉
 |                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
 ---- cursor 119,12
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
@@ -24,9 +24,9 @@
 |    ────────────────────────────────────────────                                                           ⠟⠛
 |     Close Editor                      Ctrl+W                                                             ⣿⡏⠉⠁
 |      Close Workspace                           ▐                                                          ⣋⣁⣀⡀
-|     Close Window                Ctrl+Shift+W  ▐                                                          ⣿⠿⠗
+|     Close Window                Ctrl+Shift+W  ▐                                                          ⣿⠿⠗
 |    ────────────────────────────────────────────▐                                                          ⡹⠿⠿⠃
-|     Exit                              Ctrl+Q  ▐                                                          ⠟⠛⠛⠋⠉⠉
+|     Exit                              Ctrl+Q  ▐                                                          ⠟⠛⠛⠋⠉⠉
 |                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
 ---- cursor 119,12
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
@@ -39,8 +39,8 @@
 |      Add Folder to Workspace...                                                                           ⠟⠛
 |     Save Workspace As...                                                                                 ⣿⡏⠉⠁
 |    ────────────────────────────────────────────                                                           ⣋⣁⣀⡀
-|     Save                              Ctrl+S                                                             ⣿⠿⠗
+|     Save                              Ctrl+S                                                             ⣿⠿⠗
 |      Save As...                  Ctrl+Shift+S                                                             ⡹⠿⠿⠃
-|     File: Save All                  Ctrl+K S                                                             ⠟⠛⠛⠋⠉⠉
+|     File: Save All                  Ctrl+K S                                                             ⠟⠛⠛⠋⠉⠉
 |                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
 exited=0

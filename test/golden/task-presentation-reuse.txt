@@ -1,0 +1,125 @@
+---- cursor 119,21
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: p first ──C:\──────────
+|                                 │ first output
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,27
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: p second ──C:──────────
+|                                 │ first output
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │  *  Executing task: echo second output
+|                                 │
+|                                 │ second output
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|   ─────────────────────────────│  *  Terminal will be reused by tasks, press any key to close it.
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,23
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: p cleared ──C──────────
+|                                 │  *  Executing task: echo cleared output
+|                                 │
+|                                 │ cleared output
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                   │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: p quiet ──C:\──────────
+|                                 │ cleared output
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │  *  Executing task: echo quiet end
+|                                 │
+|                                 │ quiet end
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

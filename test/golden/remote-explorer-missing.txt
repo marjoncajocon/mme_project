@@ -1,0 +1,96 @@
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      REMOTE EXPLORER            │  edit.c  
+|      Remotes (Tunnels/SSH)  ⌄  │  edit.c
+|      SSH TARGETS            │   1  /* edit.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|      No SSH hosts in           │   2  #include <stdio.h>                                                 ⣒⣂⡀
+|       ~/.ssh/config. Add one    │   3  #include <stdlib.h>                                                ⠿
+|      with Add New SSH Host...  │   4  #include <string.h>                                                ⣭⣭⣥⡤⠄
+|       (+).                      │   5                                                                     ⠟⠛
+|                                │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|                                 │   7                                                                     ⣋⣁⣀⡀
+|▎                               │   8  typedef struct Point {                                             ⣿⠿⠗
+|                                 │   9  │   int x;                                                         ⡹⠿⠿⠃
+|                                │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|                                 │  11  } Point;
+|                                │  12
+|                                 │  13  static int total = 0;
+|                                 │  14
+|                                 │  15  /* adds two numbers and remembers the sum */
+|                                 │  16  static int add (int a, int b) {
+|                                 │  17  │   total += a + b;
+|                                 │  18  │   return a + b;
+|                                 │  19  }
+|                                 │  20
+|                                 │  21  static Point make (int x, int y) {
+|                                 │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|                                │  25  │   return p;
+|                                 │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 119,6
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      REMOTE EXPLORER            │  edit.c  
+|      WSL Targets  ⌄            │  edit.c
+|      WSL TARGETS              │   1  /* edit.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|      WSL is not installed.     │   2  #include <stdio.h>                                                 ⣒⣂⡀
+|       Install it: wsl.exe       │   3  #include <stdlib.h>                                                ⠿
+|      --install                 │   4  #include <string.h>                                                ⣭⣭⣥⡤⠄
+|                                 │   5                                                                     ⠟⠛
+|                                │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|                                 │   7                                                                     ⣋⣁⣀⡀
+|▎                               │   8  typedef struct Point {                                             ⣿⠿⠗
+|                                 │   9  │   int x;                                                         ⡹⠿⠿⠃
+|                                │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|                                 │  11  } Point;
+|                                │  12
+|                                 │  13  static int total = 0;
+|                                 │  14
+|                                 │  15  /* adds two numbers and remembers the sum */
+|                                 │  16  static int add (int a, int b) {
+|                                 │  17  │   total += a + b;
+|                                 │  18  │   return a + b;
+|                                 │  19  }
+|                                 │  20
+|                                 │  21  static Point make (int x, int y) {
+|                                 │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|                                │  25  │   return p;
+|                                 │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 119,6
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      REMOTE EXPLORER            │  edit.c  
+|      Dev Containers  ⌄         │  edit.c
+|      DEV CONTAINERS           │   1  /* edit.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|      Docker is not installed   │   2  #include <stdio.h>                                                 ⣒⣂⡀
+|       (docker was not found in  │   3  #include <stdlib.h>                                                ⠿
+|      PATH).                    │   4  #include <string.h>                                                ⣭⣭⣥⡤⠄
+|                                 │   5                                                                     ⠟⠛
+|                                │   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|                                 │   7                                                                     ⣋⣁⣀⡀
+|▎                               │   8  typedef struct Point {                                             ⣿⠿⠗
+|                                 │   9  │   int x;                                                         ⡹⠿⠿⠃
+|                                │  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|                                 │  11  } Point;
+|                                │  12
+|                                 │  13  static int total = 0;
+|                                 │  14
+|                                 │  15  /* adds two numbers and remembers the sum */
+|                                 │  16  static int add (int a, int b) {
+|                                 │  17  │   total += a + b;
+|                                 │  18  │   return a + b;
+|                                 │  19  }
+|                                 │  20
+|                                 │  21  static Point make (int x, int y) {
+|                                 │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|                                │  25  │   return p;
+|                                 │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0
+---- fake
+wsl -l -q

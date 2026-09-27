@@ -19,7 +19,11 @@ time, so what mme draws from a session can be pinned.
     evaluate        "= <the expression>"
     completions     count, counter, compute: those that start with the word
     disassemble     instructions 4 bytes apart around the pointer, of "main"
-    readMemory      "Hello, memory!" and the bytes 0..49
+    readMemory      a fake 4 GB address space: "Hello, memory!" and the bytes
+                    0..49 at 0x2000, the stops counted at 0x2040 (a step
+                    changes it), elsewhere (a ^ a >> 8) & 255; unreadable
+                    (unreadableBytes): below 0x1000, the hole 0x2800..0x3100,
+                    and from 4 GB up
     next / stepIn   a stop again: the pointer 4 bytes on when the granularity
                     is "instruction", else the next line
     continue        exited 0, terminated
@@ -33,7 +37,37 @@ import sys
 out = sys.stdout.buffer if hasattr(sys.stdout, "buffer") else sys.stdout
 inp = sys.stdin.buffer if hasattr(sys.stdin, "buffer") else sys.stdin
 seq = [0]
-state = {"program": "", "line": 2, "ip": 0x1000, "name": "stub"}
+state = {"program": "", "line": 2, "ip": 0x1000, "name": "stub", "stops": 0}
+
+MEM_TOP = 1 << 32
+HOLES = [(0, 0x1000), (0x2800, 0x3100)]
+HELLO = b"Hello, memory!" + bytes(range(50))
+
+
+def readable(a):
+    return a < MEM_TOP and not any(lo <= a < hi for lo, hi in HOLES)
+
+
+def mem_byte(a):
+    if 0x2000 <= a < 0x2000 + len(HELLO):
+        return HELLO[a - 0x2000]
+    if a == 0x2040:
+        return state["stops"] & 255
+    return (a ^ (a >> 8)) & 255
+
+
+def read_memory(start, count):
+    """the bytes readable from start (up to count), and how many unreadable follow them"""
+    data = bytearray()
+    a = start
+    while a < start + count and readable(a):
+        data.append(mem_byte(a))
+        a += 1
+    skip = 0
+    while a < start + count and not readable(a):
+        skip += 1
+        a += 1
+    return bytes(data), skip
 
 
 def send(msg):
@@ -143,11 +177,15 @@ def main():
                 ins.append(d)
             respond(m, {"instructions": ins})
         elif c == "readMemory":
-            data = b"Hello, memory!" + bytes(range(50))
-            respond(m, {"address": "0x%x" % int(a.get("memoryReference", "0"), 0),
-                        "data": base64.b64encode(data).decode("ascii")})
+            start = (int(a.get("memoryReference", "0"), 0) + int(a.get("offset", 0))) & ((1 << 64) - 1)
+            data, skip = read_memory(start, int(a.get("count", 0)))
+            body = {"address": "0x%x" % start, "data": base64.b64encode(data).decode("ascii")}
+            if skip:
+                body["unreadableBytes"] = skip
+            respond(m, body)
         elif c in ("next", "stepIn", "stepOut"):
             respond(m)
+            state["stops"] += 1
             if a.get("granularity") == "instruction":
                 state["ip"] += 4
             else:

@@ -9,11 +9,11 @@
 |     ☑  main.c   2
 |       ☑  int n = count_itemscount_all(12, 34, "a label long enough to wrap", 1) + count_items(5, 6, "x", 0);  3
 |        ☑  int n = count_items(12, 34, "a label long enough to wrap", 1) + count_itemscount_all(5, 6, "x", 0);  3
-|    ☑  util.c   1
+|    ☑  util.c   1
 |        ☑ int count_itemscount_all (int a, int b, const char *s, int f) {  2                                           ─
-|    ☑  util.h   1
+|    ☑  util.h   1
 |        ☑ int count_itemscount_all (int a, int b, const char *s, int f);  1
-|
+| 
 |
 |
 |
@@ -40,11 +40,11 @@
 |     ▣  main.c   2
 |       ☐  int n = count_itemscount_all(12, 34, "a label long enough to wrap", 1) + count_items(5, 6, "x", 0);  3
 |        ☑  int n = count_items(12, 34, "a label long enough to wrap", 1) + count_itemscount_all(5, 6, "x", 0);  3
-|    ☑  util.c   1
+|    ☑  util.c   1
 |        ☑ int count_itemscount_all (int a, int b, const char *s, int f) {  2                                           ─
-|    ☑  util.h   1
+|    ☑  util.h   1
 |        ☑ int count_itemscount_all (int a, int b, const char *s, int f);  1
-|
+| 
 |
 |
 |
@@ -71,11 +71,11 @@
 |      page.html                 │   5  }
 |     util.c                  2 │   6
 |      util.h                  2 │
-|                                │
+|                                │
 |                                 │                                                                                     ─
+|                                │
+|                                 │
 |                                │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │

@@ -1,0 +1,33 @@
+---- cursor 41,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  notes.txt  ●
+|▎   OPEN EDITORS               │  notes.txt
+|    ─────────────────────────────│ 276  line 00275: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|    F3                     │ 277  line 00276: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|      main.c                    │ 278  line 00277: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|     notes.txt                 │ 279  line 00278: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|      page.html                 │ 280  line 00279: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|     util.c                    │ 281  line 00280: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|      util.h                    │ 282  line 00281: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                │ 283  line 00282: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 284  line 00283: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                │ 285  line 00284: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 286  line 00285: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                │ 287  line 00286: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 288  line 00287: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 289  line 00288: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 290  line 00289: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 291  line 00290: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 292  line 00291: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 293  line 00292: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 294  line 00293: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 295  line 00294: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 296  line 00295: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 297  line 00296: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 298  line 00297: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|                                 │ 299  line 00298: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|   ─────────────────────────────│ 300  line 00299: the paste goes on and on, and on                       ⣿⣿⣿⣿⡇
+|     TIMELINE                   │ 301  !                                                                  ⡿⠿⠿⠿⠇       ─
+|                                                                    Ln 301, Col 2  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0
+file f3/notes.txt: 13501 bytes, starts line 00000: the paste goes on and on, an

@@ -9,11 +9,11 @@
 |       guide.md docs        ▐│
 |       NeedleWordHayStack lives▐│
 |       file00.txt many      1 ▐│
-|       row 00 NeedleWordHayStac▐│                        Command Palette...   Ctrl+Shift+P
+|       row 00 NeedleWordHayStac▐│                        Command Palette...   Ctrl+Shift+P
 |       file01.txt many      1 ▐│
-|       row 01 NeedleWordHayStac▐│                             Go to File...   Ctrl+P
+|       row 01 NeedleWordHayStac▐│                             Go to File...   Ctrl+P
 |       file02.txt many      1  │
-|        row 02 NeedleWordHayStac │                              Open File...   Ctrl+O
+|       row 02 NeedleWordHayStac │                              Open File...   Ctrl+O
 |       file03.txt many      1  │
 |        row 03 NeedleWordHayStac │                            Open Folder...
 |       file04.txt many      1  │

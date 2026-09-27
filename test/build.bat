@@ -4,6 +4,8 @@ rem
 rem   hx.exe                the ConPTY harness the scenarios drive mme with
 rem   browser\rundll32.exe  a stand-in for Windows' rundll32, so a scenario
 rem                         that opens a URL proves which URL, with no window
+rem   remote\fake.exe       wsl.exe and docker.exe as a remote-explorer-*
+rem                         scenario says (run.py copies it under those names)
 rem
 rem hx.c uses mmc's terminal core (a Grid a program is driven into and read
 rem back from), so the mmc checkout has to be beside this one. Point MMC at it
@@ -29,6 +31,10 @@ echo built hx.exe
 %ZIG% cc -std=c11 -O2 -o browser\rundll32.exe browser\rundll32.c || exit /b 1
 echo built browser\rundll32.exe
 
+%ZIG% cc -std=c11 -O2 -o remote\fake.exe remote\fake.c || exit /b 1
+echo built remote\fake.exe
+
 if exist *.pdb del *.pdb >nul 2>nul
 if exist browser\*.pdb del browser\*.pdb >nul 2>nul
+if exist remote\*.pdb del remote\*.pdb >nul 2>nul
 exit /b 0

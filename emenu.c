@@ -172,7 +172,8 @@ static const char *const names[CMD_N] = {
   "Emmet: Update Tag", "Emmet: Remove Tag", "Emmet: Go to Matching Pair",
   "View: Move View", "View: Move Focused View", "View: Reset View Locations",
   "Jupyter: Open Variables View",
-  "Tasks: Terminate Task", "Open Disassembly View"
+  "Tasks: Terminate Task", "Open Disassembly View",
+  "Remote-SSH: Add New SSH Host...", "Remote-SSH: Open SSH Configuration File..."
 };
 
 static const char *const keys[CMD_N] = {
@@ -255,6 +256,7 @@ static const char *const keys[CMD_N] = {
   "Ctrl+Shift+R", "", "", "", "", "", "",
   "", "", "",
   "",
+  "", "",
   "", ""
 };
 
@@ -444,7 +446,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "editor.emmet.action.matchTag",
   "workbench.action.moveView", "workbench.action.moveFocusedView", "workbench.action.resetViewLocations",
   "jupyter.openVariableView",
-  "workbench.action.tasks.terminate", "debug.action.openDisassemblyView"
+  "workbench.action.tasks.terminate", "debug.action.openDisassemblyView",
+  "opensshremotes.addNewSshHost", "opensshremotes.openConfigFile"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

@@ -9,11 +9,11 @@
 |       5                                                    ⠟⠛           │
 |      6  #define MAXN 64                                   ⣿⡏⠉⠁         │   gpt-test
 |       7                                                    ⣋⣁⣀⡀         │
-|      8  typedef struct Point {                            ⣿⠿⠗          │  OpenAI answer 1: the model is gpt-test.
+|      8  typedef struct Point {                            ⣿⠿⠗          │  OpenAI answer 1: the model is gpt-test.
 |       9  │   int x;                                        ⡹⠿⠿⠃         │
-|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉       │    • streamed as chat.completion.chunk
+|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉       │    • streamed as chat.completion.chunk
 |      11  } Point;                                                       │
-|      12                                                                 │
+|     12                                                                 │
 |      13  static int total = 0;                                          │
 |      14                                                                 │
 |      15  /* adds two numbers and remembers the sum */                   │

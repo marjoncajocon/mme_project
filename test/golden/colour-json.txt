@@ -9,7 +9,7 @@
 {868686}    {6e7681}   9  {707070}? {9cdcfe}"nothing"{cccccc}: {569cd6}null{cccccc},
 {868686} ?  {6e7681}  10  {707070}? {9cdcfe}"tags"{cccccc}: {da70d6}[{ce9178}"red"{cccccc}, {ce9178}"green"{cccccc}, {ce9178}"blue"{da70d6}]{cccccc},
 {868686}    {6e7681}  11  {707070}? {9cdcfe}"nested"{cccccc}: {da70d6}{
-{868686}    {6e7681}  12  {707070}? {404040}? {9cdcfe}"a"{cccccc}: {b5cea8}1{cccccc},
+{868686} ?  {6e7681}  12  {707070}? {404040}? {9cdcfe}"a"{cccccc}: {b5cea8}1{cccccc},
 {868686}    {6e7681}  13  {707070}? {404040}? {9cdcfe}"b"{cccccc}: {179fff}[{b5cea8}2{cccccc}, {b5cea8}3{179fff}]{cccccc},
 {868686}    {6e7681}  14  {707070}? {404040}? {9cdcfe}"c"{cccccc}: {179fff}{ {9cdcfe}"d"{cccccc}: {ce9178}"deep" {179fff}}
 {868686}    {6e7681}  15  {707070}? {da70d6}}

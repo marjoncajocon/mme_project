@@ -9,11 +9,11 @@
 |  2    5  }                                                                                                ⣥⡤
 |      6                                                                                                   ⣥⣤⣀⣀⣀⣀⣀
 |       7  int keep_two (void) {                                                                            ⠋⠁
-|      8  │   return 2;
+|      8  │   return 2;
 |       9  }
-|     10
+|     10
 |      11  int changed_here (void) {                                                                                    ▌
-|      12 ▎│   return 33;
+|     12 ▎│   return 33;
 |      13  }
 |      14                                                                                                               ▌
 |      15 ▎int added_function (void) {                                                                                  ▌
@@ -30,7 +30,7 @@
 |      26  }
 |  main*   Reg Suite, <AGO>                                           Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
 {868686}    {6e7681}   {cccccc}1  {c586c0}#include {ce9178}<stdio.h>   {8b8b8b}Reg Suite, <AGO> ? first commit: tracked.c and notes.md               {a3719f}?{ab7a66}?{a9a9a9}?         {cccccc}?
-{868686}    {6e7681}  12 {0078d4}?{404040}?   {c586c0}return {b5cea8}33{cccccc};                                                                                               {434343}
+{868686} ?  {6e7681}  12 {0078d4}?{404040}?   {c586c0}return {b5cea8}33{cccccc};                                                                                               {434343}
 {868686}    {6e7681}  15 {0078d4}?{569cd6}int {dcdcaa}added_function {ffd700}({569cd6}void{ffd700}) {                                                                                  {0078d4}?
 {868686}    {6e7681}  16 {0078d4}?{404040}?   {c586c0}return {b5cea8}99{cccccc};                                                                                               {434343}
 exited=0

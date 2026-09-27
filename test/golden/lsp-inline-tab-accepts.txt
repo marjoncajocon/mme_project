@@ -9,11 +9,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
+|      8  typedef struct Point {                                                                           ⣿⠿⠗         ▬
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
 |      11  } Point;
-|      12  int cached_total = total;
+|     12  int cached_total = total;
 |      13  static int total = 0;
 |      14
 |      15  /* adds two numbers and remembers the sum */
@@ -29,5 +29,5 @@
 |     24  │   p.y = y;
 |      25  │   return p;
 |  1  1                                                               Ln 12, Col 26  Tab Size: 4  UTF-8  LF  C  {}  
-<->      12  int cached_total = total;
+<-> ?    12  int cached_total = total;
 exited=0

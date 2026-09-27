@@ -9,11 +9,11 @@
 |      page.html                 │   5  │   │   <p>Hello <b>world</b></p>
 |     util.c                    │   6  │   │   <img src="a.png">
 |      util.h                    │   7  │   </div>
-|                                │   8  <ul>
+|                                │   8  <ul>
 |                                 │   9  │   <li>apples</li>
-|                                │  10  │   <li>pears</li>
+|                                │  10  │   <li>pears</li>
 |                                 │  11  │   <li>plums</li>
-|                                 │  12  </ul>
+|                                │  12  </ul>
 |                                 │  13  </body>
 |                                 │  14  </html>
 |                                 │  15

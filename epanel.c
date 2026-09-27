@@ -48,6 +48,8 @@ typedef struct Term {
   int x, y, w, h;	/* where it was drawn; w 0: not shown */
   int task;	/* a task runs in it: its id (etask.c reads its output) */
   int done;	/* the task ended: a key closes it */
+  int close_end, no_reuse_msg;	/* its task's presentation.close, and showReuseMessage false */
+  int lift;	/* the lines its task's start put up into the scrollback (task_head), the view keeps over its output */
   int kind;	/* SH_*: how to quote a path for it */
   long base;	/* the number of screen row 0: every line that went up into the scrollback counts */
   int sb_len0, sb_head0;	/* the scrollback when base was counted last */
@@ -796,43 +798,109 @@ int panel_run (int cols, int rows, const char *name, const char *cmd, const char
 }
 
 
+/* a task's terminal whose first lines went up (task_head): the view keeps them over the new output, until it fills
+** the screen */
+static void keep_view (Term *t) {
+  int v = t->rows - 1 - t->g->cy;
+  if (t->lift <= 0) return;
+  if (v > t->lift) v = t->lift;
+  if (v <= 0) {
+    v = 0;
+    t->lift = 0;
+  }
+  grid_set_view(t->g, v);
+}
+
+
+/*
+** A task's terminal starting: " *  Executing task: echo" (NULL: none), in
+** a terminal used again (keep) under what it showed. ConPTY clears the
+** screen as its program starts, so there the lines shown go up into the
+** scrollback first, the cursor at the top; the view then keeps them over
+** the new output (keep_view).
+*/
+static void task_head (Term *t, const char *echo, int keep) {
+  char s[1100];
+  int k, n;
+  if (echo) {
+    snprintf(s, sizeof(s), "\033[0m *  Executing task: %s \r\n\r\n", echo);
+    term_feed(t, s, strlen(s));
+  }
+  n = t->g->cy + (t->g->cx > 0);	/* the lines used */
+  t->lift = 0;
+  if (n == 0 || !keep) {
+    grid_set_view(t->g, 0);
+    return;
+  }
+  snprintf(s, sizeof(s), "\033[%d;1H", t->rows);
+  term_feed(t, s, strlen(s));
+  for (k = 0; k < n; k++) term_feed(t, "\n", 1);
+  term_feed(t, "\033[H", 3);
+  t->lift = n;
+  keep_view(t);
+}
+
+
 /*
 ** The same with the program and its arguments given (a "process" task, a
 ** shell of options.shell, a debug adapter's runInTerminal). echo: the line
 ** " *  Executing task: echo" first, NULL none. reuse: presentation.panel,
 ** which finished terminal goes for it: any (PR_SHARED), the one of the same
-** name (PR_DEDICATED), none (PR_NEW).
+** name (PR_DEDICATED), none (PR_NEW). With it, TT_CLEAR (presentation.clear:
+** what that terminal showed goes first; else it stays above, as VS Code
+** keeps it), TT_CLOSE (presentation.close: the terminal goes when the task
+** ends) and TT_NOREUSEMSG (presentation.showReuseMessage false).
 */
 int panel_run_argv (int cols, int rows, const char *name, char **argv, const char *echo, const char *cwd, int task,
                     int reuse) {
-  char *here, head[1024];
-  Term *t;
+  char *here;
+  Term *t = NULL;
+  Pty *pty;
   int i;
-  for (i = 0; i < g_n && reuse != PR_NEW; i++)	/* a finished task's terminal is used again */
-    if (g_term[i]->done && (reuse == PR_SHARED || strcmp(g_term[i]->name, name) == 0)) {
-      term_free(i);
+  for (i = 0; i < g_n && (reuse & 3) != PR_NEW; i++)	/* a finished task's terminal is used again */
+    if (g_term[i]->done && ((reuse & 3) == PR_SHARED || strcmp(g_term[i]->name, name) == 0)) {
+      t = g_term[i];
+      cols = t->cols;
+      rows = t->rows;
       break;
     }
-  if (g_n == MAX_TERM) return -1;
+  if (t == NULL && g_n == MAX_TERM) return -1;
   if (cols < 2) cols = 2;
   if (rows < 1) rows = 1;
   os_setenv("TERM", "xterm-256color");
   os_setenv("COLORTERM", "truecolor");
   os_setenv("TERM_PROGRAM", MME_NAME);
-  t = (Term *)xmalloc(sizeof(Term));
-  memset(t, 0, sizeof(*t));
   here = os_getcwd();
   os_chdir(cwd && *cwd ? cwd : side_root());
-  t->pty = pty_spawn(argv[0], argv, cols, rows);
+  pty = pty_spawn(argv[0], argv, cols, rows);
   if (here) os_chdir(here);
   free(here);
-  if (t->pty == NULL) {
+  if (pty == NULL) {
     toast(1, "The task could not start");
-    free(t);
     return -1;
   }
+  if (t) {	/* the same terminal, its output kept unless presentation.clear */
+    t->pty = pty;
+    t->done = 0;
+    t->task = task;
+    t->close_end = (reuse & TT_CLOSE) != 0;
+    t->no_reuse_msg = (reuse & TT_NOREUSEMSG) != 0;
+    snprintf(t->name, sizeof(t->name), "%s", name);
+    if (reuse & TT_CLEAR) {
+      static const char cls[] = "\033[0m\033[H\033[2J\033[3J";
+      term_feed(t, cls, sizeof(cls) - 1);
+    }
+    task_head(t, echo, 1);
+    g_cur = i;
+    return 0;
+  }
+  t = (Term *)xmalloc(sizeof(Term));
+  memset(t, 0, sizeof(*t));
+  t->pty = pty;
   snprintf(t->name, sizeof(t->name), "%s", name);
   t->task = task;
+  t->close_end = (reuse & TT_CLOSE) != 0;
+  t->no_reuse_msg = (reuse & TT_NOREUSEMSG) != 0;
   t->grp = ++g_next_grp;
   t->g = grid_new(cols, rows, opt.term_scrollback);
   vt_init(&t->vt, t->g);
@@ -842,10 +910,7 @@ int panel_run_argv (int cols, int rows, const char *name, char **argv, const cha
   t->cols = cols;
   t->rows = rows;
   buf_init(&t->osc);
-  if (echo) {
-    snprintf(head, sizeof(head), "\033[0m *  Executing task: %s \r\n\r\n", echo);
-    term_feed(t, head, strlen(head));
-  }
+  task_head(t, echo, 0);
   g_term[g_n] = t;
   g_cur = g_n++;
   return 0;
@@ -1081,6 +1146,7 @@ int panel_poll (void) {
       took += (size_t)n;
       got = 1;
     }
+    if (took && t->lift) keep_view(t);
     if (took >= POLL_MAX) continue;	/* more may wait: whether it ended is asked when it is read */
     if (t->task && (n < 0 || pty_exited(t->pty, &code))) {	/* a task ended: its terminal stays */
       char msg[256];
@@ -1089,14 +1155,20 @@ int panel_poll (void) {
         term_feed(t, buf, (size_t)n);
         task_output(t->task, buf, (size_t)n);
       }
-      snprintf(msg, sizeof(msg), "\r\n\033[0m *  The terminal process terminated with exit code: %d. \r\n"
-                                 " *  Terminal will be reused by tasks, press any key to close it. \r\n", code);
+      snprintf(msg, sizeof(msg), "\r\n\033[0m *  The terminal process terminated with exit code: %d. \r\n%s", code,
+               t->no_reuse_msg ? "" : " *  Terminal will be reused by tasks, press any key to close it. \r\n");
       term_feed(t, msg, strlen(msg));
+      if (t->lift) keep_view(t);
+      t->lift = 0;
       task_done(t->task, code);
       pty_close(t->pty);
       t->pty = NULL;
       t->done = 1;
       got = 1;
+      if (t->close_end) {	/* presentation.close: the terminal goes with its task */
+        term_free(i--);
+        if (g_n == 0) return 2;
+      }
       continue;
     }
     if (n < 0 || pty_exited(t->pty, &code)) {	/* the shell ended: its terminal goes */

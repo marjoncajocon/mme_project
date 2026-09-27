@@ -9,11 +9,11 @@
 |       5                                                                                                   ⠟⠛
 |      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
 |       7                                                                                                   ⣋⣁⣀⡀
-|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
 |       9  │   int x;                                                                                       ⡹⠿⠿⠃
-|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉      ─
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉      ─
 |      11  } Point;
-|      12
+|     12
 |      13  static·int·total·=·0;
 |      14
 |      15  /* adds two numbers and remembers the sum */
@@ -40,11 +40,11 @@
 |      21  static Point make (int x, int y) {                                                               ⠟⠛
 |     22  │   Point p;                                                                                     ⣿⡏⠉⠁
 |      23  │   p.x = x;                                                                                     ⣋⣁⣀⡀
-|     24  │   p.y = y;                                                                                     ⣿⠿⠗
+|     24  │   p.y = y;                                                                                     ⣿⠿⠗
 |      25  │   return p;                                                                                    ⡹⠿⠿⠃
-|     26  }                                                                                                ⣟⣛⡛⠋⠉⠉
+|     26  }                                                                                                ⣟⣛⡛⠋⠉⠉
 |      27
-|      28  int main (int argc, char **argv) {
+|     28  int main (int argc, char **argv) {
 |      29  │   Point p = make(1, 2);
 |      30  │   const char *name = "mme";
 |      31  │   double ratio = 1.5;

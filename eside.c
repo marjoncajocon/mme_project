@@ -30,15 +30,19 @@ static const uint32_t act_icon[VIEW_N] = {
   0xEB91,	/* debug-alt: Run and Debug */
   0xEAE6,	/* extensions */
   0xEA79,	/* beaker: Testing */
-  0xEB86	/* list-tree: the extensions' views (only when there are some) */
+  0xEB86,	/* list-tree: the extensions' views (only when there are some) */
+  0xEB39	/* remote-explorer: the Remote Explorer */
 };
+
+/* VS Code's order: the Remote Explorer after Run and Debug */
+static const int act_order[VIEW_N] = {VIEW_FILES, VIEW_SEARCH, VIEW_GIT, VIEW_DEBUG, VIEW_REMOTE, VIEW_EXT, VIEW_TEST, VIEW_TREE};
 
 
 /* the activity bar's icons in order: the side bar's views there (VIEW_*), then the panel's moved into it */
 static int act_views (int *v) {
   int k, n = 0;
   for (k = 0; k < VIEW_N; k++)
-    if (view_in_side(k)) v[n++] = k;
+    if (view_in_side(act_order[k])) v[n++] = act_order[k];
   for (k = MV_PROBLEMS; k < MV_N; k++)
     if (view_in_side(VIEW_MOVED + k)) v[n++] = VIEW_MOVED + k;
   return n;
@@ -121,6 +125,7 @@ void side_draw (int view, int x, int y, int w, int h, int focus, const char *act
   else if (view == VIEW_EXT) ext_draw(x, y, w, h, focus);
   else if (view == VIEW_TEST) test_draw(x, y, w, h, focus);
   else if (view == VIEW_TREE) tree_draw(x, y, w, h, focus);
+  else if (view == VIEW_REMOTE) remote_view_draw(x, y, w, h, focus);
   else files_draw(x, y, w, h, focus, active);
 }
 
@@ -133,6 +138,7 @@ int side_key (int view, int k, SideAct *act) {
   if (view == VIEW_EXT) return ext_key(k, act);
   if (view == VIEW_TEST) return test_key(k, act);
   if (view == VIEW_TREE) return tree_key(k, act);
+  if (view == VIEW_REMOTE) return remote_view_key(k, act);
   return files_key(k, act);
 }
 
@@ -145,6 +151,7 @@ void side_click (int view, int row, int col, SideAct *act) {
   else if (view == VIEW_EXT) ext_click(row, col, act);
   else if (view == VIEW_TEST) test_click(row, col, act);
   else if (view == VIEW_TREE) tree_click(row, col, act);
+  else if (view == VIEW_REMOTE) remote_view_click(row, col, act);
   else files_click(row, col, act);
 }
 
@@ -216,6 +223,7 @@ void side_bar_to (int view, int y) {
   else if (view == VIEW_EXT) ext_scroll_to(top);
   else if (view == VIEW_TEST) test_scroll_to(top);
   else if (view == VIEW_TREE) tree_scroll_to(top);
+  else if (view == VIEW_REMOTE) remote_view_scroll_to(top);
 }
 
 
@@ -226,12 +234,13 @@ void side_wheel (int view, int d) {
   else if (view == VIEW_EXT) ext_wheel(d);
   else if (view == VIEW_TEST) test_wheel(d);
   else if (view == VIEW_TREE) tree_wheel(d);
+  else if (view == VIEW_REMOTE) remote_view_wheel(d);
   else files_wheel(d);
 }
 
 
 int side_idle (int view) {
-  int r = ext_idle() | test_idle() | chat_idle();	/* downloads, test runs and Claude's answers go on whatever is shown */
+  int r = ext_idle() | test_idle() | chat_idle() | remote_view_idle();	/* downloads, test runs, Claude's answers, wsl.exe and docker go on whatever is shown */
   return (view == VIEW_SEARCH || search_busy() ? search_idle() : 0) | r;	/* a search goes on hidden too */
 }
 
@@ -2099,22 +2108,22 @@ void files_wheel (int d) {
 
 static const char *const mv_id[MV_N] = {
   "workbench.view.search", "outline", "timeline", "workbench.view.explorer", "workbench.view.scm",
-  "workbench.view.debug", "workbench.view.extensions", "workbench.view.extension.test",
+  "workbench.view.debug", "workbench.view.extensions", "workbench.view.extension.test", "workbench.view.remote",
   "workbench.panel.markers", "workbench.panel.output", "workbench.panel.repl", "terminal", "jupyterViewVariables"
 };
 static const char *const mv_title[MV_N] = {
   "SEARCH", "OUTLINE", "TIMELINE", "EXPLORER", "SOURCE CONTROL", "RUN AND DEBUG", "EXTENSIONS", "TESTING",
-  "PROBLEMS", "OUTPUT", "DEBUG CONSOLE", "TERMINAL", "JUPYTER"
+  "REMOTE EXPLORER", "PROBLEMS", "OUTPUT", "DEBUG CONSOLE", "TERMINAL", "JUPYTER"
 };
 static const char *const mv_name[MV_N] = {
   "Search", "Outline", "Timeline", "Explorer", "Source Control", "Run and Debug", "Extensions", "Testing",
-  "Problems", "Output", "Debug Console", "Terminal", "Jupyter: Variables"
+  "Remote Explorer", "Problems", "Output", "Debug Console", "Terminal", "Jupyter: Variables"
 };
 static const uint32_t mv_icon[MV_N] = {
-  0xEA6D, 0xEB5B, 0xEA82, 0xEAF0, 0xEA68, 0xEB91, 0xEAE6, 0xEA79,	/* codicons search, symbol-class, history, files ... */
+  0xEA6D, 0xEB5B, 0xEA82, 0xEAF0, 0xEA68, 0xEB91, 0xEAE6, 0xEA79, 0xEB39,	/* codicons search, symbol-class, history, files ... */
   0xEA6C, 0xEB9D, 0xEB9B, 0xEA85, 0xEBB8	/* warning, output, debug-console, terminal, variable-group */
 };
-static const int mv_view[VIEW_N] = {MV_EXPLORER, MV_SEARCH, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST, -1};
+static const int mv_view[VIEW_N] = {MV_EXPLORER, MV_SEARCH, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST, -1, MV_REMOTE};
 
 static struct {
   char *id;

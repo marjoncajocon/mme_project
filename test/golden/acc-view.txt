@@ -9,11 +9,11 @@
 |
 | 
 |
+| 
+|
 | 
 |
 | 
-|
-|
 |
 |
 |
@@ -31,10 +31,10 @@
 |                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
 exited=0
 ---- speech
-New File, Ctrl+N, 1 of 465
-Save, Ctrl+S, 1 of 295
-Search, Ctrl+Shift+F, 1 of 225
-Settings, Ctrl+,, 1 of 142
+New File, Ctrl+N, 1 of 467
+Save, Ctrl+S, 1 of 297
+Search, Ctrl+Shift+F, 1 of 227
+Settings, Ctrl+,, 1 of 144
 Settings, Ctrl+,, 1 of 64
 Settings, Ctrl+,, 1 of 36
 Settings, Ctrl+,, 1 of 29

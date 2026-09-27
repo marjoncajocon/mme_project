@@ -145,6 +145,93 @@ static void put_config (Buf *b, const char *key) {
 }
 
 
+/* ${command:pickProcess}: a process of the system's picked, its id (Attach to Process); NULL: none picked */
+static char *pick_process (void) {
+  Buf out;
+  Vec pid = {0};
+  Pick p;
+  char *line, *nl, *v = NULL;
+  int r;
+  size_t i;
+#ifdef _WIN32
+  char *root = os_getenv("SystemRoot"), exe[600];
+  char *argv[] = {exe, "/fo", "csv", "/nh", NULL};
+  snprintf(exe, sizeof(exe), "%s\\System32\\tasklist.exe", root ? root : "C:\\Windows");
+  free(root);
+#else
+  char *argv[] = {"/bin/ps", "-axo", "pid=,comm=", NULL};
+#endif
+  buf_init(&out);
+  if (run_capture(argv, &out) != 0 || out.len == 0) {
+    toast(1, "The processes could not be listed");
+    buf_free(&out);
+    return NULL;
+  }
+  pick_init(&p, "Pick the process to attach to");
+  for (line = out.s; line && *line; line = nl) {
+    char name[256], id[32];
+    if ((nl = strchr(line, '\n')) != NULL) *nl++ = '\0';
+#ifdef _WIN32
+    if (sscanf(line, "\"%255[^\"]\",\"%31[0-9]\"", name, id) != 2) continue;	/* "mme.exe","1234","Console",... */
+#else
+    if (sscanf(line, " %31[0-9] %255[^\r\n]", id, name) != 2) continue;
+#endif
+    {
+      char d[64];
+      snprintf(d, sizeof(d), "process id: %s", id);
+      pick_add(&p, path_basename(name), d, 0xEB2C);
+    }
+    vec_push(&pid, xstrdup(id));
+  }
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r >= 0 && (size_t)r < pid.n) v = xstrdup(pid.v[r]);
+  for (i = 0; i < pid.n; i++) free(pid.v[i]);
+  free(pid.v);
+  buf_free(&out);
+  return v;
+}
+
+
+/*
+** ${command:id}: the command run, the string it gives put in (once a run),
+** as VS Code does: mme's own that give one (pickProcess), else an
+** extension's through the host. A command that gives nothing stops the run
+** (a pick not made); one that gives other than a string, or is not there,
+** says so. NULL: the run stops.
+*/
+static char *command_value (const char *id) {
+  char key[160], *v = NULL, *r;
+  Json *j = NULL;
+  size_t i;
+  int c = CMD_NONE;
+  snprintf(key, sizeof(key), "${command:%s}", id);	/* not an input's id: the same answers keep both */
+  for (i = 0; i + 1 < g_ans.n; i += 2)
+    if (strcmp(g_ans.v[i], key) == 0) return xstrdup(g_ans.v[i + 1]);
+  if (g_cancel) return NULL;
+  if (strcmp(id, "pickProcess") == 0) v = pick_process();
+  else if ((c = cmd_by_id(id)) != CMD_NONE && c < CMD_N) mme_command(c);	/* mme's own: they give nothing back */
+  else if ((r = lsp_ext_command_value(id)) == NULL)
+    toast(1, "command '%s' not found", id);
+  else {
+    if (r[0] == '!') toast(1, "%s", r + 1);	/* it threw */
+    else if ((j = json_parse(r, strlen(r))) != NULL && j->type == J_STR) v = xstrdup(j->str);
+    else if (j == NULL || j->type != J_NULL)
+      toast(1, "Cannot substitute command variable '%s' because command did not return a result of type string.", id);
+    else if (c == CMD_NONE) toast(1, "command '%s' not found", id);	/* nothing, from no command the host knows */
+    if (r[0] != '!') json_free(j);
+    free(r);
+  }
+  if (v == NULL) {
+    g_cancel = 1;
+    return NULL;
+  }
+  vec_push(&g_ans, xstrdup(key));
+  vec_push(&g_ans, xstrdup(v));
+  return v;
+}
+
+
 /* "${workspaceFolder}/${fileBasenameNoExtension}": VS Code's variables put in */
 char *vs_subst (const char *s) {
   const char *file = editor_file(), *root = side_root();
@@ -174,6 +261,11 @@ char *vs_subst (const char *s) {
     else if (strncmp(name, "config:", 7) == 0) put_config(&b, name + 7);
     else if (strncmp(name, "input:", 6) == 0) {
       char *v = input_value(name + 6);
+      if (v) buf_puts(&b, v);
+      free(v);
+    }
+    else if (strncmp(name, "command:", 8) == 0) {
+      char *v = command_value(name + 8);
       if (v) buf_puts(&b, v);
       free(v);
     }
@@ -1037,6 +1129,9 @@ static int job_resolve (int j, const Task *t) {
     if (strcmp(reveal, "always") != 0) x->flags |= TT_HIDE;
     x->silent = strcmp(reveal, "silent") == 0;
     if (json_bool(member(pr, "focus"), 0)) x->flags |= TT_FOCUS;
+    if (json_bool(member(pr, "clear"), 0)) x->flags |= TT_CLEAR;	/* else a terminal used again keeps what it showed */
+    if (json_bool(member(pr, "close"), 0)) x->flags |= TT_CLOSE;
+    if (!json_bool(member(pr, "showReuseMessage"), 1)) x->flags |= TT_NOREUSEMSG;
     if (!json_bool(member(pr, "echo"), 1)) {
       free(x->echo);
       x->echo = NULL;

@@ -3085,6 +3085,7 @@ const handlers = {
     return {items};
   },
   async 'workspace/executeCommand' (p) {
+    await extsRead;	// asked as the host starts (a task's ${command:id}): the extensions known first, to activate
     const r = await executeCommand(p.command, ...(p.arguments || []));
     return plain(r === undefined ? null : r);
   },

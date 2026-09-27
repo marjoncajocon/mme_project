@@ -9,11 +9,11 @@
 |        5  static int step0002 (int a) { return a + 2; }                                                   ⣿⣿⣷⣶⣶
 |       6  static int step0003 (int a) { return a + 3; }                                                   ⣛⣛⡛⠛⠛
 |        7  static int step0004 (int a) { return a + 4; }                                                   ⣿⣿⣿⣿⣿
-|       8  static int step0005 (int a) { return a + 5; }                                                   ⣿⣿⣟⣛⣛
+|       8  static int step0005 (int a) { return a + 5; }                                                   ⣿⣿⣟⣛⣛
 |        9  static int step0006 (int a) { return a + 6; }                                                   ⣿⣿⣿⣿⣿
-|      10  /* step 7 of the work */                                                                        ⣿⣿⣯⣭⣭
+|      10  /* step 7 of the work */                                                                        ⣿⣿⣯⣭⣭
 |       11  static int step0008 (int a) { return a + 8; }                                                   ⣛⣛⣛⣛⣛
-|       12  static int step0009 (int a) { return a + 9; }                                                   ⣿⣿⣷⣶⣶
+|      12  static int step0009 (int a) { return a + 9; }                                                   ⣿⣿⣷⣶⣶
 |       13  static int step0010 (int a) { return a + 10; }                                                  ⣿⣿⡿⠿⠿
 |       14  static int step0011 (int a) { return a + 11; }                                                  ⣿⣿⣿⣿⣿
 |       15  static int step0012 (int a) { return a + 12; }                                                  ⣿⣿⣟⣛⣛
@@ -40,11 +40,11 @@
 |        5  static int step0002 (int a) { return a + 2; }
 |       6  static int step0003 (int a) { return a + 3; }
 |        7  static int step0004 (int a) { return a + 4; }
-|       8  static int step0005 (int a) { return a + 5; }
+|       8  static int step0005 (int a) { return a + 5; }
 |        9  static int step0006 (int a) { return a + 6; }
-|      10  /* step 7 of the work */
+|      10  /* step 7 of the work */
 |       11  static int step0008 (int a) { return a + 8; }
-|       12  static int step0009 (int a) { return a + 9; }
+|      12  static int step0009 (int a) { return a + 9; }
 |       13  static int step0010 (int a) { return a + 10; }
 |       14  static int step0011 (int a) { return a + 11; }
 |       15  static int step0012 (int a) { return a + 12; }

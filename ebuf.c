@@ -846,6 +846,27 @@ int doc_undo (Doc *d, Pos *cur) {
 }
 
 
+void doc_mark (Doc *d, DocMark *m) {
+  m->undo_n = d->undo.n;
+  m->redo = d->redo;	/* a change would drop them: kept aside */
+  memset(&d->redo, 0, sizeof(d->redo));
+  m->changes = d->changes;
+  m->saved = d->saved;
+  doc_group(d);
+}
+
+
+void doc_unmark (Doc *d, DocMark *m) {
+  while (d->undo.n > m->undo_n) free(d->undo.v[--d->undo.n].text);
+  undo_clear(&d->redo);
+  d->redo = m->redo;
+  memset(&m->redo, 0, sizeof(m->redo));
+  d->changes = m->changes;
+  d->saved = m->saved;
+  doc_group(d);
+}
+
+
 int doc_redo (Doc *d, Pos *cur) {
   long g;
   if (d->redo.n == 0) return 0;

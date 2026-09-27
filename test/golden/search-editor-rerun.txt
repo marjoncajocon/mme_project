@@ -9,11 +9,11 @@
 |      notes.txt                 │
 |     saved.code-search         │
 |                                 │
+|                                │
+|                                 │
 |                                │
 |                                 │
 |                                │
-|                                 │
-|                                 │
 |                                 │
 |                                 │
 |                                 │
@@ -40,11 +40,11 @@
 |      notes.txt                 │    1: Total is counted in count.c.
 |     saved.code-search         │    2: The total never goes down.
 |                                 │
-|                                │  src/count.c:
+|                                │  src/count.c:
 |                                 │    2  #include <stdio.h>
-|                                │    3: static int total = 0;
+|                                │    3: static int total = 0;
 |                                 │    4: static int add (int a) { total += a; return total; }
-|                                 │    5
+|                                │    5
 |                                 │
 |                                 │    8    add(2);
 |                                 │    9:   printf("%d\n", total);
@@ -71,11 +71,11 @@
 |      notes.txt                 │    2: The total never goes down.
 |     saved.code-search         │
 |                                 │  src/count.c:
-|                                │    3: static int total = 0;
+|                                │    3: static int total = 0;
 |                                 │    4: static int add (int a) { total += a; return total; }
-|                                │    9:   printf("%d\n", total);
+|                                │    9:   printf("%d\n", total);
 |                                 │
-|                                 │
+|                                │
 |                                 │
 |                                 │
 |                                 │
