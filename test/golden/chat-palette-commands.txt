@@ -1,0 +1,32 @@
+---- cursor 22,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    >Chat
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  Chat: Clear                                                                               ⣒⣂⡀
+|       3  #incl  Chat: Open Chat  Ctrl+Alt+I                                                               ⠿
+|      4  #incl  Chat: New Chat                                                                            ⣭⣭⣥⡤⠄
+|       5         Chat: Cancel                                                                              ⠟⠛
+|      6  #defi  Chat: Toggle Agent Mode                                                                   ⣿⡏⠉⠁
+|       7         Chat: Set API Key...                                                                      ⣋⣁⣀⡀
+|      8  typed  Chat: Change Model...                                                                     ⣿⠿⠗
+|       9  │   i  Chat: Toggle Implicit Context                                                             ⡹⠿⠿⠃
+|     10  │   i  Change Indentation...                                                                     ⠟⠛⠛⠋⠉⠉
+|      11  } Poi  Inline Chat: Start  Ctrl+I
+|      12         Inline Chat: Discard  Escape
+|      13  stati  Transpose Characters around the Cursor
+|      14         Inline Chat: Accept Changes  Ctrl+Enter
+|      15  /* ad  Copy Path of Active File  Shift+Alt+C
+|      16  stati  Copy Relative Path of Active File  Ctrl+K Ctrl+Shift+C
+|      17  │   t
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

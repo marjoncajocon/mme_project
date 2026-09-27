@@ -128,28 +128,37 @@ static int have_git (void) {
 
 static const char *repo_dir (void);
 
-/* git -C dir with the arguments of args (NULL ends them); err: stderr into out too */
-static int git_exec_in (const char *dir, Buf *out, int err, const char *const *args) {
-  char *argv[64];
-  int n = 0, rc, i;
+/* git -C dir with the arguments of args (NULL ends them); err: stderr into out too; magic: a pathspec may be
+   ":(exclude)x" (else a file named "[ab].txt" or "*.c" is only that file) */
+static int git_run (const char *dir, Buf *out, int err, int magic, const char *const *args) {
+  char **argv;
+  int n = 0, rc, i, k = 0;
   size_t from = out->len;
   long long t0 = os_now_us();
   Buf cmd;
   if (!have_git()) return -1;
+  while (args[k]) k++;
+  argv = (char **)xmalloc(((size_t)k + 5) * sizeof(char *));
   argv[n++] = g_git;
   argv[n++] = (char *)"-C";
   argv[n++] = (char *)dir;
-  argv[n++] = (char *)"--literal-pathspecs";	/* a file named "[ab].txt" or "*.c" is only that file */
-  while (*args && n < 63) argv[n++] = (char *)*args++;
+  if (!magic) argv[n++] = (char *)"--literal-pathspecs";
+  while (*args) argv[n++] = (char *)*args++;
   argv[n] = NULL;
   rc = err ? run_capture_err(argv, out) : run_capture(argv, out);
   buf_init(&cmd);	/* the OUTPUT view's Git channel, like VS Code's: "> git status -z [12ms]" */
-  for (i = 4; i < n; i++) buf_printf(&cmd, " %s", argv[i]);
+  for (i = magic ? 3 : 4; i < n; i++) buf_printf(&cmd, " %s", argv[i]);
   buf_putc(&cmd, '\0');
   out_log("Git", "[%s] > git%s [%ldms]", rc == 0 ? "info" : "error", cmd.s, (long)((os_now_us() - t0) / 1000));
   if (rc != 0 && out->len > from) out_append("Git", out->s + from, out->len - from < 4096 ? out->len - from : 4096);
   buf_free(&cmd);
+  free(argv);
   return rc;
+}
+
+
+static int git_exec_in (const char *dir, Buf *out, int err, const char *const *args) {
+  return git_run(dir, out, err, 0, args);
 }
 
 
@@ -431,15 +440,19 @@ static void repos_scan (void) {
     }
     vec_init(&v);
     if (os_listdir(dir, &v) == 0) {
+      Vec seen;	/* a link to the folder itself is not another repository */
+      vec_init(&seen);
+      fs_dir_first(&seen, dir);
       vec_sort(&v);
       for (k = 0; k < v.n; k++) {
         char *sub;
         OsStat st;
         if (v.v[k][0] == '.' || strcmp(v.v[k], "node_modules") == 0) continue;
         sub = path_join(dir, v.v[k]);
-        if (os_stat(sub, &st) == 0 && st.is_dir) repo_try(sub, 0);
+        if (os_stat(sub, &st) == 0 && st.is_dir && fs_walk_into(&seen, sub)) repo_try(sub, 0);
         free(sub);
       }
+      vec_free(&seen);
     }
     vec_free(&v);
   }
@@ -706,6 +719,146 @@ static void read_state (const char *gd) {
 }
 
 
+/*
+** {==================================================================
+** Folder links in the working tree
+** ===================================================================
+*/
+
+/*
+** Git for Windows goes into a junction as into a folder (a symlink it does
+** not follow): one back up the tree has git status -uall list the tree
+** again at each turn until the paths are too long, and two of them take it
+** for ever (mme did not come up). So the untracked folders are asked for
+** first (-unormal barely looks into them), the links in them that lead
+** back up are found (not followed), and -uall leaves those out. They are
+** kept for git add -A too.
+*/
+#define LINK_LOOK	200000	/* the entries looked at in untracked folders, at most */
+
+static Vec g_links;	/* the working tree's links back up the tree, from the top with '/' */
+
+#ifdef _WIN32
+
+/* the link at path (native) leads to a folder it is in (or itself): walked, it never ends */
+static int link_loops (const char *path) {
+  char *to = fs_real_dir(path), *dir = path_dirname(path), *at = fs_real_dir(dir);
+  size_t n = to ? strlen(to) : 0;
+  int r = to && at && m_fnncmp(at, to, n) == 0 && (at[n] == '\0' || path_is_sep(at[n]));
+  free(to);
+  free(dir);
+  free(at);
+  return r;
+}
+
+
+/* the links under the untracked folder dir (native; rel from the top) that loop, into g_links */
+static void links_in (const char *dir, const char *rel, size_t *left) {
+  Vec v;
+  size_t i;
+  vec_init(&v);
+  if (os_listdir(dir, &v) == 0)
+    for (i = 0; i < v.n && *left > 0; i++) {
+      char *p = path_join(dir, v.v[i]);
+      OsStat st;
+      (*left)--;
+      if (os_lstat(p, &st) == 0 && st.is_dir && strcmp(v.v[i], ".git") != 0) {
+        char *r = xstrcat3(rel, "/", v.v[i]);
+        if (!st.is_link) links_in(p, r, left);
+        else if (link_loops(p)) {
+          vec_push(&g_links, r);
+          r = NULL;
+        }
+        free(r);
+      }
+      free(p);
+    }
+  vec_free(&v);
+}
+
+#endif
+
+
+/* git status -z -uall into b, the links in g_links left out (only Windows' git follows them) */
+static int status_all (Buf *b) {
+#ifdef _WIN32
+  Buf u;
+  size_t i, left = LINK_LOOK;
+  int dirs = 0, rc;
+  vec_free(&g_links);
+  vec_init(&g_links);
+  buf_init(&u);
+  if ((rc = git(&u, "status", "--porcelain=v1", "-z", "-unormal", NULL, NULL)) != 0) {
+    buf_free(&u);
+    return rc;
+  }
+  for (i = 0; i + 3 < u.len;) {	/* "XY path\0", renames: "XY new\0old\0"; an untracked folder: "?? dir/\0" */
+    const char *e = u.s + i;
+    size_t len = strlen(e + 3);
+    if (e[0] == '?' && len > 0 && e[3 + len - 1] == '/') {
+      char *rel = xstrndup(e + 3, len - 1), *p = path_join(g_top, rel);
+      OsStat st;
+      dirs++;
+      to_native(p);
+      if (os_lstat(p, &st) == 0 && st.is_link) {
+        if (link_loops(p)) {
+          vec_push(&g_links, rel);
+          rel = NULL;
+        }
+      }
+      else links_in(p, rel, &left);
+      free(rel);
+      free(p);
+    }
+    i += 3 + len + 1;
+    if (e[0] == 'R' || e[0] == 'C') i += strlen(u.s + i) + 1;
+  }
+  if (dirs == 0) {	/* no untracked folder: -uall would say the same */
+    buf_putn(b, u.s, u.len);
+    buf_free(&u);
+    return 0;
+  }
+  buf_free(&u);
+  if (g_links.n > 0) {
+    const char **a = (const char **)xmalloc((g_links.n + 6) * sizeof(char *));
+    int n = 0;
+    a[n++] = "status";
+    a[n++] = "--porcelain=v1";
+    a[n++] = "-z";
+    a[n++] = "-uall";
+    a[n++] = "--";
+    for (i = 0; i < g_links.n; i++) a[n++] = xstrcat3(":(exclude,literal)", g_links.v[i], "");
+    a[n] = NULL;
+    rc = git_run(g_top, b, 0, 1, a);
+    for (i = 5; a[i]; i++) free((char *)a[i]);
+    free(a);
+    return rc;
+  }
+#endif
+  return git(b, "status", "--porcelain=v1", "-z", "-uall", NULL, NULL);
+}
+
+
+/* git add -A, the links back up the tree left out */
+static int add_all (Buf *b) {
+  const char **a = (const char **)xmalloc((g_links.n + 5) * sizeof(char *));
+  size_t i;
+  int n = 0, rc;
+  a[n++] = "add";
+  a[n++] = "-A";
+  a[n++] = "--";
+  a[n++] = ":/";	/* the whole tree, as git add -A alone */
+  for (i = 0; i < g_links.n; i++) a[n++] = xstrcat3(":(exclude,literal)", g_links.v[i], "");
+  a[n] = NULL;
+  rc = git_run(g_top, b, 0, 1, a);
+  for (i = 4; a[i]; i++) free((char *)a[i]);
+  free(a);
+  return rc;
+}
+
+/* }================================================================== */
+
+
 void git_refresh (void) {
   Buf b;
   size_t i;
@@ -752,7 +905,7 @@ void git_refresh (void) {
   }
   buf_free(&b);
   buf_init(&b);
-  if (git(&b, "status", "--porcelain=v1", "-z", "-uall", NULL, NULL) == 0) {
+  if (status_all(&b) == 0) {
     for (i = 0; i + 3 < b.len;) {	/* "XY path\0", renames: "XY new\0old\0" */
       const char *e = b.s + i;
       size_t len = strlen(e + 3);
@@ -1132,7 +1285,7 @@ static void commit (void) {
       }
     }
     buf_init(&b);
-    git(&b, "add", "-A", NULL, NULL, NULL, NULL);
+    add_all(&b);
     buf_free(&b);
   }
   buf_init(&b);
@@ -1954,7 +2107,7 @@ int diff_open_files (const char *path, const char *old_file, const char *new_fil
   buf_free(&b);
   if (D.nline == 0) {	/* no difference: the text itself */
     size_t len, i, from = 0, n = 0;
-    char *s = read_file(new_file, &len);
+    char *s = read_file_all(new_file, &len);
     for (i = 0; s && i <= len; i++) {
       if (i < len && s[i] != '\n') continue;
       if (i < len || i > from) {
@@ -2359,7 +2512,13 @@ int diff_open (const char *path, int staged) {
   buf_init(&b);
   if (!staged && c->y == '?') {	/* untracked: every line is new */
     size_t len, from = 0;
-    char *s = read_file(path, &len);
+    char *s = read_file_all(path, &len);	/* all of it: this side is typed in and saved */
+    if (s == NULL) {
+      free(rel);
+      buf_free(&b);
+      toast(1, "Unable to read '%s' (it can't be read, or is over 1 GB)", path_basename(path));
+      return -1;
+    }
     D.title = xstrcat3(path_basename(path), " (Untracked)", "");
     for (i = 0; s && i <= len; i++) {
       if (i < len && s[i] != '\n') continue;
@@ -3540,7 +3699,7 @@ int diff_range (int act) {
   }
   path = xstrdup(D.path);
   if (act == 2) {	/* the file's own line ends */
-    blob = read_file(path, &bl);
+    blob = read_file_all(path, &bl);
   }
   else {	/* the index's */
     snprintf(spec, sizeof(spec), ":%s", D.rel);

@@ -1,0 +1,33 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lsp
+|      links.c  
+|     links.c
+|       1  /* links.c - what a language server links */                                                     ⣿⣿⡭⠍⠁       ─
+|      2  #include "colors.c"                                                                              ⠉⠁
+|       3  /* docs: https://example.com/mme */
+|      4  #include "renamer/main.c"
+|       5  int linked = 1;
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  1  1                                                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  C  {}  
+<->       3  /* docs: <under>https://example.com/mme<-> */
+exited=0

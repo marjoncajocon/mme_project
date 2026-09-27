@@ -1,0 +1,32 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c      Untitled-1  
+| 
+|       1                                                                                                               ─
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                           Move Editor into New Window: the editor has no file     
+|                                                           yet (save it first).
+|
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

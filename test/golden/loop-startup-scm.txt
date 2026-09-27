@@ -1,0 +1,63 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         looprepo
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    LOOPREPO               │
+|      fresh                   M │
+|     lib/deep                  │
+|  2   sub                     M │
+|     top.c                     │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|  main*                                                                                                             
+---- cursor 6,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         looprepo
+|      SOURCE CONTROL         │
+|      main                     │
+|      Message (Ctrl+Enter to co  │
+|     Changes                2  │
+|        made.txt fresh        U │
+|▎      new.txt sub           U │
+|  2   GRAPH                     │
+|    ◉   main  first commit     │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|  main*                                                                                                             
+exited=0

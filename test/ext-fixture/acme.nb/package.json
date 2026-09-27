@@ -1,0 +1,34 @@
+{
+  "name": "nb",
+  "publisher": "acme",
+  "displayName": "Acme Notebooks",
+  "description": "A notebook format of its own (.acmenb) and a kernel for it",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
+  "contributes": {
+    "notebooks": [
+      {
+        "type": "acme-notebook",
+        "displayName": "Acme Notebook",
+        "selector": [
+          {
+            "filenamePattern": "*.acmenb"
+          }
+        ]
+      }
+    ],
+    "notebookRenderer": [
+      {
+        "id": "acme-renderer",
+        "displayName": "Acme Renderer",
+        "entrypoint": "./renderer.js",
+        "mimeTypes": [
+          "application/x-acme"
+        ]
+      }
+    ]
+  }
+}

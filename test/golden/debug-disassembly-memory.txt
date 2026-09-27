@@ -1,0 +1,125 @@
+---- cursor 40,10
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      Disassembly               
+|      Stub: plain            │ <CRUMBS of mme-data/debug/Disassembly>
+|                                 │  16  0x00000fe8          48 89 0e e8               mov r6, 14           ⣿ ⣿⡇⢸⡇
+|     VARIABLES                 │  17  0x00000fec          48 89 0f ec               mov r7, 15           ⣿ ⣿⡇⢸⡇
+|       Locals                   │  18  0x00000ff0          48 89 10 f0               mov r0, 16           ⣿ ⣿⡇⢸⣿
+|         count: 42              │  19  0x00000ff4          48 89 11 f4               mov r1, 17           ⣿ ⣿⡇⢸⣿
+|          counter: 7             │  20  0x00000ff8          48 89 12 f8               mov r2, 18           ⣿⠤⣟⡃⢘⣛      ─
+|▎    WATCH                    │  21  0x00000ffc          48 89 13 fc               mov r3, 19           ⣿⠒⣯⡅⢨⣭
+|  ●      Add Expression         │  22  ; prog.py:2  count = 42                                            ⣿ ⣿⡇⢸⣿
+|     CALL STACK                │ 23  0x00001000          48 89 14 00               mov r4, 20           ⣿ ⣿⡇⢸⣿
+|       main     PAUSED ON ENTRY │  24  0x00001004          48 89 15 04               mov r5, 21           ⣿ ⣿⡇⢸⣿
+|       main         prog.py  2 │  25  ; prog.py:3  counter = 7                                           ⣿ ⣿⡇⢸⣿
+|      BREAKPOINTS               │  26  0x00001008          48 89 16 08               mov r6, 22           ⣿ ⣿⡇⢸⣿
+|                                 │  27  0x0000100c          48 89 17 0c               mov r7, 23           ⣿ ⣿⡇⢸⣿
+|                                 │  28  0x00001010          48 89 18 10               mov r0, 24           ⣿ ⣿⡇⢸⣿
+|                                 │  29  0x00001014          48 89 19 14               mov r1, 25           ⣿ ⣿⡇⢸⣿
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  Evaluate expression
+|                                                                     Ln 23, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 40,10
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      Disassembly               
+|      Stub: plain            │ <CRUMBS of mme-data/debug/Disassembly>
+|                                 │  16  0x00000fec          48 89 0e ec               mov r6, 14           ⣿ ⣿⡇⢸⡇
+|     VARIABLES                 │  17  0x00000ff0          48 89 0f f0               mov r7, 15           ⣿ ⣿⡇⢸⡇
+|       Locals                   │  18  0x00000ff4          48 89 10 f4               mov r0, 16           ⣿ ⣿⡇⢸⣿
+|         count: 42              │  19  0x00000ff8          48 89 11 f8               mov r1, 17           ⣿ ⣿⡇⢸⣿
+|          counter: 7             │  20  0x00000ffc          48 89 12 fc               mov r2, 18           ⣿⠒⣯⡅⢨⣭      ─
+|▎    WATCH                    │  21  ; prog.py:2  count = 42                                            ⣿⠉⣷⡆⢰⣶
+|  ●      Add Expression         │  22  0x00001000          48 89 13 00               mov r3, 19           ⣿ ⣿⡇⢸⣿
+|     CALL STACK                │ 23  0x00001004          48 89 14 04               mov r4, 20           ⣿ ⣿⡇⢸⣿
+|       main      PAUSED ON STEP │  24  ; prog.py:3  counter = 7                                           ⣿ ⣿⡇⢸⣿
+|       main         prog.py  2 │  25  0x00001008          48 89 15 08               mov r5, 21           ⣿ ⣿⡇⢸⣿
+|      BREAKPOINTS               │  26  0x0000100c          48 89 16 0c               mov r6, 22           ⣿ ⣿⡇⢸⣿
+|                                 │  27  0x00001010          48 89 17 10               mov r7, 23           ⣿ ⣿⡇⢸⣿
+|                                 │  28  0x00001014          48 89 18 14               mov r0, 24           ⣿ ⣿⡇⢸⣿
+|                                 │  29  0x00001018          48 89 19 18               mov r1, 25           ⣿ ⣿⡇⢸⣿
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  Evaluate expression
+|                                                                     Ln 23, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 119,16
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      Disassembly               
+|      Stub: plain            │ <CRUMBS of mme-data/debug/Disassembly>
+|                                 │  16  0x00000fec          48 89 0e ec               mov r6, 14           ⣿ ⣿⡇⢸⡇
+|     VARIABLES                 │  17  0x00000ff0          48 89 0f f0               mov r7, 15           ⣿ ⣿⡇⢸⡇
+|       Locals                   │  18  0x00000ff4          48 89 10 f4               mov r0, 16           ⣿ ⣿⡇⢸⣿
+|         count: 42              │  19  0x00000ff8          48 89 11 f8               mov r1, 17           ⣿ ⣿⡇⢸⣿
+|                                     0  0x00000ffc          48 89 12 fc               mov r2, 18           ⣿⠒⣯⡅⢨⣭      ─
+|▎    W   Set Value                 1  ; prog.py:2  count = 42                                            ⣿⠉⣷⡆⢰⣶
+|  ●        Copy Value                2  0x00001000          48 89 13 00               mov r3, 19           ⣿ ⣿⡇⢸⣿
+|     C   Add to Watch              3  0x00001004          48 89 14 04               mov r4, 20           ⣿ ⣿⡇⢸⣿
+|          View Binary Data          4  ; prog.py:3  counter = 7                                           ⣿ ⣿⡇⢸⣿
+|       ─────────────────────────── 5  0x00001008          48 89 15 08               mov r5, 21           ⣿ ⣿⡇⢸⣿
+|      B   Break on Value Change     6  0x0000100c          48 89 16 0c               mov r6, 22           ⣿ ⣿⡇⢸⣿
+|           Break on Value Read       7  0x00001010          48 89 17 10               mov r7, 23           ⣿ ⣿⡇⢸⣿
+|           Break on Value Access     8  0x00001014          48 89 18 14               mov r0, 24           ⣿ ⣿⡇⢸⣿
+|                                     9  0x00001018          48 89 19 18               mov r1, 25           ⣿ ⣿⡇⢸⣿
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  Evaluate expression
+|                                                                     Ln 23, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 45,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      Disassembly                   
+|      Stub: plain            │ Address   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  Decoded text
+|                                 │ 00002000  48 65 6C 6C 6F 2C 20 6D 65 6D 6F 72 79 21 00 01  Hello, memory!..
+|     VARIABLES                 │ 00002010  02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11  ................
+|       Locals                   │ 00002020  12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21  .............. !
+|         count: 42              │ 00002030  22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31  "#$%&'()*+,-./01
+|          counter: 7             │
+|▎    WATCH                    │
+|  ●      Add Expression         │
+|     CALL STACK                │
+|       main      PAUSED ON STEP │
+|       main         prog.py  2 │
+|      BREAKPOINTS               │
+|                                 │
+|                                 │
+|                                 │ Memory   64 bytes   0x00002000   0x48 (72)   read-only
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  Evaluate expression
+| 0x00002000   0x48 (72)                                                                                              
+exited=0

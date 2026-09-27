@@ -1,0 +1,32 @@
+---- cursor 45,14
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  page.html  ●
+|▎   OPEN EDITORS               │  page.html
+|    ─────────────────────────────│   1  <!DOCTYPE html>                                                    ⣿⣁⡀
+|    F3                     │   2  <html>                                                             ⡼⠛⠋⠁
+|      main.c                    │   3  <body>                                                             ⡿⠿
+|     notes.txt                 │   4  │   <div class="box">                                              ⠛
+|      page.html                 │   5  │   │   <p>Hello <b>world</b></p>
+|     util.c                    │   6  │   │   <img src="a.png">
+|      util.h                    │   7  │   </div>
+|                                │   8  <ul>
+|                                 │   9  │   <li>apples</li>
+|                                │  10  │   <li>pears</li>
+|                                 │  11  │   <li>plums</li>
+|                                 │  12  </ul>
+|                                 │  13  </body>
+|                                 │  14  </html>
+|                                 │  15
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │                                                                                     ─
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                         Ln 12, Col 6  Tab Size: 4  UTF-8  LF  HTML  
+exited=0

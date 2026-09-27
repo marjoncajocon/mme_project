@@ -1,0 +1,63 @@
+---- cursor 20,15
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      nb.ipynb  ●
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                               python
+|
+|   ▎        Notebook fixture
+|    ▎        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+|   ▎
+|    ▎        Some bold text.
+| 
+|    ▎  [1] x = 6 * 7
+|   ▎      print('hello')
+|    ▎      x
+|   ▎      hello
+|    ▎      42
+|
+|    ▎▷ [2] 1 / 0 + 1
+|    ▎      Traceback (most recent call last):
+|    ▎      ZeroDivisionError: division by zero
+|
+|    ▎  [3] df
+|    ▎         city    people
+|    ▎      ──────────────────
+|    ▎      0  Manila  1846513
+|    ▎      1  Cebu    964169
+|
+|           + Code    + Markdown
+|
+| 
+|
+|                                                                                                                     
+---- cursor 16,19
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      nb.ipynb  ●
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                        Python 3.9.10
+|
+|   ▎        Notebook fixture
+|    ▎        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+|   ▎
+|    ▎        Some bold text.
+| 
+|    ▎  [1] x = 6 * 7
+|   ▎      print('hello')
+|    ▎      x
+|   ▎      hello
+|    ▎      42
+|
+|    ▎  [2] 1 / 0 + 1
+|    ▎      Traceback (most recent call last):
+|    ▎      ZeroDivisionError: division by zero
+|
+|    ▎▷ [ ] y = 2
+|
+|    ▎  [3] df
+|    ▎         city    people
+|    ▎      ──────────────────
+|    ▎      0  Manila  1846513
+|    ▎      1  Cebu    964169
+|
+|          + Code    + Markdown
+|
+|                                                                                                                     
+exited=0

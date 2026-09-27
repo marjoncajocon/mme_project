@@ -1,0 +1,63 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER
+|▎   OPEN EDIT  Refactor
+|    ───────────                                                                                            ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄  ─
+|    F3          Extract to function in module scope                                          Extract    ⠁
+|      main.c     Extract to constant in enclosing scope                                                wr
+|     notes.tx   Extract to method in class  Cannot extract to a method outside a class
+|      page.htm   Inline variable                                                               Inline
+|     util.c     Convert to named parameters                                                  Rewrite
+|      util.h     Move to util.c                                                                  Move
+| 
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        stubSymbol              │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                                                                     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                 Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  main.c  
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│  1  #include "util.h"                                                  ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄  ─
+|    F3                     │   2  int main (void) {                                                  ⠁
+|      main.c                  2 │   3  │   int n = count_items(a: 12, b: 34, s: "a label long enough to wr
+|     notes.txt                 │   4  │   return n;
+|      page.html                 │   5  }
+|     util.c                    │   6
+|      util.h                    │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        stubSymbol              │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                    Cannot extract to a method outside a class     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                 Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

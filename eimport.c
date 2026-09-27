@@ -141,7 +141,7 @@ void import_run (const char *dir, int *settings, int *keys, int *snippets) {
     OsStat st;
     size_t len;
     if (os_stat(to, &st) != 0 || !st.exists) {
-      if ((s = read_file(from, &len)) != NULL && (fd = os_open(to, OS_WRITE)) >= 0) {
+      if ((s = read_file_all(from, &len)) != NULL && (fd = os_open(to, OS_WRITE)) >= 0) {	/* a copy, never a part */
         os_write(fd, s, len);
         os_close(fd);
         (*snippets)++;

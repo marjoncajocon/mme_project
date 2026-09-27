@@ -1,0 +1,12 @@
+[181818]    [1f1f1f]   1  [262626]The quick brown [613314]fo[262626]x jumps over the lazy dog.                                                     [1f1f1f]?????       ?
+[181818] ?  [1f1f1f]   4  ?   indented line with [613314]fo[1f1f1f]o and [613314]fo[1f1f1f]o again
+{cccccc} /fo|                                                                Ln 1, Col 17  Spaces: 4  UTF-8  LF  Plain Text  ?
+[181818]    [1f1f1f]   1  [262626]The quick brown fox jumps over the lazy dog.                                                     [1f1f1f]?????       ?
+[181818] ?  [1f1f1f]   4  ?   indented line with foo and foo again
+{cccccc} -- NORMAL --                                                        Ln 1, Col 17  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 2, Col 15  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 4, Col 24  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 2, Col 15  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 32  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} E486: Pattern not found: nothing                                    Ln 1, Col 32  Spaces: 4  UTF-8  LF  Plain Text  ?
+exited=0

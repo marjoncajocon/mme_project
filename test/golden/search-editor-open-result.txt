@@ -1,0 +1,94 @@
+---- cursor 36,17
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total  
+|▎   OPEN EDITORS               │   total                                                                    1
+|    ─────────────────────────────│                                                                          
+|    SEDIT                  │  6 results - 2 files
+|      src                       │
+|     .gitignore                │  notes.txt:
+|      notes.txt                 │    1: Total is counted in count.c.
+|     saved.code-search         │    2: The total never goes down.
+|                                 │
+|                                │  src/count.c:
+|                                 │    2  #include <stdio.h>
+|                                │    3: static int total = 0;
+|                                 │    4: static int add (int a) { total += a; return total; }
+|                                 │    5
+|                                 │
+|                                 │    8    add(2);
+|                                 │    9:   printf("%d\n", total);
+|                                 │    10    return 0;
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 62,11
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total      count.c  
+|▎   OPEN EDITORS               │ src   count.c   main
+|    ─────────────────────────────│   1  /* count.c - the search editor's fixture */                        ⣿⣿⣍⣉⣁⡀
+|    SEDIT                  │   2  #include <stdio.h>                                                 ⣶⠒
+|      src                       │   3  static int total = 0;                                              ⠟⠋⠁
+|       count.c                 │   4  static int add (int a) { total += a; return total; }
+|      .gitignore                │   5                                                                                 ▬
+|     notes.txt                 │   6  int main (void) {
+|      saved.code-search         │   7  │ add(1);                                                                      ▬
+|                                │   8  │ add(2);
+|                                 │   9  │ printf("%d\n", total);
+|                                │  10  │ return 0;
+|                                 │  11  }
+|                                 │  12
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        main                    │                                                                                     ▬
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                 Ln 9, Col 23 (5 selected)  Spaces: 2  UTF-8  LF  C  
+---- cursor 49,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total      notes.txt     count.c
+|▎   OPEN EDITORS               │  notes.txt
+|    ─────────────────────────────│   1  Total is counted in count.c.                                       ⠛⠛⠛
+|    SEDIT                  │   2  The total never goes down.
+|      src                       │   3
+|       count.c                 │
+|      .gitignore                │
+|     notes.txt                 │
+|      saved.code-search         │
+|                                │
+|                                 │                                                                                     ▬
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                        Ln 2, Col 10 (5 selected)  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

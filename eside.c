@@ -34,31 +34,31 @@ static const uint32_t act_icon[VIEW_N] = {
 };
 
 
-/* the activity bar's place of view v (Search moved into the panel has none: the ones under it go up); -1 none */
-static int act_slot (int v) {
-  int k, slot = 0;
-  for (k = 0; k < v; k++)
-    if (!(k == VIEW_SEARCH && view_in_panel(MV_SEARCH))) slot++;
-  if ((v == VIEW_TREE && tree_count() == 0) || (v == VIEW_SEARCH && view_in_panel(MV_SEARCH))) return -1;
-  return slot;
+/* the activity bar's icons in order: the side bar's views there (VIEW_*), then the panel's moved into it */
+static int act_views (int *v) {
+  int k, n = 0;
+  for (k = 0; k < VIEW_N; k++)
+    if (view_in_side(k)) v[n++] = k;
+  for (k = MV_PROBLEMS; k < MV_N; k++)
+    if (view_in_side(VIEW_MOVED + k)) v[n++] = VIEW_MOVED + k;
+  return n;
 }
 
 
 void act_draw (int x, int y, int h, int view, int shown) {
-  int v, i;
+  int v[VIEW_N + MV_N], n = act_views(v), i, gear = act_manage_row(y, h);
   for (i = 0; i < h; i++) scr_fill(x, y + i, ACT_W, S_ACT);
-  for (v = 0; v < VIEW_N; v++) {
-    int row = y + 1 + act_slot(v) * 2, on = shown && v == view;
-    if (act_slot(v) < 0) continue;
-    if (row >= y + h) break;
+  for (i = 0; i < n; i++) {
+    int row = y + 1 + i * 2, on = shown && v[i] == view;
+    if (row >= y + h || (gear >= 0 && row >= gear - 1)) break;	/* (the side bar's own never reach the gear) */
     if (on) scr_put(opt.side_right ? x + ACT_W - 1 : x, row, 0x258E, S_ACT_BAR);	/* the bar on the side of the editor */
-    scr_put(x + 1, row, act_icon[v], on ? S_ACT_ON : S_ACT);
+    scr_put(x + 1, row, v[i] < VIEW_N ? act_icon[v[i]] : view_icon(v[i] - VIEW_MOVED), on ? S_ACT_ON : S_ACT);
     if (row + 1 < y + h) {	/* VS Code's badge: a number at the icon's foot, white on blue */
-      int dot = 0, n = act_badge(v, &dot);
-      if (n > 0) {
+      int dot = 0, c = act_badge(v[i], &dot);
+      if (c > 0) {
         char b[8];
         int k;
-        snprintf(b, sizeof(b), n > 99 ? "99" : "%d", n);
+        snprintf(b, sizeof(b), c > 99 ? "99" : "%d", c);
         for (k = 0; b[k]; k++) scr_put_rgb(x + 2 + k, row + 1, (unsigned char)b[k], 0xFFFFFF, 0x0078D4, RGB_BOLD | RGB_BADGE);
       }
       else if (dot) {
@@ -67,7 +67,7 @@ void act_draw (int x, int y, int h, int view, int shown) {
       }
     }
   }
-  if ((v = act_manage_row(y, h)) >= 0) scr_put(x + 1, v, 0xEAF8, S_ACT);	/* Manage: codicon settings-gear */
+  if (gear >= 0) scr_put(x + 1, gear, 0xEAF8, S_ACT);	/* Manage: codicon settings-gear */
 }
 
 
@@ -78,11 +78,9 @@ int act_manage_row (int y, int h) {
 
 
 int act_hit (int y) {
-  int v;
-  if (y < 1) return -1;
-  for (v = 0; v < VIEW_N; v++)
-    if (act_slot(v) >= 0 && act_slot(v) == (y - 1) / 2) return v;
-  return -1;
+  int v[VIEW_N + MV_N], n = act_views(v);
+  if (y < 1 || (y - 1) / 2 >= n) return -1;
+  return v[(y - 1) / 2];
 }
 
 /* }================================================================== */
@@ -94,13 +92,28 @@ int act_hit (int y) {
 ** ===================================================================
 */
 
-static struct {	/* the scrollbar side_bar drew last (the view shown's), for the mouse */
+typedef struct SBar {	/* the scrollbar side_bar drew last in a place (the view shown's), for the mouse */
   int on, x, y, w, h;
+  int hx, hy;	/* the place: where its view is drawn */
   size_t total, shown;
-} g_sb;
+} SBar;
+
+static SBar g_sbs[2];	/* the side bar's view and one moved into the panel */
+static SBar *g_sbw = &g_sbs[0];	/* the one side_bar draws */
+static int g_sbh;	/* the one side_bar_hit found */
+
+#define g_sb	(*g_sbw)
 
 
 void side_draw (int view, int x, int y, int w, int h, int focus, const char *active) {
+  int k = g_sbs[1].hx == x && g_sbs[1].hy == y;	/* its place's */
+  g_sbw = &g_sbs[k];
+  g_sb.hx = x;
+  g_sb.hy = y;
+  if (k == 0) {	/* the side bar's: the panel draws its own again after it */
+    g_sbs[1].hx = -1;
+    g_sbs[1].on = 0;
+  }
   g_sb.on = 0;	/* the view draws its bar again, if it has one */
   if (view == VIEW_SEARCH) search_draw(x, y, w, h, focus);
   else if (view == VIEW_GIT) git_draw(x, y, w, h, focus);
@@ -164,14 +177,29 @@ void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t show
 
 /* the screen's x, y is on the scrollbar the view shown drew (not the Explorer's: mme.c has that one) */
 int side_bar_hit (int x, int y) {
-  return g_sb.on && x == g_sb.x + g_sb.w - 1 && y >= g_sb.y && y < g_sb.y + g_sb.h;
+  int k;
+  for (k = 0; k < 2; k++)
+    if (g_sbs[k].on && x == g_sbs[k].x + g_sbs[k].w - 1 && y >= g_sbs[k].y && y < g_sbs[k].y + g_sbs[k].h) {
+      g_sbh = k;
+      return 1;
+    }
+  return 0;
+}
+
+
+/* the next side_draw is the view moved into the panel's (its scrollbar kept apart from the side bar's) */
+void side_draw_panel (int x, int y) {
+  g_sbs[1].hx = x;
+  g_sbs[1].hy = y;
 }
 
 
 /* the bar pressed or dragged at the screen's row y: the view scrolls to the place it stands for */
 void side_bar_to (int view, int y) {
   size_t hidden, top;
-  int row = y - g_sb.y;
+  int row;
+  g_sbw = &g_sbs[g_sbh];
+  row = y - g_sb.y;
   if (!g_sb.on || g_sb.h < 2) return;
   hidden = g_sb.total - g_sb.shown;
   {	/* the thumb's middle goes where the pointer is, as VS Code's (its length as side_bar draws it) */
@@ -575,6 +603,13 @@ static int nested_under (const char *a, const char *b) {
 }
 
 
+/* a folder link (a junction too) ends a compact chain: one back up the tree would make it endless */
+static int is_link (const char *path) {
+  OsStat st;
+  return os_lstat(path, &st) == 0 && st.is_link;
+}
+
+
 /* the rows of n's kids at indent depth: compact folders ("a/b/c"), nested files */
 static void vis_add (Node *n, int depth) {
   size_t i, j;
@@ -607,7 +642,7 @@ static void vis_add (Node *n, int depth) {
     if (opt.exp_compact && !(n == &g_root && g_ws))	/* a chain of folders with one folder in each: one row */
       for (;;) {
         if (!last->loaded) load_kids(last);
-        if (last->nkid != 1 || !last->kid[0].dir) break;
+        if (last->nkid != 1 || !last->kid[0].dir || is_link(last->kid[0].path)) break;
         last = &last->kid[0];
       }
     vis_push(k, last, depth, 0);
@@ -720,7 +755,7 @@ static void reload_open (Node *n) {
     if (opt.exp_compact && !ws)
       for (;;) {
         if (!last->loaded) load_kids(last);
-        if (last->nkid != 1 || !last->kid[0].dir) break;
+        if (last->nkid != 1 || !last->kid[0].dir || is_link(last->kid[0].path)) break;
         last = &last->kid[0];
       }
     if (!last->open) continue;
@@ -2053,33 +2088,65 @@ void files_wheel (int d) {
 /*
 ** {==================================================================
 ** Where the views are (View: Move View, Move To Panel, Reset Location):
-** Search, Outline and Timeline go into the panel as tabs of their own
-** and back; mme-data/view-locations.json remembers it, by VS Code's ids
-** ("workbench.view.search": "panel")
+** the side bar's views go into the panel as tabs of their own and the
+** panel's into the side bar with an icon of their own, and back;
+** mme-data/view-locations.json remembers the ones not at home, by VS
+** Code's ids ("workbench.view.search": "panel", "terminal": "sidebar").
+** Ids it has that no view here knows (an extension's tree view that is
+** not running) are kept.
 ** ===================================================================
 */
 
-static const char *const mv_id[MV_N] = {"workbench.view.search", "outline", "timeline"};
-static const char *const mv_title[MV_N] = {"SEARCH", "OUTLINE", "TIMELINE"};
-static int g_mv[MV_N];	/* 1: in the panel */
-static int g_mv_read;
+static const char *const mv_id[MV_N] = {
+  "workbench.view.search", "outline", "timeline", "workbench.view.explorer", "workbench.view.scm",
+  "workbench.view.debug", "workbench.view.extensions", "workbench.view.extension.test",
+  "workbench.panel.markers", "workbench.panel.output", "workbench.panel.repl", "terminal", "jupyterViewVariables"
+};
+static const char *const mv_title[MV_N] = {
+  "SEARCH", "OUTLINE", "TIMELINE", "EXPLORER", "SOURCE CONTROL", "RUN AND DEBUG", "EXTENSIONS", "TESTING",
+  "PROBLEMS", "OUTPUT", "DEBUG CONSOLE", "TERMINAL", "JUPYTER"
+};
+static const char *const mv_name[MV_N] = {
+  "Search", "Outline", "Timeline", "Explorer", "Source Control", "Run and Debug", "Extensions", "Testing",
+  "Problems", "Output", "Debug Console", "Terminal", "Jupyter: Variables"
+};
+static const uint32_t mv_icon[MV_N] = {
+  0xEA6D, 0xEB5B, 0xEA82, 0xEAF0, 0xEA68, 0xEB91, 0xEAE6, 0xEA79,	/* codicons search, symbol-class, history, files ... */
+  0xEA6C, 0xEB9D, 0xEB9B, 0xEA85, 0xEBB8	/* warning, output, debug-console, terminal, variable-group */
+};
+static const int mv_view[VIEW_N] = {MV_EXPLORER, MV_SEARCH, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST, -1};
+
+static struct {
+  char *id;
+  int panel;	/* 1 in the panel, 0 in the side bar */
+} *g_loc;
+static int g_nloc, g_loc_read;
 
 
-static void mv_read (void) {
+/* where the file says view id is: 1 the panel, 0 the side bar, -1 it says nothing */
+static int loc_get (const char *id) {
+  int i;
+  for (i = 0; id && i < g_nloc; i++)
+    if (strcmp(g_loc[i].id, id) == 0) return g_loc[i].panel;
+  return -1;
+}
+
+
+static void loc_read (void) {
   char *f = data_path("view-locations.json"), *s;
-  size_t n = 0;
-  int v;
-  g_mv_read = 1;
+  size_t n = 0, i;
+  g_loc_read = 1;
   s = read_file(f, &n);
   free(f);
   if (s) {
     Json *j = json_parse(s, n);
-    for (v = 0; j && v < MV_N; v++) {
-      const Json *e = NULL;
-      size_t i;
-      for (i = 0; j->type == J_OBJ && i < j->n; i++)
-        if (j->kid[i]->key && strcmp(j->kid[i]->key, mv_id[v]) == 0) e = j->kid[i];
-      g_mv[v] = e && e->type == J_STR && strcmp(e->str, "panel") == 0;
+    for (i = 0; j && j->type == J_OBJ && i < j->n; i++) {
+      const Json *e = j->kid[i];
+      if (!e->key || e->type != J_STR || (strcmp(e->str, "panel") != 0 && strcmp(e->str, "sidebar") != 0)) continue;
+      if (loc_get(e->key) >= 0) continue;
+      g_loc = xrealloc(g_loc, (size_t)(g_nloc + 1) * sizeof(*g_loc));
+      g_loc[g_nloc].id = xstrdup(e->key);
+      g_loc[g_nloc++].panel = strcmp(e->str, "panel") == 0;
     }
     json_free(j);
     free(s);
@@ -2087,33 +2154,18 @@ static void mv_read (void) {
 }
 
 
-int view_in_panel (int v) {
-  if (!g_mv_read) mv_read();
-  return v >= 0 && v < MV_N && g_mv[v];
-}
-
-
-const char *view_title (int v) {
-  return v >= 0 && v < MV_N ? mv_title[v] : "";
-}
-
-
-/* view v into the panel (1) or back where it was (0), remembered */
-void view_set_panel (int v, int panel) {
+static void loc_write (void) {
   char *f;
   Buf b;
-  int k, fd, any = 0;
-  if (!g_mv_read) mv_read();
-  if (v < 0 || v >= MV_N) return;
-  g_mv[v] = panel != 0;
+  int k, fd;
   buf_init(&b);
   buf_puts(&b, "{");
-  for (k = 0; k < MV_N; k++)
-    if (g_mv[k]) {
-      buf_printf(&b, "%s\n  \"%s\": \"panel\"", any ? "," : "", mv_id[k]);
-      any = 1;
-    }
-  buf_puts(&b, any ? "\n}\n" : "}\n");
+  for (k = 0; k < g_nloc; k++) {
+    buf_printf(&b, "%s\n  ", k ? "," : "");
+    json_put_str(&b, g_loc[k].id, strlen(g_loc[k].id));
+    buf_puts(&b, g_loc[k].panel ? ": \"panel\"" : ": \"sidebar\"");
+  }
+  buf_puts(&b, g_nloc ? "\n}\n" : "}\n");
   f = data_path("view-locations.json");
   if ((fd = os_open(f, OS_WRITE)) >= 0) {
     os_write(fd, b.s, b.len);
@@ -2121,6 +2173,113 @@ void view_set_panel (int v, int panel) {
   }
   free(f);
   buf_free(&b);
+}
+
+
+/* view id to where (-1: its home, forgotten) */
+static void loc_set (const char *id, int where) {
+  int i;
+  for (i = 0; i < g_nloc; i++)
+    if (strcmp(g_loc[i].id, id) == 0) break;
+  if (where < 0) {
+    if (i == g_nloc) return;
+    free(g_loc[i].id);
+    memmove(&g_loc[i], &g_loc[i + 1], (size_t)(g_nloc - i - 1) * sizeof(*g_loc));
+    g_nloc--;
+    return;
+  }
+  if (i == g_nloc) {
+    g_loc = xrealloc(g_loc, (size_t)(g_nloc + 1) * sizeof(*g_loc));
+    g_loc[g_nloc++].id = xstrdup(id);
+  }
+  g_loc[i].panel = where;
+}
+
+
+/* a view's id: MV_*, or MV_N + an extension's tree view */
+static const char *mv_key (int v) {
+  if (v >= 0 && v < MV_N) return mv_id[v];
+  return v >= MV_N ? tree_id(v - MV_N) : NULL;
+}
+
+
+int view_in_panel (int v) {
+  int w;
+  if (!g_loc_read) loc_read();
+  if (v < 0 || (v >= MV_N && v - MV_N >= tree_count())) return 0;
+  w = loc_get(mv_key(v));
+  return w < 0 ? v >= MV_PROBLEMS && v < MV_N : w;
+}
+
+
+int view_moved (int v) {
+  return view_in_panel(v) != (v >= MV_PROBLEMS && v < MV_N);
+}
+
+
+const char *view_title (int v) {
+  return v >= 0 && v < MV_N ? mv_title[v] : v >= MV_N ? tree_title(v - MV_N) : "";
+}
+
+
+const char *view_name (int v) {
+  return v >= 0 && v < MV_N ? mv_name[v] : v >= MV_N ? tree_name(v - MV_N) : "";
+}
+
+
+uint32_t view_icon (int v) {
+  return v >= 0 && v < MV_N ? mv_icon[v] : 0xEB86;	/* list-tree */
+}
+
+
+int view_of_side (int view) {
+  if (view >= VIEW_MOVED) return view - VIEW_MOVED < MV_N ? view - VIEW_MOVED : -1;
+  return view >= 0 && view < VIEW_N ? mv_view[view] : -1;
+}
+
+
+int side_of_view (int v) {
+  int k;
+  if (v >= MV_PROBLEMS && v < MV_N) return VIEW_MOVED + v;
+  if (v >= MV_N) return VIEW_TREE;
+  for (k = 0; k < VIEW_N; k++)
+    if (mv_view[k] == v) return k;
+  return VIEW_FILES;
+}
+
+
+/* view v into the panel (1) or the side bar (0), remembered (at home: forgotten) */
+void view_set_panel (int v, int panel) {
+  const char *id = mv_key(v);
+  if (!g_loc_read) loc_read();
+  if (id == NULL) return;
+  loc_set(id, (panel != 0) == (v >= MV_PROBLEMS && v < MV_N) ? -1 : panel != 0);
+  loc_write();
+}
+
+
+void view_reset (void) {
+  if (!g_loc_read) loc_read();
+  while (g_nloc > 0) loc_set(g_loc[0].id, -1);
+  loc_write();
+}
+
+
+/* is side bar view v (VIEW_*, VIEW_MOVED + MV_*) there? */
+int view_in_side (int view) {
+  if (view >= VIEW_MOVED) return view - VIEW_MOVED >= MV_PROBLEMS && view - VIEW_MOVED < MV_N && view_moved(view - VIEW_MOVED);
+  if (view == VIEW_TREE) return tree_side_count() > 0;
+  return view >= 0 && view < VIEW_N && !view_in_panel(mv_view[view]);
+}
+
+
+int view_side_first (void) {
+  int v;
+  for (v = 0; v < VIEW_N; v++)
+    if (v != VIEW_TREE && view_in_side(v)) return v;
+  for (v = MV_PROBLEMS; v < MV_N; v++)
+    if (view_in_side(VIEW_MOVED + v)) return VIEW_MOVED + v;
+  return view_in_side(VIEW_TREE) ? VIEW_TREE : -1;
 }
 
 /* }================================================================== */

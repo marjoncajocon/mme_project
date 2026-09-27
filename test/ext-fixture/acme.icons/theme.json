@@ -1,0 +1,10 @@
+{
+  "iconDefinitions": {
+    "_file": {"iconPath": "./icons/file.svg"},
+    "_c": {"iconPath": "./icons/c.svg"},
+    "_folder": {"iconPath": "./icons/folder.svg"}
+  },
+  "file": "_file",
+  "folder": "_folder",
+  "fileExtensions": {"c": "_c", "h": "_c"}
+}

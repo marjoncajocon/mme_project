@@ -26,5 +26,9 @@
   "perf-find-long-line": {
     "max_us": 0,
     "over_20ms": 0
+  },
+  "perf-multi-cursor": {
+    "max_us": 0,
+    "over_20ms": 0
   }
 }

@@ -1,0 +1,25 @@
+{
+  "name": "demo",
+  "publisher": "acme",
+  "displayName": "Acme Demo",
+  "description": "A tiny extension the regression suite runs in mme's extension host",
+  "version": "1.0.0",
+  "engines": {"vscode": "^1.80.0"},
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:plaintext"],
+  "contributes": {
+    "commands": [
+      {"command": "demo.sayHello", "title": "Say Hello", "category": "Demo"},
+      {"command": "demo.pickColor", "title": "Pick a Color", "category": "Demo"}
+    ],
+    "keybindings": [
+      {"command": "demo.sayHello", "key": "ctrl+alt+h"}
+    ],
+    "configuration": {
+      "title": "Demo",
+      "properties": {
+        "demo.greeting": {"type": "string", "default": "Hello from the demo", "description": "What Say Hello says."}
+      }
+    }
+  }
+}

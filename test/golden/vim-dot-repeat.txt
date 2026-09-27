@@ -1,0 +1,32 @@
+---- cursor 10,8
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  ●
+|     text.txt
+|       1  fox jumps over the lazy dog.                                                                     ⣿⣿⣿⣤⣤
+|      2  one two three four five six!                                                                     ⠓⠒⠂
+|       3  a-a-a-alpha(beta, gamma) and "quoted text" here!
+|      4  │   ia-a-a-ndented line with foo and foo again
+|       5  NEW
+|      6  last line of the file
+|       7
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                                                       ─
+|
+|
+|
+|
+|
+| 
+|
+| -- NORMAL --                                                         Ln 6, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

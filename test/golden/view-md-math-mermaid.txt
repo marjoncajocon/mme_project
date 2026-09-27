@@ -1,0 +1,63 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          mdmath
+|      math.md      Preview math.md  
+|     math.md
+|      Math and diagrams
+|     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+|
+|     Inline: E = mc², aᵢ + bᵢⱼ, α ≤ β, (a+b)/c, √(x²+y²); not math: $5 and $10.
+|
+|                                                  ∑ᵢ₌₁ⁿ i = (n(n+1))/2
+|
+|                                                       ┌───────┐
+|                                                        │ Start │
+|                                                       └───┬───┘
+|                                                            └┐
+|                                                             │
+|                                                             │
+|                                                             ▼
+|                                                        ╱────────╲
+|                                                        < Is it? >
+|                                                        ╲────┬───╱
+|                                                       ┌─────┴───┐
+|                                                       │ Yes     │ No
+|                                                       │         │
+|                                                       ▼         ▼
+|                                                    ┌────┐   ╭───────╮
+|                                                    │ OK │   │ Retry │
+|                                                    └──┬─┘   ╰───────╯
+|                                                      └────┐
+|                                                            │
+|                                                                      Ln 1, Col 1  Spaces: 2  UTF-8  LF  Plain Text  
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          mdmath
+|      math.md      Preview math.md  
+|     math.md
+|                                                       ┌─────┴───┐
+|                                                      │ Yes     │ No
+|                                                       │         │
+|                                                      ▼         ▼
+|                                                    ┌────┐   ╭───────╮
+|                                                   │ OK │   │ Retry │
+|                                                    └──┬─┘   ╰───────╯
+|                                                      └────┐
+|                                                            │
+|                                                           │
+|                                                            ▼
+|                                                         ┌─────┐
+|                                                         │ End │
+|                                                         └─────┘
+|       ↺ Retry → Start
+|
+|                                                        ┌───────┐
+|                                          ┌───────┐ ┌──▶│ Parse ├─┐   ┌────────┐
+|                                          │ Input ├─┤   └───────┘ ├──▶│ Output │
+|                                          └───────┘ │             │   └────────┘
+|                                                    └─────────────┘
+|
+|        mermaid
+|        sequenceDiagram
+|         Alice->>Bob: Hello
+|
+|                                                                      Ln 1, Col 1  Spaces: 2  UTF-8  LF  Plain Text  
+exited=0

@@ -1,0 +1,142 @@
+{
+  "name": "web",
+  "publisher": "acme",
+  "displayName": "Acme Web",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "acmeWeb.panel",
+        "title": "Acme: Open Panel"
+      },
+      {
+        "command": "acmeWeb.eat",
+        "title": "Eat It"
+      },
+      {
+        "command": "acmeWeb.refresh",
+        "title": "Refresh Fruits",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "acmeWeb.pick",
+        "title": "Pick Fruit"
+      },
+      {
+        "command": "acmeWeb.debug",
+        "title": "Acme: Debug"
+      },
+      {
+        "command": "acmeWeb.askModel",
+        "title": "Acme: Ask the Model"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "acmeWeb",
+          "title": "Acme Chat",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "acmeWeb": [
+        {
+          "type": "webview",
+          "id": "acmeWeb.chat",
+          "name": "Chat"
+        },
+        {
+          "id": "acmeWeb.fruits",
+          "name": "Fruits"
+        }
+      ]
+    },
+    "customEditors": [
+      {
+        "viewType": "acmeWeb.editor",
+        "displayName": "Acme Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.txt"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "acmeWeb.eat",
+          "when": "view == acmeWeb.fruits && viewItem == fruit"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "acmeWeb.refresh",
+          "when": "view == acmeWeb.fruits",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "acmeWeb.pick",
+          "when": "false"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "acme",
+        "properties": {
+          "word": {
+            "type": "string"
+          }
+        }
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "acme",
+        "label": "Acme Debug"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "acme.helper",
+        "name": "acme",
+        "fullName": "Acme Helper",
+        "description": "asks the model",
+        "commands": [
+          {
+            "name": "shout",
+            "description": "in capitals"
+          }
+        ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "acme_upper",
+        "displayName": "Upper",
+        "modelDescription": "upper-cases a text",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ]
+}

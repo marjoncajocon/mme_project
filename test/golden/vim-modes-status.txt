@@ -1,0 +1,43 @@
+{cccccc} -- NORMAL --                                                         Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- INSERT --                                                         Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- VISUAL --                                            Ln 1, Col 2 (1 selected)  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- VISUAL LINE --                                     Ln 1, Col 45 (44 selected)  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- VISUAL BLOCK --                                      Ln 1, Col 2 (1 selected)  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- REPLACE --                                                        Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --  d2                                                     Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} :set nu|                                                             Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL -- recording @a                                            Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} E492: Not an editor command: bogus                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  
+|     text.txt
+|       1  The quick brown fox jumps over the lazy dog.                                                     ⣿⣿⣿⣭⠅       ─
+|      2  one two three four five six                                                                      ⣶⣶⡒
+|       3  alpha(beta, gamma) and "quoted text" here
+|      4  │   indented line with foo and foo again
+|       5  │
+|      6  second paragraph starts here
+|       7  it has two lines
+|      8  last line of the file
+|       9
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+| E492: Not an editor command: bogus                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

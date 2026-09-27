@@ -1,0 +1,94 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      sample.acmenb  
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                           Acme Shout
+|
+|   ▎        Acme notebook
+|    ▎        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| 
+|    ▎  [ ] hello from acme
+| 
+|           + Code    + Markdown
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      sample.acmenb  ●
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                           Acme Shout
+|
+|   ▎        Acme notebook
+|    ▎        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| 
+|    ▎▷ [ ] hello from acme
+|   ▎      HELLO FROM ACME
+|    ▎      [application/x-acme: Notebook: Open Output in Browser shows it]
+| 
+|           + Code    + Markdown
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      sample.acmenb  
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                           Acme Shout
+|
+|   ▎        Acme notebook
+|    ▎        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+| 
+|    ▎  [ ] say hello from acme
+| 
+|           + Code    + Markdown
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+exited=0

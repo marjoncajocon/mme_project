@@ -1,0 +1,32 @@
+---- cursor 73,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           case
+|      case.txt  ●
+|     case.txt
+|       1  foo Foo FOO fOO                                       foo_bar                       No results     
+|      2  foo-bar Foo-Bar FOO-BAR                                new_name                         
+|       3  new_name New_Name NEW_NAME
+|      4
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|                                                                                                                       ─
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                         Replaced 3 occurrences   
+|
+|                                                                      Ln 3, Col 8  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

@@ -1,0 +1,63 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c  
+|     edit.c
+|       1  /* edit.c - a small C file the editing scenarios type into. */                                   ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #include <stdio.h>                                                                               ⣒⣂⡀
+|       3  #include <stdlib.h>                                                                              ⠿
+|      4  #include <string.h>                                                                              ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                            Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    Select an option to open a Remote Window
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  Connect to Host...  Remote-SSH                                                            ⣒⣂⡀
+|       3  #incl  Connect to WSL  WSL                                                                       ⠿
+|      4  #incl  Connect to WSL using Distro...  WSL                                                       ⣭⣭⣥⡤⠄
+|       5         Open Folder in WSL...  WSL                                                                ⠟⠛
+|      6  #defi  Reopen Folder in WSL  WSL                                                                 ⣿⡏⠉⠁
+|       7         Reopen in Container  Dev Containers                                                       ⣋⣁⣀⡀
+|      8  typed  Open Folder in Container...  Dev Containers                                               ⣿⠿⠗
+|       9  │   i  Attach to Running Container...  Dev Containers                                            ⡹⠿⠿⠃
+|     10  │   i  Rebuild and Reopen in Container  Dev Containers                                           ⠟⠛⠛⠋⠉⠉
+|      11  } Poi
+|      12
+|      13  static int total = 0;
+|      14
+|      15  /* adds two numbers and remembers the sum */
+|      16  static int add (int a, int b) {
+|      17  │   total += a + b;
+|      18  │   return a + b;
+|      19  }
+|      20
+|      21  static Point make (int x, int y) {
+|      22  │   Point p;
+|      23  │   p.x = x;
+|      24  │   p.y = y;
+|     25  │   return p;
+|      26  }
+|                                                                            Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

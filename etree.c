@@ -36,6 +36,7 @@ typedef struct TNode {
 
 typedef struct TView {
   char *id, *name, *title;	/* title: its container's ("Acme Chat") */
+  char *head;	/* NAME: its tab's in the panel */
   int open;	/* the section is open */
   int asked;	/* its root was asked for */
   char *msg;	/* treeView.message, or the host's word when there is no provider */
@@ -60,6 +61,18 @@ static int g_nrow, g_caprow;
 static int g_sel, g_top, g_h = 1;
 static char *g_selh;	/* the selected row's handle, kept when a view is filled again */
 static int g_selv = -1;
+
+/*
+** A view moved into the panel (View: Move View) is a tab of its own there:
+** the calls are for the view tree_scope said, the side bar's (-1) or that
+** one, each with its own selection and scrolling.
+*/
+static int g_scope = -1;
+static int g_dx, g_dy;	/* where it was drawn */
+static struct {
+  int scope, sel, top, h, selv;
+  char *selh;
+} g_st[2] = {{-1, 0, 0, 1, -1, NULL}, {-1, 0, 0, 1, -1, NULL}};
 
 #define HEAD	1	/* the title */
 
@@ -187,6 +200,9 @@ void tree_views (const Json *views) {
       v->id = xstrdup(json_str(json_get(views->kid[k], "id"), ""));
       v->name = xstrdup(json_str(json_get(views->kid[k], "name"), ""));
       v->title = xstrdup(json_str(json_get(views->kid[k], "title"), ""));
+      v->head = xstrdup(v->name);
+      for (i = 0; v->head[i]; i++)
+        if (v->head[i] >= 'a' && v->head[i] <= 'z') v->head[i] = (char)(v->head[i] - 32);
       v->open = 1;
       for (j = 0; j < nold; j++)
         if (strcmp(old[j].id, v->id) == 0) v->open = old[j].open;
@@ -196,6 +212,7 @@ void tree_views (const Json *views) {
     free(old[i].id);
     free(old[i].name);
     free(old[i].title);
+    free(old[i].head);
     free(old[i].msg);
     free(old[i].desc);
     acts_free(old[i].tact, old[i].ntact);
@@ -203,12 +220,61 @@ void tree_views (const Json *views) {
   }
   free(old);
   g_sel = g_top = 0;
+  g_st[0].sel = g_st[0].top = g_st[1].sel = g_st[1].top = 0;
+  g_st[1].scope = -1;
   scr_redraw();
 }
 
 
 int tree_count (void) {
   return g_nv;
+}
+
+
+int tree_side_count (void) {
+  int v, n = 0;
+  for (v = 0; v < g_nv; v++) n += !view_in_panel(MV_N + v);
+  return n;
+}
+
+
+const char *tree_id (int k) {
+  return k >= 0 && k < g_nv ? g_v[k].id : NULL;
+}
+
+
+const char *tree_name (int k) {
+  return k >= 0 && k < g_nv ? g_v[k].name : "";
+}
+
+
+const char *tree_title (int k) {
+  return k >= 0 && k < g_nv ? g_v[k].head : "";
+}
+
+
+void tree_scope (int k) {
+  int from = g_scope >= 0, to = k >= 0;
+  if (k == g_scope) return;
+  g_st[from].scope = g_scope;	/* the one left keeps its selection */
+  g_st[from].sel = g_sel;
+  g_st[from].top = g_top;
+  g_st[from].h = g_h;
+  g_st[from].selv = g_selv;
+  g_st[from].selh = g_selh;
+  g_scope = k;
+  if (to && g_st[1].scope != k) {	/* another view in the panel: from its top */
+    free(g_st[1].selh);
+    g_st[1].selh = NULL;
+    g_st[1].sel = g_st[1].top = 0;
+    g_st[1].selv = -1;
+  }
+  g_sel = g_st[to].sel;
+  g_top = g_st[to].top;
+  g_h = g_st[to].h;
+  g_selv = g_st[to].selv;
+  g_selh = g_st[to].selh;
+  g_st[to].selh = NULL;
 }
 
 
@@ -302,10 +368,11 @@ void tree_reveal (const Json *p) {
   const char *h = json_str(json_get(p, "handle"), NULL);
   if (v < 0 || h == NULL) return;
   g_v[v].open = 1;
+  tree_scope(view_in_panel(MV_N + v) ? v : -1);	/* where it is */
   free(g_selh);
   g_selh = xstrdup(h);
   g_selv = v;
-  mme_show_trees();
+  mme_show_trees(v);
 }
 
 
@@ -338,6 +405,7 @@ static void rows (void) {
   int v, i;
   g_nrow = 0;
   for (v = 0; v < g_nv; v++) {
+    if (g_scope >= 0 ? v != g_scope : view_in_panel(MV_N + v)) continue;	/* in the panel / the side bar */
     row_add(TR_HEAD, v, 0, NULL);
     if (!g_v[v].open) continue;
     if (!g_v[v].asked) {	/* shown for the first time: its root is asked for */
@@ -386,6 +454,8 @@ void tree_draw (int x, int y, int w, int h, int focus) {
   scr_box(x, y, w, h, S_SIDE);
   if (h <= HEAD) return;
   scr_puts(x + 2, y, "EXTENSION VIEWS", S_SIDE_HEAD);
+  g_dx = x;
+  g_dy = y;
   rows();
   g_h = h - HEAD;
   if (g_sel < g_top) g_top = g_sel;
@@ -558,7 +628,7 @@ int tree_key (int k, SideAct *act) {
       return 1;
     case K_F10:
       if (k & KM_SHIFT) {	/* Shift+F10: the row's menu */
-        row_menu(g_sel, side_width() / 2, g_sel - g_top + HEAD + 2);
+        row_menu(g_sel, (g_scope >= 0 ? g_dx : 0) + side_width() / 2, (g_scope >= 0 ? g_dy - 1 : 0) + g_sel - g_top + HEAD + 2);
         return 1;
       }
       break;
@@ -640,9 +710,21 @@ void tree_wheel (int d) {
 }
 
 
-/* the badges of the views together, for the activity bar */
+/* the badges of the views together, for the activity bar (the side bar's) */
 int tree_badge (void) {
   int v, n = 0;
-  for (v = 0; v < g_nv; v++) n += g_v[v].badge;
+  for (v = 0; v < g_nv; v++)
+    if (!view_in_panel(MV_N + v)) n += g_v[v].badge;
   return n;
+}
+
+
+/* the side bar's view of the selected row, -1 none */
+int tree_focused (void) {
+  int was = g_scope, v = -1;
+  tree_scope(-1);
+  rows();
+  if (g_sel < g_nrow) v = g_row[g_sel].view;
+  tree_scope(was);
+  return v;
 }

@@ -1193,6 +1193,15 @@ With no file open the editor shows the keys to start with.
   looks for bytes or text (`4d 5a` or `MZ`) and F3 finds the next one. The
   status bar shows the offset and the byte there, the line under it the file
   and its size. View: Reopen Editor With Hex Editor opens any file this way.
+  A file over 64 MB is not read whole: its bytes come from the disk a page at
+  a time, as they are shown or searched.
+- **Folder links** — a symlink or a Windows junction that leads back up the
+  tree shows in the Explorer (and opens there) but is walked once, not round
+  and round: Search, the Search Editor, Go to File, Compare Folders, the
+  watched files, test discovery and the Explorer's compact folders follow each
+  real folder once. Git for Windows walks into a junction, so Source Control
+  leaves such links out of `git status` (and of the smart commit's
+  `git add -A`): a repository with one opens as any other.
 - **Source Control** — Staged Changes and Changes. Enter or a click opens the
   diff; `s` / `+` stages, `u` / `-` unstages, `o` opens the file. The message
   box on top commits with Ctrl+Enter. The title's buttons commit, refresh and
@@ -1367,13 +1376,27 @@ With no file open the editor shows the keys to start with.
   high as the editors and its edge drags. workbench.panel.alignment "justify"
   puts a bottom panel across the whole width, under the sidebar too.
 - **Moving views** — View: Move View (a view, then Panel or Primary Side Bar)
-  and View: Move Focused View move Search, Outline and Timeline into the panel,
-  each a tab of its own (Search's icon leaves the activity bar and
-  Ctrl+Shift+F searches there), and back; the Outline's "..." has Move To
-  Panel, the panel's "..." Move To Primary Side Bar and Reset Location while
-  one shows, View: Reset View Locations puts all of them back. mme-data/
-  view-locations.json remembers where they are. The other views stay where
-  they are.
+  and View: Move Focused View move any view: the side bar's (the Explorer with
+  OPEN EDITORS, Outline, Timeline, Search, Source Control, Run and Debug,
+  Extensions, Testing, and each extension's tree view) into the panel, each a
+  tab of its own whose icon leaves the activity bar, and the panel's
+  (Problems, Output, Debug Console, Terminal, Jupyter's Variables) into the
+  side bar, each with an activity bar icon of its own (VS Code's codicon, the
+  problems' count on it). A view works where it is as it does at home: its
+  keys, clicks, context menus, wheel and scrollbar, and its shortcut goes
+  there (Ctrl+Shift+E, Ctrl+Shift+G, Ctrl+Shift+D, Ctrl+Shift+X, Ctrl+`,
+  Ctrl+Shift+M, Ctrl+Shift+U ... show and focus it, or hide it again). A view
+  asked for where it is not (Open Folder's Explorer, a task's terminal) shows
+  where it is. Move To Panel / Move To Primary Side Bar and Reset Location
+  are in the panel's "..." (for the tab shown), a panel tab's right click, the
+  right click on a side bar view's title, the "..." of a panel's view in the
+  side bar and the Outline's "...". View: Reset View Locations puts every view
+  back (the one with the keys stays shown). mme-data/view-locations.json
+  remembers the ones not at home by VS Code's ids (`"workbench.view.explorer":
+  "panel"`, `"terminal": "sidebar"`). Not done: dragging views and their
+  icons, and the secondary side bar as a place for them (Chat alone lives
+  there); a tab that does not fit in the panel's title row is not drawn (Move
+  View still reaches it).
 
 ## Keys
 

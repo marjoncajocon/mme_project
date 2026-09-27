@@ -4301,6 +4301,7 @@ typedef struct WJob {	/* a look, on a worker */
   size_t nw;
   WFile *f;
   size_t n, cap, seen;
+  Vec real;	/* the real folders links led to (the root first): each is walked once */
   unsigned gen;	/* the watchers it was made for */
   int done;
   Mutex *mx;
@@ -4393,7 +4394,7 @@ static void walk (WJob *j, const char *dir, int depth) {
       continue;
     }
     if (st.is_dir) {
-      if (!wt_skip(v.v[i])) walk(j, full, depth + 1);
+      if (!wt_skip(v.v[i]) && fs_walk_into(&j->real, full)) walk(j, full, depth + 1);
       free(full);
       continue;
     }
@@ -4427,7 +4428,10 @@ static void walk_main (void *ud) {
   size_t i;
   for (i = 0; root[i]; i++)
     if (root[i] == '/' && path_is_sep('\\')) root[i] = '\\';
+  vec_init(&j->real);
+  fs_dir_first(&j->real, root);
   walk(j, root, 0);
+  vec_free(&j->real);
   free(root);
   if (j->n) qsort(j->f, j->n, sizeof(WFile), cmp_wf);
   mx_lock(j->mx);

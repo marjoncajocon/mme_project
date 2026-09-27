@@ -1,0 +1,94 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      plain.txt  
+|     plain.txt
+|       1  plain text line 01 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      2  plain text line 02 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       3  plain text line 03 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      4  plain text line 04 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       5  plain text line 05 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      6  plain text line 06 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       7  plain text line 07 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      8  plain text line 08 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       9  plain text line 09 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     10  plain text line 10 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      11  plain text line 11 with several words on it                                                                  ▬
+|      12  plain text line 12 with several words on it                                                                  ▬
+|      13  plain text line 13 with several words on it                                                                  ▬
+|      14  plain text line 14 with several words on it                                                                  ▬
+|    ── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ FRUITS ──────────────────────────────────────────────────────
+|      ACME CHAT: FRUITS                                                                                             
+|         Fruits
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|  0  0                                                              Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      plain.txt  
+|     plain.txt
+|       1  plain text line 01 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      2  plain text line 02 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       3  plain text line 03 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      4  plain text line 04 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       5  plain text line 05 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      6  plain text line 06 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       7  plain text line 07 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      8  plain text line 08 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|       9  plain text line 09 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|     10  plain text line 10 with several words on it                                                      ⣿⣿⣿⣿⡇       ▬
+|      11  plain text line 11 with several words on it                                                                  ▬
+|      12  plain text line 12 with several words on it                                                                  ▬
+|      13  plain text line 13 with several words on it                                                                  ▬
+|      14  plain text line 14 with several words on it                                                                  ▬
+|    ── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ FRUITS ──────────────────────────────────────────────────────
+|      ACME CHAT: FRUITS                                                                                             
+|         Fruits
+|            apple ripe
+|            banana ripe
+|
+|
+|
+|
+|
+| 
+|
+|  0  0                                                              Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXTENSION VIEWS            │  plain.txt  
+|     ACME CHAT: FRUITS        │  plain.txt
+|         Fruits                │   1  plain text line 01 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|           apple ripe          │   2  plain text line 02 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|            banana ripe         │   3  plain text line 03 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                │   4  plain text line 04 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │  11  plain text line 11 with several words on it                                    ▬
+|▎                               │  12  plain text line 12 with several words on it                                    ▬
+|                                 │  13  plain text line 13 with several words on it                                    ▬
+|                                 │  14  plain text line 14 with several words on it                                    ▬
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── Filter (e.g. text,  ────────
+|                                 │  No problems have been detected in the workspace.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|  0  0                                                              Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

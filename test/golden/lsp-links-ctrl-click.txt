@@ -1,0 +1,32 @@
+---- cursor 23,6
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lsp
+|      links.c      colors.c  
+|     colors.c
+|       1  /* colors.c - the colors a language server finds in the text */                                  ⣿⣿⣿⣉⠉⠉⠁
+|      2  const char *red = "#ff0000";                                                                     ⠉⠉⠉⠁
+|       3  const char *green = "#00ff00";
+|      4  const char *blue = "rgb(0, 0, 255)";
+|       5  const char *faded = "#ff000080";
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|                                                                                                                       ─
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  2  2                                                                  Ln 4, Col 14  Spaces: 4  UTF-8  LF  C  {}  
+exited=0

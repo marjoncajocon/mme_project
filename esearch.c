@@ -19,8 +19,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-char *fs_real_dir (const char *path);	/* efiles.c: a folder's real path, links followed */
-
 
 typedef struct SFile {
   char *path;	/* native */

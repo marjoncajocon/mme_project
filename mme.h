@@ -336,6 +336,7 @@ void doc_init (Doc *d);
 void doc_free (Doc *d);
 int doc_load (Doc *d, const char *native);	/* 0 read, 1 new file, -1 error */
 int doc_load_enc (Doc *d, const char *native, int enc);	/* enc -1: from its BOM, else files.encoding */
+char *read_file_all (const char *native, size_t *len);	/* all of it (read_file stops at 64 MB); NULL: unreadable, or over 1 GB */
 void doc_set_text (Doc *d, const char *s, size_t len);	/* the lines of s, LF ends them */
 char *doc_disk_text (const Doc *d, size_t *len);	/* the file as it is now, UTF-8, LF; NULL: none */
 void doc_stamp (Doc *d);	/* the file's time and size, now */
@@ -1145,15 +1146,32 @@ void explorer_deleted (const char *path);	/* mme.c: the tabs of a deleted file *
 void search_scope (const char *rel);	/* esearch.c: Find in Folder (files to include) */
 void side_refresh (void);
 void side_draw (int view, int x, int y, int w, int h, int focus, const char *active);
+void side_draw_panel (int x, int y);	/* the next side_draw is in the panel (its scrollbar apart) */
 int side_key (int view, int k, SideAct *act);	/* 0: not used */
 void side_click (int view, int row, int col, SideAct *act);
 void side_wheel (int view, int d);
 int side_idle (int view);	/* 1: something changed, draw again */
-/* eside.c: the views that move between the side bar and the panel (View: Move View), where they are */
-enum { MV_SEARCH, MV_OUTLINE, MV_TIMELINE, MV_N };
-int view_in_panel (int v);	/* MV_*: 1 it is in the panel */
-void view_set_panel (int v, int panel);	/* into the panel (1), back (0); remembered */
+/*
+** eside.c: the views that move between the side bar and the panel (View:
+** Move View), where they are. The side bar's first (Outline and Timeline
+** are the Explorer's panes), then the panel's own from MV_PROBLEMS; MV_N + k
+** is the extensions' tree view k (etree.c). E.view is VIEW_MOVED + MV_* for
+** a panel's view moved into the side bar.
+*/
+enum { MV_SEARCH, MV_OUTLINE, MV_TIMELINE, MV_EXPLORER, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST,
+       MV_PROBLEMS, MV_OUTPUT, MV_CONSOLE, MV_TERMINAL, MV_VARS, MV_N };
+#define VIEW_MOVED	16
+int view_in_panel (int v);	/* MV_* (or MV_N + a tree view): 1 it is in the panel */
+void view_set_panel (int v, int panel);	/* into the panel (1), the side bar (0); remembered */
+void view_reset (void);	/* View: Reset View Locations: each where it was */
+int view_moved (int v);	/* not where it is by default */
 const char *view_title (int v);	/* "SEARCH" */
+const char *view_name (int v);	/* "Search" */
+uint32_t view_icon (int v);	/* its codicon, for the activity bar */
+int view_of_side (int view);	/* VIEW_* (or VIEW_MOVED + MV_*) -> MV_*; -1 none (the tree views: several) */
+int side_of_view (int v);	/* MV_* -> VIEW_*; VIEW_MOVED + v for a panel's, VIEW_FILES for Outline and Timeline */
+int view_side_first (void);	/* the first view the side bar has (E.view), -1: none */
+int view_in_side (int view);	/* side bar view VIEW_* (or VIEW_MOVED + MV_*) is there (not moved away) */
 
 uint32_t file_icon (const char *name, int *st);	/* Seti's icon and its color (or the icon theme's) */
 
@@ -1193,6 +1211,10 @@ int fs_remove (const char *path);	/* for good, a folder with all in it */
 int fs_copy (const char *from, const char *to);	/* a folder with all in it */
 char *fs_copy_name (const char *dir, const char *name, int is_folder);	/* "a copy.c" */
 void fs_reveal (const char *path);	/* in the system's file manager */
+char *fs_real_dir (const char *path);	/* a folder's real path, links and Windows junctions followed; NULL: unknown */
+int fs_dir_first (Vec *seen, const char *path);	/* its real folder not in seen yet (now it is): a walk's roots go in first */
+int fs_walk_into (Vec *seen, const char *path);	/* a folder in a walk: 0 it is a link to one walked already */
+long fs_read_at (const char *path, unsigned long long off, void *buf, size_t n);	/* -1: unreadable */
 void files_wheel (int d);
 
 void search_draw (int x, int y, int w, int h, int focus);
@@ -1375,14 +1397,20 @@ void tree_info (const Json *p);
 void tree_items (const Json *p);
 void tree_refresh (const Json *p);
 void tree_reveal (const Json *p);
-int tree_count (void);	/* the views there are; 0: no activity bar icon */
+int tree_count (void);	/* the views there are */
+int tree_side_count (void);	/* the ones in the side bar; 0: no activity bar icon */
+const char *tree_id (int k);	/* tree view k's id, name ("NPM Scripts"), its container's title */
+const char *tree_name (int k);
+const char *tree_title (int k);	/* "NPM SCRIPTS" */
+void tree_scope (int k);	/* the view the calls below are for: k in the panel, -1 the side bar's */
+int tree_focused (void);	/* the view of the selected row (the side bar's), -1 none */
 int tree_badge (void);
 void tree_draw (int x, int y, int w, int h, int focus);
 int tree_key (int k, SideAct *act);
 void tree_click (int row, int col, SideAct *act);
 void tree_menu (int row, int x, int y);	/* the right button */
 void tree_wheel (int d);
-void mme_show_trees (void);	/* mme.c: the view shown (treeView.reveal) */
+void mme_show_trees (int k);	/* mme.c: the view shown (treeView.reveal) */
 void lsp_ext_notify (const char *method, const char *params);	/* elsp.c: a notification to the extension host */
 void lsp_ext_start (void);	/* the host started when no document is open (a notebook's kernels) */
 int lsp_ext_wait (int ms, int (*done) (void));	/* its messages read until done() or ms */

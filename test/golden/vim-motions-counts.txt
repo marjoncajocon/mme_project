@@ -1,0 +1,20 @@
+{cccccc} -- NORMAL --                                                        Ln 1, Col 17  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 25  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 19  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 44  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 41  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 13  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 18  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 13  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 1, Col 37  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 3, Col 37  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 3, Col 18  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 5, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 9, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 5, Col 1  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                         Ln 4, Col 5  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 4, Col 19  Spaces: 4  UTF-8  LF  Plain Text  ?
+{cccccc} -- NORMAL --                                                        Ln 4, Col 22  Spaces: 4  UTF-8  LF  Plain Text  ?
+exited=0

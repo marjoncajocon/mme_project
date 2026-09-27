@@ -1,0 +1,35 @@
+[181818] ?                               ?[1f1f1f]  [264f78]src/count.c: [1f1f1f]
+[181818]                                 ?[1f1f1f]  [264f78]  2  #include <stdio.h> [1f1f1f]
+[181818] ?                               ?[262626]    3: static int [613314]total[262626] = 0;
+---- cursor 40,5
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total      Untitled-1  ●
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│   1  src/count.c:                                                       ⠛⠓⠂
+|    SEDIT                  │   2  │ 2  #include <stdio.h>
+|      src                       │   3
+|     .gitignore                │
+|      notes.txt                 │
+|     saved.code-search         │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                                                                                     ─
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                      Ln 3, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

@@ -1,0 +1,63 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lsp
+|      colors.c
+|     colors.c  Pick a color presentation, or type a hex color (#rrggbb)
+|       1  /* co                                                                                            ⣿⣿⣿⣉⠉⠉⠁     ─
+|      2  const   #00ff00  current                                                                        ⠉⠉⠉⠁
+|       3  const   rgb(0, 255, 0)
+|      4  const
+|       5  const char *faded = "■ #ff000080";
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  1  1                                                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  C  {}  
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lsp
+|      colors.c  ●
+|     colors.c
+|       1  /* colors.c - the colors a language server finds in the text */                                  ⣿⣿⣿⣭⠉⠉⠁     ─
+|      2  const char *red = "■ #ff0000";                                                                   ⠉⠉⠉⠁
+|       3  const char *green = "■ rgb(0, 255, 0)";
+|      4  const char *blue = "■ rgb(0, 0, 255)";
+|       5  const char *faded = "■ #ff000080";
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  1  1                                                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  C  {}  
+exited=0

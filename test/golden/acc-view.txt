@@ -1,0 +1,54 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c      Untitled-1  
+| 
+|       1  Settings Sync is off: Settings Sync: Turn On.                                                    ⠉⠉⠉⠉⠁       ▬
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                  Settings Sync is off: Settings Sync: Turn On.   
+|
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0
+---- speech
+New File, Ctrl+N, 1 of 465
+Save, Ctrl+S, 1 of 295
+Search, Ctrl+Shift+F, 1 of 225
+Settings, Ctrl+,, 1 of 142
+Settings, Ctrl+,, 1 of 64
+Settings, Ctrl+,, 1 of 36
+Settings, Ctrl+,, 1 of 29
+Settings, Ctrl+,, 1 of 15
+Settings, Ctrl+,, 1 of 9
+Settings Sync: Turn Off, 1 of 5
+Settings Sync: Sync Now, 1 of 5
+Settings Sync: Turn Off, 1 of 5
+Settings Sync: Sync Now, 1 of 5
+Settings Sync: Turn Off, 1 of 5
+Settings Sync: Sync Now, 1 of 5
+Settings Sync: Sync Now, 1 of 2
+Settings Sync is off: Settings Sync: Turn On.
+Editor
+edit.c, C, line 1
+Accessible View
+Untitled-1, Plain Text, line 1

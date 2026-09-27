@@ -1,0 +1,64 @@
+---- cursor 68,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           case
+|      case.txt  
+|     case.txt
+|       1  foo Foo FOO fOO                                       foo                           1 of 10          ▬
+|      2  foo-bar Foo-Bar FOO-BAR                                baz                              
+|       3  foo_bar Foo_Bar FOO_BAR
+|      4
+|
+| 
+|                                                                                                                       ▬
+| 
+|
+| 
+|
+|
+|
+|                                                                                                                       ▬
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                         Ln 1, Col 4 (3 selected)  Spaces: 4  UTF-8  LF  Plain Text  
+[181818] ?  [1f1f1f]   2  [22374b]foo[1f1f1f]-bar [613314]Foo[1f1f1f]-Bar [613314]FOO[1f1f1f]-BAR                               [313131] baz                          [0078d4]?[313131]  [1f1f1f] ? ?
+---- cursor 68,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           case
+|      case.txt  ●
+|     case.txt
+|       1  baz Baz BAZ baz                                       foo                           No results       ▬
+|      2  baz-bar Baz-Bar BAZ-BAR                                baz                              
+|       3  baz_bar Baz_Bar BAZ_BAR
+|      4
+|
+| 
+|                                                                                                                       ▬
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                        Replaced 10 occurrences   
+|
+|                                                                      Ln 1, Col 4  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

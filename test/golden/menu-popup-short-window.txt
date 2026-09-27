@@ -1,0 +1,15 @@
+---- cursor 119,5
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                             lang
+|      edit.c                                                Remote Host           ▐
+|     edit.c                                                Editor Selection      ▐
+|       1  /* edit.c - a small C file the editing scenarios   Editor Indentation                           ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #include <stdio.h>                                 Editor Encoding                              ⣒⣂⡀
+|                                                                                     l 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 119,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                             lang
+|      edit.c                                               Editor Encoding
+|     edit.c                                                Editor End of Line
+|       1  /* edit.c - a small C file the editing scenarios   Editor Language       ▐                      ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #include <stdio.h>                                 Notifications         ▐                      ⣒⣂⡀
+|                                                                                     l 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

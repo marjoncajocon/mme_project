@@ -1,0 +1,32 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c
+|     edit.c    Ports
+|       1  /* ed                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|      2  #incl  5173  →  localhost:5173  forwarding... (from the terminal)                                ⣒⣂⡀
+|       3  #incl  Forward a Port...                                                                         ⠿
+|      4  #incl                                                                                            ⣭⣭⣥⡤⠄
+|       5                                                                                                   ⠟⠛
+|      6  #define MAXN 64                                                                                  ⣿⡏⠉⠁
+|       7                                                                                                   ⣋⣁⣀⡀
+|      8  typedef struct Point {                                                                           ⣿⠿⠗
+|       9  │   int x;                                                                                       ⡹⠿⠿⠃
+|     10  │   int y;                                                                                       ⠟⠛⠛⠋⠉⠉
+|      11  } Point;
+|      12
+|      13  static int total = 0;
+|      14
+|    ── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: mmc-shell ──MMC:/<PATH>───────────────
+|
+|       [+] mmc <VER> :: portable shell
+|       [+] developed by :: Marjon Mangindo Cajocon
+|       [+] type help for help, exit to leave
+|
+|     ┌─[<USER>@<HOST>]─[MMC]─[/<PATH>]
+|     └──╼ $ echo Serving on http://localhost:5173/ and 127.0.0.1:22
+|     Serving on http://localhost:5173/ and 127.0.0.1:22
+|
+|    ┌─[<USER>@<HOST>]─[MMC]─[/<PATH>]
+|     └──╼ $
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

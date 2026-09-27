@@ -12,6 +12,7 @@
 
 #include "mme.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,26 @@ char *fs_real_dir (const char *path) {
 }
 
 
+/* up to n bytes of the file from off (the hex viewer's pages of a big one); how many, -1: unreadable */
+long fs_read_at (const char *path, unsigned long long off, void *buf, size_t n) {
+  wchar_t *w = wide(path);
+  HANDLE h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, 0, NULL);
+  LARGE_INTEGER at;
+  DWORD got;
+  long total = 0;
+  free(w);
+  if (h == INVALID_HANDLE_VALUE) return -1;
+  at.QuadPart = (LONGLONG)off;
+  if (!SetFilePointerEx(h, at, NULL, FILE_BEGIN)) total = -1;
+  else
+    while ((size_t)total < n && ReadFile(h, (char *)buf + total, (DWORD)(n - (size_t)total), &got, NULL) && got > 0)
+      total += (long)got;
+  CloseHandle(h);
+  return total;
+}
+
+
 static int remove_one (const char *path, int dir) {
   wchar_t *w = wide(path);
   int r = (dir ? RemoveDirectoryW(w) : DeleteFileW(w)) ? 0 : -1;
@@ -119,6 +140,17 @@ int fs_rename (const char *from, const char *to) {
 /* the folder path is, links followed; NULL: unknown */
 char *fs_real_dir (const char *path) {
   return os_realpath(path);
+}
+
+
+/* up to n bytes of the file from off (the hex viewer's pages of a big one); how many, -1: unreadable */
+long fs_read_at (const char *path, unsigned long long off, void *buf, size_t n) {
+  FILE *f = fopen(path, "rb");
+  long total = -1;
+  if (f == NULL) return -1;
+  if (off <= (unsigned long long)LONG_MAX && fseek(f, (long)off, SEEK_SET) == 0) total = (long)fread(buf, 1, n, f);
+  fclose(f);
+  return total;
 }
 
 
@@ -217,6 +249,34 @@ void fs_reveal (const char *path) {
 
 
 /*
+** A folder walk follows each real folder once: a link (a Windows
+** junction too) back up the tree would have it go round forever. seen
+** holds the real paths walked (the roots put in first); path is a
+** folder, or a link to one.
+*/
+int fs_dir_first (Vec *seen, const char *path) {
+  char *rp = fs_real_dir(path);
+  size_t i;
+  if (rp == NULL) return 0;	/* a broken link: nothing to walk */
+  for (i = 0; i < seen->n; i++)
+    if (m_fncmp(seen->v[i], rp) == 0) {
+      free(rp);
+      return 0;
+    }
+  vec_push(seen, rp);
+  return 1;
+}
+
+
+/* a folder met in a walk: 1 go into it; 0 it is a link to one walked already (or a broken one) */
+int fs_walk_into (Vec *seen, const char *path) {
+  OsStat st;
+  if (os_lstat(path, &st) != 0 || !st.is_link) return 1;
+  return fs_dir_first(seen, path);
+}
+
+
+/*
 ** A rename or a move of the Explorer's, as VS Code does it: the language
 ** servers that asked for it get willRenameFiles first and their edits
 ** (the imports of the file) are made, then the file moves, then they get
@@ -233,7 +293,9 @@ int fs_move (const char *from, const char *to) {
 
 /* a file or a folder with all that is in it; -1 when something stayed */
 int fs_remove (const char *path) {
+  OsStat st;
   int r = 0;
+  if (os_lstat(path, &st) == 0 && st.is_link) return remove_one(path, st.is_dir);	/* the link, not what it leads to */
   if (is_dir(path)) {
     Vec v;
     size_t i;
@@ -252,8 +314,8 @@ int fs_remove (const char *path) {
 }
 
 
-/* a copy of a file, or of a folder and all in it; -1: it failed */
-int fs_copy (const char *from, const char *to) {
+/* fs_copy's; seen: the real folders copied (a link back up the tree is not copied round and round) */
+static int copy_in (const char *from, const char *to, Vec *seen) {
   if (fs_exists(to)) return -1;
   if (is_dir(from)) {
     Vec v;
@@ -266,7 +328,8 @@ int fs_copy (const char *from, const char *to) {
     os_listdir(from, &v);
     for (i = 0; i < v.n; i++) {
       char *a = path_join(from, v.v[i]), *b = path_join(to, v.v[i]);
-      if (fs_copy(a, b) != 0) r = -1;
+      if (is_dir(a) && !fs_walk_into(seen, a)) ;	/* a folder copied already */
+      else if (copy_in(a, b, seen) != 0) r = -1;
       free(a);
       free(b);
     }
@@ -293,6 +356,18 @@ int fs_copy (const char *from, const char *to) {
     if (r != 0) os_unlink(to);	/* half a file is worse than none */
     return r;
   }
+}
+
+
+/* a copy of a file, or of a folder and all in it; -1: it failed */
+int fs_copy (const char *from, const char *to) {
+  Vec seen;
+  int r;
+  vec_init(&seen);
+  fs_dir_first(&seen, from);
+  r = copy_in(from, to, &seen);
+  vec_free(&seen);
+  return r;
 }
 
 

@@ -1,0 +1,35 @@
+---- cursor 6,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      Search: saved  
+|      total                                                                                                  1
+|                                                                                                            
+|     5 results - 2 files
+|
+|     notes.txt:
+|        1  Total is counted in count.c.
+|       2: The total never goes down.
+|
+|     src/count.c:
+|        2  #include <stdio.h>
+|       3: static int total = 0;
+|        4: static int add (int a) { total += a; return total; }
+|        5
+|
+|        8    add(2);
+|        9:   printf("%d\n", total);
+|        10    return 0;
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+{868686}    {cccccc}    {b5cea8}1  {cccccc}Total is counted in count.c.
+{868686} ?  {cccccc}    {b5cea8}2: {cccccc}The total never goes down.
+[181818] ?  [1f1f1f]  [313131] total                                                                                           [0078d4]?[313131] ? ?  [1f1f1f] [0078d4]?[1f1f1f] [313131] 1   [1f1f1f]
+exited=0

@@ -1122,7 +1122,7 @@ static char *ws_path (const char *p, char *why, size_t n) {
 /* a file's text: the editor's (unsaved changes too), else the disk's; NULL: none */
 static char *file_text (const char *path, size_t *len) {
   char *s = open_doc_text(path, len);
-  if (s == NULL) s = read_file(path, len);
+  if (s == NULL) s = read_file_all(path, len);	/* never a part: an edit is made on what it read */
   return s;
 }
 
@@ -1180,7 +1180,8 @@ static void tool_list (const Json *a, Buf *out) {
 }
 
 
-static void search_in (const char *dir, const char *root, const char *q, Buf *out, int *hits, int *files, int depth) {
+static void search_in (const char *dir, const char *root, const char *q, Buf *out, int *hits, int *files, int depth,
+                       Vec *seen) {
   Vec v;
   size_t i, rl = strlen(root);
   if (depth > 12 || *hits >= 100 || *files > 5000) return;
@@ -1196,7 +1197,9 @@ static void search_in (const char *dir, const char *root, const char *q, Buf *ou
       free(f);
       continue;
     }
-    if (st.is_dir) search_in(f, root, q, out, hits, files, depth + 1);
+    if (st.is_dir) {
+      if (fs_walk_into(seen, f)) search_in(f, root, q, out, hits, files, depth + 1, seen);	/* not round a link */
+    }
     else if (st.size < 512 * 1024) {
       size_t len = 0, k, ls = 0;
       char *s = file_text(f, &len);
@@ -1234,7 +1237,13 @@ static int tool_search (const Json *a, Buf *out) {
     buf_puts(out, why);
     return 0;
   }
-  if (*q) search_in(dir, side_root(), q, out, &hits, &files, 0);
+  if (*q) {
+    Vec seen;
+    vec_init(&seen);
+    fs_dir_first(&seen, dir);
+    search_in(dir, side_root(), q, out, &hits, &files, 0, &seen);
+    vec_free(&seen);
+  }
   if (hits == 0) buf_printf(out, "No results (%d files searched).", files);
   else if (hits >= 100) buf_puts(out, "(the first 100 results)");
   free(dir);

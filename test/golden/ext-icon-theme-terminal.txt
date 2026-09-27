@@ -1,0 +1,63 @@
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXPLORER                   │  edit.c  
+|▎   OPEN EDITORS               │  edit.c
+|    ─────────────────────────────│   1  /* edit.c - a small C file the editing scenarios type into. */     ⣿⣿⠉⠉⠉⠉⠁     ─
+|    LANG                   │   2  #include <stdio.h>                                                 ⣒⣂⡀
+|      card.tsx                  │   3  #include <stdlib.h>                                                ⠿
+|     conf.json                ▐│   4  #include <string.h>                                                ⣭⣭⣥⡤⠄
+|      demo.go                  ▐│   5                                                                     ⠟⠛
+|     doc.md                   ▐│   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|      edit.c                   ▐│   7                                                                     ⣋⣁⣀⡀
+|     fold.c                   ▐│   8  typedef struct Point {                                             ⣿⠿⠗
+|      latin1.c                 ▐│   9  │   int x;                                                         ⡹⠿⠿⠃
+|     nb.ipynb                 ▐│  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|      plain.txt                ▐│  11  } Point;
+|      site.css                 ▐│  12
+|      sticky.c                 ▐│  13  static int total = 0;
+|      util.py                  ▐│  14
+|      wrap.js                  ▐│  15  /* adds two numbers and remembers the sum */
+|    ─────────────────────────────│  16  static int add (int a, int b) {
+|     OUTLINE                  │  17  │   total += a + b;
+|        MAXN                    │  18  │   return a + b;
+|        Point                   │  19  }
+|        add                     │  20
+|        make                    │  21  static Point make (int x, int y) {
+|        main                    │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|   ─────────────────────────────│  25  │   return p;
+|     TIMELINE                   │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXPLORER
+|▎   OPEN EDIT  Select File Icon Theme (Up/Down Keys to Preview)
+|    ───────────                                                                                            ⣿⣿⠉⠉⠉⠉⠁     ─
+|    LANG        Seti (mme's own)                                                                        ⣒⣂⡀
+|      card.tsx   Acme Icons  current                                                                     ⠿
+|     conf.jso                                                                                            ⣭⣭⣥⡤⠄
+|      demo.go                  ▐│   5                                                                     ⠟⠛
+|     doc.md                   ▐│   6  #define MAXN 64                                                    ⣿⡏⠉⠁
+|      edit.c                   ▐│   7                                                                     ⣋⣁⣀⡀
+|     fold.c                   ▐│   8  typedef struct Point {                                             ⣿⠿⠗
+|      latin1.c                 ▐│   9  │   int x;                                                         ⡹⠿⠿⠃
+|     nb.ipynb                 ▐│  10  │   int y;                                                         ⠟⠛⠛⠋⠉⠉
+|      plain.txt                ▐│  11  } Point;
+|      site.css                 ▐│  12
+|      sticky.c                 ▐│  13  static int total = 0;
+|      util.py                  ▐│  14
+|      wrap.js                  ▐│  15  /* adds two numbers and remembers the sum */
+|    ─────────────────────────────│  16  static int add (int a, int b) {
+|     OUTLINE                  │  17  │   total += a + b;
+|        MAXN                    │  18  │   return a + b;
+|        Point                   │  19  }
+|        add                     │  20
+|        make                    │  21  static Point make (int x, int y) {
+|        main                    │  22  │   Point p;
+|                                 │  23  │   p.x = x;
+|                                 │  24  │   p.y = y;
+|   ─────────────────────────────│  25  │   return p;
+|     TIMELINE                   │  26  }
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

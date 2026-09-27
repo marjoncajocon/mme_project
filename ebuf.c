@@ -446,7 +446,7 @@ static int nobom_of (const Doc *d) {
 #define LOAD_MAX	((long long)1 << 30)	/* bigger files are not opened (never cut short) */
 
 /* the whole file, NUL ended; NULL: it can't be read (or is too big to) */
-static char *read_all (const char *native, size_t *len) {
+char *read_file_all (const char *native, size_t *len) {
   OsStat st;
   size_t cap, n = 0, want;
   long got = 0;
@@ -479,7 +479,7 @@ static char *read_all (const char *native, size_t *len) {
     return NULL;
   }
   s[n] = '\0';
-  *len = n;
+  if (len) *len = n;
   return s;
 }
 
@@ -488,7 +488,7 @@ static char *read_all (const char *native, size_t *len) {
    *bom: it had one (UTF-16 without one is saved without one) */
 static char *load_bytes (const char *native, int *enc, int *crlf, size_t *len, int *bom) {
   size_t n, i;
-  char *raw = read_all(native, &n), *s;
+  char *raw = read_file_all(native, &n), *s;
   int e;
   if (raw == NULL) return NULL;
   e = bom_of(raw, n);

@@ -1,0 +1,32 @@
+---- cursor 77,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c                                                           │  CHAT                                    
+|     edit.c                                                            │
+|       1  /* edit.c - a small C file the editing scenarios t⣿⣿⠉⠉⠉⠉⠁     ─│
+|      2  #include <stdio.h>                                ⣒⣂⡀          │
+|       3  #include <stdlib.h>                               ⠿            │
+|      4  #include <string.h>                               ⣭⣭⣥⡤⠄        │
+|       5                                                    ⠟⠛           │                       
+|      6  #define MAXN 64                                   ⣿⡏⠉⠁         │
+|       7                                                    ⣋⣁⣀⡀         │                  Ask Claude
+|      8  typedef struct Point {                            ⣿⠿⠗          │
+|       9  │   int x;                                        ⡹⠿⠿⠃         │  Claude can make mistakes, so check what it
+|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉       │                   writes.
+|      11  } Point;                                                       │
+|      12                                                                 │    The selection, or the lines the editor
+|      13  static int total = 0;                                          │   shows, goes with the question. Ctrl+I in
+|      14                                                                 │  the editor asks for a change right there.
+|      15  /* adds two numbers and remembers the sum */                   │
+|      16  static int add (int a, int b) {                                │
+|      17  │   total += a + b;                                            │
+|      18  │   return a + b;                                              │
+|      19  }                                                              │
+|      20                                                                 │
+|      21  static Point make (int x, int y) {                             │
+|      22  │   Point p;                                                   │ ╭──────────────────────────────────────────╮
+|      23  │   p.x = x;                                                   │ │  edit.c Current file                   │
+|      24  │   p.y = y;                                                   │ │ Ask Claude                               │
+|     25  │   return p;                                                  │ │ Ask                    claude-opus-5   │
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄             │ ╰──────────────────────────────────────────╯
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

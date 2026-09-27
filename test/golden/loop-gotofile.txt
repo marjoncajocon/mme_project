@@ -1,0 +1,32 @@
+---- cursor 19,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         looprepo
+|      EXPLORER
+|▎   OPEN EDIT  .c
+|    ───────────
+|    LOOPREPO    lib.c  lib/deep                                                         file results
+|      fresh      top.c
+|     lib/deep
+|  2   sub                     M │
+|     top.c                     │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|  main*                                                                                                             
+exited=0

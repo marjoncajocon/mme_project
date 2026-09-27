@@ -1,0 +1,125 @@
+---- cursor 17,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  ●
+|     text.txt
+|       1  one two three four five six                                                                      ⠿⠿⠿⠶⠂
+|      2 ONa-a-a-E(beta, gamma) and "quoted text" here                                                    ⠿⠿⠍
+|       3  │   indented line with foo and foo again
+|      4  │                                                                                                            ─
+|       5  second paragraph starts here
+|      6  it has two lines
+|       7  last line of the file
+|      8
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+| -- NORMAL --                                                         Ln 2, Col 8  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 12,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  ●
+|     text.txt
+|       1  one two three four five six                                                                      ⠿⠿⠿⠶
+|      2 ONE(beta, gamma) and "quoted text" here                                                          ⠿⠿⠍
+|       3  │   indented line with foo and foo again
+|      4  │                                                                                                            ─
+|       5  second paragraph starts here
+|      6  it has two lines
+|       7  last line of the file
+|      8
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+| -- NORMAL --                                                         Ln 2, Col 3  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  
+|     text.txt
+|       1  The quick brown fox jumps over the lazy dog.                                                     ⣿⣿⣿⣭⠅       ─
+|      2  one two three four five six                                                                      ⣶⣶⡒
+|       3  alpha(beta, gamma) and "quoted text" here
+|      4  │   indented line with foo and foo again
+|       5  │
+|      6  second paragraph starts here
+|       7  it has two lines
+|      8  last line of the file
+|       9
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+| -- NORMAL --                                                         Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+---- cursor 10,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  ●
+|     text.txt
+|       1  one two three four five six                                                                      ⠿⠿⠿⠶
+|      2 ONE(beta, gamma) and "quoted text" here                                                          ⠿⠿⠍
+|       3  │   indented line with foo and foo again
+|      4  │                                                                                                            ─
+|       5  second paragraph starts here
+|      6  it has two lines
+|       7  last line of the file
+|      8
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+| -- NORMAL --                                                         Ln 2, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

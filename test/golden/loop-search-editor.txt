@@ -1,0 +1,32 @@
+---- cursor 43,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         looprepo
+|      EXPLORER                   │  Search: needle  
+|▎   OPEN EDITORS               │   needle                                                                   1
+|    ─────────────────────────────│                                                                          
+|    LOOPREPO               │  4 results - 4 files
+|      fresh                   M │
+|     lib/deep                  │  lib/deep/lib.c:
+|  2   sub                     M │    1: int lib (void) { return 2; } /* needle */
+|     top.c                     │
+|                                 │  sub/inner.txt:
+|                                │    1: the needle in sub
+|                                 │
+|                                │  sub/new.txt:
+|                                 │    1: untracked, with a needle
+|                                 │
+|                                 │  top.c:
+|                                 │    1: int top (void) { return 1; } /* needle */
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|  main*                                                                                                             
+exited=0

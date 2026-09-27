@@ -1,0 +1,156 @@
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      SEARCH                 │
+|▎     Search                │
+|                                │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ EXPLORER ──────────────────────
+|                                 │ OPEN EDITORS
+|                                 │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ PROJ                                                                          
+|                                 │  deep/one/two                                                                      ▐
+|                                 │  docs                                                                              ▐
+|                                 │  many                                                                              ▐
+|                                 │  src                                                                               ▐
+|                                 │  app.js
+|                                 │  main.c
+|                                │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ TIMELINE
+|                                                                                                                     
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      SEARCH                 │  site.css  
+|▎     Search                │  site.css
+|                                │   1  /* site.css - the CSS colour fixture. */                           ⣿⣭⣉⠉        ─
+|                                │   2  :root {                                                            ⣋⠁
+|                                 │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
+|                                │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
+|                                 │   5  │ --gap: 8px;                                                      ⠟⠛⠋
+|                                │   6  }                                                                  ⡿⠭⠭
+|                                 │   7                                                                     ⠁
+|                                │   8  body {
+|                                 │   9  │ background: var(--bg);
+|                                 │  10  │ color: var(--fg);
+|                                 │  11  │ font-family: "Segoe UI", sans-serif;
+|                                 │  12  │ margin: 0;
+|                                 │  13  }
+|                                 │  14
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ EXPLORER ──────────────────────
+|                                 │ OPEN EDITORS
+|                                 │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ PROJ                                                                          
+|                                 │  src
+|                                 │  app.js
+|                                 │  main.c                                                                            ▐
+|                                 │  package.json                                                                      ▐
+|                                 │  readme.md                                                                         ▐
+|                                 │  site.css                                                                          ▐
+|                                │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ TIMELINE
+|                                                                             Ln 1, Col 1  Spaces: 2  UTF-8  LF  CSS  
+---- cursor 119,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      SEARCH                 │  site.css  
+|▎     Search                │  site.css
+|                                │   1  /* site.css - the CSS colour fixture. */                           ⣿⣭⣉⠉        ─
+|                                │   2  :root {                                                            ⣋⠁
+|                                 │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
+|                                │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
+|                                 │   5  │ --gap: 8px;                                                      ⠟⠛⠋
+|                                │   6  }                                                                  ⡿⠭⠭
+|                                 │   7                                                                     ⠁
+|                                │   8  body {
+|                                 │   9  │ background: var(--bg);
+|                                 │  10  │ color: var(--fg);
+|                                 │  11  │ font-family: "Segoe UI", sans-serif;
+|                                 │  12  │ margin: 0;
+|                                 │  13  }
+|                                 │  14
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ EXPLORER ──────────────────────
+|                                 │ OPEN EDITORS
+|                                 │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ PROJ                                                                          
+|                                 │  src
+|                                 │  app.js
+|                                 │  main.c                                                                            ▐
+|                                 │  package.json                                                                      ▐
+|                                 │  readme.md                                                                         ▐
+|                                 │  site.css                                                                          ▐
+|                                │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ TIMELINE
+|                                                                             Ln 1, Col 1  Spaces: 2  UTF-8  LF  CSS  
+---- cursor 119,21
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      SEARCH                 │  site.css  
+|▎     Search                │  site.css
+|                                │   1  /* site.css - the CSS colour fixture. */                           ⣿⣭⣉⠉        ─
+|                                │   2  :root {                                                            ⣋⠁
+|                                 │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
+|                                │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
+|                                 │   5  │ --gap: 8px;                                                      ⠟⠛⠋
+|                                │   6  }                                                                  ⡿⠭⠭
+|                                 │   7                                                                     ⠁
+|                                │   8  body {
+|                                 │   9  │ background: var(--bg);
+|                                 │  10  │ color: var(--fg);
+|                                 │  11  │ font-family: "Segoe UI", sans-serif;
+|                                 │  12  │ margin: 0;
+|                                 │  13  }
+|                                 │  14
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ EXPLORER ──────────────────────
+|                                 │ OPEN EDITORS
+|                                 │─────────────────────────────────────────────────────   Move To Primary Side Bar     ─
+|                                 │ PROJ                                                  Reset Location
+|                                 │  src
+|                                 │  app.js
+|                                 │  main.c                                                                            ▐
+|                                 │  package.json                                                                      ▐
+|                                 │  readme.md                                                                         ▐
+|                                 │  site.css                                                                          ▐
+|                                │──────────────────────────────────────────────────────────────────────────────────────
+|                                 │ TIMELINE
+|                                                                             Ln 1, Col 1  Spaces: 2  UTF-8  LF  CSS  
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │  site.css  
+|▎   OPEN EDITORS               │  site.css
+|    ─────────────────────────────│   1  /* site.css - the CSS colour fixture. */                           ⣿⣭⣉⠉        ─
+|    PROJ                   │   2  :root {                                                            ⣋⠁
+|      deep/one/two              │   3  │ --bg: #1e1e1e;                                                   ⣿⡿⠥⠤
+|     docs                      │   4  │ --fg: rgb(212, 212, 212);                                        ⣥⡄
+|      many                      │   5  │ --gap: 8px;                                                      ⠟⠛⠋
+|     src                       │   6  }                                                                  ⡿⠭⠭
+|      app.js                    │   7                                                                     ⠁
+|     main.c                    │   8  body {
+|      package.json              │   9  │ background: var(--bg);
+|     readme.md                 │  10  │ color: var(--fg);
+|      site.css                  │  11  │ font-family: "Segoe UI", sans-serif;
+|                                 │  12  │ margin: 0;
+|                                 │  13  }
+|                                 │  14
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── Filter (e.g. text,  ────────
+|    ─────────────────────────────│  No problems have been detected in the workspace.
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                             Ln 1, Col 1  Spaces: 2  UTF-8  LF  CSS  
+exited=0

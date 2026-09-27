@@ -1,0 +1,94 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER
+|▎   OPEN EDIT  Select a launch configuration
+|    ───────────
+|    DBG         Stub: plain  current
+|      .vscode    Stub: fails first
+|     prog.py    Stub: terminal
+|                  Both  compound
+|                 Add Configuration...
+|
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 44,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py                                 
+|      Stub: terminal         │  prog.py   main
+|                                 │   1  def main():                                                        ⣿⣇⣀
+|     VARIABLES                 │  2  │   count = 42  count = 42                                         ⠤           ▬
+|       Locals                   │   3  │   counter = 7
+|         count: 42              │   4  │   print(count + counter)
+|          counter: 7             │   5
+|▎    WATCH                    │   6                                                                                 ▬
+|  ●      Add Expression         │   7  main()
+|     CALL STACK                │   8
+|       Stub: plain      PAUSED │
+|      Stub: terminal   PAUSED │
+|       main     PAUSED ON ENTRY │
+|        main         prog.py  2 │
+|      BREAKPOINTS               │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: stub program ──────────
+|                                 │ name?
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                          Ln 2, Col 5  Spaces: 4  UTF-8  LF  Python  
+---- cursor 44,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py  
+|      Both                   │  prog.py   main
+|                                 │   1  def main():                                                        ⣿⣇⣀
+|     VARIABLES                 │   2  │   count = 42                                                     ⠤           ▬
+|      WATCH                    │   3  │   counter = 7
+|        Add Expression         │   4  │   print(count + counter)
+|      CALL STACK                │   5
+|▎    BREAKPOINTS               │   6                                                                                 ▬
+|                                 │   7  main()
+|                                │   8
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: stub program ──────────
+|                                 │ name?
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                          Ln 2, Col 5  Spaces: 4  UTF-8  LF  Python  
+exited=0

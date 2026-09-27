@@ -1,0 +1,63 @@
+---- cursor 41,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  util.h  
+|▎   OPEN EDITORS               │  util.h
+|    ─────────────────────────────│  1  xint count_items (int a, int b, const char *s, int f);             ⠉⠉⠉⠉⠉⠁      ─
+|    F3                     │   2
+|      main.c                    │
+|     notes.txt                 │
+|      page.html                 │
+|     util.c                    │
+|      util.h                  2 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        stubSymbol              │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                                                didChangeWatchedFiles util.h:2  
+|   ─────────────────────────────│                                                 Source: python
+|     TIMELINE                   │                                                                                     ▬
+|  1  1                                                                   Ln 1, Col 2  Spaces: 4  UTF-8  LF  C  {}  
+---- cursor 41,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  util.h      notes.txt  
+|▎   OPEN EDITORS               │  notes.txt
+|    ─────────────────────────────│   1  ywatched by *.txt                                                  ⠉⠉          ─
+|    F3                     │   2
+|      main.c                    │
+|     notes.txt                 │
+|      page.html                 │
+|     util.c                    │
+|      util.h                  2 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                                             didChangeWatchedFiles notes.txt:2  
+|   ─────────────────────────────│                                              Source: python
+|     TIMELINE                   │
+|  1  1                                                              Ln 1, Col 2  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

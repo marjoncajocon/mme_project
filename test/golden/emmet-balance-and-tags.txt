@@ -1,0 +1,156 @@
+---- cursor 69,7
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  page.html  
+|▎   OPEN EDITORS               │  page.html
+|    ─────────────────────────────│   1  <!DOCTYPE html>                                                    ⣿⣁⡀
+|    F3                     │   2  <html>                                                             ⣼⠛⠋⠁
+|      main.c                    │   3  <body>                                                             ⣧
+|     notes.txt                 │   4  │   <div class="box">
+|      page.html                 │   5  │   │   <p>Hello <b>world</b></p>
+|     util.c                    │   6  │   │   <img src="a.png">
+|      util.h                    │   7  │   </div>
+|                                │   8  apples
+|                                 │   9  pears                                                                          ▬
+|                                │  10  plums
+|                                 │  11  </body>
+|                                 │  12  </html>
+|                                 │  13
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                           Ln 5, Col 30 (12 selected)  Tab Size: 4  UTF-8  LF  HTML  
+---- cursor 65,7
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  page.html  
+|▎   OPEN EDITORS               │  page.html
+|    ─────────────────────────────│   1  <!DOCTYPE html>                                                    ⣿⣁⡀
+|    F3                     │   2  <html>                                                             ⣼⠛⠋⠁
+|      main.c                    │   3  <body>                                                             ⣧
+|     notes.txt                 │   4  │   <div class="box">
+|      page.html                 │   5  │   │   <p>Hello <b>world</b></p>
+|     util.c                    │   6  │   │   <img src="a.png">
+|      util.h                    │   7  │   </div>
+|                                │   8  apples
+|                                 │   9  pears                                                                          ▬
+|                                │  10  plums
+|                                 │  11  </body>
+|                                 │  12  </html>
+|                                 │  13
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                            Ln 5, Col 26 (5 selected)  Tab Size: 4  UTF-8  LF  HTML  
+---- cursor 70,7
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  page.html  ●
+|▎   OPEN EDITORS               │  page.html
+|    ─────────────────────────────│   1  <!DOCTYPE html>                                                    ⣿⣁⡀
+|    F3                     │   2  <html>                                                             ⣼⠛⠋⠉⠁
+|      main.c                    │   3  <body>                                                             ⣧
+|     notes.txt                 │   4  │   <div class="box">
+|      page.html                 │   5  │   │   <p>Hello <strong>world</strong></p>
+|     util.c                    │   6  │   │   <img src="a.png">
+|      util.h                    │   7  │   </div>
+|                                │   8  apples
+|                                 │   9  pears                                                                          ▬
+|                                │  10  plums
+|                                 │  11  </body>
+|                                 │  12  </html>
+|                                 │  13
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                            Ln 5, Col 31 (5 selected)  Tab Size: 4  UTF-8  LF  HTML  
+---- cursor 44,9
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  page.html  ●
+|▎   OPEN EDITORS               │  page.html
+|    ─────────────────────────────│   1  <!DOCTYPE html>                                                    ⣿⣁⡀
+|    F3                     │   2  <html>                                                             ⣼⠛⠋⠉⠁
+|      main.c                    │   3  <body>                                                             ⣧
+|     notes.txt                 │   4  │   <div class="box">
+|      page.html                 │   5  │   │   <p>Hello <strong>world</strong></p>
+|     util.c                    │   6  │   │   <img src="a.png">
+|      util.h                    │   7  │   </div>
+|                                │   8  apples
+|                                 │   9  pears
+|                                │  10  plums
+|                                 │  11  </body>
+|                                 │  12  </html>
+|                                 │  13                                                                                 ─
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                          Ln 7, Col 5  Tab Size: 4  UTF-8  LF  HTML  
+---- cursor 40,8
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  page.html  ●
+|▎   OPEN EDITORS               │  page.html
+|    ─────────────────────────────│   1  <!DOCTYPE html>                                                    ⣿⣁⣀⣀
+|    F3                     │   2  <html>                                                             ⡟⠉⠁
+|      main.c                    │   3  <body>                                                             ⠛
+|     notes.txt                 │   4  │   <p>Hello <strong>world</strong></p>
+|      page.html                 │   5  │   <img src="a.png">
+|     util.c                    │   6  apples
+|      util.h                    │   7  pears
+|                                │   8  plums
+|                                 │   9  </body>
+|                                │  10  </html>
+|                                 │  11
+|                                 │                                                                                     ─
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                          Ln 6, Col 1  Tab Size: 4  UTF-8  LF  HTML  
+exited=0

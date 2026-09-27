@@ -2788,7 +2788,7 @@ static const char *source_line (const char *path, size_t ln, size_t *len) {
     free(last);
     free(text);
     last = xstrdup(path);
-    text = read_file(path, &tlen);
+    text = read_file_all(path, &tlen);
   }
   if (text == NULL || ln == 0) return NULL;
   for (p = text; --ln > 0 && (p = memchr(p, '\n', tlen - (size_t)(p - text))) != NULL; p++) ;

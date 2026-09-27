@@ -1,0 +1,63 @@
+---- cursor 13,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      SEARCH                 │
+|      total                 │
+|                                │
+|▎    6 results in 2 files       │
+|      Open in editor             │
+|      notes.txt            2  │
+|        Total is counted in coun │
+|       The total never goes dow │
+|       count.c src          4  │
+|       static int total = 0;    │                        Command Palette...   Ctrl+Shift+P
+|        …d (int a) { total += a; │
+|       …= a; return total; }    │                             Go to File...   Ctrl+P
+|        printf("%d\n", total);   │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                                                                     
+---- cursor 36,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      SEARCH                 │  Search: total  
+|      total                 │   total                                                                    1
+|                                │                                                                          
+|▎    6 results in 2 files       │  6 results - 2 files
+|      Open in editor             │
+|      notes.txt            2  │  notes.txt:
+|        Total is counted in coun │    1: Total is counted in count.c.
+|       The total never goes dow │    2: The total never goes down.
+|       count.c src          4  │
+|       static int total = 0;    │  src/count.c:
+|        …d (int a) { total += a; │    2  #include <stdio.h>
+|       …= a; return total; }    │    3: static int total = 0;
+|        printf("%d\n", total);   │    4: static int add (int a) { total += a; return total; }
+|                                 │    5
+|                                 │
+|                                 │    8    add(2);
+|                                 │    9:   printf("%d\n", total);
+|                                 │    10    return 0;
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                                                                     
+exited=0

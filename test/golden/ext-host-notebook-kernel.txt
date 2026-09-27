@@ -1,0 +1,63 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      nb.ipynb
+|    + Code   +  Select Kernel                                                                                   python
+|
+|   ▎        No   mme: Jupyter / Python (mme-kernel.py)  selected
+|    ▎        ━━   Acme Kernel  runs cells in the extension                                              ━━━━━━━━━━
+|   ▎
+|    ▎        Some bold text.
+| 
+|    ▎  [1] x = 6 * 7
+|   ▎      print('hello')
+|    ▎      x
+|   ▎      hello
+|    ▎      42
+| 
+|    ▎  [2] 1 / 0
+|    ▎      Traceback (most recent call last):
+|    ▎      ZeroDivisionError: division by zero
+|
+|    ▎  [3] df
+|    ▎         city    people
+|    ▎      ──────────────────
+|    ▎      0  Manila  1846513
+|    ▎      1  Cebu    964169
+|
+|           + Code    + Markdown
+|
+| 
+|
+|                                                                                                                     
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      nb.ipynb  ●
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                          Acme Kernel
+|
+|   ▎        Notebook fixture
+|    ▎        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+|   ▎
+|    ▎        Some bold text.
+| 
+|    ▎▷ [1] x = 6 * 7
+|   ▎      print('hello')
+|    ▎      x
+|   ▎      acme ran: x = 6 * 7
+|    ▎      the acme result 1
+| 
+|    ▎  [2] 1 / 0
+|    ▎      Traceback (most recent call last):
+|    ▎      ZeroDivisionError: division by zero
+|
+|    ▎  [3] df
+|    ▎         city    people
+|    ▎      ──────────────────
+|    ▎      0  Manila  1846513
+|    ▎      1  Cebu    964169
+|
+|           + Code    + Markdown
+|
+| 
+|
+|                                                                                                                     
+exited=0

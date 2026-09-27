@@ -5,6 +5,8 @@
 ** The keys move a cursor through the bytes (arrows, PgUp / PgDn, Home /
 ** End, Ctrl+G to an offset, Ctrl+F for bytes or text); the byte under it
 ** is told in the status line. It only reads: mme does not write binaries.
+** A big file is not read whole: its bytes come from the disk a page at a
+** time, as they are shown or looked through.
 ** A debugger's memory (readMemory) shows the same way, its offsets the
 ** addresses the bytes are at.
 */
@@ -20,8 +22,10 @@
 
 typedef struct Hex {
   char *path;
-  unsigned char *b;	/* the whole file */
-  size_t n;
+  unsigned char *b;	/* the bytes from off: the whole file, or the page of a big one read last */
+  size_t off, nb;
+  int paged;	/* too big to read whole */
+  size_t n;	/* the file's size */
   size_t at;	/* the byte the cursor is on */
   size_t top;	/* the first row shown */
   int x, y, w, h;	/* where it was drawn, for the mouse */
@@ -31,25 +35,68 @@ typedef struct Hex {
   int ow;	/* the offsets' columns */
 } Hex;
 
-#define MAX_HEX	(64 << 20)	/* a file bigger than this is not read whole */
+#define MAX_HEX	(64 << 20)	/* a file bigger than this is read a page at a time, not whole */
+#define PAGE	(1 << 20)	/* the bytes of a big file read at once */
+
+
+/* the file (again) into h: whole when it is small, else its size (the pages come as needed); -1: unreadable */
+static int load (Hex *h, const char *path) {
+  OsStat st;
+  size_t len = 0;
+  char *s = NULL;
+  if (os_stat(path, &st) != 0 || st.is_dir || (unsigned long long)st.size > (size_t)-1 / 2) return -1;
+  if (st.size <= MAX_HEX && (s = read_file_all(path, &len)) == NULL) return -1;
+  free(h->b);
+  h->b = (unsigned char *)s;
+  h->paged = s == NULL;
+  h->off = 0;
+  h->nb = h->paged ? 0 : len;
+  h->n = h->paged ? (size_t)st.size : len;
+  return 0;
+}
+
+
+/*
+** The bytes at 'at' as far as they are read in (*avail of them, need at
+** least unless the file ends first); NULL: past the end, or unreadable.
+** A page starts a little before at: scrolling back does not read again.
+*/
+static const unsigned char *span (Hex *h, size_t at, size_t need, size_t *avail) {
+  if (at >= h->n) return NULL;
+  if (need > PAGE / 2) need = PAGE / 2;
+  if (at < h->off || at >= h->off + h->nb || (h->off + h->nb - at < need && h->off + h->nb < h->n)) {
+    size_t from = at - at % (PAGE / 4), want;
+    long got;
+    if (!h->paged) return NULL;
+    if (at - from + need > PAGE) from = at;
+    want = h->n - from < PAGE ? h->n - from : PAGE;
+    if (h->b == NULL) h->b = (unsigned char *)xmalloc(PAGE);
+    got = fs_read_at(h->path, (unsigned long long)from, h->b, want);
+    h->off = from;
+    h->nb = got > 0 ? (size_t)got : 0;
+    if (at >= h->off + h->nb) return NULL;	/* it got shorter since */
+  }
+  *avail = h->off + h->nb - at;
+  return h->b + (at - h->off);
+}
+
+
+static unsigned char byte_at (Hex *h, size_t at) {
+  size_t n;
+  const unsigned char *p = span(h, at, 1, &n);
+  return p ? *p : 0;
+}
 
 
 /* the page of path; NULL when it cannot be read */
 void *hex_open (const char *path) {
-  Hex *h;
-  size_t len = 0;
-  char *s = read_file(path, &len);
-  OsStat st;
-  if (s == NULL) return NULL;
-  if (os_stat(path, &st) == 0 && st.size > MAX_HEX) {
-    free(s);
+  Hex *h = (Hex *)xmalloc(sizeof(Hex));
+  memset(h, 0, sizeof(*h));
+  if (load(h, path) != 0) {
+    free(h);
     return NULL;
   }
-  h = (Hex *)xmalloc(sizeof(Hex));
-  memset(h, 0, sizeof(*h));
   h->path = xstrdup(path);
-  h->b = (unsigned char *)s;
-  h->n = len;
   h->ow = 8;
   return h;
 }
@@ -75,12 +122,7 @@ void hex_close (void *page) {
 /* the file again from the disk (it changed outside) */
 void hex_reload (void *page) {
   Hex *h = (Hex *)page;
-  size_t len = 0;
-  char *s;
-  if (h == NULL || (s = read_file(h->path, &len)) == NULL) return;
-  free(h->b);
-  h->b = (unsigned char *)s;
-  h->n = len;
+  if (h == NULL || load(h, h->path) != 0) return;
   if (h->at >= h->n) h->at = h->n ? h->n - 1 : 0;
 }
 
@@ -95,12 +137,13 @@ size_t hex_size (void *page) {
 const char *hex_status (void *page) {
   static char s[80];
   Hex *h = (Hex *)page;
+  unsigned b;
   if (h == NULL) return "";
+  b = h->n ? byte_at(h, h->at) : 0;
   if (h->n == 0) snprintf(s, sizeof(s), "empty");
-  else if (h->base) snprintf(s, sizeof(s), "0x%0*llX   0x%02X (%u)", h->ow, h->base + h->at, h->b[h->at],
-                             (unsigned)h->b[h->at]);
-  else snprintf(s, sizeof(s), "0x%08lX of 0x%lX   0x%02X (%u)", (unsigned long)h->at,
-                (unsigned long)h->n, h->b[h->at], (unsigned)h->b[h->at]);
+  else if (h->base) snprintf(s, sizeof(s), "0x%0*llX   0x%02X (%u)", h->ow, h->base + h->at, b, b);
+  else snprintf(s, sizeof(s), "0x%08llX of 0x%llX   0x%02X (%u)", (unsigned long long)h->at,
+                (unsigned long long)h->n, b, b);
   return s;
 }
 
@@ -159,8 +202,8 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
         continue;
       }
       if (at == hx->at) st = focus ? S_SEL : S_MATCH;
-      else if (hx->b[at] == 0) st = S_LINE;	/* zeros dim, as VS Code shows them */
-      snprintf(s, sizeof(s), "%02X", hx->b[at]);
+      else if (byte_at(hx, at) == 0) st = S_LINE;	/* zeros dim, as VS Code shows them */
+      snprintf(s, sizeof(s), "%02X", byte_at(hx, at));
       if (cx + 2 < x + w) scr_puts(cx, y + 1 + r, s, st);
       cx += 3;
     }
@@ -170,7 +213,7 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
       unsigned char b;
       int st = S_TEXT;
       if (at >= hx->n || cx >= x + w) break;
-      b = hx->b[at];
+      b = byte_at(hx, at);
       if (at == hx->at) st = focus ? S_SEL : S_MATCH;
       else if (b < 32 || b >= 127) st = S_LINE;
       scr_put(cx++, y + 1 + r, (b >= 32 && b < 127) ? b : '.', st);
@@ -178,8 +221,8 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
   }
   {	/* the line under it: the file, where the cursor is, what the byte is */
     char line[200];
-    snprintf(line, sizeof(line), " %s   %lu bytes   %s   read-only", hx->base ? "Memory" : path_basename(hx->path),
-             (unsigned long)hx->n, hex_status(page));
+    snprintf(line, sizeof(line), " %s   %llu bytes   %s   read-only%s", hx->base ? "Memory" : path_basename(hx->path),
+             (unsigned long long)hx->n, hex_status(page), hx->paged ? " (read from the disk as it is shown)" : "");
     scr_fill(x, y + h - 1, w, S_STATUS);
     scr_putsw(x, y + h - 1, w, line, S_STATUS);
   }
@@ -223,12 +266,18 @@ static size_t find_bytes (const char *q, unsigned char *out, size_t max) {
 }
 
 
-/* the next place of the bytes from 'from'; (size_t)-1 none */
-static size_t find_from (const Hex *h, const unsigned char *q, size_t m, size_t from) {
-  size_t i;
+/* the next place of the bytes from 'from'; (size_t)-1 none. A big file is looked through a page at a time */
+static size_t find_from (Hex *h, const unsigned char *q, size_t m, size_t from) {
+  size_t i = from;
   if (m == 0 || m > h->n) return (size_t)-1;
-  for (i = from; i + m <= h->n; i++)
-    if (h->b[i] == q[0] && memcmp(h->b + i, q, m) == 0) return i;
+  while (i + m <= h->n) {
+    size_t n, k;
+    const unsigned char *p = span(h, i, m, &n);
+    if (p == NULL || n < m) break;
+    for (k = 0; k + m <= n; k++)
+      if (p[k] == q[0] && memcmp(p + k, q, m) == 0) return i + k;
+    i += n - m + 1;
+  }
   return (size_t)-1;
 }
 
@@ -286,7 +335,7 @@ int hex_key (void *page, int k) {
           size_t at;
           const char *p = s;
           if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
-          at = strchr(p, '#') ? (size_t)strtoul(strchr(p, '#') + 1, NULL, 10) : (size_t)strtoul(p, NULL, 16);
+          at = strchr(p, '#') ? (size_t)strtoull(strchr(p, '#') + 1, NULL, 10) : (size_t)strtoull(p, NULL, 16);
           if (at < h->n) h->at = at;
           free(s);
         }

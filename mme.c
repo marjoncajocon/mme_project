@@ -281,11 +281,31 @@ static int pv_shown (void);
 static void pv_open (int mv);
 static void pv_draw (int focus);
 static int pv_tabs (int x, int y, int narrow);
-static void pv_key (int k);
+static int pv_tab_at (int x);
+static void pv_key (int pv, int k);
 static int pv_mouse (const Mouse *m, int press);
 static void pv_move_ask (int focused);
 static void pv_move (int mv, int panel);
-static int pv_more_menu (int x, int y);
+static int pv_first (void);
+static int pv_mv (int pv);
+static int mv_pv (int mv);
+static int pfocus (int pv);
+static int pfocus_to (int pv);
+static int sfocus (int view);
+static int sshown (int view);
+static int pv_keys (void);
+static int vw_panel_side (void);
+static void vw_host (int panel);
+static void vw_fix (void);
+static void view_draw_side (int view, int x, int y, int w, int h, int focus, int full);
+static void view_key_side (int view, int k);
+static void view_mouse_side (int view, const Mouse *m, int press, int x, int y);
+static void pview_draw_side (int pv, int x, int y, int w, int h, int focus);
+static int pview_mouse (int pv, const Mouse *m, int press, int by);
+static void pview_mouse_side (int pv, const Mouse *m, int press);
+static void view_menu (int mv, int x, int y);
+static void view_reset_all (void);
+static void view_shown_hook (int v);
 static int global_key (int k);
 static void md_preview (int side);
 static void help_page (const char *name, void (*make) (Buf *b));
@@ -304,7 +324,7 @@ static void sig_close (void);
 static void draw_signature (int gw);
 static void draw_hover (int gw);
 static void draw_problems (int x, int y, int w, int h, int focus);
-static void problems_title (int y, int x1);
+static void problems_title (int y, int left, int x1);
 static void manage_menu (void);
 static void panel_more_menu (int x, int y);
 static int problems_title_click (int x);
@@ -1750,11 +1770,6 @@ static void group_layout (void) {
     }
   }
   text_zone(1);	/* once: a zone laid out again at another size loses what was drawn in it */
-}
-
-
-int side_width (void) {
-  return L.side_w - 1;	/* without the edge */
 }
 
 
@@ -4486,19 +4501,24 @@ static void draw_panel (void) {
   char t[160];
   if (pv_shown()) pv_draw(focus);	/* a view moved into the panel, the Variables: under the title row */
   for (i = 0; i < L.panel_w; i++) scr_put(L.panel_x + i, y, 0x2500, S_BORDER);
-  {	/* the tabs, the one shown underlined */
-    int ne, nw;
+  {	/* the tabs, the one shown underlined (not the ones moved into the side bar) */
+    static const int pv[4] = {1, 3, 2, 0};
+    int ne, nw, k, tx = L.panel_x + (narrow ? 1 : 2);
+    int *x0[4], *x1[4];
+    x0[0] = &g_pn.prob_x0, x1[0] = &g_pn.prob_x1, x0[1] = &g_pn.out_x0, x1[1] = &g_pn.out_x1;
+    x0[2] = &g_pn.dbg_x0, x1[2] = &g_pn.dbg_x1, x0[3] = &g_pn.term_x0, x1[3] = &g_pn.term_x1;
     lsp_counts(&ne, &nw);
-    snprintf(t, sizeof(t), narrow ? " PROB " : " PROBLEMS %d ", ne + nw);	/* narrow (at a side): shorter */
-    g_pn.prob_x0 = L.panel_x + (narrow ? 1 : 2);
-    g_pn.prob_x1 = g_pn.prob_x0 + scr_puts(g_pn.prob_x0, y, t, E.panel_view == 1 ? S_PANEL_TAB_ON : S_PANEL_TAB);
-    g_pn.out_x0 = g_pn.prob_x1 + 1;
-    g_pn.out_x1 = g_pn.out_x0 + scr_puts(g_pn.out_x0, y, narrow ? " OUT " : " OUTPUT ", E.panel_view == 3 ? S_PANEL_TAB_ON : S_PANEL_TAB);
-    g_pn.dbg_x0 = g_pn.out_x1 + 1;
-    g_pn.dbg_x1 = g_pn.dbg_x0 + scr_puts(g_pn.dbg_x0, y, narrow ? " DEBUG " : " DEBUG CONSOLE ", E.panel_view == 2 ? S_PANEL_TAB_ON : S_PANEL_TAB);
-    g_pn.term_x0 = g_pn.dbg_x1 + 1;
-    g_pn.term_x1 = g_pn.term_x0 + scr_puts(g_pn.term_x0, y, narrow ? " TERM " : " TERMINAL ", E.panel_view == 0 ? S_PANEL_TAB_ON : S_PANEL_TAB);
-    g_pn_end = pv_tabs(g_pn.term_x1, y, narrow);	/* the moved views' after them */
+    for (k = 0; k < 4; k++) {
+      *x0[k] = *x1[k] = -1;
+      if (!view_in_panel(pv_mv(pv[k]))) continue;
+      if (k == 0) snprintf(t, sizeof(t), narrow ? " PROB " : " PROBLEMS %d ", ne + nw);	/* narrow (at a side): shorter */
+      else snprintf(t, sizeof(t), "%s", k == 1 ? (narrow ? " OUT " : " OUTPUT ") : k == 2 ? (narrow ? " DEBUG " : " DEBUG CONSOLE ")
+                                                                                           : (narrow ? " TERM " : " TERMINAL "));
+      *x0[k] = tx;
+      *x1[k] = tx + scr_puts(tx, y, t, E.panel_view == pv[k] ? S_PANEL_TAB_ON : S_PANEL_TAB);
+      tx = *x1[k] + 1;
+    }
+    g_pn_end = pv_tabs(tx - 1, y, narrow);	/* the moved views' after them */
   }
   g_pn.close_x = x1 - 3;
   g_pn.max_x = x1 - 5;
@@ -4511,7 +4531,7 @@ static void draw_panel (void) {
   if (E.panel_view >= PV_VARS) return;	/* drawn already */
   if (E.panel_view == 1) {
     draw_problems(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
-    problems_title(y, ix);	/* after: the counts are known */
+    problems_title(y, g_pn_end + 2, ix);	/* after: the counts are known */
     return;
   }
   if (E.panel_view == 2) {
@@ -4906,6 +4926,7 @@ static void draw_drop (void) {
 
 /* everything but the overlays; emenu.c draws those on top */
 static void compose (void) {
+  vw_fix();	/* the views shown are where they are */
   layout();
   update_title();
   scr_clear(S_TEXT);
@@ -4914,37 +4935,10 @@ static void compose (void) {
   if (L.act_w > 0) act_draw(L.act_x, L.body_y, L.body_h, E.view, E.side);
   if (L.side_w > 0) {
     int ey;
-    int tree_h = L.side_h, oe_h = 0, ol_h = 0, tl_h = 0, py, sf = E.focus == F_SIDE;
-    if (E.view == VIEW_FILES && L.side_h > 10) {	/* the panes: OPEN EDITORS over the folder, the others under it */
-      oe_h = oe_height();
-      tl_h = view_in_panel(MV_TIMELINE) ? 0 : tl_height();	/* moved into the panel: not here */
-      tree_h = L.side_h - oe_h - tl_h;
-      if (HAS_DOC && T->sx && (tree_h > 12 || !OL.open) && !view_in_panel(MV_OUTLINE)) {
-        ol_h = OL.open ? tree_h * 2 / 5 : 2;	/* collapsed: its title only */
-        tree_h -= ol_h;
-      }
-      if (tree_h < 4) {
-        oe_h = ol_h = tl_h = 0;
-        tree_h = L.body_h;
-      }
-      else tree_h += oe_h;	/* the folder's pane has OPEN EDITORS in it, under "EXPLORER" */
-    }
-    files_gap(oe_h);
-    side_draw(E.view, L.side_x, L.body_y, L.side_w - 1, tree_h,
-              sf && E.outline_focus == PANE_TREE, HAS_DOC ? T->real : NULL);
-    py = L.body_y + tree_h;
-    OE.h = OL.h = TL.h = 0;
-    if (oe_h) {	/* its line goes: "EXPLORER" is above it */
-      draw_open_editors(L.side_x, L.body_y, L.side_w - 1, oe_h, sf && E.outline_focus == PANE_EDITORS);
-      scr_fill(L.side_x, L.body_y, L.side_w - 1, S_SIDE);
-      scr_puts(L.side_x + 2, L.body_y, "EXPLORER", S_SIDE_HEAD);
-    }
-    if (ol_h) draw_outline(L.side_x, py, L.side_w - 1, ol_h, sf && E.outline_focus == PANE_OUTLINE);
-    py += ol_h;
-    if (tl_h) draw_timeline(L.side_x, py, L.side_w - 1, tl_h, sf && E.outline_focus == PANE_TIMELINE);
-    if (E.outline_focus && ((E.outline_focus == PANE_OUTLINE && !OL.h) || (E.outline_focus == PANE_EDITORS && !OE.h) ||
-                            (E.outline_focus == PANE_TIMELINE && !TL.h)))
-      E.outline_focus = PANE_TREE;	/* its pane went */
+    vw_host(0);	/* (the side bar's own tree views) */
+    if (E.view >= VIEW_MOVED)	/* a panel's view moved into the side bar */
+      pview_draw_side(mv_pv(E.view - VIEW_MOVED), L.side_x, L.body_y, L.side_w - 1, L.side_h, E.focus == F_SIDE);
+    else view_draw_side(E.view, L.side_x, L.body_y, L.side_w - 1, L.side_h, E.focus == F_SIDE, L.body_h);
     for (ey = 0; ey < L.side_h; ey++)	/* the edge that drags */
       scr_put(L.edge_x, L.body_y + ey, 0x2502, E.resizing ? S_TOGGLE_ON : S_BORDER);
   }
@@ -5036,7 +5030,7 @@ static void draw (void) {
   nb_sync();
   lang_settings();
   background();
-  scr_cursor_shape(E.focus == F_PANEL && E.panel && E.panel_view == 0 && panel_alive() ? panel_cursor_shape()
+  scr_cursor_shape(pfocus(0) && panel_alive() ? panel_cursor_shape()
                                                                                           : editor_shape());
   scr_flush();
 }
@@ -6131,7 +6125,7 @@ static void focus_tab (int i) {
   T = G->tab[i];
   G->diff = 0;
   clamp_view();
-  if (E.side && E.view == VIEW_FILES) side_follow(T->real);
+  if (sshown(VIEW_FILES)) side_follow(T->real);
 }
 
 
@@ -6378,7 +6372,7 @@ static int open_file (const char *path, int preview) {
       G->diff = 0;
       reset_view();
       set_real();
-      if (E.side && E.view == VIEW_FILES) side_follow(T->real);
+      if (sshown(VIEW_FILES)) side_follow(T->real);
       free(p);
       return 0;
     }
@@ -6398,7 +6392,7 @@ static int open_file (const char *path, int preview) {
   reset_view();
   set_real();
   lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
-  if (E.side && E.view == VIEW_FILES) side_follow(T->real);
+  if (sshown(VIEW_FILES)) side_follow(T->real);
   recent_file_add(p);
   free(p);
   return 0;
@@ -6635,8 +6629,9 @@ static void recent_file_add (const char *path) {
 }
 
 
-/* the folder's files for Go to File; paths gets each one's full path; skip: already there */
-static void walk_files (const char *dir, const char *rel, Pick *p, Vec *paths, const Vec *skip, int depth) {
+/* the folder's files for Go to File; paths gets each one's full path; skip: already there; seen: the real
+   folders links led to (the roots first), each walked once */
+static void walk_files (const char *dir, const char *rel, Pick *p, Vec *paths, const Vec *skip, Vec *seen, int depth) {
   Vec v;
   size_t i, k;
   vec_init(&v);
@@ -6649,8 +6644,9 @@ static void walk_files (const char *dir, const char *rel, Pick *p, Vec *paths, c
     const char *nm = v.v[i];
     if (files_excluded(r)) ;	/* files.exclude */
     else if (os_stat(path, &st) == 0 && st.is_dir) {
-      if (strcmp(nm, ".git") != 0 && strcmp(nm, "node_modules") != 0 && strcmp(nm, "mme-data") != 0)
-        walk_files(path, r, p, paths, skip, depth + 1);
+      if (strcmp(nm, ".git") != 0 && strcmp(nm, "node_modules") != 0 && strcmp(nm, "mme-data") != 0 &&
+          fs_walk_into(seen, path))
+        walk_files(path, r, p, paths, skip, seen, depth + 1);
     }
     else {
       int ist, dup = 0;
@@ -6721,6 +6717,7 @@ static struct {
   char *key;	/* the folders it is for */
   Vec name, dir, path;	/* each file: its name, its folder from the root (NULL none), its path; the editor's */
   Vec todo, todo_rel;	/* folders still to read, the last first; the workers' */
+  Vec real;	/* the real folders links led to (the roots first), under mx: each is walked once */
   int done, stale;
   long long made;	/* when the walk started */
   Mutex *mx;	/* todo, out, found, active, alive and cancel are under it */
@@ -6780,13 +6777,28 @@ static void fi_reset (char *key) {
   vec_init(&FI.path);
   vec_init(&FI.todo);
   vec_init(&FI.todo_rel);
+  vec_free(&FI.real);
+  vec_init(&FI.real);
   for (i = ws_count() - 1; i >= 0; i--) {	/* every folder of a workspace, by its name */
+    fs_dir_first(&FI.real, ws_folder(i));
     vec_push(&FI.todo, xstrdup(ws_folder(i)));
     vec_push(&FI.todo_rel, xstrdup(ws_count() > 1 ? ws_folder_name(i) : ""));
   }
   FI.done = 0;
   FI.stale = 0;
   FI.made = os_now_us();
+}
+
+
+/* a folder a worker found: 0 it is a link to one walked already (a junction back up the tree) */
+static int fi_walk_into (const char *path) {
+  OsStat st;
+  int r;
+  if (os_lstat(path, &st) != 0 || !st.is_link) return 1;
+  mx_lock(FI.mx);
+  r = fs_dir_first(&FI.real, path);
+  mx_unlock(FI.mx);
+  return r;
 }
 
 
@@ -6847,9 +6859,15 @@ static void fi_worker (void *ud) {
           continue;
         }
         if (os_stat(path, &st) == 0 && st.is_dir) {
-          sub[ns] = path;
-          subrel[ns] = r;
-          ns++;
+          if (fi_walk_into(path)) {
+            sub[ns] = path;
+            subrel[ns] = r;
+            ns++;
+          }
+          else {
+            free(path);
+            free(r);
+          }
           continue;
         }
         pk->name[pk->n] = xstrdup(v.v[i]);
@@ -10524,14 +10542,14 @@ static void draw_problems (int x, int y, int w, int h, int focus) {
 
 
 /* the Problems' title row: the filter box, the funnel (Show Errors ...), Collapse All */
-static void problems_title (int y, int x1) {
+static void problems_title (int y, int left, int x1) {
   int bw, filtered = pb_filtered();
   PB.coll_x = x1 - 7;
   PB.funnel_x = x1 - 9;
   scr_put(PB.coll_x, y, 0xEAC5, S_PANEL_TAB);	/* collapse-all */
   scr_put(PB.funnel_x, y, filtered ? 0xEBCE : 0xEAF1, filtered ? S_TOGGLE_ON : S_PANEL_TAB);	/* filter, filled when on */
   PB.box_x0 = PB.box_x1 = -1;
-  bw = x1 - 11 - (g_pn_end + 2);
+  bw = x1 - 11 - left;
   if (bw > 44) bw = 44;
   if (bw < 14) return;
   PB.box_x1 = x1 - 11;
@@ -10550,7 +10568,7 @@ static void problems_title (int y, int x1) {
       scr_putsw(PB.box_x0 + 1, y, bw - 2 - cw, "Filter (e.g. text, **/*.ts, !**/node_modules/**)", S_INPUT_HINT);
       tw = 0;
     }
-    if (PB.in_filter && E.focus == F_PANEL) scr_cursor(PB.box_x0 + 1 + tw, y);
+    if (PB.in_filter && pfocus(1)) scr_cursor(PB.box_x0 + 1 + tw, y);
   }
 }
 
@@ -10600,7 +10618,7 @@ static int problems_title_click (int x) {
   else if (x == PB.funnel_x) problems_menu();
   else if (PB.box_x0 >= 0 && x >= PB.box_x0 && x < PB.box_x1) PB.in_filter = 1;
   else return 0;
-  E.focus = F_PANEL;
+  E.focus = pfocus_to(1);
   return 1;
 }
 
@@ -10923,7 +10941,7 @@ static void pick_channel (void) {
 static void problems_click (size_t k) {
   problems_rows();
   PB.in_filter = 0;
-  E.focus = F_PANEL;
+  E.focus = pfocus_to(1);
   if (k >= PB.n) return;
   PB.sel = k;
   if (PB.row[k].diag < 0) {
@@ -11808,8 +11826,8 @@ static void history_restore (const char *copy) {
   if (!HAS_DOC || G->diff) return;
   snprintf(msg, sizeof(msg), "Do you want to restore the contents of '%s'?", doc_name());
   if (dialog(msg, "Restoring will discard any unsaved changes.", bt, 2) != 0) return;
-  if ((s = read_file(copy, &len)) == NULL) {
-    toast(1, "Unable to read the Local History entry");
+  if ((s = read_file_all(copy, &len)) == NULL) {	/* all of it: a part would replace the text */
+    toast(1, "Unable to read the Local History entry (it can't be read, or is over 1 GB)");
     return;
   }
   if (len > 0 && s[len - 1] == '\n') len--;	/* the last line's end is the text's end */
@@ -12029,7 +12047,7 @@ static const FText *ft_get (const char *path) {
   f = &g_ft[g_nft++];
   memset(f, 0, sizeof(*f));
   f->path = xstrdup(path);
-  s = read_file(path, &len);
+  s = read_file_all(path, &len);
   f->buf = s ? s : xstrdup("");
   if (s == NULL) len = 0;
   for (k = 0; k < len; k++) n += f->buf[k] == '\n';
@@ -13369,24 +13387,27 @@ static void change_indentation (void) {
 ** ===================================================================
 */
 
+/* side bar view v (VIEW_*, VIEW_MOVED + MV_*) shown with the keys; one moved into the panel: there */
 static void show_view (int v) {
-  if (v == VIEW_SEARCH && view_in_panel(MV_SEARCH)) {	/* moved into the panel: there */
-    pv_open(MV_SEARCH);
-    return;
+  if (v < VIEW_N && !view_in_side(v) && !(v == VIEW_TREE && tree_count() == 0)) {
+    int mv = view_of_side(v);
+    if (v == VIEW_TREE)	/* the extensions' views: the first in the panel */
+      for (mv = MV_N; mv < MV_N + tree_count() && !view_in_panel(mv); mv++) ;
+    if (mv >= 0 && view_in_panel(mv)) pv_open(mv);
   }
-  E.side = 1;
-  E.view = v;
-  E.focus = F_SIDE;
-  if (v == VIEW_GIT) git_refresh();
-  if (v == VIEW_EXT) ext_show();
-  if (v == VIEW_TEST) test_show();
-  if (v == VIEW_FILES && T->real) side_reveal(T->real);
+  else {
+    E.side = 1;
+    E.view = v;
+    E.focus = F_SIDE;
+  }
+  view_shown_hook(v);
 }
 
 
-/* treeView.reveal: the extensions' views shown */
-void mme_show_trees (void) {
-  show_view(VIEW_TREE);
+/* treeView.reveal: the extensions' view k shown, where it is */
+void mme_show_trees (int k) {
+  if (k >= 0 && view_in_panel(MV_N + k)) pv_open(MV_N + k);
+  else show_view(VIEW_TREE);
 }
 
 
@@ -13781,7 +13802,7 @@ static int page_file_open (int kind, const char *path, int preview) {
   G->diff = 0;
   E.focus = F_EDITOR;
   recent_file_add(path);
-  if (E.side && E.view == VIEW_FILES) side_follow(T->real);
+  if (sshown(VIEW_FILES)) side_follow(T->real);
   return 0;
 }
 
@@ -13953,7 +13974,7 @@ static void searched_cmd (int cmd) {
 static void copy_path (int relative) {
   const char *p = NULL, *root = side_root();
   size_t rl = strlen(root);
-  if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && files_selected()) p = files_selected();
+  if (sfocus(VIEW_FILES) && files_selected()) p = files_selected();
   else if (HAS_DOC && !T->page && T->doc->path) p = T->real ? T->real : T->doc->path;
   if (p == NULL) return;
   if (relative && m_fnncmp(p, root, rl) == 0 && path_is_sep(p[rl])) p += rl + 1;
@@ -13966,9 +13987,12 @@ static void apply_act (const SideAct *act);
 static void explorer_cmd (int what) {
   SideAct act;
   files_index_stale();	/* a file may come or go: Go to File walks again */
-  if (!E.side || E.view != VIEW_FILES) show_view(VIEW_FILES);
-  E.side = 1;
-  E.focus = F_SIDE;
+  if (!sshown(VIEW_FILES)) show_view(VIEW_FILES);
+  if (vw_panel_side() == VIEW_FILES) E.focus = F_PANEL;	/* moved into the panel */
+  else {
+    E.side = 1;
+    E.focus = F_SIDE;
+  }
   E.outline_focus = 0;
   memset(&act, 0, sizeof(act));
   files_cmd(what, &act);
@@ -14307,17 +14331,36 @@ static void manage_menu (void) {
 }
 
 
-/* the panel's "..." (Views and More Actions): where it goes, its alignment */
+/* the panel's "..." (Views and More Actions): the view shown's Move To Primary Side Bar, where it goes, its alignment */
 static void panel_more_menu (int x, int y) {
-  static const char *const label[] = {"Move Panel Left", "Move Panel Right", "Move Panel To Bottom", "",
-                                      "Align Panel Center", "Align Panel Justify", "", "Maximize Panel Size",
-                                      "Hide Panel"};
-  int flags[9] = {0, 0, 0, MF_LINE, 0, 0, MF_LINE, 0, 0}, r;
-  flags[opt.panel_loc == PANEL_LEFT ? 0 : opt.panel_loc == PANEL_RIGHT ? 1 : 2] |= MF_CHECK;
-  flags[opt.panel_justify ? 5 : 4] |= MF_CHECK;
-  if (E.panel_max) flags[7] |= MF_CHECK;
-  r = popup_list(x - popup_width(label, flags, 9) + 2, y, label, flags, 9);
-  switch (r) {
+  static const char *const base[] = {"Move Panel Left", "Move Panel Right", "Move Panel To Bottom", "",
+                                     "Align Panel Center", "Align Panel Justify", "", "Maximize Panel Size",
+                                     "Hide Panel"};
+  static const int bflags[9] = {0, 0, 0, MF_LINE, 0, 0, MF_LINE, 0, 0};
+  const char *label[12];
+  int flags[12], n = 0, k, r, mv = pv_mv(E.panel_view);
+  label[n] = "Move To Primary Side Bar";	/* the view shown */
+  flags[n++] = 0;
+  if (view_moved(mv)) {
+    label[n] = "Reset Location";
+    flags[n++] = 0;
+  }
+  label[n] = "";
+  flags[n++] = MF_LINE;
+  k = n;
+  for (r = 0; r < 9; r++) {
+    label[n] = base[r];
+    flags[n++] = bflags[r];
+  }
+  flags[k + (opt.panel_loc == PANEL_LEFT ? 0 : opt.panel_loc == PANEL_RIGHT ? 1 : 2)] |= MF_CHECK;
+  flags[k + (opt.panel_justify ? 5 : 4)] |= MF_CHECK;
+  if (E.panel_max) flags[k + 7] |= MF_CHECK;
+  r = popup_list(x - popup_width(label, flags, n) + 2, y, label, flags, n);
+  if (r >= 0 && r < k - 1) {	/* either: to the side bar (the panel's own leave home, the others go back) */
+    pv_move(mv, 0);
+    return;
+  }
+  switch (r - k) {
     case 0: run_command(CMD_PANEL_LEFT); break;
     case 1: run_command(CMD_PANEL_RIGHT); break;
     case 2: run_command(CMD_PANEL_BOTTOM); break;
@@ -14334,23 +14377,182 @@ static void panel_more_menu (int x, int y) {
 
 /*
 ** {==================================================================
-** Views in the panel, like VS Code's: Search, Outline and Timeline moved
-** there (View: Move View, a view's Move To Panel; eside.c remembers where
-** they are) and back (Move To Primary Side Bar, Reset Location), each a
-** tab of the panel; and Jupyter's Variables. E.panel_view is PV_VARS, or
-** PV_MOVED + MV_* for a moved view.
+** Views anywhere, like VS Code's: the side bar's views moved into the
+** panel (View: Move View, a view's Move To Panel; eside.c remembers where
+** they are), each a tab of the panel, and the panel's moved into the side
+** bar, each with an icon of the activity bar; back with Move To Primary
+** Side Bar / Move To Panel, or Reset Location. A view is drawn, gets its
+** keys and the mouse by what it is, in the place it has: view_*_side for
+** the side bar's (the Explorer with its panes, Search, Source Control ...),
+** pview_* for the panel's (the terminal, the problems ...). E.panel_view is
+** PV_VARS, or PV_MOVED + MV_* for a moved view (PV_MOVED + MV_N + k: the
+** extensions' tree view k); E.view is VIEW_MOVED + MV_* for a panel's view
+** in the side bar.
 ** ===================================================================
 */
 
+#define PV_TREES	32	/* the tree views that can have a tab */
+
 static struct {
-  int x0[MV_N + 1], x1[MV_N + 1];	/* their tabs in the panel's title row; [MV_N]: JUPYTER */
+  int x0[MV_N + PV_TREES], x1[MV_N + PV_TREES];	/* their tabs in the panel's title row; [MV_VARS]: JUPYTER */
   int vars;	/* the JUPYTER tab shows (a kernel said its variables, or it was opened) */
+  int more_x, add_x, kill_x, clear_x, chan_x0, chan_x1;	/* a panel's view in the side bar: its title's actions */
 } g_pv;
 
+static int g_vw_w;	/* a side bar's view used in the panel: its width (side_width); 0 in the side bar */
+static int g_vw_f = F_SIDE;	/* and the focus a click on it gives */
+static int g_sbar_view;	/* the view whose scrollbar is held (E.sbar_drag 2: in the panel) */
+static struct {
+  int side, view, panel, pv;
+} g_vwas = {0, -1, 0, -1};	/* what vw_fix left (view -1: nothing yet) */
 
-/* the panel's view shown is one of these; a moved view that went back: the terminal's instead */
+
+/* the panel's own view pv (0 the terminal, 1 the problems, 2 the debug console, 3 the output, PV_VARS) as MV_* */
+static int pv_mv (int pv) {
+  static const int mv[PV_VARS + 1] = {MV_TERMINAL, MV_PROBLEMS, MV_CONSOLE, MV_OUTPUT, MV_VARS};
+  if (pv >= 0 && pv <= PV_VARS) return mv[pv];
+  return pv >= PV_MOVED ? pv - PV_MOVED : -1;
+}
+
+
+/* E.panel_view for view mv in the panel */
+static int mv_pv (int mv) {
+  switch (mv) {
+    case MV_TERMINAL: return 0;
+    case MV_PROBLEMS: return 1;
+    case MV_CONSOLE: return 2;
+    case MV_OUTPUT: return 3;
+    case MV_VARS: return PV_VARS;
+  }
+  return PV_MOVED + mv;
+}
+
+
+/* the panel's own view pv has the keys, in the panel or in the side bar */
+static int pfocus (int pv) {
+  if (E.focus == F_PANEL) return E.panel && E.panel_view == pv && view_in_panel(pv_mv(pv));
+  return E.focus == F_SIDE && E.side && E.view == VIEW_MOVED + pv_mv(pv);
+}
+
+
+/* where a click on the panel's own view pv puts the focus */
+static int pfocus_to (int pv) {
+  return view_in_panel(pv_mv(pv)) ? F_PANEL : F_SIDE;
+}
+
+
+/* the side bar's view (VIEW_*) the panel shows, -1 none (Outline and Timeline are panes: not these) */
+static int vw_panel_side (void) {
+  int mv = E.panel_view - PV_MOVED;
+  if (!E.panel || E.panel_view < PV_MOVED || mv == MV_OUTLINE || mv == MV_TIMELINE || !view_in_panel(mv)) return -1;
+  return side_of_view(mv);
+}
+
+
+/* the side bar's view (VIEW_*) has the keys, in the side bar or in the panel */
+static int sfocus (int view) {
+  if (E.focus == F_SIDE) return E.side && E.view == view;
+  return E.focus == F_PANEL && vw_panel_side() == view;
+}
+
+
+/* it shows, in the side bar or in the panel */
+static int sshown (int view) {
+  return (E.side && E.view == view) || vw_panel_side() == view;
+}
+
+
+/* the keys are in one of the panel's own views, wherever it is (a terminal's keys are its own) */
+static int pv_keys (void) {
+  if (E.focus == F_PANEL) return vw_panel_side() < 0;
+  return E.focus == F_SIDE && E.side && E.view >= VIEW_MOVED;
+}
+
+
+/* the calls to the side bar's view go to the one in the panel (1) or in the side bar (0) */
+static void vw_host (int panel) {
+  g_vw_w = panel ? L.panel_w : 0;
+  g_vw_f = panel ? F_PANEL : F_SIDE;
+  tree_scope(panel && E.panel_view >= PV_MOVED + MV_N ? E.panel_view - PV_MOVED - MV_N : -1);
+}
+
+
+int side_width (void) {
+  return g_vw_w > 0 ? g_vw_w : L.side_w - 1;	/* without the edge */
+}
+
+
+/* the first of the panel's views that is there (E.panel_view), -1 none */
+static int pv_first (void) {
+  static const int own[] = {1, 3, 2, 0};
+  int i, v;
+  for (i = 0; i < 4; i++)
+    if (view_in_panel(pv_mv(own[i]))) return own[i];
+  for (v = 0; v < MV_PROBLEMS; v++)
+    if (view_in_panel(v)) return PV_MOVED + v;
+  for (v = 0; v < tree_count() && v < PV_TREES; v++)
+    if (view_in_panel(MV_N + v)) return PV_MOVED + MV_N + v;
+  return view_in_panel(MV_VARS) && (g_pv.vars || nb_vars_known()) ? PV_VARS : -1;
+}
+
+
+/*
+** What the side bar and the panel show is where the views are: a view
+** asked for where it is not (the Explorer by Open Folder, the terminal by a
+** task ...) shows where it is instead, and the place it was asked in shows
+** what it did before. Run before each key, click and drawing.
+*/
+static void vw_fix (void) {
+  int v, first = g_vwas.view < 0;
+  if (!view_in_side(E.view) && !(E.view == VIEW_TREE && tree_count() == 0)) {	/* the side bar's view is in the panel */
+    v = E.view;
+    if (!first && E.side && v != g_vwas.view && v < VIEW_N) {	/* just asked for: the panel shows it */
+      int mv = view_of_side(v);
+      if (v == VIEW_TREE)
+        for (mv = MV_N; mv < MV_N + tree_count() && !view_in_panel(mv); mv++) ;
+      if (mv >= 0 && view_in_panel(mv)) {
+        E.panel = 1;
+        E.panel_view = PV_MOVED + mv;
+        if (E.focus == F_SIDE) E.focus = F_PANEL;
+      }
+      E.side = g_vwas.side;
+    }
+    E.view = !first && view_in_side(g_vwas.view) ? g_vwas.view : view_side_first();
+    if (E.view < 0) {	/* every view is in the panel: no side bar */
+      E.view = v;
+      E.side = 0;
+      if (E.focus == F_SIDE) E.focus = F_EDITOR;
+    }
+  }
+  v = E.panel_view;
+  if (v >= 0 && !(v >= PV_MOVED + MV_N ? view_in_panel(v - PV_MOVED) && v - PV_MOVED - MV_N < PV_TREES
+                                        : view_in_panel(pv_mv(v)))) {	/* the panel's view is in the side bar */
+    if (!first && E.panel && v != g_vwas.pv && v <= PV_VARS) {	/* just asked for: the side bar shows it */
+      E.side = 1;
+      E.view = VIEW_MOVED + pv_mv(v);
+      if (E.focus == F_PANEL) E.focus = F_SIDE;
+      E.panel = g_vwas.panel;
+    }
+    E.panel_view = g_vwas.pv >= 0 && g_vwas.pv != v ? g_vwas.pv : pv_first();
+    if (E.panel_view < 0) {	/* every view is in the side bar: no panel */
+      E.panel_view = v;
+      E.panel = E.panel_max = 0;
+      if (E.focus == F_PANEL) E.focus = F_EDITOR;
+    }
+  }
+  g_vwas.side = E.side;
+  g_vwas.view = E.view;
+  g_vwas.panel = E.panel;
+  g_vwas.pv = E.panel_view;
+}
+
+
+/* the panel's view shown is one of these (a view moved in, the Variables); what went back: another */
 static int pv_shown (void) {
-  if (E.panel_view >= PV_MOVED && !view_in_panel(E.panel_view - PV_MOVED)) E.panel_view = 1;
+  if (E.panel_view >= PV_MOVED && !view_in_panel(E.panel_view - PV_MOVED)) {
+    E.panel_view = pv_first();
+    if (E.panel_view < 0) E.panel_view = 1;
+  }
   return E.panel_view >= PV_VARS;
 }
 
@@ -14365,11 +14567,283 @@ static void pv_open (int mv) {
 }
 
 
+/*
+** A side bar's view (VIEW_*) at x, y, w, h (full: the rows the folder
+** takes when the panes do not fit): the Explorer is OPEN EDITORS over the
+** folder, OUTLINE and TIMELINE under it (when they are not in the panel).
+*/
+static void view_draw_side (int view, int x, int y, int w, int h, int focus, int full) {
+  int tree_h = h, oe_h = 0, ol_h = 0, tl_h = 0, py, panes = view == VIEW_FILES || !view_in_panel(MV_EXPLORER);
+  if (view == VIEW_FILES && h > 10) {	/* the panes: OPEN EDITORS over the folder, the others under it */
+    oe_h = oe_height();
+    tl_h = view_in_panel(MV_TIMELINE) ? 0 : tl_height();	/* moved into the panel: not here */
+    tree_h = h - oe_h - tl_h;
+    if (HAS_DOC && T->sx && (tree_h > 12 || !OL.open) && !view_in_panel(MV_OUTLINE)) {
+      ol_h = OL.open ? tree_h * 2 / 5 : 2;	/* collapsed: its title only */
+      tree_h -= ol_h;
+    }
+    if (tree_h < 4) {
+      oe_h = ol_h = tl_h = 0;
+      tree_h = full;
+    }
+    else tree_h += oe_h;	/* the folder's pane has OPEN EDITORS in it, under "EXPLORER" */
+  }
+  if (view == VIEW_FILES) files_gap(oe_h);
+  else if (panes) files_gap(0);
+  side_draw(view, x, y, w, tree_h, focus && E.outline_focus == PANE_TREE, HAS_DOC ? T->real : NULL);
+  py = y + tree_h;
+  if (panes) OE.h = OL.h = TL.h = 0;	/* (the Explorer's panes: where it is) */
+  if (oe_h) {	/* its line goes: "EXPLORER" is above it */
+    draw_open_editors(x, y, w, oe_h, focus && E.outline_focus == PANE_EDITORS);
+    scr_fill(x, y, w, S_SIDE);
+    scr_puts(x + 2, y, "EXPLORER", S_SIDE_HEAD);
+  }
+  if (ol_h) draw_outline(x, py, w, ol_h, focus && E.outline_focus == PANE_OUTLINE);
+  py += ol_h;
+  if (tl_h) draw_timeline(x, py, w, tl_h, focus && E.outline_focus == PANE_TIMELINE);
+  if (panes && E.outline_focus && ((E.outline_focus == PANE_OUTLINE && !OL.h) || (E.outline_focus == PANE_EDITORS && !OE.h) ||
+                                   (E.outline_focus == PANE_TIMELINE && !TL.h)))
+    E.outline_focus = PANE_TREE;	/* its pane went */
+}
+
+
+/* a key for a side bar's view (VIEW_*) with the keys, where it is */
+static void view_key_side (int view, int k) {
+  SideAct act;
+  if (view == VIEW_FILES && E.outline_focus) {	/* a pane under the folders */
+    if (E.outline_focus == PANE_OUTLINE && OL.h > 0) outline_key(k);
+    else if (E.outline_focus == PANE_EDITORS && OE.h > 0) oe_key(k);
+    else if (E.outline_focus == PANE_TIMELINE && TL.h > 0) tl_key(k);
+    else E.outline_focus = PANE_TREE;
+    E.follow = 0;
+    return;
+  }
+  memset(&act, 0, sizeof(act));
+  if (KEY_CODE(k) == K_TAB && view == VIEW_FILES && (OL.h > 0 || OE.h > 0 || TL.h > 0)) next_pane();	/* to the panes */
+  else if (side_key(view, k, &act)) apply_act(&act);
+  else if (KEY_CODE(k) == K_ESC || KEY_CODE(k) == K_TAB) E.focus = F_EDITOR;
+  E.follow = 0;
+}
+
+
+static void view_menu (int mv, int x, int y);
+
+/* the mouse on a side bar's view (VIEW_*) whose title's row is at x, y: in the side bar, or in the panel */
+static void view_mouse_side (int view, const Mouse *m, int press, int x, int y) {
+  SideAct act;
+  if (press && view == VIEW_FILES && files_bar_rows() > 0 && m->x == x + side_width() - 1 &&
+      m->y >= files_bar_y() && m->y < files_bar_y() + files_bar_rows()) {	/* its scrollbar */
+    E.bar_drag = 1;
+    files_bar_to(m->y - files_bar_y(), files_bar_rows());
+    return;
+  }
+  if (press && view != VIEW_FILES && m->button == 0 && side_bar_hit(m->x, m->y)) {	/* the view's scrollbar */
+    E.sbar_drag = g_vw_w > 0 ? 2 : 1;
+    g_sbar_view = view;
+    side_bar_to(view, m->y);
+    return;
+  }
+  if (view == VIEW_FILES && OE.h > 0 && m->y >= OE.y0 && m->y < OE.y0 + OE.h) {	/* OPEN EDITORS */
+    if (m->wheel) {	/* OPEN EDITORS */
+      size_t st = (size_t)wheel_step(m->mods);
+      OE.top = m->wheel < 0 ? (OE.top > st ? OE.top - st : 0) : OE.top + st;
+    }
+    else if (press) {
+      E.focus = g_vw_f;
+      oe_click(m->y - OE.y0, m->x - x);
+    }
+    return;
+  }
+  if (view == VIEW_FILES && TL.h > 0 && m->y >= TL.y0 && m->y < TL.y0 + TL.h) {	/* TIMELINE */
+    if (m->wheel) {	/* TIMELINE */
+      size_t st = (size_t)wheel_step(m->mods);
+      TL.top = m->wheel < 0 ? (TL.top > st ? TL.top - st : 0) : TL.top + st;
+    }
+    else if (m->press && !m->drag && (m->button == 0 || m->button == 2)) {
+      E.focus = g_vw_f;
+      tl_click(m->y - TL.y0, m->x, m->button);
+    }
+    return;
+  }
+  if (m->wheel) {
+    side_wheel(view, m->wheel);
+    return;
+  }
+  if (m->button == 2 && m->press && !m->drag && m->y == y && g_vw_w == 0) {	/* its title: Move To Panel ... */
+    E.focus = g_vw_f;
+    view_menu(view == VIEW_TREE ? -1 : view_of_side(view), m->x, m->y + 1);
+    return;
+  }
+  if (m->button == 2 && m->press && !m->drag && view == VIEW_TREE) {	/* an extension's view: the row's menu */
+    E.focus = g_vw_f;
+    tree_menu(m->y - y, m->x, m->y + 1);
+    return;
+  }
+  if (m->button == 2 && m->press && !m->drag && view == VIEW_DEBUG && m->y > y + 2) {	/* Run and Debug: a row's menu */
+    E.focus = g_vw_f;
+    memset(&act, 0, sizeof(act));
+    debug_menu(debug_row_at(m->y - y), m->x, m->y + 1, &act);
+    apply_act(&act);
+    return;
+  }
+  if (m->button == 2 && m->press && !m->drag && view == VIEW_GIT) {	/* Source Control: a row's menu (the graph's commits) */
+    E.focus = g_vw_f;
+    memset(&act, 0, sizeof(act));
+    git_menu(m->y - y, m->x, m->y + 1, &act);
+    apply_act(&act);
+    return;
+  }
+  if (m->button == 2 && m->press && !m->drag && view == VIEW_FILES && !(OL.h > 0 && m->y >= OL.y0)) {
+    E.focus = g_vw_f;	/* the right button: the Explorer's menu */
+    E.outline_focus = 0;
+    memset(&act, 0, sizeof(act));
+    files_menu(m->y - y, m->x, m->y + 1, &act);
+    apply_act(&act);
+    return;
+  }
+  if (!press) return;
+  E.focus = g_vw_f;
+  if (view == VIEW_FILES && OL.h > 0 && m->y >= OL.y0 && m->y < OL.y0 + OL.h) {	/* the Outline: there */
+    int col = m->x - x, w = side_width();
+    E.outline_focus = PANE_OUTLINE;
+    if (m->y <= OL.y0 + 1 && (col <= 1 || !OL.open)) OL.open = !OL.open;	/* its chevron */
+    else if (!OL.open) ;
+    else if (m->y == OL.y0 + 1 && col >= w - 4) outline_menu();
+    else if (m->y == OL.y0 + 1 && col >= w - 6) outline_collapse_all();
+    else if (m->y >= OL.y0 + 2) {
+      size_t n, k = OL.top + (size_t)(m->y - OL.y0 - 2);
+      const Sym *v = outline_rows(&n);
+      if (k < OL.nvis) {
+        size_t i = OL.vis[k];
+        OL.sel = k;
+        if (sym_end(v, n, i) > i + 1 && col <= 2 + v[i].depth * 2) ol_close(&v[i], !ol_closed(&v[i]));	/* the chevron */
+        else outline_go(1);
+      }
+    }
+    return;
+  }
+  E.outline_focus = 0;
+  memset(&act, 0, sizeof(act));
+  if (view == VIEW_FILES) files_mods(m->mods);	/* Ctrl / Shift: more rows selected, Alt: to the side */
+  side_click(view, m->y - y, m->x - x, &act);
+  if (view == VIEW_FILES) {
+    files_mods(0);
+    if (!(m->mods & (KM_CTRL | KM_SHIFT)) && files_drag_start(m->y - y)) {	/* it may be dragged */
+      E.fdrag = 1;
+      E.fdrag_x = m->x;
+      E.fdrag_y = m->y;
+    }
+  }
+  apply_act(&act);
+}
+
+
+/* the panel's own view pv in the side bar: its title with its actions and "...", it under */
+static void pview_draw_side (int pv, int x, int y, int w, int h, int focus) {
+  int mv = pv_mv(pv), r = x + w - 3, top = 1;
+  char t[160];
+  scr_box(x, y, w, h, S_SIDE);
+  scr_puts(x + 2, y, view_title(mv), S_SIDE_HEAD);
+  g_pv.more_x = r;
+  g_pv.add_x = g_pv.kill_x = g_pv.clear_x = g_pv.chan_x0 = g_pv.chan_x1 = -1;
+  scr_put(r, y, 0xEA7C, S_SIDE_HEAD);	/* ellipsis: Move To Panel, Reset Location */
+  if (pv == 0 && w > 20) {	/* the terminal's: New Terminal, Kill */
+    g_pv.kill_x = r - 2;
+    g_pv.add_x = r - 4;
+    scr_put(g_pv.kill_x, y, 0xEA81, S_SIDE_HEAD);	/* codicon trash */
+    scr_put(g_pv.add_x, y, 0xEA60, S_SIDE_HEAD);	/* add */
+  }
+  if (pv == 3 && w > 20) {	/* the output's: its channel, Clear Output */
+    int cw;
+    g_pv.clear_x = r - 2;
+    scr_put(g_pv.clear_x, y, 0xEABF, S_SIDE_HEAD);	/* clear-all */
+    snprintf(t, sizeof(t), " %s \xE2\x8C\x84 ", out_count() ? out_name(out_current()) : "Output");	/* ⌄ */
+    cw = (int)str_cols(t);
+    if (r - 3 - cw > x + 10) {
+      g_pv.chan_x1 = r - 3;
+      g_pv.chan_x0 = g_pv.chan_x1 - cw;
+      scr_puts(g_pv.chan_x0, y, t, S_INPUT);
+    }
+  }
+  if (pv == 1) {	/* the problems' filter, the funnel and Collapse All: the row under */
+    top = 2;
+    scr_fill(x, y + 1, w, S_SIDE);
+  }
+  if (h <= top) return;
+  switch (pv) {
+    case 0: panel_draw(x, y + top, w, h - top, focus); break;
+    case 1:
+      draw_problems(x, y + top, w, h - top, focus);
+      problems_title(y + 1, x + 1, x + w + 4);	/* after: the counts are known */
+      break;
+    case 2: console_draw(x, y + top, w, h - top, focus); break;
+    case 3: out_draw(x, y + top, w, h - top, focus); break;
+    case PV_VARS: nb_vars_draw(x, y + top, w, h - top, focus); break;
+  }
+}
+
+
+/* the mouse on a panel's own view pv, the rows from by: 1 taken */
+static int pview_mouse (int pv, const Mouse *m, int press, int by) {
+  if (pv > PV_VARS) return 0;	/* (a moved view: not one of these) */
+  if (m->wheel) {
+    if (pv == 1) {
+      size_t st = (size_t)wheel_step(m->mods);
+      if (m->wheel < 0) PB.sel = PB.sel > st ? PB.sel - st : 0;
+      else PB.sel = PB.sel + st < PB.n ? PB.sel + st : (PB.n ? PB.n - 1 : 0);
+    }
+    else if (pv == 2) console_wheel(m->wheel);
+    else if (pv == 3) out_wheel(m->wheel);
+    else if (pv == PV_VARS) nb_vars_wheel(m->wheel);
+    else panel_wheel(m->wheel);
+    return 1;
+  }
+  if (pv == 0 && m->y >= by && (m->button != 3 || !m->drag)) {	/* a terminal, the tabs list, a link */
+    PanelLink lk;
+    int r = panel_mouse(m, pfocus(0), &lk);
+    if (m->press && !m->drag) E.focus = pfocus_to(0);
+    if (r == 2) open_link(&lk);
+    else if (r == 3) {	/* the last one went: its place closes */
+      if (view_in_panel(MV_TERMINAL)) E.panel = E.panel_max = 0;
+      else E.side = 0;
+      E.focus = F_EDITOR;
+    }
+    else if (r >= 100) run_command(r - 100);	/* the right-click menu */
+    return 1;
+  }
+  if (press && pv == 1 && m->y >= by) {	/* a problem: there */
+    problems_click(PB.top + (size_t)(m->y - by));
+    return 1;
+  }
+  return 0;
+}
+
+
+/* the mouse on the panel's own view pv in the side bar */
+static void pview_mouse_side (int pv, const Mouse *m, int press) {
+  int y = L.body_y, top = pv == 1 ? 2 : 1;
+  if (m->y == y && !m->wheel) {	/* its title: the actions, "..." */
+    if (!(m->press && !m->drag)) return;
+    E.focus = F_SIDE;
+    if (m->button == 2 || m->x == g_pv.more_x) view_menu(pv_mv(pv), m->x, m->y + 1);
+    else if (m->x == g_pv.add_x) run_command(CMD_TERMINAL_NEW);
+    else if (m->x == g_pv.kill_x) run_command(CMD_TERMINAL_KILL);
+    else if (m->x == g_pv.clear_x) out_clear();
+    else if (m->x >= g_pv.chan_x0 && m->x < g_pv.chan_x1) pick_channel();
+    return;
+  }
+  if (pv == 1 && m->y == y + 1 && !m->wheel) {	/* the problems' filter row */
+    if (press && !problems_title_click(m->x)) E.focus = F_SIDE;
+    return;
+  }
+  if (!pview_mouse(pv, m, press, y + top) && press) E.focus = F_SIDE;
+}
+
+
 /* its body, drawn before the panel's title row (which goes over the view's own title) */
 static void pv_draw (int focus) {
   int x = L.panel_x, y = L.panel_y, w = L.panel_w, h = L.panel_h;
   if (E.panel_view == PV_VARS) nb_vars_draw(x, y + 1, w, h - 1, focus);
-  else if (E.panel_view == PV_MOVED + MV_SEARCH) search_draw(x, y, w, h, focus);
   else if (E.panel_view == PV_MOVED + MV_OUTLINE) {
     OL.open = 1;
     draw_outline(x, y, w, h, focus);
@@ -14379,20 +14853,31 @@ static void pv_draw (int focus) {
     tl_height();	/* its entries, for the file in front */
     draw_timeline(x, y, w, h, focus);
   }
+  else if (vw_panel_side() >= 0) {	/* a side bar's view, as it is there */
+    vw_host(1);
+    side_draw_panel(x, y);
+    view_draw_side(vw_panel_side(), x, y, w, h, focus, h);
+    vw_host(0);
+  }
 }
 
 
-/* their tabs after TERMINAL's, from column x; the column after them */
+/* their tabs after the panel's own, from column x: the side bar's views, the trees, JUPYTER; the column after them */
 static int pv_tabs (int x, int y, int narrow) {
-  int v;
-  for (v = 0; v <= MV_N; v++) {
-    int on = v == MV_N ? E.panel_view == PV_VARS : E.panel_view == PV_MOVED + v;
-    char t[40];
-    g_pv.x0[v] = g_pv.x1[v] = -1;
-    if (v < MV_N && !view_in_panel(v)) continue;
-    if (v == MV_N && !(g_pv.vars || nb_vars_known() || on)) continue;
-    snprintf(t, sizeof(t), " %s ", v == MV_N ? "JUPYTER" : view_title(v));
-    if (narrow) t[5] = ' ', t[6] = '\0';	/* " SEAR ": short, as the others are */
+  int order[MV_N + PV_TREES], n = 0, i, v;
+  for (v = 0; v < MV_N + PV_TREES; v++) g_pv.x0[v] = g_pv.x1[v] = -1;
+  for (v = 0; v < MV_PROBLEMS; v++)
+    if (view_in_panel(v)) order[n++] = v;
+  for (v = 0; v < tree_count() && v < PV_TREES; v++)
+    if (view_in_panel(MV_N + v)) order[n++] = MV_N + v;
+  if (view_in_panel(MV_VARS) && (g_pv.vars || nb_vars_known() || E.panel_view == PV_VARS)) order[n++] = MV_VARS;
+  for (i = 0; i < n; i++) {
+    int on = order[i] == MV_VARS ? E.panel_view == PV_VARS : E.panel_view == PV_MOVED + order[i];
+    char t[80];
+    v = order[i];
+    snprintf(t, sizeof(t), " %s ", view_title(v));
+    if (narrow && strlen(t) > 6) t[5] = ' ', t[6] = '\0';	/* " SEAR ": short, as the others are */
+    if (x + 1 + (int)str_cols(t) > L.panel_x + L.panel_w - 8) continue;	/* no room before "...": Move View has it */
     g_pv.x0[v] = x + 1;
     g_pv.x1[v] = g_pv.x0[v] + scr_puts(g_pv.x0[v], y, t, on ? S_PANEL_TAB_ON : S_PANEL_TAB);
     x = g_pv.x1[v];
@@ -14401,54 +14886,56 @@ static int pv_tabs (int x, int y, int narrow) {
 }
 
 
-/* a key while one of them has the focus */
-static void pv_key (int k) {
-  int code = KEY_CODE(k);
-  E.follow = 0;
-  if (E.panel_view == PV_MOVED + MV_SEARCH) {
-    SideAct act;
-    memset(&act, 0, sizeof(act));
-    if (global_key(k)) ;
-    else if (search_key(k, &act)) apply_act(&act);
-    else if (code == K_ESC || code == K_TAB) E.focus = F_EDITOR;
-    return;
-  }
-  if (global_key(k)) return;
-  if (code == K_ESC) E.focus = F_EDITOR;
-  else if (E.panel_view == PV_VARS) nb_vars_key(k);
-  else if (E.panel_view == PV_MOVED + MV_OUTLINE) outline_key(k);
-  else if (E.panel_view == PV_MOVED + MV_TIMELINE) tl_key(k);
+/* the panel's tab at column x (its title row): the view (MV_*), -1 none */
+static int pv_tab_at (int x) {
+  int v;
+  for (v = 0; v < MV_N + PV_TREES; v++)
+    if (g_pv.x0[v] >= 0 && x >= g_pv.x0[v] && x < g_pv.x1[v]) return v;
+  if (g_pn.prob_x0 >= 0 && x >= g_pn.prob_x0 && x < g_pn.prob_x1) return MV_PROBLEMS;
+  if (g_pn.out_x0 >= 0 && x >= g_pn.out_x0 && x < g_pn.out_x1) return MV_OUTPUT;
+  if (g_pn.dbg_x0 >= 0 && x >= g_pn.dbg_x0 && x < g_pn.dbg_x1) return MV_CONSOLE;
+  if (g_pn.term_x0 >= 0 && x >= g_pn.term_x0 && x < g_pn.term_x1) return MV_TERMINAL;
+  return -1;
 }
 
 
-/* the mouse in the panel: their tabs, their rows; 1 taken */
+/* a key while the Outline, the Timeline (in the panel) or the Variables (anywhere) have the focus */
+static void pv_key (int pv, int k) {
+  int code = KEY_CODE(k);
+  E.follow = 0;
+  if (global_key(k)) return;
+  if (code == K_ESC) E.focus = F_EDITOR;
+  else if (pv == PV_VARS) nb_vars_key(k);
+  else if (pv == PV_MOVED + MV_OUTLINE) outline_key(k);
+  else if (pv == PV_MOVED + MV_TIMELINE) tl_key(k);
+}
+
+
+/* the mouse in the panel: the moved views' tabs, their rows; 1 taken */
 static int pv_mouse (const Mouse *m, int press) {
   int v;
-  if (press && m->y == L.panel_y)
-    for (v = 0; v <= MV_N; v++)
-      if (g_pv.x0[v] >= 0 && m->x >= g_pv.x0[v] && m->x < g_pv.x1[v]) {
-        if (v == MV_N) {
-          E.panel_view = PV_VARS;
-          E.focus = F_PANEL;
-        }
-        else pv_open(v);
-        return 1;
-      }
+  if (press && m->y == L.panel_y && (v = pv_tab_at(m->x)) >= 0 && (v < MV_PROBLEMS || v >= MV_N || v == MV_VARS)) {
+    if (v == MV_VARS) {
+      E.panel_view = PV_VARS;
+      E.focus = F_PANEL;
+    }
+    else pv_open(v);
+    return 1;
+  }
   if (!pv_shown() || m->y <= L.panel_y) return 0;
+  if (vw_panel_side() >= 0) {	/* a side bar's view: as it is there */
+    vw_host(1);
+    view_mouse_side(vw_panel_side(), m, press, L.panel_x, L.panel_y);
+    vw_host(0);
+    return 1;
+  }
   if (m->wheel) {
     if (E.panel_view == PV_VARS) nb_vars_wheel(m->wheel);
-    else if (E.panel_view == PV_MOVED + MV_SEARCH) search_wheel(m->wheel);
     return 1;
   }
   if (!press) return 1;
   E.focus = F_PANEL;
-  if (E.panel_view == PV_MOVED + MV_SEARCH) {
-    SideAct act;
-    memset(&act, 0, sizeof(act));
-    search_click(m->y - L.panel_y, m->x - L.panel_x, &act);
-    apply_act(&act);
-  }
-  else if (E.panel_view == PV_MOVED + MV_TIMELINE) tl_click(m->y - TL.y0, m->x, m->button);
+  if (E.panel_view == PV_MOVED + MV_TIMELINE) tl_click(m->y - TL.y0, m->x, m->button);
   else if (E.panel_view == PV_MOVED + MV_OUTLINE && m->y == OL.y0 + 1 && m->x - L.panel_x >= L.panel_w - 4) outline_menu();
   else if (E.panel_view == PV_MOVED + MV_OUTLINE && m->y >= OL.y0 + 2) {
     size_t n, k = OL.top + (size_t)(m->y - OL.y0 - 2);
@@ -14462,49 +14949,119 @@ static int pv_mouse (const Mouse *m, int press) {
 }
 
 
-/* view mv to the panel (1) or back to the side bar (0), shown where it went */
+/* what a side bar's view does when it shows: Source Control reads git again ...; the terminal starts */
+static void view_shown_hook (int v) {
+  if (v == VIEW_MOVED + MV_TERMINAL && !panel_alive()) panel_start(E.side_w > 12 ? E.side_w - 3 : 10, L.body_h - 2);
+  if (v == VIEW_GIT) git_refresh();
+  if (v == VIEW_EXT) ext_show();
+  if (v == VIEW_TEST) test_show();
+  if (v == VIEW_FILES && T->real) side_reveal(T->real);
+}
+
+
+/* view mv to the panel (1) or the side bar (0), shown where it went */
 static void pv_move (int mv, int panel) {
   view_set_panel(mv, panel);
-  if (panel) pv_open(mv);
-  else {
-    if (E.panel_view == PV_MOVED + mv) E.panel_view = 1;
-    if (mv == MV_SEARCH) show_view(VIEW_SEARCH);
+  if (mv >= MV_PROBLEMS && mv < MV_N) {	/* one of the panel's own */
+    int pv = mv_pv(mv);
+    if (mv == MV_VARS) g_pv.vars = 1;
+    if (panel) {
+      if (E.view == VIEW_MOVED + mv && (E.view = view_side_first()) < 0) {
+        E.view = VIEW_FILES;
+        E.side = 0;
+      }
+      E.panel = 1;
+      E.panel_view = pv;
+      E.focus = F_PANEL;
+    }
     else {
+      if (E.panel_view == pv && (E.panel_view = pv_first()) < 0) {
+        E.panel_view = pv;
+        E.panel = E.panel_max = 0;
+      }
+      E.side = 1;
+      E.view = VIEW_MOVED + mv;
+      E.focus = F_SIDE;
+    }
+    if (mv == MV_TERMINAL && !panel_alive()) {	/* a terminal to show there */
+      layout();
+      if (panel) panel_start(PANEL_COLS, L.panel_h - 1);
+      else view_shown_hook(E.view);
+    }
+  }
+  else if (panel) {
+    pv_open(mv);
+    if (!view_in_side(E.view) && (E.view = view_side_first()) < 0) {	/* the side bar had it */
+      E.view = VIEW_FILES;
+      E.side = 0;
+    }
+    view_shown_hook(side_of_view(mv));
+  }
+  else {
+    if (E.panel_view == PV_MOVED + mv && (E.panel_view = pv_first()) < 0) {
+      E.panel_view = 1;
+      E.panel = E.panel_max = 0;
+    }
+    if (mv == MV_OUTLINE || mv == MV_TIMELINE) {
       show_view(VIEW_FILES);
       if (mv == MV_OUTLINE) OL.open = 1;
       else TL.open = TL.stale = 1;
       E.outline_focus = mv == MV_OUTLINE ? PANE_OUTLINE : PANE_TIMELINE;
     }
+    else show_view(side_of_view(mv));
   }
 }
 
 
-/* the view with the focus now that can move (MV_*), -1 none */
+/* the view with the focus now (MV_*), -1 none */
 static int pv_focused (void) {
-  if (E.focus == F_PANEL && E.panel && E.panel_view >= PV_MOVED) return E.panel_view - PV_MOVED;
-  if (E.focus == F_SIDE && E.side && E.view == VIEW_SEARCH) return MV_SEARCH;
-  if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus == PANE_OUTLINE) return MV_OUTLINE;
-  if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus == PANE_TIMELINE) return MV_TIMELINE;
-  return -1;
+  int v;
+  if (E.focus == F_PANEL && E.panel) {
+    if (vw_panel_side() == VIEW_FILES && E.outline_focus == PANE_OUTLINE && OL.h > 0) return MV_OUTLINE;	/* its panes */
+    if (vw_panel_side() == VIEW_FILES && E.outline_focus == PANE_TIMELINE && TL.h > 0) return MV_TIMELINE;
+    return pv_mv(E.panel_view);
+  }
+  if (E.focus != F_SIDE || !E.side) return -1;
+  if (E.view >= VIEW_MOVED) return E.view - VIEW_MOVED;
+  if (E.view == VIEW_FILES && E.outline_focus == PANE_OUTLINE) return MV_OUTLINE;
+  if (E.view == VIEW_FILES && E.outline_focus == PANE_TIMELINE) return MV_TIMELINE;
+  if (E.view == VIEW_TREE) return (v = tree_focused()) >= 0 ? MV_N + v : -1;
+  return view_of_side(E.view);
+}
+
+
+/* where view v is, in the Move View list: "Panel", "Side Bar: Explorer" */
+static const char *pv_where (int v, char *b, size_t n) {
+  if (view_in_panel(v)) return "Panel";
+  snprintf(b, n, "Side Bar: %s", v == MV_OUTLINE || v == MV_TIMELINE ? view_name(MV_EXPLORER)
+                                  : v >= MV_N ? "Extension Views" : view_name(v));
+  return b;
 }
 
 
 /* View: Move View (which one, then where) and View: Move Focused View (where) */
 static void pv_move_ask (int focused) {
-  static const char *const name[MV_N] = {"Search", "Outline", "Timeline"};
-  int mv = focused ? pv_focused() : -1, r, v;
+  static const int order[] = {MV_EXPLORER, MV_OUTLINE, MV_TIMELINE, MV_SEARCH, MV_SCM, MV_DEBUG, MV_EXT, MV_TEST};
+  static const int own[] = {MV_PROBLEMS, MV_OUTPUT, MV_CONSOLE, MV_TERMINAL, MV_VARS};
+  int mv = focused ? pv_focused() : -1, r, v, n = 0, list[MV_N + PV_TREES];
+  char where[80];
   Pick p;
   if (focused && mv < 0) {
-    toast(1, "There is no view with the focus that can be moved: Search, Outline and Timeline can.");
+    toast(1, "There is no view with the focus that can be moved.");
     return;
   }
   if (mv < 0) {
     pick_init(&p, "Select a View to Move");
     p.keep_order = 1;
-    for (v = 0; v < MV_N; v++) pick_add(&p, name[v], view_in_panel(v) ? "Panel" : v == MV_SEARCH ? "Side Bar: Search" : "Side Bar: Explorer", 0);
-    mv = pick_run(&p);
+    for (v = 0; v < (int)(sizeof(order) / sizeof(order[0])); v++) list[n++] = order[v];
+    for (v = 0; v < tree_count() && v < PV_TREES; v++) list[n++] = MV_N + v;
+    for (v = 0; v < (int)(sizeof(own) / sizeof(own[0])); v++)
+      if (own[v] != MV_VARS || g_pv.vars || nb_vars_known() || view_moved(MV_VARS)) list[n++] = own[v];
+    for (v = 0; v < n; v++) pick_add(&p, view_name(list[v]), pv_where(list[v], where, sizeof(where)), 0);
+    r = pick_run(&p);
     pick_free(&p);
-    if (mv < 0) return;
+    if (r < 0) return;
+    mv = list[r];
   }
   pick_init(&p, "Select Destination");
   p.keep_order = 1;
@@ -14516,15 +15073,56 @@ static void pv_move_ask (int focused) {
 }
 
 
-/* the panel's "..." while a moved view shows: Move To Primary Side Bar, Reset Location; 1 it was */
-static int pv_more_menu (int x, int y) {
-  static const char *const label[] = {"Move To Primary Side Bar", "Reset Location"};
-  static const int flags[] = {0, 0};
-  int r;
-  if (!pv_shown() || E.panel_view == PV_VARS) return 0;
-  r = popup_list(x - popup_width(label, flags, 2) + 2, y, label, flags, 2);
-  if (r >= 0) pv_move(E.panel_view - PV_MOVED, 0);
-  return 1;
+/*
+** A view's menu (the "..." of a panel's view in the side bar, the right
+** button on a view's title or on its tab): Move To Panel or Move To
+** Primary Side Bar, and Reset Location when it is not at home. mv -1: the
+** extensions' views in the side bar, each Move To Panel.
+*/
+static void view_menu (int mv, int x, int y) {
+  const char *label[PV_TREES + 2];
+  char buf[PV_TREES][80];
+  int flags[PV_TREES + 2], n = 0, v, r, list[PV_TREES], w;
+  if (mv < 0) {
+    for (v = 0; v < tree_count() && v < PV_TREES; v++)
+      if (!view_in_panel(MV_N + v)) {
+        snprintf(buf[n], sizeof(buf[n]), "%s: Move To Panel", tree_name(v));
+        label[n] = buf[n];
+        flags[n] = 0;
+        list[n++] = MV_N + v;
+      }
+    if (n == 0) return;
+    if (x + (w = popup_width(label, flags, n)) > E.cols) x = E.cols - w;
+    r = popup_list(x, y, label, flags, n);
+    if (r >= 0 && r < n) pv_move(list[r], 1);
+    return;
+  }
+  label[n] = view_in_panel(mv) ? "Move To Primary Side Bar" : "Move To Panel";
+  flags[n++] = 0;
+  if (view_moved(mv)) {
+    label[n] = "Reset Location";
+    flags[n++] = 0;
+  }
+  if (x + (w = popup_width(label, flags, n)) > E.cols) x = E.cols - w;
+  r = popup_list(x, y, label, flags, n);
+  if (r == 0) pv_move(mv, !view_in_panel(mv));
+  else if (r == 1) pv_move(mv, mv >= MV_PROBLEMS && mv < MV_N);
+}
+
+
+/* View: Reset View Locations: each view at home; the one with the keys still shown */
+static void view_reset_all (void) {
+  int mv = pv_focused(), shown = mv >= 0 && view_moved(mv);
+  view_reset();
+  vw_fix();
+  if (!shown) return;
+  if (mv >= MV_PROBLEMS && mv < MV_N) {
+    E.panel = 1;
+    E.panel_view = mv_pv(mv);
+    E.focus = F_PANEL;
+  }
+  else if (mv == MV_OUTLINE || mv == MV_TIMELINE) pv_move(mv, 0);
+  else show_view(side_of_view(mv));
 }
 
 /* }================================================================== */
@@ -14537,6 +15135,11 @@ int act_badge (int view, int *dot) {
   if (view == VIEW_TEST) return test_failed();
   if (view == VIEW_TREE) return tree_badge();
   if (view == VIEW_DEBUG) *dot = dbg_active();
+  if (view == VIEW_MOVED + MV_PROBLEMS) {	/* the problems moved into the side bar: their count */
+    int ne, nw;
+    lsp_counts(&ne, &nw);
+    return ne + nw;
+  }
   return 0;
 }
 
@@ -15744,7 +16347,10 @@ static void session_restore (void) {
       if (page == PAGE_SEARCHED || page == PAGE_MDIFF) continue;	/* a Search Editor never saved, a multi-diff: not kept */
       if (bk) {
         char *bf = path_join(bd, bk);
-        btext = read_file(bf, &blen);
+        btext = read_file_all(bf, &blen);	/* all of it: a part would be taken for the text */
+        if (btext == NULL && fs_exists(bf))
+          toast(1, "The unsaved changes of '%s' could not be restored (unreadable, or over 1 GB)",
+                path ? path_basename(path) : "Untitled");
         free(bf);
       }
       if (path && (os_stat(path, &st) == 0 && st.exists) && open_file(path, 0) == 0) ;
@@ -15800,8 +16406,8 @@ static void session_restore (void) {
   }
   focus_group((int)jnum(json_get(j, "group"), 0, 0, g_ngrp - 1));
   {	/* the side bar as it was */
-    int v = (int)jnum(json_get(j, "view"), E.view, 0, VIEW_N - 1), side = (int)jnum(json_get(j, "side"), E.side, 0, 1);
-    if (v >= 0 && v < VIEW_N) show_view(v);
+    int v = (int)jnum(json_get(j, "view"), E.view, 0, VIEW_MOVED + MV_N - 1), side = (int)jnum(json_get(j, "side"), E.side, 0, 1);
+    if ((v < VIEW_N || v >= VIEW_MOVED) && (view_in_side(v) || (v == VIEW_TREE && tree_count() == 0))) show_view(v);
     E.side = side;
   }
   E.side_w = (int)jnum(json_get(j, "sideWidth"), E.side_w, 10, 1000);
@@ -15815,8 +16421,10 @@ static void session_restore (void) {
   }
   E.panel_h = (int)jnum(json_get(j, "panelHeight"), E.panel_h, 3, 1000);
   if (json_num(json_get(j, "panel"), 0)) {
-    int pv = (int)jnum(json_get(j, "panelView"), 0, 0, 3);
-    if (pv == 0) run_command(CMD_TERMINAL);	/* a terminal again, like VS Code */
+    int pv = (int)jnum(json_get(j, "panelView"), 0, 0, PV_MOVED + MV_N - 1);
+    if (pv == PV_VARS || (pv >= PV_MOVED && !(pv_mv(pv) < MV_PROBLEMS && view_in_panel(pv_mv(pv))))) pv = 0;	/* the terminal */
+    if (!view_in_panel(pv_mv(pv))) ;	/* moved into the side bar since */
+    else if (pv == 0) run_command(CMD_TERMINAL);	/* a terminal again, like VS Code */
     else {
       E.panel = 1;
       E.panel_view = pv;
@@ -16788,14 +17396,17 @@ static void open_compare_folders (const char *left, const char *right) {
 /* File: Compare Active File With...: a file of the folder, picked like Ctrl+P */
 static void compare_with (void) {
   Pick p;
-  Vec paths, none;
+  Vec paths, none, seen;
   int r;
   if (!HAS_DOC || T->page || G->diff) return;
   pick_init(&p, "Select a file to compare with");
   vec_init(&paths);
   vec_init(&none);
+  vec_init(&seen);
+  for (r = 0; r < ws_count(); r++) fs_dir_first(&seen, ws_folder(r));
   for (r = 0; r < ws_count(); r++)
-    walk_files(ws_folder(r), ws_count() > 1 ? ws_folder_name(r) : "", &p, &paths, &none, 0);
+    walk_files(ws_folder(r), ws_count() > 1 ? ws_folder_name(r) : "", &p, &paths, &none, &seen, 0);
+  vec_free(&seen);
   r = pick_run(&p);
   if (r >= 0) {
     char *full = xstrdup(paths.v[r]), *mine, *other, title[512];
@@ -17223,7 +17834,9 @@ static void acc_track (int k) {
   if (!acc_on()) return;
   if (E.focus != lfocus) {	/* the part with the focus */
     static const char *const part[] = {"Editor", "Explorer", "Terminal", "Chat"};
-    if (E.focus >= 0 && E.focus <= F_CHAT) acc_say(E.focus == F_SIDE && E.view != VIEW_FILES ? "Side Bar" : part[E.focus]);
+    if (E.focus >= 0 && E.focus <= F_CHAT)	/* (the Explorer and the terminal where they are) */
+      acc_say(E.focus == F_SIDE ? (E.view == VIEW_FILES ? part[F_SIDE] : E.view == VIEW_MOVED + MV_TERMINAL ? part[F_PANEL] : "Side Bar")
+              : sfocus(VIEW_FILES) ? part[F_SIDE] : part[E.focus]);
     lfocus = E.focus;
     lt = NULL;
     lside[0] = '\0';
@@ -17263,7 +17876,7 @@ static void acc_track (int k) {
     la = T->anchor;
     lsel = T->sel;
   }
-  else if (E.focus == F_SIDE && E.view == VIEW_FILES) {	/* the Explorer's row: its name, a folder open or not */
+  else if (sfocus(VIEW_FILES)) {	/* the Explorer's row: its name, a folder open or not */
     const char *name = NULL;
     int depth = 0, kind = files_selected_row(&name, &depth);
     char now[512];
@@ -17288,7 +17901,7 @@ static void accessible_view (void) {
   size_t n = 0;
   if (HV.text) s = HV.text;
   else if (E.focus == F_CHAT) s = chat_answer(&n);
-  else if (E.focus == F_PANEL && E.panel && E.panel_view == 0) s = own = panel_text(&n);
+  else if (pfocus(0)) s = own = panel_text(&n);
   if (s == NULL) s = note_last();
   if (s == NULL) {
     toast(0, "Accessible View: nothing to show here (a hover, Chat's answer, the terminal, a notification).");
@@ -17873,7 +18486,7 @@ static void run_command (int cmd) {
     case CMD_TYPE: {	/* {"text": "..."}: typed where the keys go */
       const char *t = json_str(json_get(keys_args(), "text"), NULL);
       if (t == NULL) break;
-      if (E.focus == F_PANEL && E.panel && E.panel_view == 0) panel_send(t, strlen(t));
+      if (pfocus(0)) panel_send(t, strlen(t));
       else if (HAS_DOC && !G->diff && !T->page && !T->md) {
         doc_group(T->doc);
         insert(t, strlen(t));
@@ -18079,14 +18692,11 @@ static void run_command (int cmd) {
         doc_group(T->doc);
       }
       break;
-    case CMD_DEBUG_VIEW:
-      E.side = 1;
-      E.view = VIEW_DEBUG;
-      E.focus = F_SIDE;
-      break;
+    case CMD_DEBUG_VIEW: show_view(VIEW_DEBUG); break;
     case CMD_DEBUG_CONSOLE:	/* show it and go there; from there: hide it */
-      if (E.panel && E.panel_view == 2 && E.focus == F_PANEL) {
-        E.panel = 0;
+      if (pfocus(2)) {
+        if (E.focus == F_SIDE) E.side = 0;
+        else E.panel = 0;
         E.focus = F_EDITOR;
         break;
       }
@@ -18132,8 +18742,9 @@ static void run_command (int cmd) {
     case CMD_TASK_TERMINATE: task_command(cmd); break;
     case CMD_DEBUG_DISASM: dbg_command(cmd); break;
     case CMD_TERMINAL:	/* show it and go there; from there: hide it */
-      if (E.panel && E.focus == F_PANEL && E.panel_view == 0) {
-        E.panel = E.panel_max = 0;
+      if (pfocus(0)) {
+        if (E.focus == F_SIDE) E.side = 0;
+        else E.panel = E.panel_max = 0;
         E.focus = F_EDITOR;
         break;
       }
@@ -18196,7 +18807,7 @@ static void run_command (int cmd) {
     case CMD_TERMINAL_KILL:	/* the one in front; the panel goes with the last */
       if (!panel_confirm_kill()) break;
       panel_kill();
-      if (!panel_alive()) {
+      if (!panel_alive() && view_in_panel(MV_TERMINAL)) {	/* (in the side bar: the main loop closes it) */
         E.panel = E.panel_max = 0;
         if (E.focus == F_PANEL) E.focus = F_EDITOR;
       }
@@ -18245,8 +18856,9 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_OUTPUT:	/* the panel with the output; again: back to where the keys were */
-      if (E.panel && E.panel_view == 3 && E.focus == F_PANEL) {
-        E.panel = 0;
+      if (pfocus(3)) {
+        if (E.focus == F_SIDE) E.side = 0;
+        else E.panel = 0;
         E.focus = F_EDITOR;
         break;
       }
@@ -18292,15 +18904,9 @@ static void run_command (int cmd) {
       if (HAS_DOC && !G->diff && T->page == PAGE_NOTEBOOK) nb_command(T->pdata, NB_OUT_BROWSER);
       else toast(0, "Open a notebook first.");
       break;
-    case CMD_MOVE_VIEW: pv_move_ask(0); break;	/* the views in the panel */
+    case CMD_MOVE_VIEW: pv_move_ask(0); break;	/* the views anywhere */
     case CMD_MOVE_FOCUSED_VIEW: pv_move_ask(1); break;
-    case CMD_RESET_VIEW_LOCATIONS: {
-      int v;
-      for (v = 0; v < MV_N; v++)
-        if (view_in_panel(v)) view_set_panel(v, 0);
-      if (E.panel_view >= PV_MOVED) E.panel_view = 1;
-      break;
-    }
+    case CMD_RESET_VIEW_LOCATIONS: view_reset_all(); break;
     case CMD_NB_VARIABLES:
       g_pv.vars = 1;
       E.panel = 1;
@@ -18327,8 +18933,8 @@ static void run_command (int cmd) {
       break;
     case CMD_NEXT_PROBLEM: next_problem(0); break;
     case CMD_RENAME:	/* F2 in the Explorer: the file's name */
-      if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && !E.outline_focus) explorer_cmd(FC_RENAME);
-      else if (E.focus == F_SIDE && E.side && E.view == VIEW_DEBUG) {	/* Run and Debug: Edit Breakpoint, Set Value */
+      if (sfocus(VIEW_FILES) && !E.outline_focus) explorer_cmd(FC_RENAME);
+      else if (sfocus(VIEW_DEBUG)) {	/* Run and Debug: Edit Breakpoint, Set Value */
         SideAct act;
         memset(&act, 0, sizeof(act));
         debug_key(K_F2, &act);
@@ -18351,8 +18957,9 @@ static void run_command (int cmd) {
       }
       break;
     case CMD_PROBLEMS:	/* the panel, its Problems; again: back to where the keys were */
-      if (E.panel && E.panel_view == 1 && E.focus == F_PANEL) {
-        E.panel = 0;
+      if (pfocus(1)) {
+        if (E.focus == F_SIDE) E.side = 0;
+        else E.panel = 0;
         E.focus = F_EDITOR;
         break;
       }
@@ -18439,12 +19046,12 @@ static void run_command (int cmd) {
     case CMD_COPY_PATH: copy_path(0); break;
     case CMD_COPY_REL_PATH: copy_path(1); break;
     case CMD_REVEAL_OS:
-      if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES) explorer_cmd(FC_REVEAL);
+      if (sfocus(VIEW_FILES)) explorer_cmd(FC_REVEAL);
       else if (HAS_DOC && !T->page && T->doc->path) fs_reveal(T->real ? T->real : T->doc->path);
       else fs_reveal(side_root());
       break;
     case CMD_OPEN_IN_TERMINAL:
-      if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES) explorer_cmd(FC_TERMINAL);
+      if (sfocus(VIEW_FILES)) explorer_cmd(FC_TERMINAL);
       else {
         char *d = HAS_DOC && !T->page && T->doc->path ? path_dirname(T->doc->path) : NULL;
         panel_cwd(d);
@@ -18639,12 +19246,12 @@ static int global_key (int k) {
     else toast(0, "The key combination (Ctrl+;) is not a command.");
     return 1;
   }
-  if (k == (';' | KM_CTRL) && E.focus != F_PANEL) {	/* Ctrl+; A, C, F, L: Testing, like VS Code */
+  if (k == (';' | KM_CTRL) && !pv_keys()) {	/* Ctrl+; A, C, F, L: Testing, like VS Code */
     E.chord_test = 1;
     toast(0, "(Ctrl+;) was pressed. Waiting for second key of chord...");
     return 1;
   }
-  if (k == CTRL('k') && E.focus != F_PANEL) {	/* Ctrl+K Ctrl+S: the shortcuts */
+  if (k == CTRL('k') && !pv_keys()) {	/* Ctrl+K Ctrl+S: the shortcuts */
     E.chord = 1;
     toast(0, "(Ctrl+K) was pressed. Waiting for second key of chord...");
     return 1;
@@ -18683,7 +19290,7 @@ static int global_key (int k) {
   if ((code == K_F5 || code == K_F9 || ((code == K_F6 || code == K_F10 || code == K_F11) && dbg_active())) &&
       !(k & KM_ALT) && !(code == K_F10 && (k & KM_SHIFT))) {	/* Shift+F10: a context menu, not a step */
     int cs5 = k & (KM_CTRL | KM_SHIFT);	/* Run and Debug's keys, VS Code's */
-    if (code == K_F5 && cs5 == 0 && E.focus == F_SIDE && E.view == VIEW_FILES && !dbg_active()) return 0;	/* the Explorer's refresh */
+    if (code == K_F5 && cs5 == 0 && sfocus(VIEW_FILES) && !dbg_active()) return 0;	/* the Explorer's refresh */
     if (code == K_F5) run_command(cs5 == (KM_CTRL | KM_SHIFT) ? CMD_DEBUG_RESTART : cs5 == KM_SHIFT ? CMD_DEBUG_STOP
                                   : cs5 == KM_CTRL ? CMD_DEBUG_RUN : CMD_DEBUG_START);
     else if (code == K_F9) run_command(CMD_BREAKPOINT);
@@ -18704,7 +19311,7 @@ static int global_key (int k) {
   if ((k & KM_ALT) && !(k & (KM_CTRL | KM_SHIFT))) {	/* Alt+F, Alt+E ...: a menu, like VS Code */
     static const char mn[] = "fesvgrth";
     const char *p = code < 128 ? strchr(mn, code) : NULL;
-    int in_find = E.finding || (E.focus == F_SIDE && E.view == VIEW_SEARCH);
+    int in_find = E.finding || sfocus(VIEW_SEARCH);
     if (p && *p && !(in_find && code == 'r')) {	/* Alt+R in a find box: its .* */
       run_command(menu_run((int)(p - mn)));
       return 1;
@@ -19088,7 +19695,6 @@ static void apply_act (const SideAct *act) {
     case SA_FIND_FOLDER:	/* Find in Folder...: the Search view, "files to include" that folder */
       show_view(VIEW_SEARCH);
       search_scope(act->path);
-      E.focus = F_SIDE;
       break;
     case SA_DIFF:
     case SA_SHOW_DIFF:
@@ -21256,8 +21862,7 @@ const char *when_ctx (const char *key) {
   }
   if (strcmp(key, "editorTextFocus") == 0 || strcmp(key, "editorFocus") == 0) return B(ed);
   if (strcmp(key, "textInputFocus") == 0 || strcmp(key, "inputFocus") == 0)	/* the Search view's boxes too, in the panel as well */
-    return B(ed || E.finding || (E.focus == F_SIDE && E.view == VIEW_SEARCH) ||
-             (E.focus == F_PANEL && E.panel && E.panel_view == PV_MOVED + MV_SEARCH));
+    return B(ed || E.finding || (E.focus == F_SIDE && E.view == VIEW_SEARCH) || sfocus(VIEW_SEARCH));
   if (strcmp(key, "editorIsOpen") == 0) return B(HAS_DOC);
   if (strcmp(key, "editorHasSelection") == 0) return B(HAS_DOC && T->sel);
   if (strcmp(key, "editorHasMultipleSelections") == 0) return B(HAS_DOC && T->nmc > 0);
@@ -21282,7 +21887,7 @@ const char *when_ctx (const char *key) {
   if (strcmp(key, "hasPrevTabstop") == 0) return B(SN.t != NULL && SN.at > 0);
   if (strcmp(key, "inQuickOpen") == 0) return NULL;	/* the quick input takes its keys itself */
   if (strcmp(key, "inDebugMode") == 0) return B(dbg_active());
-  if (strcmp(key, "terminalFocus") == 0) return B(E.focus == F_PANEL && E.panel && E.panel_view == 0);
+  if (strcmp(key, "terminalFocus") == 0) return B(pfocus(0));
   if (strcmp(key, "terminalIsOpen") == 0) return B(panel_count() > 0);
   if (strcmp(key, "panelFocus") == 0) return B(E.focus == F_PANEL && E.panel);
   if (strcmp(key, "panelVisible") == 0) return B(E.panel);
@@ -21290,14 +21895,14 @@ const char *when_ctx (const char *key) {
   if (strcmp(key, "sideBarVisible") == 0) return B(E.side);
   if (strcmp(key, "explorerViewletFocus") == 0 || strcmp(key, "filesExplorerFocus") == 0 ||
       strcmp(key, "explorerViewletVisible") == 0)
-    return B(E.side && E.view == VIEW_FILES && (key[8] == 'V' ? 1 : E.focus == F_SIDE));
+    return B(key[8] == 'V' ? sshown(VIEW_FILES) : sfocus(VIEW_FILES));
   if (strcmp(key, "searchViewletFocus") == 0 || strcmp(key, "searchViewletVisible") == 0)
-    return B(E.side && E.view == VIEW_SEARCH && (key[14] == 'V' ? 1 : E.focus == F_SIDE));
-  if (strcmp(key, "scmViewletVisible") == 0) return B(E.side && E.view == VIEW_GIT);
+    return B(key[14] == 'V' ? sshown(VIEW_SEARCH) : sfocus(VIEW_SEARCH));
+  if (strcmp(key, "scmViewletVisible") == 0) return B(sshown(VIEW_GIT));
   if (strcmp(key, "activeViewlet") == 0) {
     static const char *const v[VIEW_N] = {"workbench.view.explorer", "workbench.view.search",
                                           "workbench.view.scm", "workbench.view.debug", "workbench.view.extensions"};
-    return E.side ? v[E.view] : NULL;
+    return E.side && E.view >= 0 && E.view < VIEW_N ? v[E.view] : NULL;
   }
   if (strcmp(key, "activePanel") == 0) {
     static const char *const v[] = {"terminal", "workbench.panel.markers", "workbench.panel.repl", "workbench.panel.output"};
@@ -21331,7 +21936,7 @@ static void run_bound (int c) {
 /* keybindings.json's keys, before mme's; 1 when k was one */
 static int user_key (int k) {
   int c;
-  if (E.focus == F_PANEL && E.panel && E.panel_view == 0 && !panel_passes(k)) return 0;	/* the shell's */
+  if (pfocus(0) && !panel_passes(k)) return 0;	/* the shell's */
   if (E.uchord) {
     c = keys_find(E.uchord, k);
     E.uchord = 0;
@@ -21354,7 +21959,7 @@ static int user_key (int k) {
   if (c == -1) {
     char name[48];
     E.uchord = k;
-    if (k == CTRL('k') && E.focus != F_PANEL) E.chord = 1;	/* mme's chord goes on too */
+    if (k == CTRL('k') && !pv_keys()) E.chord = 1;	/* mme's chord goes on too */
     key_name(k, 1, name, sizeof(name));
     toast(0, "(%s) was pressed. Waiting for second key of chord...", name);
     return 1;
@@ -21365,6 +21970,7 @@ static int user_key (int k) {
 
 static void on_key (int k) {
   int code = KEY_CODE(k);
+  vw_fix();	/* the views with the keys are where they are */
   E.follow = 1;
   E.nav_quiet = IS_TEXT(k) || code == K_UP || code == K_DOWN || code == K_PGUP || code == K_PGDN ||
                 code == K_ENTER || code == K_BS || code == K_DEL || code == K_PASTE || code == K_TAB;
@@ -21375,11 +21981,11 @@ static void on_key (int k) {
     run_command(CMD_TERMINAL_NEW);
     goto done;
   }
-  if (k == 0 || k == ('`' | KM_CTRL) || (k == CTRL('j') && !E.chord && !(E.focus == F_SIDE && E.view == VIEW_GIT))) {
+  if (k == 0 || k == ('`' | KM_CTRL) || (k == CTRL('j') && !E.chord && !sfocus(VIEW_GIT))) {
     run_command(CMD_TERMINAL);
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && E.panel_view == 2) {	/* the debug console */
+  if (pfocus(2)) {	/* the debug console */
     if (KEY_CODE(k) == K_PASTE) {
       Buf b;
       buf_init(&b);
@@ -21391,34 +21997,34 @@ static void on_key (int k) {
     E.follow = 0;
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && E.panel_view == 1) {	/* the problems' list, its filter */
+  if (pfocus(1)) {	/* the problems' list, its filter */
     if (PB.in_filter || k == CTRL('f') || k == CTRL('c') || (IS_TEXT(k) && k != ' ')) problems_key(k);
     else if (!global_key(k)) problems_key(k);
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && E.panel_view == 3) {	/* the output */
+  if (pfocus(3)) {	/* the output */
     if (KEY_CODE(k) == K_ESC) E.focus = F_EDITOR;
     else if (!global_key(k)) out_key(k);
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && pv_shown()) {	/* a view moved into the panel, the Variables */
-    pv_key(k);
+  if (pfocus(PV_VARS) || (E.focus == F_PANEL && E.panel && pv_shown() && vw_panel_side() < 0)) {	/* the Outline moved into the panel, the Variables */
+    pv_key(pfocus(PV_VARS) ? PV_VARS : E.panel_view, k);
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && panel_finding() && !panel_passes(k) && panel_find_key(k)) goto done;
-  if (E.focus == F_PANEL && E.panel && k == CTRL('f')) {	/* Find, over the terminal */
+  if (pfocus(0) && panel_finding() && !panel_passes(k) && panel_find_key(k)) goto done;
+  if (pfocus(0) && k == CTRL('f')) {	/* Find, over the terminal */
     panel_find_open();
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && (k == (K_LEFT | KM_ALT) || k == (K_RIGHT | KM_ALT)) && panel_group_size() > 1) {
+  if (pfocus(0) && (k == (K_LEFT | KM_ALT) || k == (K_RIGHT | KM_ALT)) && panel_group_size() > 1) {
     panel_focus_pane(k == (K_LEFT | KM_ALT) ? -1 : 1);	/* the split next to it */
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel && E.panel_view == 0 && panel_key_cmd(k)) {	/* copy, paste, Ctrl+Up ... */
+  if (pfocus(0) && panel_key_cmd(k)) {	/* copy, paste, Ctrl+Up ... */
     E.follow = 0;
     goto done;
   }
-  if (E.focus == F_PANEL && E.panel) {
+  if (pfocus(0)) {
     if (panel_passes(k)) global_key(k);
     else if (KEY_CODE(k) == K_PASTE) {
       Buf b;
@@ -21446,21 +22052,15 @@ static void on_key (int k) {
   }
   if (vim_key(k)) goto done;	/* vim.enable: Normal mode's keys, before VS Code's */
   if (global_key(k)) goto done;
-  if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus) {	/* a pane under the folders */
-    if (E.outline_focus == PANE_OUTLINE && OL.h > 0) outline_key(k);
-    else if (E.outline_focus == PANE_EDITORS && OE.h > 0) oe_key(k);
-    else if (E.outline_focus == PANE_TIMELINE && TL.h > 0) tl_key(k);
-    else E.outline_focus = PANE_TREE;
-    E.follow = 0;
+  if (E.focus == F_SIDE && E.side && E.view < VIEW_MOVED) {	/* a side bar's view */
+    vw_host(0);
+    view_key_side(E.view, k);
     goto done;
   }
-  if (E.focus == F_SIDE && E.side) {
-    SideAct act;
-    memset(&act, 0, sizeof(act));
-    if (KEY_CODE(k) == K_TAB && E.view == VIEW_FILES && (OL.h > 0 || OE.h > 0 || TL.h > 0)) next_pane();	/* to the panes */
-    else if (side_key(E.view, k, &act)) apply_act(&act);
-    else if (KEY_CODE(k) == K_ESC || KEY_CODE(k) == K_TAB) E.focus = F_EDITOR;
-    E.follow = 0;
+  if (E.focus == F_PANEL && E.panel && vw_panel_side() >= 0) {	/* one moved into the panel: as it is there */
+    vw_host(1);
+    view_key_side(vw_panel_side(), k);
+    vw_host(0);
     goto done;
   }
   if (G->diff && HAS_DIFF) {
@@ -21738,6 +22338,8 @@ static int pointer_at (const Mouse *m, const Mouse *zm) {
   int in_editor = m->x >= L.area_x && m->y >= L.text_y && m->y < L.text_y + L.view_h &&
                   !in_panel(m->x, m->y);
   if (in_panel(m->x, m->y) && m->y > L.panel_y && E.panel_view == 0) return PTR_TEXT;	/* the terminal's text */
+  if (E.side && E.view == VIEW_MOVED + MV_TERMINAL && L.side_w > 0 && m->y > L.body_y && m->y < L.body_y + L.side_h &&
+      m->x >= L.side_x && m->x < L.side_x + L.side_w - 1) return PTR_TEXT;	/* in the side bar */
   if (in_editor && HAS_DOC && !T->page && !G->diff) {
     int gw = gutter_width();
     if (zm->x >= L.ed_x + gw && zm->x < L.ed_x + gw + text_cols()) return E.link_y ? PTR_POINTER : PTR_TEXT;
@@ -21885,15 +22487,20 @@ static void on_mouse (void) {
   }
   if (E.fdrag) {	/* the Explorer's rows dragged: into a folder of the tree, or into an editor group (opened) */
     int over_side = L.side_w > 0 && E.view == VIEW_FILES && (opt.side_right ? m->x > L.edge_x : m->x < L.edge_x);
+    int ey = L.body_y;	/* the Explorer's first row (in the panel: its title row's) */
+    if (vw_panel_side() == VIEW_FILES) {
+      over_side = in_panel(m->x, m->y) && m->y > L.panel_y;
+      ey = L.panel_y;
+    }
     if (m->drag && m->button == 0) {
       if (E.fdrag == 1 && (abs(m->x - E.fdrag_x) >= 2 || m->y != E.fdrag_y)) E.fdrag = 2;
-      if (E.fdrag == 2) files_drag_over(over_side ? m->y - L.body_y : -1);
+      if (E.fdrag == 2) files_drag_over(over_side ? m->y - ey : -1);
     }
     else if (!m->press) {
       if (E.fdrag == 2 && over_side) {
         SideAct act;
         memset(&act, 0, sizeof(act));
-        files_drop(m->y - L.body_y, (m->mods & KM_CTRL) != 0, &act);	/* Ctrl: copied */
+        files_drop(m->y - ey, (m->mods & KM_CTRL) != 0, &act);	/* Ctrl: copied */
         apply_act(&act);
       }
       else if (E.fdrag == 2 && m->x >= L.area_x && m->x < L.area_x + L.area_w && m->y >= L.area_y &&
@@ -22017,33 +22624,18 @@ static void on_mouse (void) {
   }
   if (in_panel(m->x, m->y)) {
     if (pv_mouse(m, press)) return;	/* the moved views' tabs and rows */
-    if (m->wheel && E.panel_view == 1) {
-      size_t st = (size_t)wheel_step(m->mods);
-      if (m->wheel < 0) PB.sel = PB.sel > st ? PB.sel - st : 0;
-      else PB.sel = PB.sel + st < PB.n ? PB.sel + st : (PB.n ? PB.n - 1 : 0);
+    if (m->button == 2 && m->press && !m->drag && m->y == L.panel_y && pv_tab_at(m->x) >= 0) {	/* a tab: Move To ... */
+      view_menu(pv_tab_at(m->x), m->x, m->y + 1);
+      return;
     }
-    else if (m->wheel && E.panel_view == 2) console_wheel(m->wheel);
-    else if (m->wheel && E.panel_view == 3) out_wheel(m->wheel);
-    else if (m->wheel) panel_wheel(m->wheel);
-    else if (E.panel_view == 0 && m->y > L.panel_y && (m->button != 3 || !m->drag)) {	/* a terminal, the tabs list, a link */
-      PanelLink lk;
-      int r = panel_mouse(m, E.focus == F_PANEL, &lk);
-      if (m->press && !m->drag) E.focus = F_PANEL;
-      if (r == 2) open_link(&lk);
-      else if (r == 3) {
-        E.panel = E.panel_max = 0;
-        E.focus = F_EDITOR;
-      }
-      else if (r >= 100) run_command(r - 100);	/* the right-click menu */
-    }
-    else if (press && E.panel_view == 1 && m->y > L.panel_y) problems_click(PB.top + (size_t)(m->y - L.panel_y - 1));	/* a problem: there */
+    if ((m->wheel || m->y > L.panel_y) && pview_mouse(E.panel_view, m, press, L.panel_y + 1)) ;	/* its body */
     else if (press && m->y == L.panel_y) {	/* its title row: the icons, or drag it */
       if (m->x == g_pn.close_x) {
         E.panel = E.panel_max = 0;
         E.focus = F_EDITOR;
       }
       else if (m->x == g_pn.max_x) run_command(CMD_PANEL_MAX);
-      else if (m->x == g_pn.more_x && !pv_more_menu(m->x, m->y + 1)) panel_more_menu(m->x, m->y + 1);
+      else if (m->x == g_pn.more_x) panel_more_menu(m->x, m->y + 1);
       else if (E.panel_view == 1 && problems_title_click(m->x)) ;	/* the filter box, the funnel, Collapse All */
       else if (m->x >= g_pn.prob_x0 && m->x < g_pn.prob_x1) {
         E.panel_view = 1;
@@ -22125,9 +22717,13 @@ static void on_mouse (void) {
     else show_view(v);
     return;
   }
-  if (E.sbar_drag) {	/* a side bar view's scrollbar, held: it follows the mouse */
+  if (E.sbar_drag) {	/* a side bar view's scrollbar, held (2: in the panel): it follows the mouse */
     if (m->button == 0 && !m->press && !m->drag) E.sbar_drag = 0;
-    else side_bar_to(E.view, m->y);
+    else {
+      vw_host(E.sbar_drag == 2);
+      side_bar_to(g_sbar_view, m->y);
+      vw_host(0);
+    }
     return;
   }
   if (E.bar_drag) {	/* the side bar's scrollbar, held */
@@ -22136,109 +22732,13 @@ static void on_mouse (void) {
     return;
   }
   if (L.side_w > 0 && (opt.side_right ? m->x >= L.edge_x : m->x <= L.edge_x)) {	/* the sidebar */
-    SideAct act;
     if (m->x == L.edge_x && press) {
       E.resizing = 1;
       return;
     }
-    if (press && E.view == VIEW_FILES && files_bar_rows() > 0 && m->x == L.side_x + side_width() - 1 &&
-        m->y >= files_bar_y() && m->y < files_bar_y() + files_bar_rows()) {	/* its scrollbar */
-      E.bar_drag = 1;
-      files_bar_to(m->y - files_bar_y(), files_bar_rows());
-      return;
-    }
-    if (press && E.view != VIEW_FILES && m->button == 0 && side_bar_hit(m->x, m->y)) {	/* the view's scrollbar */
-      E.sbar_drag = 1;
-      side_bar_to(E.view, m->y);
-      return;
-    }
-    if (E.view == VIEW_FILES && OE.h > 0 && m->y >= OE.y0 && m->y < OE.y0 + OE.h) {	/* OPEN EDITORS */
-      if (m->wheel) {	/* OPEN EDITORS */
-        size_t st = (size_t)wheel_step(m->mods);
-        OE.top = m->wheel < 0 ? (OE.top > st ? OE.top - st : 0) : OE.top + st;
-      }
-      else if (press) {
-        E.focus = F_SIDE;
-        oe_click(m->y - OE.y0, m->x - L.side_x);
-      }
-      return;
-    }
-    if (E.view == VIEW_FILES && TL.h > 0 && m->y >= TL.y0 && m->y < TL.y0 + TL.h) {	/* TIMELINE */
-      if (m->wheel) {	/* TIMELINE */
-        size_t st = (size_t)wheel_step(m->mods);
-        TL.top = m->wheel < 0 ? (TL.top > st ? TL.top - st : 0) : TL.top + st;
-      }
-      else if (m->press && !m->drag && (m->button == 0 || m->button == 2)) {
-        E.focus = F_SIDE;
-        tl_click(m->y - TL.y0, m->x, m->button);
-      }
-      return;
-    }
-    if (m->wheel) {
-      side_wheel(E.view, m->wheel);
-      return;
-    }
-    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_TREE) {	/* an extension's view: the row's menu */
-      E.focus = F_SIDE;
-      tree_menu(m->y - L.body_y, m->x, m->y + 1);
-      return;
-    }
-    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_DEBUG && m->y > L.body_y + 2) {	/* Run and Debug: a row's menu */
-      E.focus = F_SIDE;
-      memset(&act, 0, sizeof(act));
-      debug_menu(debug_row_at(m->y - L.body_y), m->x, m->y + 1, &act);
-      apply_act(&act);
-      return;
-    }
-    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_GIT) {	/* Source Control: a row's menu (the graph's commits) */
-      E.focus = F_SIDE;
-      memset(&act, 0, sizeof(act));
-      git_menu(m->y - L.body_y, m->x, m->y + 1, &act);
-      apply_act(&act);
-      return;
-    }
-    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_FILES && !(OL.h > 0 && m->y >= OL.y0)) {
-      E.focus = F_SIDE;	/* the right button: the Explorer's menu */
-      E.outline_focus = 0;
-      memset(&act, 0, sizeof(act));
-      files_menu(m->y - L.body_y, m->x, m->y + 1, &act);
-      apply_act(&act);
-      return;
-    }
-    if (!press) return;
-    E.focus = F_SIDE;
-    if (E.view == VIEW_FILES && OL.h > 0 && m->y >= OL.y0 && m->y < OL.y0 + OL.h) {	/* the Outline: there */
-      int col = m->x - L.side_x, w = side_width();
-      E.outline_focus = PANE_OUTLINE;
-      if (m->y <= OL.y0 + 1 && (col <= 1 || !OL.open)) OL.open = !OL.open;	/* its chevron */
-      else if (!OL.open) ;
-      else if (m->y == OL.y0 + 1 && col >= w - 4) outline_menu();
-      else if (m->y == OL.y0 + 1 && col >= w - 6) outline_collapse_all();
-      else if (m->y >= OL.y0 + 2) {
-        size_t n, k = OL.top + (size_t)(m->y - OL.y0 - 2);
-        const Sym *v = outline_rows(&n);
-        if (k < OL.nvis) {
-          size_t i = OL.vis[k];
-          OL.sel = k;
-          if (sym_end(v, n, i) > i + 1 && col <= 2 + v[i].depth * 2) ol_close(&v[i], !ol_closed(&v[i]));	/* the chevron */
-          else outline_go(1);
-        }
-      }
-      return;
-    }
-    E.outline_focus = 0;
-    memset(&act, 0, sizeof(act));
-    if (E.view == VIEW_FILES) files_mods(m->mods);	/* Ctrl / Shift: more rows selected, Alt: to the side */
-    side_click(E.view, m->y - L.body_y, m->x - L.side_x, &act);
-    if (E.view == VIEW_FILES) {
-      files_mods(0);
-      if (!(m->mods & (KM_CTRL | KM_SHIFT)) && files_drag_start(m->y - L.body_y)) {	/* it may be dragged */
-        E.fdrag = 1;
-        E.fdrag_x = m->x;
-        E.fdrag_y = m->y;
-      }
-    }
-    apply_act(&act);
+    vw_host(0);
+    if (E.view >= VIEW_MOVED) pview_mouse_side(mv_pv(E.view - VIEW_MOVED), m, press);	/* a panel's view moved there */
+    else view_mouse_side(E.view, m, press, L.side_x, L.body_y);
     return;
   }
   if (m->x >= L.area_x && m->x < L.area_x + L.area_w && (m->x < L.ed_x - L.mml_w || m->x >= L.ed_x + L.ed_w ||
@@ -22669,6 +23169,10 @@ int main (int argc, char **argv) {
     if (panel_poll() == 2 && E.panel_view == 0) {	/* the shell ended: its panel closes, like VS Code's */
       E.panel = 0;
       if (E.focus == F_PANEL) E.focus = F_EDITOR;
+    }
+    else if (!panel_alive() && E.side && E.view == VIEW_MOVED + MV_TERMINAL) {	/* in the side bar: that closes */
+      E.side = 0;
+      if (E.focus == F_SIDE) E.focus = F_EDITOR;
     }
     draw();
     k = term_key(search_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */

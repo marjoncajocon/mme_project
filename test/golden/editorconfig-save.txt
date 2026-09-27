@@ -1,0 +1,33 @@
+---- cursor 41,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │  save.txt  
+|▎   OPEN EDITORS               │  save.txt
+|    ─────────────────────────────│   1  xhello                                                             ⠏           ─
+|    PROJ                   │   2  world
+|      lib/a/b                   │   3  end
+|     sub                       │   4
+|      .editorconfig             │
+|     cafe.latin                │
+|      four.c                    │
+|     main.go                   │
+|      num2.txt                  │
+|     num4.txt                  │
+|      save.txt                  │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                    Ln 1, Col 2  Spaces: 2  UTF-8  CRLF  Plain Text  
+exited=0
+file proj/save.txt: 20 bytes, starts xhello\r\nworld\r\nend\r\n

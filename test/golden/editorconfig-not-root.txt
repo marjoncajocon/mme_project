@@ -1,0 +1,32 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           open
+|      a.txt  
+|     a.txt
+|       1 one                                                                                              ⠑           ─
+|      2  │      two
+|       3
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                    Ln 1, Col 1  Tab Size: 7  UTF-8  LF  Plain Text  
+exited=0

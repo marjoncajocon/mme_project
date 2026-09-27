@@ -1,0 +1,32 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      brand-new.txt  
+|     brand-new.txt
+|       1                                                                                                               ─
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                    Ln 1, Col 1  Spaces: 2  UTF-8  CRLF  Plain Text  
+exited=0

@@ -151,8 +151,9 @@ const char *mdiff_title (void *page) {
 #define MAX_WALK	50000	/* a folder's files looked at, at most */
 
 
-/* every file under dir, from it with '/' ("src/a.c"); .git's not */
-static void walk (const char *dir, const char *rel, Vec *out) {
+/* every file under dir, from it with '/' ("src/a.c"); .git's not; seen: the real folders links led to
+   (dir first), each walked once */
+static void walk (const char *dir, const char *rel, Vec *out, Vec *seen) {
   Vec v;
   size_t i;
   vec_init(&v);
@@ -161,7 +162,7 @@ static void walk (const char *dir, const char *rel, Vec *out) {
       char *p = path_join(dir, v.v[i]), *r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
       OsStat st;
       if (os_stat(p, &st) == 0 && st.is_dir) {
-        if (strcmp(v.v[i], ".git") != 0) walk(p, r, out);
+        if (strcmp(v.v[i], ".git") != 0 && fs_walk_into(seen, p)) walk(p, r, out, seen);
         free(r);
       }
       else vec_push(out, r);
@@ -222,14 +223,20 @@ static void folder_add (MDiff *m, const char *rel, char letter, size_t *cap) {
 
 /* the two folders walked side by side: what is only in one, what differs */
 static void folders_read (MDiff *m) {
-  Vec l, r;
+  Vec l, r, seen;
   size_t i = 0, j = 0, cap = 0;
   files_free(m);
   m->same = 0;
   vec_init(&l);
   vec_init(&r);
-  walk(m->left, "", &l);
-  walk(m->right, "", &r);
+  vec_init(&seen);
+  fs_dir_first(&seen, m->left);
+  walk(m->left, "", &l, &seen);
+  vec_free(&seen);
+  vec_init(&seen);
+  fs_dir_first(&seen, m->right);
+  walk(m->right, "", &r, &seen);
+  vec_free(&seen);
   vec_sort(&l);
   vec_sort(&r);
   while (i < l.n || j < r.n) {

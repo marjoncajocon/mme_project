@@ -1,0 +1,32 @@
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      RUN AND DEBUG              │  plain.txt  
+|      Run and Debug (F5)      │  plain.txt
+|      create a launch.json file  │   1  plain text line 01 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|     VARIABLES                 │   2  plain text line 02 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      WATCH                    │   3  plain text line 03 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|        Add Expression         │   4  plain text line 04 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|      CALL STACK                │   5  plain text line 05 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|▎    BREAKPOINTS               │   6  plain text line 06 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │   7  plain text line 07 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                │   8  plain text line 08 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │   9  plain text line 09 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                │  10  plain text line 10 with several words on it                        ⣿⣿⣿⣿⡇       ▬
+|                                 │  11  plain text line 11 with several words on it                                    ▬
+|                                │  12  plain text line 12 with several words on it                                    ▬
+|                                 │  13  plain text line 13 with several words on it                                    ▬
+|                                 │  14  plain text line 14 with several words on it                                    ▬
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Asking the extension for its debug adapter...
+|                                 │ Starting the debugger...
+|                                 │ hello from the acme debugger
+|                                 │ custom event: acmeEvent {"n":1}
+|                                 │ custom: hi mme from the adapter
+|                                 │ tracker: the adapter sent its messages
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  Please start a debug session to evaluate expressions
+|  0  0                                                              Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

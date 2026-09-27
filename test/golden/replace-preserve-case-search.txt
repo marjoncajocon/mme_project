@@ -1,0 +1,96 @@
+---- cursor 11,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           case
+|      SEARCH                 │
+|      foo                   │
+|        baz                    │
+|▎                              │
+|      10 results in 1 file       │
+|     Open in editor             │
+|       case.txt              │
+|       foobaz Foo FOO fOO       │
+|        foo FooBaz FOO fOO       │
+|       foo Foo FOOBAZ fOO       │                        Command Palette...   Ctrl+Shift+P
+|        foo Foo FOO fOObaz       │
+|       foobaz-bar Foo-Bar FOO-B │                             Go to File...   Ctrl+P
+|        foo-bar FooBaz-Bar FOO-B │
+|        foo-bar Foo-Bar FOOBAZ-B │                              Open File...   Ctrl+O
+|        foobaz_bar Foo_Bar FOO_B │
+|        foo_bar FooBaz_Bar FOO_B │                            Open Folder...
+|        foo_bar Foo_Bar FOOBAZ_B │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                                                                     
+[181818]       [313131] baz                 [0078d4]?[313131] ? [181818] ?[1f1f1f]
+---- cursor 119,17
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           case
+|      SEARCH                 │
+|      foo                   │
+|        baz                    │
+|▎                              │
+|      10 results in 1 file       │
+|     Open in editor             │
+|       case.txt              │
+|       foobaz Foo FOO fOO       │
+|        foo FooBaz FOO fOO       │
+|       foo Foo FOOBAZ fOO       │                        Command Palette...   Ctrl+Shift+P
+|        foo Foo FOO fOObaz
+|       foobaz-bar Foo-Bar FOO-B    Replace 10 occurrences across 1 file with 'baz'?
+|        foo-bar FooBaz-Bar FOO-B
+|        foo-bar Foo-Bar FOOBAZ-B
+|        foobaz_bar Foo_Bar FOO_B
+|        foo_bar FooBaz_Bar FOO_B                                  Replace     Cancel
+|        foo_bar Foo_Bar FOOBAZ_B
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                                                                     
+---- cursor 11,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           case
+|      SEARCH                 │
+|      foo                   │
+|        baz                    │
+|▎                              │
+|      No results found. Review y │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │                             Replaced 10 occurrences across 1 file with 'baz'.   
+|                                 │
+|                                                                                                                     
+exited=0
+file case/case.txt: 64 bytes, starts baz Baz BAZ baz\nbaz-bar Baz-Bar BAZ-BAR\n

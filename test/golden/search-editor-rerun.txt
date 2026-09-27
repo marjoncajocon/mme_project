@@ -1,0 +1,94 @@
+---- cursor 42,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search  
+|▎   OPEN EDITORS               │   total                                                                    1
+|    ─────────────────────────────│                                                                          
+|    SEDIT                  │
+|      src                       │
+|     .gitignore                │
+|      notes.txt                 │
+|     saved.code-search         │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 42,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total  
+|▎   OPEN EDITORS               │   total                                                                    1
+|    ─────────────────────────────│                                                                          
+|    SEDIT                  │  6 results - 2 files
+|      src                       │
+|     .gitignore                │  notes.txt:
+|      notes.txt                 │    1: Total is counted in count.c.
+|     saved.code-search         │    2: The total never goes down.
+|                                 │
+|                                │  src/count.c:
+|                                 │    2  #include <stdio.h>
+|                                │    3: static int total = 0;
+|                                 │    4: static int add (int a) { total += a; return total; }
+|                                 │    5
+|                                 │
+|                                 │    8    add(2);
+|                                 │    9:   printf("%d\n", total);
+|                                 │    10    return 0;
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 42,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total  
+|▎   OPEN EDITORS               │   total                                                                  
+|    ─────────────────────────────│                                                                          
+|    SEDIT                  │  5 results - 2 files
+|      src                       │
+|     .gitignore                │  notes.txt:
+|      notes.txt                 │    2: The total never goes down.
+|     saved.code-search         │
+|                                 │  src/count.c:
+|                                │    3: static int total = 0;
+|                                 │    4: static int add (int a) { total += a; return total; }
+|                                │    9:   printf("%d\n", total);
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

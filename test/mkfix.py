@@ -569,8 +569,20 @@ int main (void) { return util(); }
 """
 
 
+def unlink_loops():
+    """the looprepo's links go first: a remover that went into them would never end"""
+    for rel in LOOP_LINKS:
+        p = os.path.join(FIX, "looprepo", rel)
+        if os.path.islink(p) or os.path.isdir(p):
+            try:
+                os.rmdir(p)	# a junction (or a folder symlink): the link itself
+            except OSError:
+                os.unlink(p)
+
+
 def build_tree():
     if os.path.isdir(FIX):
+        unlink_loops()
         rmtree(FIX)
     os.makedirs(FIX)
     w(os.path.join(FIX, "gitconfig-none"), "")
@@ -709,6 +721,7 @@ def build_tree():
 
     build_debug()
     build_git()
+    build_loop()
     print("fixtures in", FIX)
 
 
@@ -812,6 +825,34 @@ int main (void) {
 \treturn 0;
 }
 """
+
+
+# looprepo's folder links, each back up to the repository's top: Windows' git walks into a junction, and
+# two of them made git status -uall (and so mme's start) never end; the walkers went round them too
+LOOP_LINKS = ("sub/up", "lib/deep/back")
+
+
+def build_loop():
+    repo = os.path.join(FIX, "looprepo")
+    os.makedirs(repo)
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Reg Suite")
+    git(repo, "config", "user.email", "reg@example.com")
+    git(repo, "config", "commit.gpgsign", "false")
+    git(repo, "symbolic-ref", "HEAD", "refs/heads/main")
+    w(os.path.join(repo, "top.c"), "int top (void) { return 1; } /* needle */\n")
+    w(os.path.join(repo, "sub", "inner.txt"), "the needle in sub\n")
+    w(os.path.join(repo, "lib", "deep", "lib.c"), "int lib (void) { return 2; } /* needle */\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "first commit")
+    w(os.path.join(repo, "sub", "new.txt"), "untracked, with a needle\n")
+    w(os.path.join(repo, "fresh", "made.txt"), "an untracked folder's file\n")
+    for rel in LOOP_LINKS:
+        p = os.path.join(repo, *rel.split("/"))
+        if os.name == "nt":	# a junction: no rights needed, and git walks into it
+            subprocess.run(["cmd", "/c", "mklink", "/J", p, repo], stdout=subprocess.DEVNULL, check=True)
+        else:
+            os.symlink(repo, p)
 
 
 def build_git():

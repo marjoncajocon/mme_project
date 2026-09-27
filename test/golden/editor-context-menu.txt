@@ -1,0 +1,32 @@
+---- cursor 119,21
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      main.c  
+|     main.c
+|       1  #include "util.h"                                                                                ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄
+|      2 int main (void) {                                                                                ⠁
+|       3                                        s: "a label long enough to wrap", f: 1) + count_items(a: 5,
+|      4     Go to Definition             F12
+|       5     Go to References       Shift+F12                                                                          ─
+|      6     Peek Definition          Alt+F12
+|           ────────────────────────────────────
+|            Rename Symbol                 F2
+|             Change All Occurrences   Ctrl+F2
+|            Format Document      Shift+Alt+F
+|             Refactor...         Ctrl+Shift+R
+|             Source Action...
+|           ────────────────────────────────────
+|             Cut                       Ctrl+X
+|             Copy                      Ctrl+C
+|             Paste                     Ctrl+V
+|           ────────────────────────────────────
+|             Command Palette...  Ctrl+Shift+P
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  1  1                                                                 Ln 2, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

@@ -1,0 +1,32 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      num2.txt  
+|     num2.txt
+|       1  two                                                                                              ⠁           ─
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                      Ln 1, Col 1  Spaces: 6  UTF-8  LF  Plain Text  
+exited=0

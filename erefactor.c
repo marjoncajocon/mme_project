@@ -452,7 +452,7 @@ static void preview (const TextEdit *v, size_t n) {
     char *t;
     if (done[i]) continue;
     t = open_doc_text(v[i].path, &len);
-    if (t == NULL) t = read_file(v[i].path, &len);
+    if (t == NULL) t = read_file_all(v[i].path, &len);
     for (j = i; j < n; j++)
       if (!done[j] && m_fncmp(v[j].path, v[i].path) == 0) {
         size_t q = k;

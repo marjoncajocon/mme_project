@@ -1,0 +1,15 @@
+{
+  "name": "cext",
+  "publisher": "acme",
+  "displayName": "Acme C",
+  "description": "C support, as an extension",
+  "version": "0.0.1",
+  "engines": {"vscode": "^1.80.0"},
+  "main": "./extension.js",
+  "activationEvents": ["onLanguage:c"],
+  "contributes": {
+    "commands": [{"command": "acme.cext.hello", "title": "Hello", "category": "Acme C"}],
+    "keybindings": [{"command": "acme.cext.hello", "key": "alt+z", "when": "editorLangId == c"}],
+    "configuration": {"properties": {"acmeC.level": {"type": "number", "default": 2, "description": "How loud it is"}}}
+  }
+}

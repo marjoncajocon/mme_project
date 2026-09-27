@@ -287,7 +287,8 @@ static int cmp_file (const void *a, const void *b) {
 static const char *const skip_dir[] = {"node_modules", "target", "vendor", "dist", "build", "__pycache__",
                                        "mme-data", "venv", "env", "out", "obj", "bin", NULL};
 
-static void walk (const char *dir, int depth, int *budget) {
+/* seen: the real folders links led to (the root first), each walked once */
+static void walk (const char *dir, int depth, int *budget, Vec *seen) {
   Vec v;
   size_t i;
   vec_init(&v);
@@ -308,7 +309,7 @@ static void walk (const char *dir, int depth, int *budget) {
     if (st.is_dir) {
       for (k = 0; skip_dir[k]; k++)
         if (strcmp(nm, skip_dir[k]) == 0) skip = 1;
-      if (!skip) walk(full, depth + 1, budget);
+      if (!skip && fs_walk_into(seen, full)) walk(full, depth + 1, budget, seen);
     }
     else if ((fw = fw_of(nm)) >= 0 && st.size < (4 << 20)) {
       char *real = os_realpath(full);
@@ -325,7 +326,11 @@ static void walk (const char *dir, int depth, int *budget) {
 /* Test: Refresh Tests, and the first time the view shows */
 static void discover (void) {
   int budget = 50000, i, n = 0;
-  walk(side_root(), 0, &budget);
+  Vec seen;
+  vec_init(&seen);
+  fs_dir_first(&seen, side_root());
+  walk(side_root(), 0, &budget, &seen);
+  vec_free(&seen);
   g_found = 1;
   for (i = 0; i < g_nf; i++) {	/* files that went: out */
     OsStat st;

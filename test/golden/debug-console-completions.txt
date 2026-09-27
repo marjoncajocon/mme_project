@@ -1,0 +1,94 @@
+---- cursor 40,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py                                 
+|      Stub: plain            │  prog.py   main
+|                                 │   1  def main():                                                        ⣿⣇⣀
+|     VARIABLES                 │  2  │   count = 42  count = 42                                         ⠤           ▬
+|       Locals                   │   3  │   counter = 7
+|         count: 42              │   4  │   print(count + counter)
+|          counter: 7             │   5
+|▎    WATCH                    │   6                                                                                 ▬
+|  ●      Add Expression         │   7  main()
+|     CALL STACK                │   8
+|       main     PAUSED ON ENTRY │
+|       main         prog.py  2 │
+|      BREAKPOINTS               │
+|                                 │
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │     count
+|                                │     counter
+|                                 │  cou
+|                                                                          Ln 2, Col 5  Spaces: 4  UTF-8  LF  Python  
+---- cursor 44,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py                                 
+|      Stub: plain            │  prog.py   main
+|                                 │   1  def main():                                                        ⣿⣇⣀
+|     VARIABLES                 │  2  │   count = 42  count = 42                                         ⠤           ▬
+|       Locals                   │   3  │   counter = 7
+|         count: 42              │   4  │   print(count + counter)
+|          counter: 7             │   5
+|▎    WATCH                    │   6                                                                                 ▬
+|  ●      Add Expression         │   7  main()
+|     CALL STACK                │   8
+|       main     PAUSED ON ENTRY │
+|       main         prog.py  2 │
+|      BREAKPOINTS               │
+|                                 │
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  counter
+|                                                                          Ln 2, Col 5  Spaces: 4  UTF-8  LF  Python  
+---- cursor 37,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py                                 
+|      Stub: plain            │  prog.py   main
+|                                 │   1  def main():                                                        ⣿⣇⣀
+|     VARIABLES                 │  2  │   count = 42  count = 42                                         ⠤           ▬
+|       Locals                   │   3  │   counter = 7
+|         count: 42              │   4  │   print(count + counter)
+|          counter: 7             │   5
+|▎    WATCH                    │   6                                                                                 ▬
+|  ●      Add Expression         │   7  main()
+|     CALL STACK                │   8
+|       main     PAUSED ON ENTRY │
+|       main         prog.py  2 │
+|      BREAKPOINTS               │
+|                                 │
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │ > counter
+|                                 │ = counter
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │  Evaluate expression
+|                                                                          Ln 2, Col 5  Spaces: 4  UTF-8  LF  Python  
+exited=0

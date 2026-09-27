@@ -1,0 +1,94 @@
+---- cursor 119,24
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  main.c  
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│   1  #include "util.h"                                                  ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄
+|    F3                     │   2  int main (void) {                                                  ⠁
+|    REFACTOR PREVIEW  4 of 4 changes in 3 files
+| 
+|     ☑  main.c   2
+|       ☑  int n = count_itemscount_all(12, 34, "a label long enough to wrap", 1) + count_items(5, 6, "x", 0);  3
+|        ☑  int n = count_items(12, 34, "a label long enough to wrap", 1) + count_itemscount_all(5, 6, "x", 0);  3
+|    ☑  util.c   1
+|        ☑ int count_itemscount_all (int a, int b, const char *s, int f) {  2                                           ─
+|    ☑  util.h   1
+|        ☑ int count_itemscount_all (int a, int b, const char *s, int f);  1
+|
+|
+|
+|
+|
+|
+|   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+|    Space: check or uncheck, Enter: open or check, Tab: the buttons, Ctrl+Enter: Apply, Esc: Discard
+|
+|
+|                                                                                                 Apply     Discard
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                                                                     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                Ln 3, Col 16  Tab Size: 4  UTF-8  LF  C  {}  
+---- cursor 119,8
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  main.c  
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│   1  #include "util.h"                                                  ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄
+|    F3                     │   2  int main (void) {                                                  ⠁
+|    REFACTOR PREVIEW  3 of 4 changes in 3 files
+| 
+|     ▣  main.c   2
+|       ☐  int n = count_itemscount_all(12, 34, "a label long enough to wrap", 1) + count_items(5, 6, "x", 0);  3
+|        ☑  int n = count_items(12, 34, "a label long enough to wrap", 1) + count_itemscount_all(5, 6, "x", 0);  3
+|    ☑  util.c   1
+|        ☑ int count_itemscount_all (int a, int b, const char *s, int f) {  2                                           ─
+|    ☑  util.h   1
+|        ☑ int count_itemscount_all (int a, int b, const char *s, int f);  1
+|
+|
+|
+|
+|
+|
+|   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+|    -  int n = count_items(12, 34, "a label long enough to wrap", 1) + count_items(5, 6, "x", 0);
+|    +  int n = count_all(12, 34, "a label long enough to wrap", 1) + count_items(5, 6, "x", 0);
+|
+|                                                                                                 Apply     Discard
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                                                                     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                Ln 3, Col 16  Tab Size: 4  UTF-8  LF  C  {}  
+---- cursor 55,5
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  main.c  ●   util.c  ●   util.h  ●
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│   1  #include "util.h"                                                  ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄
+|    F3                     │   2  int main (void) {                                                  ⠁
+|      main.c                  2 │  3  │   int n = count_items(a: 12, b: 34, s: "a label long enough to wr
+|     notes.txt                 │   4  │   return n;
+|      page.html                 │   5  }
+|     util.c                  2 │   6
+|      util.h                  2 │
+|                                │
+|                                 │                                                                                     ─
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        stubSymbol              │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                                       Made 3 edits in 3 files     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  3  3                                                                Ln 3, Col 16  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

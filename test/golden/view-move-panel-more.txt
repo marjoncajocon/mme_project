@@ -1,0 +1,94 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │                        Command Palette...   Ctrl+Shift+P
+|      deep/one/two              │
+|     docs                      │                             Go to File...   Ctrl+P
+|      many                      │
+|     src                       │                              Open File...   Ctrl+O
+|      app.js                    │
+|     main.c                    │                            Open Folder...
+|      package.json              │
+|     readme.md                 │                           Open Project...   Ctrl+R
+|      site.css                  │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL                                ───
+|                                 │  No problems have been detected in the workspace   Move To Primary Side Bar
+|                                 │                                                  ──────────────────────────────
+|                                 │                                                    Move Panel Left
+|                                 │                                                    Move Panel Right
+|                                 │                                                   Move Panel To Bottom
+|                                 │                                                  ──────────────────────────────
+|                                 │                                                   Align Panel Center
+|                                 │                                                    Align Panel Justify
+|                                 │                                                  ──────────────────────────────
+|   ─────────────────────────────│                                                    Maximize Panel Size
+|     TIMELINE                   │                                                    Hide Panel
+|                                                                                                                     
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      PROBLEMS                  │
+|     Filter (e.g. text,       │
+|      No problems have been detec│
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|▎                               │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                                                                     
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │                        Command Palette...   Ctrl+Shift+P
+|      deep/one/two              │
+|     docs                      │                             Go to File...   Ctrl+P
+|      many                      │
+|     src                       │                              Open File...   Ctrl+O
+|      app.js                    │
+|     main.c                    │                            Open Folder...
+|      package.json              │
+|     readme.md                 │                           Open Project...   Ctrl+R
+|      site.css                  │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── Filter (e.g. text,  ────────
+|                                 │  No problems have been detected in the workspace.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

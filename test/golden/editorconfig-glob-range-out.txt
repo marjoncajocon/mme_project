@@ -1,0 +1,32 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      num4.txt  
+|     num4.txt
+|       1  four                                                                                             ⠁           ─
+|      2
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                      Ln 1, Col 1  Spaces: 2  UTF-8  LF  Plain Text  
+exited=0

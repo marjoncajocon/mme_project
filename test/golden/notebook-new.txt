@@ -1,0 +1,32 @@
+---- cursor 16,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c      Untitled-1.ipynb  ●
+|    + Code   + Markdown   ▷ Run All   ↻ Restart   □ Interrupt   Clear All Outputs                        Python 3.9.10
+|
+|   ▎▷ [ ] x = 1
+|
+|          + Code    + Markdown
+|
+| 
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+exited=0

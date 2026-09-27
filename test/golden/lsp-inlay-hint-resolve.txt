@@ -1,0 +1,63 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      main.c  
+|     main.c
+|      1  #include "util.h"                                                                                ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄  ─
+|      2  int main (void) {           Parameter a of count_items                                           ⠁
+|       3  │   int n = count_items(a: 12, b: 34, s: "a label long enough to wrap", f: 1) + count_items(a: 5,
+|      4  │   return n;
+|       5  }
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  1  1                                                                 Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+---- cursor 37,5
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      main.c  ●
+|     main.c
+|       1  #include "util.h"                                                                                ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠤⠄
+|      2  int main (void) {                                                                                ⠁
+|      3  │   int n = count_items(a: /* a */ 12, b: 34, s: "a label long enough to wrap", f: 1) + count_ite
+|      4  │   return n;
+|       5  }
+|      6
+|
+| 
+|                                                                                                                       ─
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                                                      ▬
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                Ln 3, Col 25  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

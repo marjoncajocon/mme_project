@@ -1,0 +1,63 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      main.c  
+|     main.c
+|      1  #include "util.h"                                                                                ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄  ─
+|      2  int main (void) {                                                                                ⠁
+|       3  │   int n = count_items(a: 12, b: 34, s: "a label long enough to wrap", f: 1) +
+|         count_items(a: 5, b: 6, s: "x", f: 0);
+|       4  │   return n;
+|      5  }
+|       6
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                            Word wrap: on         
+|                                                                                                                       ▬
+|  1  1                                                                 Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+---- cursor 48,6
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          target
+|      main.c  
+|     main.c
+|       1  #include "util.h"                                                                                ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄
+|      2  int main (void) {                                                                                ⠁
+|      3  │   int n = count_items(a: 12, b: 34, s: "a label long enough to wrap", f: 1) +
+|         count_items(a: 5, b: 6, s: "x", f: 0);
+|       4  │   return n;
+|      5  }
+|       6
+| 
+|                                                                                                                       ─
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                            Word wrap: on         
+|                                                                                                                       ▬
+|  1  1                                                                Ln 3, Col 95  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

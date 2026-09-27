@@ -1,0 +1,63 @@
+---- cursor 72,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXTENSIONS                 │  edit.c      settings.json  
+|     Filter Installed Extensio  │ C:  Users  arinq  AppData  Local  Temp  mme-test  work  ext-view-disable-lan
+|     INSTALLED  1                │   1                          "c": ""                       1 of 1         
+|     Install from VSIX...      │ 116                                                                     ⣿⣿⡿⠉⠉
+|      Acme C  disabled          │ 117                                                                     ⣿⣿⣿⡅
+|      C support, as an extensio │ 118                                                                     ⣿⣿⣿⠟⠃
+|       acme  Enable   Uninstall  │ 119                                                                     ⣿⣿⣿⣧⣤⠄
+|                                │ 120                                                                     ⣿⣿⣿⠷⠆
+|                                 │ 121                                                                     ⣿⣿⣿⣯⠄
+|▎                               │ 122                                                                     ⣿⣿⠍
+|                                 │ 123                                                                     ⣷⣶⣶⣶⠂
+|                                │ 124                                                                     ⣿⣿⣿⣿⣧⡄
+|                                 │ 125                                                                     ⣿⣿⣿⣿⣀
+|                                 │ 126                                                                     ⣿⣿⣿⣯⡍
+|                                 │ 127  , "powershell": "", "xml": "", "toml": "", "markdown": "", "c":·""}⣿⣿⣿⣥⣄⡀
+|                                 │ 128                                                                     ⣿⣿⣿⣉⣀⡀
+|                                 │ 129                                                                     ⣿⣿⣿⣿⣿⣋⠉
+|                                 │ 130                                                                     ⣿⣿⣿⣿⡯⠉
+|                                 │ 131                                                                     ⣿⣿⣿⣷⣤
+|                                 │ 132                                                                     ⣿⣿⣯⣥⠤
+|                                 │ 133                                                                     ⣿⣿⣿⣯
+|                                 │ 134                                                                     ⣿⣿⣿⡷
+|                                 │ 135                                                                     ⣿⣿⠉
+|                                 │ 136                                                                     ⣿⣿⡄
+|                                 │ 137                                                                     ⣷⣶⣶⣶⣶⡖⠒⠒⠒⠒⠒⠒▬
+|                                 │                                                                         ⣿⣿⣏⣉⠉⠁
+|                                │                                                                         ⠟⠛⠛⠒⠒⠒⠒⠒
+|                                 │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                             Ln 127, Col 699 (7 selected)  Spaces: 2  UTF-8  LF  JSON with Comments  
+---- cursor 77,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXTENSIONS                 │  edit.c      settings.json  
+|     Filter Installed Extensio  │ C:  Users  arinq  AppData  Local  Temp  mme-test  work  ext-view-disable-lan
+|     INSTALLED  1                │   1                          "c": "python                  1 of 1         
+|     Install from VSIX...      │ 116                                                                     ⣿⣿⡿⠉⠉
+|      Acme C  running           │ 117                                                                     ⣿⣿⣿⡅
+|      C support, as an extensio │ 118                                                                     ⣿⣿⣿⠟⠃
+|       acm  Disable   Uninstall  │ 119                                                                     ⣿⣿⣿⣧⣤⠄
+|                                │ 120                                                                     ⣿⣿⣿⠷⠆
+|                                 │ 121                                                                     ⣿⣿⣿⣯⠄
+|▎                               │ 122                                                                     ⣿⣿⠍
+|                                 │ 123                                                                     ⣷⣶⣶⣶⠂
+|                                │ 124                                                                     ⣿⣿⣿⣿⣧⡄
+|                                 │ 125                                                                     ⣿⣿⣿⣿⣀
+|                                 │ 126                                                                     ⣿⣿⣿⣯⡍
+|                                 │ 127  wershell": "", "xml": "", "toml": "", "markdown": "", "c":·"python ⣿⣿⣿⣥⣄⡀
+|                                 │ 128                                                                     ⣿⣿⣿⣉⣀⡀
+|                                 │ 129                                                                     ⣿⣿⣿⣿⣿⣋⠉
+|                                 │ 130                                                                     ⣿⣿⣿⣿⡯⠉
+|                                 │ 131                                                                     ⣿⣿⣿⣷⣤
+|                                 │ 132                                                                     ⣿⣿⣯⣥⠤
+|                                 │ 133                                                                     ⣿⣿⣿⣯
+|                                 │ 134                                                                     ⣿⣿⣿⡷
+|                                 │ 135                                                                     ⣿⣿⠉
+|                                 │ 136                                                                     ⣿⣿⡄
+|                                 │ 137                                                                     ⣷⣶⣶⣶⣶⡖⠒⠒⠒⠒⠒⠒▬
+|                                 │                                                                         ⣿⣿⣏⣉⠉⠁
+|                                │                                                                         ⠟⠛⠛⠒⠒⠒⠒⠒
+|                                 │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                            Ln 127, Col 704 (12 selected)  Spaces: 2  UTF-8  LF  JSON with Comments  
+exited=0

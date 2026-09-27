@@ -1,0 +1,66 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         renamer
+|      EXPLORER                   │  main.c  ●   helper.h  
+|▎   OPEN EDITORS               │  helper.h
+|    ─────────────────────────────│   1  int util (void);                                                   ⠉⠉          ─
+|    RENAMER                │   2
+|      helper.h                2 │
+|     main.c                  2 │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        stubSymbol              │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                                             didRenameFiles util.h -> helper.h  
+|   ─────────────────────────────│                                              Source: python
+|     TIMELINE                   │                                                                                     ▬
+|  3  3                                                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  C  {}  
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         renamer
+|      EXPLORER                   │  main.c  ●   helper.h
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│   1  /* main.c - it includes the header the Explorer renames */         ⣛⣛⣉⡉⠉⠉      ─
+|    RENAMER                │   2  #include "helper.h"
+|      helper.h                2 │   3
+|     main.c                  2 │   4  int main (void) { return util(); }
+|                                 │   5
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|      No symbols found in this f │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                                             didRenameFiles util.h -> helper.h  
+|   ─────────────────────────────│                                              Source: python
+|     TIMELINE                   │                                                                                     ▬
+|  3  3                                                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  C  {}  
+exited=0
+file renamer/util.h: gone
+file renamer/helper.h: 17 bytes, starts int util (void);\n
+file renamer/main.c: 113 bytes, starts /* main.c - it includes the header the E

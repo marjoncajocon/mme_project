@@ -1,0 +1,64 @@
+---- cursor 62,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER
+|▎   OPEN EDIT  …<PATH>
+|    ───────────
+|    SEDIT       ..
+|      src        src
+|     .gitigno   .gitignore
+|      notes.tx   notes.txt
+|     saved.co   saved.code-search
+|                  total.code-search
+| 
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 36,4
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                          sedit
+|      EXPLORER                   │  Search: total  
+|▎   OPEN EDITORS               │   total                                                                    1
+|    ─────────────────────────────│                                                                          
+|    SEDIT                  │  6 results - 2 files
+|      src                       │
+|     .gitignore                │  notes.txt:
+|      notes.txt                 │    1: Total is counted in count.c.
+|     saved.code-search         │    2: The total never goes down.
+|                                 │
+|                                │  src/count.c:
+|                                 │    2  #include <stdio.h>
+|                                │    3: static int total = 0;
+|                                 │    4: static int add (int a) { total += a; return total; }
+|                                 │    5
+|                                 │
+|                                 │    8    add(2);
+|                                 │    9:   printf("%d\n", total);
+|                                 │    10    return 0;
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0
+file sedit/total.code-search: 325 bytes, starts # Query: total\n# ContextLines: 1\n\n6 resu

@@ -163,7 +163,10 @@ static int marker (const char *s, size_t n, char c) {
 }
 
 
-/* one side of a file as its markers have it: which 0 ours, 1 theirs */
+/*
+** one side of a file as its markers have it: which 0 ours, 1 theirs, 2
+** the base (the lines outside the conflicts, and a diff3 ||||||| part)
+*/
 static char *from_markers (const char *s, size_t len, int which, size_t *out) {
   Buf b;
   size_t i, from = 0;
@@ -177,7 +180,7 @@ static char *from_markers (const char *s, size_t len, int which, size_t *out) {
     n = i - from;
     if (n > 0 && line[n - 1] == '\r') n--;
     if (marker(line, n, '<')) in = 1, keep = (which == 0);
-    else if (in && marker(line, n, '|')) keep = 0;
+    else if (in && marker(line, n, '|')) keep = (which == 2);
     else if (in && marker(line, n, '=')) keep = (which == 1);
     else if (in && marker(line, n, '>')) in = 0, keep = 1;
     else if (keep) {
@@ -204,7 +207,7 @@ static size_t map_line (const QHunk *h, size_t nh, size_t b, int end) {
   size_t i;
   long d = 0;
   for (i = 0; i < nh; i++) {
-    if (h[i].o0 + h[i].on <= b) {
+    if (h[i].o0 + h[i].on < b || (h[i].o0 + h[i].on == b && h[i].on > 0)) {	/* before it (lines put in at b are not) */
       d += (long)h[i].nn - (long)h[i].on;
       continue;
     }
@@ -324,6 +327,8 @@ static char *build_result (size_t *len) {
       put_lines(&b, &M.inc, M.blk[k].t0, M.blk[k].t1);
       buf_printf(&b, ">>>>>>> %s\n", M.theirs_name);
       y = M.blk[k].b1;
+      while (i < nho && ho[i].o0 <= y) i++;	/* its changes are in it: lines put in at its end too */
+      while (j < nht && ht[j].o0 <= y) j++;
       k++;
     }
     else if (i < nho && ho[i].o0 == y) {	/* only we changed these lines */
@@ -368,7 +373,7 @@ static int binary (const char *s, size_t n) {
 */
 static void eol_of (const char *path) {
   size_t n = 0, i;
-  char *raw = read_file(path, &n);
+  char *raw = read_file_all(path, &n);	/* all of it: its last byte says how it ends */
   if (raw == NULL) return;
   M.no_eol = n > 0 && raw[n - 1] != '\n';
   for (i = 0; i + 1 < n; i++)
@@ -386,10 +391,11 @@ static int unterminated (const char *s, size_t n) {
 }
 
 
-/* the file's text: the editor's when it has it open, else the disk's */
+/* the file's text: the editor's when it has it open, else the disk's (all of it: the Result is saved over it);
+   NULL: unreadable, or too big */
 static char *file_text (const char *path, size_t *len) {
   char *s = open_doc_text(path, len);
-  return s != NULL ? s : read_file(path, len);
+  return s != NULL ? s : read_file_all(path, len);
 }
 
 
@@ -429,7 +435,7 @@ int merge_open (const char *path) {
   merge_close();
   disk = file_text(path, &dn);
   if (disk == NULL) {
-    toast(1, "Unable to read '%s'", path_basename(path));
+    toast(1, "Unable to read '%s' (it can't be read, or is over 1 GB)", path_basename(path));
     return -1;
   }
   if (binary(disk, dn)) {
@@ -473,6 +479,7 @@ int merge_open (const char *path) {
     sides_free();
     M.ours = from_markers(disk, dn, 0, &M.nours);
     M.theirs = from_markers(disk, dn, 1, &M.ntheirs);
+    M.base = from_markers(disk, dn, 2, &M.nbase);	/* else both sides "added" the whole file */
   }
   if (stages)	/* git ends its last >>>>>>> line: the versions know better */
     M.no_eol = unterminated(M.ours, M.nours) && unterminated(M.theirs, M.ntheirs);

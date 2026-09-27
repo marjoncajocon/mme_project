@@ -1,0 +1,156 @@
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      PROBLEMS                  │
+|     Filter (e.g. text,       │
+|      No problems have been detec│
+|                                │
+|                                 │
+|                                │
+|  2                              │
+|                                │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|▎                               │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|  main*                                                                                                             
+---- cursor 36,19
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      PROBLEMS                  │
+|     Filter (e.g. text,       │
+|      No problems have been detec│
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|▎                               │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ SOURCE CONTROL ─────────────────────────────
+|                                 │   main
+|                                 │  Message (Ctrl+Enter to commit on 'main')
+|                                 │  Changes                                                                         2
+|                                 │    tracked.c                                                                      M
+|                                 │    untracked.txt                                                                  U
+|                                 │  GRAPH
+|                                 │ ◉   main  third commit: add third.c  Reg Suite, <AGO>
+|                                 │ ● second commit: notes.md reworded  Reg Suite, <AGO>
+|                                 │ ● first commit: tracked.c and notes.md  Reg Suite, <AGO>
+|                                │
+|                                 │
+|  main*                                                                                                             
+---- cursor 82,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      PROBLEMS                  │  untracked.txt (Untracked)                                               ¶   
+|     Filter (e.g. text,       │  untracked.txt
+|      No problems have been detec│╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 1 + brand new                            ▌
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|▎                               │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │── OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ SOURCE CONTROL ─────────────────────────────
+|                                 │   main
+|                                 │  Message (Ctrl+Enter to commit on 'main')
+|                                 │  Changes                                                                         2
+|                                 │    tracked.c                                                                      M
+|                                 │    untracked.txt                                                                  U
+|                                 │  GRAPH
+|                                 │ ◉   main  third commit: add third.c  Reg Suite, <AGO>
+|                                 │ ● second commit: notes.md reworded  Reg Suite, <AGO>
+|                                 │ ● first commit: tracked.c and notes.md  Reg Suite, <AGO>
+|                                │
+|                                 │
+|  main*                                                                                                             
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      PROBLEMS                                                                                                ¶   
+|     Filter (e  Select Destination
+|      No proble                                                                                                        ▌
+|                Panel  current
+|                 Primary Side Bar
+| 
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|▎                               │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │── OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─ SOURCE CONTROL ─────────────────────────────
+|                                 │   main
+|                                 │  Message (Ctrl+Enter to commit on 'main')
+|                                 │  Changes                                                                         2
+|                                 │    tracked.c                                                                      M
+|                                 │    untracked.txt                                                                  U
+|                                 │  GRAPH
+|                                 │ ◉   main  third commit: add third.c  Reg Suite, <AGO>
+|                                 │ ● second commit: notes.md reworded  Reg Suite, <AGO>
+|                                 │ ● first commit: tracked.c and notes.md  Reg Suite, <AGO>
+|                                │
+|                                 │
+|  main*                                                                                                             
+---- cursor 82,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
+|      SOURCE CONTROL         │  untracked.txt (Untracked)                                               ¶   
+|      main                     │  untracked.txt
+|      Message (Ctrl+Enter to co  │╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 1 + brand new                            ▌
+|     Changes                2  │
+|        tracked.c             M │
+|▎      untracked.txt         U │
+|  2   GRAPH                     │
+|    ◉   main  third commit: ad │
+|     ● second commit: notes.md r │
+|    ● first commit: tracked.c a │
+|                                 │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|  main*                                                                                                             
+exited=0

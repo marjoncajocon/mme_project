@@ -1,0 +1,36 @@
+---- cursor 10,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lsp
+|      colors.c  
+|     colors.c
+|       1  /* colors.c - the colors a language server finds in the text */                                  ⣿⣿⣿⣉⠉⠉⠁     ─
+|      2  const char *red = "■ #ff0000";                                                                   ⠉⠉⠉⠁
+|       3  const char *green = "■ #00ff00";
+|      4  const char *blue = "■ rgb(0, 0, 255)";
+|       5  const char *faded = "■ #ff000080";
+|      6
+|
+| 
+|
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+| 
+|                                                                                                                       ▬
+|  1  1                                                                   Ln 1, Col 1  Spaces: 4  UTF-8  LF  C  {}  
+{868686} ?  {6e7681}   2  {569cd6}const char {d4d4d4}*{cccccc}red {d4d4d4}= {ce9178}"{ff0000}? {ce9178}#ff0000"{cccccc};                                                                   {4b83b1}?{a9a9a9}?{ab7a66}??
+{868686}    {6e7681}   3  {569cd6}const char {d4d4d4}*{cccccc}green {d4d4d4}= {ce9178}"{00ff00}? {ce9178}#00ff00"{cccccc};
+{868686} ?  {6e7681}   4  {569cd6}const char {d4d4d4}*{cccccc}blue {d4d4d4}= {ce9178}"{0000ff}? {ce9178}rgb(0, 0, 255)"{cccccc};
+{868686}    {6e7681}   5  {569cd6}const char {d4d4d4}*{cccccc}faded {d4d4d4}= {ce9178}"{8f1010}? {ce9178}#ff000080"{cccccc};
+exited=0

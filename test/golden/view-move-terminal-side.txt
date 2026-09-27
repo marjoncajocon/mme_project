@@ -1,0 +1,94 @@
+---- cursor 6,6
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      TERMINAL                │
+|                                │
+|     >echo moved-to-side         │
+|    moved-to-side               │
+|                                 │
+|    >                           │
+|                                 │
+|                                │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|▎                               │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │
+|                                 │
+|                                                                                                                     
+---- cursor 119,28
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|
+| 
+|
+| 
+|
+| 
+|
+| 
+|
+|                                          Command Palette...   Ctrl+Shift+P
+|
+|                                               Go to File...   Ctrl+P
+|
+|                                                Open File...   Ctrl+O
+|
+|                                               Open Folder...
+|
+|                                              Open Project...   Ctrl+R
+|
+|                                                     New File   Ctrl+N
+|
+|
+|
+|
+|
+|
+| 
+|
+|                                                                                                                     
+---- cursor 36,22
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           proj
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    PROJ                   │                        Command Palette...   Ctrl+Shift+P
+|      deep/one/two              │
+|     docs                      │                             Go to File...   Ctrl+P
+|      many                      │
+|     src                       │                              Open File...   Ctrl+O
+|      app.js                    │
+|     main.c                    │                            Open Folder...
+|      package.json              │
+|     readme.md                 │                           Open Project...   Ctrl+R
+|      site.css                  │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: cmd ──C:\Wind──────────
+|                                 │
+|                                 │ >echo moved-to-side
+|                                 │ moved-to-side
+|                                 │
+|                                 │ >
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+exited=0

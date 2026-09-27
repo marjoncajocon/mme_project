@@ -1,0 +1,63 @@
+---- cursor 77,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c                                                           │  CHAT                                    
+|     edit.c                                                            │
+|       1  /* edit.c - a small C file the editing scenarios t⣿⣿⠉⠉⠉⠉⠁     ─│
+|      2  #include <stdio.h>                                ⣒⣂⡀          │
+|       3  #include <stdlib.h>                               ⠿            │
+|      4  #include <string.h>                               ⣭⣭⣥⡤⠄        │
+|       5                                                    ⠟⠛           │                       
+|      6  #define MAXN 64                                   ⣿⡏⠉⠁         │
+|       7                                                    ⣋⣁⣀⡀         │                  Ask Claude
+|      8  typedef struct Point {                            ⣿⠿⠗          │
+|       9  │   int x;                                        ⡹⠿⠿⠃         │  Claude can make mistakes, so check what it
+|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉       │                   writes.
+|      11  } Point;                                                       │
+|      12                                                                 │  Chat needs an Anthropic API key: put it in
+|      13  static int total = 0;                                          │  settings.json as "mme.chat.apiKey" (Chat:
+|      14                                                                 │       Set API Key... does it), or set
+|      15  /* adds two numbers and remembers the sum */                   │    ANTHROPIC_API_KEY in the environment.
+|      16  static int add (int a, int b) {                                │
+|      17  │   total += a + b;                                            │                Set API Key...
+|      18  │   return a + b;                                              │
+|      19  }                                                              │
+|      20                                                                 │
+|      21  static Point make (int x, int y) {                             │
+|      22  │   Point p;                                                   │ ╭──────────────────────────────────────────╮
+|      23  │   p.x = x;                                                   │ │  edit.c Current file                   │
+|      24  │   p.y = y;                                                   │ │ Ask Claude                               │
+|     25  │   return p;                                                  │ │ Ask                    claude-opus-5   │
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄             │ ╰──────────────────────────────────────────╯
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+---- cursor 82,26
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c                                                           │  CHAT                                    
+|     edit.c                                                            │  ▎ Chat needs an Anthropic API key: put
+|       1  /* edit.c - a small C file the editing scenarios t⣿⣿⠉⠉⠉⠉⠁     ─│  ▎ it in settings.json as mme.chat.apiKey
+|      2  #include <stdio.h>                                ⣒⣂⡀          │  ▎ (Chat: Set API Key... does it), or set
+|       3  #include <stdlib.h>                               ⠿            │  ▎ ANTHROPIC_API_KEY in the environment.
+|      4  #include <string.h>                               ⣭⣭⣥⡤⠄        │
+|       5                                                    ⠟⠛           │
+|      6  #define MAXN 64                                   ⣿⡏⠉⠁         │
+|       7                                                    ⣋⣁⣀⡀         │
+|      8  typedef struct Point {                            ⣿⠿⠗          │
+|       9  │   int x;                                        ⡹⠿⠿⠃         │
+|     10  │   int y;                                        ⠟⠛⠛⠋⠉⠉       │
+|      11  } Point;                                                       │
+|      12                                                                 │
+|      13  static int total = 0;                                          │
+|      14                                                                 │
+|      15  /* adds two numbers and remembers the sum */                   │
+|      16  static int add (int a, int b) {                                │
+|      17  │   total += a + b;                                            │
+|      18  │   return a + b;                                              │
+|      19  }                                                              │
+|      20                                                                 │
+|      21  static Point make (int x, int y) {                             │
+|      22  │   Point p;                                                   │ ╭──────────────────────────────────────────╮
+|      23  │   p.x = x;                                                   │ │  edit.c Current file                   │
+|      24  │   p.y = y;                                                   │ │ hello                                    │
+|     25  │   return p;                                                  │ │ Ask                    claude-opus-5   │
+|          ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄             │ ╰──────────────────────────────────────────╯
+|                                                                             Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  
+exited=0

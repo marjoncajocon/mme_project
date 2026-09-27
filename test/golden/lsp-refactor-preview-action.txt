@@ -1,0 +1,63 @@
+---- cursor 119,24
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  main.c  
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│  1  #include "util.h"                                                  ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄  ─
+|    F3                     │   2  int main (void) {                                                  ⠁
+|    REFACTOR PREVIEW  3 of 3 changes in 2 files
+| 
+|     ☑  main.c   1
+|       ☑ /* moved away */⏎#include "util.h"  1
+|     ☑  util.c   2
+|       ☑ /* moved here */⏎#include "util.h"  1
+|        ☑  returnreturn a + b + f + (s != 0);  3
+| 
+|
+|
+|
+|
+|
+|
+|
+|   ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+|    Space: check or uncheck, Enter: open or check, Tab: the buttons, Ctrl+Enter: Apply, Esc: Discard
+|
+|
+|                                                                                                 Apply     Discard
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                                                                     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                 Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+---- cursor 40,3
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                            f3
+|      EXPLORER                   │  main.c  
+|▎   OPEN EDITORS               │  main.c
+|    ─────────────────────────────│  1  #include "util.h"                                                  ⣿⡿⠤⠤⠤⠤⠤⠤⠤⠄  ─
+|    F3                     │   2  int main (void) {                                                  ⠁
+|      main.c                  2 │   3  │   int n = count_items(a: 12, b: 34, s: "a label long enough to wr
+|     notes.txt                 │   4  │   return n;
+|      page.html                 │   5  }
+|     util.c                    │   6
+|      util.h                    │
+|                                │
+|                                 │
+|                                │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|    ─────────────────────────────│
+|     OUTLINE                  │
+|        stubSymbol              │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│                                                                                     ▬
+|     TIMELINE                   │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|  1  1                                                                 Ln 1, Col 1  Tab Size: 4  UTF-8  LF  C  {}  
+exited=0

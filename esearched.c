@@ -189,11 +189,19 @@ static const char *open_text (SJob *J, const char *path, size_t *len) {
 }
 
 
+static int is_root (const SJob *J, const char *path) {
+  size_t i;
+  for (i = 0; i < J->root.n; i++)
+    if (strcmp(J->root.v[i], path) == 0) return 1;
+  return 0;
+}
+
+
 /* the thread: the folders walked, the files read and matched, until the end or a cancel */
 static void worker (void *ud) {
   SJob *J = (SJob *)ud;
   Regex *re = NULL;
-  Vec path, rel;
+  Vec path, rel, seen;
   size_t i;
   if (J->regex) {	/* its own: a Regex is not shared between threads */
     const char *err = NULL;
@@ -201,7 +209,9 @@ static void worker (void *ud) {
   }
   vec_init(&path);
   vec_init(&rel);
+  vec_init(&seen);	/* the real folders walked: a link back up the tree is not walked round and round */
   for (i = J->root.n; i-- > 0;) {
+    fs_dir_first(&seen, J->root.v[i]);
     vec_push(&path, xstrdup(J->root.v[i]));
     vec_push(&rel, xstrdup(J->name.v[i]));
   }
@@ -221,6 +231,7 @@ static void worker (void *ud) {
     }
     if (r[0] && search_globs(J->exc, r)) ;	/* left out */
     else if (os_stat(p, &st) != 0) ;
+    else if (st.is_dir && !is_root(J, p) && !fs_walk_into(&seen, p)) ;	/* a link to a folder walked already */
     else if (st.is_dir) {
       Vec v;
       vec_init(&v);
@@ -252,6 +263,7 @@ static void worker (void *ud) {
   }
   vec_free(&path);
   vec_free(&rel);
+  vec_free(&seen);
   re_free(re);
   mx_lock(J->mx);
   J->done = 1;
@@ -629,7 +641,7 @@ static void unescape (char *s) {
 */
 void *searched_load (const char *path) {
   size_t len = 0;
-  char *s = read_file(path, &len), *p, *nl;
+  char *s = read_file_all(path, &len), *p, *nl;
   int head = 1;
   SEd *e;
   if (s == NULL) return NULL;

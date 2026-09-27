@@ -1011,6 +1011,15 @@ SCENARIOS = [
          "extension), a row's command runs (\"Picked apple\"), Shift+F10 is its context menu "
          "(view/item/context), and Eat It changes the tree the extension refreshes",
          exts=[("acme.web", "acme.web")]),
+    Scen("ext-host-tree-view-panel", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move View", "w:400", "k:|", "w:400", "k:Fruits", "w:300",
+          "k:|", "w:400", "k:|", "w:2500", "d", "k:" + DOWN + ENTER, "w:1500", "d",
+          "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move Focused View", "w:400", "k:|", "w:400", "k:" + DOWN + "|",
+          "w:1500", "d"],
+         "View: Move View puts an extension's tree view (Fruits) in the panel, a tab of its own (the\n"
+         "         activity bar's extension views icon goes with the last one): its keys open its\n"
+         "         group there; View: Move Focused View puts it back in the side bar's extension views",
+         exts=[("acme.web", "acme.web")]),
     Scen("ext-host-task-provider", "lang/plain.txt",
          ["w:5000", "k:" + CTRL_SHIFT_P, "k:run task...", "w:700", "k:" + ENTER, "w:2500", "d",
           "k:acme", "w:500", "k:" + ENTER, "w:3000", "d"],
@@ -1544,6 +1553,46 @@ SCENARIOS = [
          "View: Move View puts Search in the panel (a tab of its own, its icon gone\n"
          "         from the activity bar, Ctrl+Shift+F and the search there); View: Reset\n"
          "         View Locations puts it back in the side bar"),
+    Scen("view-move-explorer-panel", "proj",
+         ["w:1800", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move View", "w:400", "k:|", "w:400",
+          "k:Explorer", "w:300", "k:|", "w:400", "k:|", "w:1000", "d",
+          "k:" + END, "w:300", "k:|", "w:1000", "d",
+          "k:" + CTRL_SHIFT_E, "w:500", "k:" + UP, "w:400", "d",
+          "k:`[<2;88;18M", "k:`[<2;88;18m", "w:500", "d", "k:|", "w:1000", "d"],
+         "View: Move View puts the Explorer in the panel with OPEN EDITORS and\n"
+         "         TIMELINE (its icon gone, the side bar shows the next view): its keys open\n"
+         "         a file there, Ctrl+Shift+E goes back to it; a right click on its tab is\n"
+         "         Move To Primary Side Bar / Reset Location, which puts it back"),
+    Scen("view-move-panel-more", "proj",
+         ["w:1800", "k:" + CTRL_SHIFT_M, "w:600"] + click(114, 18) + ["w:500", "d", "k:|", "w:800",
+          "k:" + CTRL_SHIFT_U, "w:400", "k:" + CTRL_SHIFT_U, "w:600", "k:" + CTRL_SHIFT_M, "w:600", "d",
+          "k:" + CTRL_SHIFT_P, "w:300", "k:View: Reset View Locations", "w:400", "k:|", "w:800", "d"],
+         "the panel's \"...\" has Move To Primary Side Bar for the view it shows: PROBLEMS goes to\n"
+         "         the side bar with the keys; View: Reset View Locations brings it back to the panel"),
+    Scen("view-move-terminal-side", "proj",
+         ["w:1800", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move View", "w:400", "k:|", "w:400",
+          "k:Terminal", "w:300", "k:|", "w:400", "k:" + DOWN + "|", "w:2500", "k:cls|", "w:1200",
+          "k:echo moved-to-side|", "w:1500", "d", "k:" + CTRL_BACKTICK, "w:600", "d",
+          "k:" + CTRL_BACKTICK, "w:800", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Reset View Locations", "w:400",
+          "k:|", "w:1000", "d"],
+         "View: Move View puts the TERMINAL in the side bar with an icon of its own\n"
+         "         (codicon terminal): it types and prints there, Ctrl+` hides it and shows it\n"
+         "         again; View: Reset View Locations puts it back in the panel, still shown",
+         settings={"terminal.integrated.shell": "C:\\Windows\\System32\\cmd.exe",
+                   "terminal.integrated.env.windows": {"PROMPT": "$G"}}),
+    Scen("view-move-problems-scm", "gitrepo",
+         ["w:2500", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move View", "w:400", "k:|", "w:400",
+          "k:Problems", "w:300", "k:|", "w:400", "k:" + DOWN + "|", "w:800", "d",
+          "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move View", "w:400", "k:|", "w:400",
+          "k:Source Control", "w:300", "k:|", "w:400", "k:|", "w:1500", "d",
+          "k:" + CTRL_SHIFT_M, "w:600", "k:" + CTRL_SHIFT_G, "w:800", "k:" + DOWN * 3, "w:300", "k:|", "w:1500", "d",
+          "k:" + CTRL_SHIFT_G, "w:600", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move Focused View", "w:400", "k:|",
+          "w:400", "d",
+          "k:" + DOWN + "|", "w:1200", "k:" + CTRL_SHIFT_U, "w:500", "k:" + CTRL_SHIFT_U, "w:800", "d"],
+         "the PROBLEMS in the side bar (their icon, codicon warning, and the filter\n"
+         "         under the title) and SOURCE CONTROL in the panel: Ctrl+Shift+M and\n"
+         "         Ctrl+Shift+G go where they are, a change's diff opens from the panel;\n"
+         "         View: Move Focused View asks where and puts Source Control back"),
     # ------------------------------------------------ tasks.json and launch.json (fix/dbg, test/stubdap.py)
     Scen("task-depends-inputs", "dbg",
          ["w:1500"] + PALETTE("Run Task") + ["k:build", "w:400", "k:|", "w:700", "d", "k:|", "w:600", "d",
@@ -1585,6 +1634,20 @@ SCENARIOS = [
          "an extension's debug adapter on a named pipe (DebugAdapterNamedPipeServer) is joined to a port by the "
          "host and mme talks to it as to its other adapters: its output is in the DEBUG CONSOLE",
          exts=[("acme.pipe", "acme.pipe")]),
+
+    # ------------------------------------------ folder links back up the tree (looprepo: two junctions)
+    Scen("loop-startup-scm", "looprepo",
+         ["w:3000", "d", "k:" + CTRL_SHIFT_G, "w:1500", "d"],
+         "a repository with junctions back up to its top (sub/up, lib/deep/back) opens: git status -uall "
+         "went round them for ever before (a blank window); the Source Control view lists the untracked "
+         "files once, not the links' endless copies"),
+    Scen("loop-gotofile", "looprepo",
+         ["w:1800", "k:" + CTRL_P, "w:700", "k:.c", "w:1500", "d"],
+         "Go to File's index follows each real folder once: top.c and lib/deep/lib.c are there once, not again "
+         "under sub/up/... and lib/deep/back/..."),
+    Scen("loop-search-editor", "looprepo",
+         SE_NEW + ["k:needle", "w:2500", "d"],
+         "the Search Editor walks each real folder once: a needle per file, not one more at each turn of a link"),
 ]
 
 
@@ -1969,7 +2032,7 @@ def sync_tree():
         os.makedirs(TREE)
     n = 0
     for name in os.listdir(EDITOR):
-        if not name.endswith((".c", ".h", ".rc", ".ico")) and name not in ("build.bat", "makefile"):
+        if not name.endswith((".c", ".h", ".rc", ".ico", ".js")) and name not in ("build.bat", "makefile"):
             continue
         src = os.path.join(EDITOR, name)
         if not os.path.isfile(src):

@@ -1,0 +1,32 @@
+---- cursor 119,29
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      edit.c      Preview Settings Sync.md  
+|    C:  Users  arinq  AppData  Local  Temp  mme-test  work  sync-after-change  mme-data  sync   Settings S
+|      Settings Sync
+|     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+|
+|     Sync is on.
+|
+|     The data is in a secret gist of your GitHub account: https://gist.github.com/tester/g1, changed
+|      2026-09-26T10:00:00Z.
+| 
+|      ┌───────────────┬────────────┬─────────┐
+|     │ File          │  On GitHub │ State   │
+|      ├───────────────┼────────────┼─────────┤
+|      │ settings.json │ 5757 bytes │ in sync │
+|      └───────────────┴────────────┴─────────┘
+|
+|      Synced: settings.json, keybindings.json and the snippets (of the profile in use).
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                       GitHub: Settings Sync...   
+|
+|                                                                      Ln 1, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

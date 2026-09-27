@@ -1,0 +1,32 @@
+---- cursor 10,10
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           vim
+|      text.txt  ●
+|     text.txt
+|       1  The quick brown fox jumps over the lazy dog.                                                     ⣿⣿⣿⣭⠅
+|      2  one <two> three four five six                                                                    ⣶⣶⡒
+|       3  alpha(be<ta>, gamma) and "quoted text" here
+|      4  │   indented line with BAR and BAR again
+|       5  │
+|      6  # second paragraph starts here
+|       7  # it has two lines
+|      8  # last line of the file
+|       9
+| 
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|
+|                                                                                                                       ─
+|
+|
+|
+| 
+|
+| 3 substitutions on 3 lines                                           Ln 8, Col 1  Spaces: 4  UTF-8  LF  Plain Text  
+exited=0

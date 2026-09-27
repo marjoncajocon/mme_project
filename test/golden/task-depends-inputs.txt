@@ -1,0 +1,94 @@
+---- cursor 17,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER
+|▎   OPEN EDIT  Build mode
+|    ───────────
+|    DBG        debug
+|      .vscode   release  (Default)
+|     prog.py
+|                                 │
+|                                │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 22,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER
+|▎   OPEN EDIT  World
+|    ───────────
+|    DBG        Who is it built for? (Press 'Enter' to confirm or 'Escape' to cancel)
+|      .vscode
+|     prog.py                   │
+|                                 │
+|                                │
+|                                 │
+|                                │                        Command Palette...   Ctrl+Shift+P
+|                                 │
+|                                │                             Go to File...   Ctrl+P
+|                                 │
+|                                 │                              Open File...   Ctrl+O
+|                                 │
+|                                 │                            Open Folder...
+|                                 │
+|                                 │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|                                                                                                                     
+---- cursor 119,22
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      EXPLORER                   │
+|▎   OPEN EDITORS               │
+|    ─────────────────────────────│
+|    DBG                    │                        Command Palette...   Ctrl+Shift+P
+|      .vscode                   │
+|     prog.py                 1 │                             Go to File...   Ctrl+P
+|                                 │
+|                                │                              Open File...   Ctrl+O
+|                                 │
+|                                │                            Open Folder...
+|                                 │
+|                                │                           Open Project...   Ctrl+R
+|                                 │
+|                                 │                                  New File   Ctrl+N
+|                                 │
+|                                 │
+|                                 │── PROBLEMS 1 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ── 1: build ──C:\WI──────────
+|                                 │ building release for Suite
+|                                 │ prog.py:3:5: warning: unused thing
+|                                 │
+|                                 │  *  The terminal process terminated with exit code: 0.
+|                                 │  *  Terminal will be reused by tasks, press any key to close it.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|   ─────────────────────────────│
+|     TIMELINE                   │
+|  0  1                                                                                                             
+exited=0

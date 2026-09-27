@@ -1,0 +1,63 @@
+---- cursor 6,2
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXTENSIONS                 │  edit.c      acme.cext.md  
+|     Filter Installed Extensio  │ C:  Users  arinq  AppData  Local  Temp  mme-test  work  ext-view-details-pag
+|     INSTALLED  1                │   1  # Acme C                                                           ⠭⠤⠤         ─
+|     Install from VSIX...      │   2                                                                     ⠭⠭⠭⠤⠤⠤⠤⠤⠤⠤⠤⠄
+|      Acme C  running           │   3  acme  |  acme.cext  |  v0.0.1                                      ⣭⣀⣀
+|      C support, as an extensio │   4                                                                     ⠭⠭⠭⠭⠭⠍⠉⠉⠉⠉⠉⠉
+|       acm  Disable   Uninstall  │   5  C support, as an extension                                         ⠭⠭⠭⠥⠤
+|                                │   6                                                                     ⣷⣖⣒⣒⣂⣀⡀
+|                                 │   7  Installed in <PATH>⠥⠤⠤⠤
+|▎                               │   8                                                                     ⠭⠍⠉⠉⠉⠉⠉⠉⠁
+|                                 │   9  ## Status                                                          ⠭⠭⠉⠁
+|                                │  10                                                                     ⠭⠭⠭⠭⠭⠉⠉⠉
+|                                 │  11  - running                                                          ⠉⠉⠉⠁
+|                                 │  12  - started on `onLanguage:c`
+|                                 │  13  - activation: <N> ms, of which the host was busy <N> ms (loading its co
+|                                 │  14
+|                                 │  15  ### VS Code APIs it asked for that mme does not have
+|                                 │  16
+|                                 │  17  - `vscode.window.registerAcmeThing`
+|                                 │  18
+|                                 │  19  ### Its log (the extension host's lines about it)
+|                                 │  20
+|                                 │  21  ```
+|                                 │  22  [missing] vscode.window.registerAcmeThing
+|                                 │  23  ready for C
+|                                 │  24  [info] activated acme.cext in <N> ms (<N> ms busy), on onLanguage:c
+|                                │  25  ```
+|                                 │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                        Ln 1, Col 1  Spaces: 4  UTF-8  LF  Markdown  
+---- cursor 40,19
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           lang
+|      EXTENSIONS                 │  edit.c      acme.cext.md  
+|     Filter Installed Extensio  │ C:  Users  arinq  AppData  Local  Temp  mme-test  work  ext-view-details-pag
+|     INSTALLED  1                │   1  # Acme C                                                           ⠭⠤⠤
+|     Install from VSIX...      │   9  ## Status                                                          ⠭⠭⠭⠤⠤⠤⠤⠤⠤⠤⠤⠄
+|      Acme C  running           │  27  ### When it starts (activation events)                             ⣭⣀⣀
+|      C support, as an extensio │  29  `onLanguage:c`; and 1 implied by what it contributes (its commands,⠭⠭⠭⠭⠭⠍⠉⠉⠉⠉⠉⠉
+|       acm  Disable   Uninstall  │  30                                                                     ⠭⠭⠭⠥⠤
+|                                │  31  ## Commands (1)                                                    ⣷⣖⣒⣒⣂⣀⡀
+|                                 │  32                                                                     ⠥⠤⠤⠤
+|▎                               │  33  - Acme C: Hello  `acme.cext.hello`                                 ⠭⠍⠉⠉⠉⠉⠉⠉⠁
+|                                 │  34                                                                     ⠭⠭⠉⠁
+|                                │  35  ## Keybindings (1)                                                 ⠭⠭⠭⠭⠭⠉⠉⠉
+|                                 │  36                                                                     ⠉⠉⠉⠁
+|                                 │  37  - `Alt+Z`: acme.cext.hello (when editorLangId == c) **takes mme's W
+|                                 │  38
+|                                 │  39  ## Settings (1, in the Settings editor: Ctrl+,)
+|                                 │  40
+|                                 │  41  - `acmeC.level` = 2: How loud it is
+|                                 │  42
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │                                                                                     ─
+|                                 │      ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+|                                                                       Ln 42, Col 1  Spaces: 4  UTF-8  LF  Markdown  
+exited=0
