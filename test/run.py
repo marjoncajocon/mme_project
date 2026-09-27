@@ -964,11 +964,13 @@ SCENARIOS = [
          exts=[("acme.web", "acme.web")], private=True),
     Scen("ext-view-enable-disable", "lang/plain.txt",
          ["w:5000", "k:" + csiu("x", ctrl=True, shift=True), "w:1000", "d"] + click(15, 8) + ["w:4000", "d"]
+         + click(15, 8) + ["w:5000", "d"] + click(15, 8) + ["w:3000"] + click(15, 14) + ["w:3000"]
          + click(15, 8) + ["w:5000", "d"],
          "the Extensions view has an Enable / Disable button beside Uninstall for an extension with code (a "
          "theme has none): Disable stops its code (its status bar item goes, the row says disabled, the button "
-         "says Enable), Enable starts it again",
-         exts=[("acme.demo", "acme.demo"),
+         "says Enable), Enable starts it again; two disabled, then one enabled: settings.json's list is written "
+         "whole each time (the rows say running, disabled)",
+         exts=[("acme.demo", "acme.demo"), ("acme.web", "acme.web"),
                ("acme.monokai-dark-1.0.0", {"name": "monokai-dark", "publisher": "acme", "version": "1.0.0",
                                              "displayName": "Monokai Dark", "description": "A dark color theme"})]),
     Scen("ext-view-scrollbar", "lang/plain.txt",

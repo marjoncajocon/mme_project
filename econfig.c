@@ -1473,6 +1473,27 @@ void settings_put_raw (const char *key, const char *value) {
         while (*e && *e != '"') e += (*e == '\\' && e[1]) ? 2 : 1;
         if (*e) e++;
       }
+      else if (*e == '[' || *e == '{') {	/* a list or an object: to its own end, the commas in it are its */
+        int depth = 0;
+        while (*e) {
+          if (*e == '"') {
+            e++;
+            while (*e && *e != '"') e += (*e == '\\' && e[1]) ? 2 : 1;
+            if (*e) e++;
+            continue;
+          }
+          if (*e == '/' && e[1] == '/') {	/* a comment in it: to the end of its line */
+            while (*e && *e != '\n') e++;
+            continue;
+          }
+          if (*e == '[' || *e == '{') depth++;
+          else if ((*e == ']' || *e == '}') && --depth == 0) {
+            e++;
+            break;
+          }
+          e++;
+        }
+      }
       else while (*e && *e != ',' && *e != '\n' && *e != '}') e++;
       buf_putn(&b, s, (size_t)(v - s));
       buf_puts(&b, value);

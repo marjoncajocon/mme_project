@@ -1466,12 +1466,29 @@ void ext_draw (int x, int y, int w, int h, int focus) {
     scr_put(x + 1, sy, 0xEB29, st == S_SIDE ? S_ICON_BLUE : st);	/* codicon package */
     cx = x + 3;
     cx += scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
-    {	/* its code in the extension host: how it is */
-      const char *hs = ehost_disabled(it->id) ? "disabled" : ehost_state(it->id);
-      if (hs) {
-        char tag[32];
-        snprintf(tag, sizeof(tag), "  %s", strcmp(hs, "error") == 0 ? "failed" : hs);
-        scr_putsw(cx, sy, x + w - cx - 1, tag, dim);
+    if (g_ext[it->ext].code) {	/* its code: disabled, enabled (waiting for its files), running, failed, needs ... */
+      const char *hs = ehost_state(it->id), *tag;
+      uint32_t rgb = 0;
+      char t[48];
+      if (!is_on(it)) tag = "disabled";
+      else if (hs == NULL || strcmp(hs, "starting") == 0) tag = "enabled";	/* its activation event has not come */
+      else if (strcmp(hs, "running") == 0) {
+        tag = "running";
+        rgb = 0x73C991;
+      }
+      else if (strcmp(hs, "error") == 0) {
+        tag = "failed";
+        rgb = 0xF14C4C;
+      }
+      else {
+        tag = hs;	/* "needs dart-code" */
+        rgb = 0xCCA700;
+      }
+      snprintf(t, sizeof(t), "  %s", tag);
+      {
+        int n = scr_putsw(cx, sy, x + w - cx - 1, t, dim), i;
+        if (rgb && st == S_SIDE)
+          for (i = 2; i < n; i++) scr_set_fg(cx + i, sy, rgb);
       }
     }
     scr_putsw(x + 3, sy + 1, w - 4, it->desc, dim);

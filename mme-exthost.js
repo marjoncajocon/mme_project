@@ -39,9 +39,23 @@ let nextId = 1;
 const pending = new Map();	// our requests to mme: id -> {res, rej}
 const cancels = new Map();	// mme's requests to us: id -> CancellationTokenSource
 
+// mme's end of the pipe gone (it was killed): nothing is written any more - an error written about the
+// write that failed would fail too, and round again for ever, a core busy - and the host goes
+let outDead = false;
+process.stdout.on('error', () => {
+  outDead = true;
+  quit();
+});
+
 function send (msg) {
+  if (outDead || process.stdout.destroyed) return;
   const s = JSON.stringify(msg);
-  stdout('Content-Length: ' + Buffer.byteLength(s, 'utf8') + '\r\n\r\n' + s);
+  try {
+    stdout('Content-Length: ' + Buffer.byteLength(s, 'utf8') + '\r\n\r\n' + s);
+  } catch (e) {
+    outDead = true;
+    quit();
+  }
 }
 
 function request (method, params) {
@@ -86,7 +100,7 @@ process.stdin.on('end', () => quit());
 const spawned = new Set();
 for (const fn of ['spawn', 'execFile', 'exec', 'fork']) {
   const real = cp[fn];
-  cp[fn] = function (...a) {
+  const wrap = function (...a) {
     const c = real.apply(this, a);
     if (c && c.pid) {
       spawned.add(c);
@@ -94,7 +108,33 @@ for (const fn of ['spawn', 'execFile', 'exec', 'fork']) {
     }
     return c;
   };
+  if (fn === 'exec' || fn === 'execFile') {	// util.promisify(cp.execFile) gives {stdout, stderr}, as Node's own does
+    wrap[require('util').promisify.custom] = (...a) => {
+      let child;
+      const p = new Promise((resolve, reject) => {
+        child = wrap(...a, (err, stdout, stderr) => {
+          if (err) {
+            err.stdout = stdout;
+            err.stderr = stderr;
+            reject(err);
+          } else resolve({stdout, stderr});
+        });
+      });
+      p.child = child;
+      return p;
+    };
+  }
+  cp[fn] = wrap;
 }
+
+// mme gone without a word (killed: its pipe may stay open, a child holding it): the host goes too
+setInterval(() => {
+  try {
+    process.kill(process.ppid, 0);
+  } catch (e) {
+    quit();
+  }
+}, 2000).unref();
 
 // the host goes (mme said exit, or its pipe closed): the extensions' deactivate, then what they started
 let quitting = false;
@@ -152,7 +192,14 @@ process.stdout.write = (chunk, enc, cb) => {
   return true;
 };
 process.noDeprecation = true;	// node's own warnings about old modules extensions use: not theirs to see
-process.on('uncaughtException', (e) => log('[error] ' + (e && e.stack ? e.stack : e)));
+process.on('uncaughtException', (e) => {
+  if (e && /^(EPIPE|EOF|ECONNRESET|ERR_STREAM_DESTROYED|ERR_STREAM_WRITE_AFTER_END)$/.test(e.code || '') && (outDead || process.stdout.destroyed || e.syscall === 'write')) {
+    outDead = true;	// mme is gone: not logged (the log is that pipe), the host goes
+    quit();
+    return;
+  }
+  log('[error] ' + (e && e.stack ? e.stack : e));
+});
 process.on('unhandledRejection', (e) => log('[error] unhandled: ' + (e && e.stack ? e.stack : e)));
 
 const missing = new Set();
