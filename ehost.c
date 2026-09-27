@@ -571,8 +571,12 @@ int ehost_message (const char *method, const Json *p) {
   else if (strcmp(method, "mme/languages") == 0) {
     const Json *ls = json_get(p, "languages");
     size_t i;
-    for (i = 0; ls && ls->type == J_ARR && i < ls->n; i++) add_lang(json_str(ls->kid[i], ""));
+    for (i = 0; ls && ls->type == J_ARR && i < ls->n; i++) {
+      add_lang(json_str(ls->kid[i], ""));
+      lsp_yield(json_str(ls->kid[i], ""));	/* mme's own server of it, running from before, stops */
+    }
   }
+  else if (strcmp(method, "mme/refresh") == 0) mme_lsp_views_reset();	/* an extension's hints, colors changed */
   else if (strcmp(method, "mme/treeViews") == 0) tree_views(json_get(p, "views"));	/* etree.c */
   else if (strcmp(method, "mme/debuggers") == 0) {
     const Json *ts = json_get(p, "types");

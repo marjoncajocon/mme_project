@@ -676,7 +676,13 @@ With no file open the editor shows the keys to start with.
   starts it again. What an extension started (Dart's analysis server,
   Flutter's daemon, an AI agent) stops with it: the host ends them, and mme
   ends the host's whole process tree, so nothing is left running. One that
-  depends on an extension that does not run says so ("needs dart-code"). When a running extension serves a language, mme does not
+  depends on an extension that does not run says so ("needs dart-code").
+  Disable takes the extension's languages with it: mme's own server of each
+  (`mme.languageServers`, e.g. `"dart": "dart language-server"`) is set to
+  `""`, its command kept in `mme.extensions.savedServers`, and it stops; Enable
+  gives the command back, and the extension's own server serves the language
+  (mme's stops, not both run). An extension never clicked leaves mme's own
+  server of its languages as it is. When a running extension serves a language, mme does not
   start its own server for it (the extension starts its own).
 
   **Ghost text from extensions**: an AI extension that gives inline completions

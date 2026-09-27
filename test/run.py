@@ -982,6 +982,14 @@ SCENARIOS = [
          exts=[("acme.theme%d-1.0.0" % i, {"name": "theme%d" % i, "publisher": "acme", "version": "1.0.0",
                                            "displayName": "Theme %02d" % i, "description": "A color theme"})
                for i in range(1, 11)]),
+    Scen("ext-view-disable-language", "lang/edit.c",
+         ["w:5000", "k:" + csiu("x", ctrl=True, shift=True), "w:1000"] + click(15, 8) + ["w:3000",
+          "k:" + CTRL_SHIFT_P, "k:open user settings (json)", "w:600", "k:" + ENTER, "w:1500", "k:", "k:\"c\": \"\"", "w:600", "d",
+          "k:" + ESC, "k:" + csiu("x", ctrl=True, shift=True), "w:1000"] + click(15, 8) + ["w:3000",
+          "k:" + CTRL_SHIFT_P, "k:open user settings (json)", "w:600", "k:" + ENTER, "w:1500", "k:", "k:" + BKSP * 12, "k:\"c\": \"python", "w:600", "d"],
+         "Disable on an extension for C takes the language with it: mme.languageServers's \"c\" is \"\" (mme's "
+         "own server off, its command kept in mme.extensions.savedServers); Enable gives the same command back",
+         stub_lsp=("c",), exts=[("acme.cext", "acme.cext")]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

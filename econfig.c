@@ -1536,10 +1536,8 @@ const Json *settings_all (void) {
 }
 
 
-const char *settings_server (const char *lang) {
-  if (strcmp(lang, INLINE_LANG) == 0)	/* not a language: its own setting */
-    return json_str(settings_get("mme\\.inlineCompletionServer"), "");
-  if (strcmp(lang, EXT_LANG) == 0) return ehost_command();	/* the extension host (ehost.c) */
+/* mme's own server of lang when settings.json names none; NULL: it has none */
+const char *settings_server_default (const char *lang) {
   static const struct {
     const char *lang, *cmd;
   } def[] = {
@@ -1564,17 +1562,26 @@ const char *settings_server (const char *lang) {
     {"svelte", "svelteserver --stdio"}, {"latex", "texlab"}, {"objective-c", "clangd"},
     {"powershell", ""}, {"xml", "lemminx"}, {"toml", "taplo lsp stdio"}, {"markdown", "marksman server"}
   };
-  const Json *servers = json_get(g_json, "mme\\.languageServers");
   size_t i;
+  for (i = 0; i < sizeof(def) / sizeof(def[0]); i++)
+    if (strcmp(def[i].lang, lang) == 0) return def[i].cmd;
+  return NULL;
+}
+
+
+const char *settings_server (const char *lang) {
+  const Json *servers;
+  if (strcmp(lang, INLINE_LANG) == 0)	/* not a language: its own setting */
+    return json_str(settings_get("mme\\.inlineCompletionServer"), "");
+  if (strcmp(lang, EXT_LANG) == 0) return ehost_command();	/* the extension host (ehost.c) */
+  servers = json_get(g_json, "mme\\.languageServers");
   if (servers) {
     const Json *s = json_get(servers, lang);
     if (s) return json_str(s, NULL);
     s = json_get(servers, "*");	/* what every other language gets: "" turns them all off */
     if (s) return json_str(s, NULL);
   }
-  for (i = 0; i < sizeof(def) / sizeof(def[0]); i++)
-    if (strcmp(def[i].lang, lang) == 0) return def[i].cmd;
-  return NULL;
+  return settings_server_default(lang);
 }
 
 

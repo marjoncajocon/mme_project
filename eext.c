@@ -59,6 +59,7 @@ typedef struct Ext {
   size_t nlang;
   int ngrammar, ncommand, nkey, ndebug, nicon, nconfig;	/* what mme does not use */
   int code;	/* it has code (package.json's main): it can be turned on and off */
+  Vec onlang;	/* the languages its activationEvents name (onLanguage:go): what it serves, with lang's */
 } Ext;
 
 static Ext *g_ext;
@@ -97,6 +98,7 @@ static void ext_free (Ext *e) {
     free(l->close);
   }
   free(e->lang);
+  vec_free(&e->onlang);
 }
 
 
@@ -236,6 +238,14 @@ static int ext_read (Ext *e, const char *dir, int vscode) {
   e->nicon = (int)count(json_get(c, "iconThemes"));
   e->nconfig = json_get(c, "configuration") != NULL;
   e->code = json_get(pk, "main") != NULL || json_get(pk, "browser") != NULL;
+  vec_init(&e->onlang);
+  {
+    const Json *ev = json_get(pk, "activationEvents");
+    for (i = 0; i < count(ev); i++) {
+      const char *s = json_str(ev->kid[i], "");
+      if (strncmp(s, "onLanguage:", 11) == 0 && s[11]) vec_push(&e->onlang, xstrdup(s + 11));
+    }
+  }
   json_free(nl);
   json_free(pk);
   return 0;
@@ -1531,6 +1541,109 @@ static void press (size_t k) {
 static void set_run (const char *id, int on);
 static void set_disabled (const char *id, int off);
 
+
+static int served (const Ext *e, const char *lang) {	/* one of the languages the extension is for */
+  size_t i;
+  for (i = 0; i < e->nlang; i++)
+    if (e->lang[i].id && strcmp(e->lang[i].id, lang) == 0) return 1;
+  for (i = 0; i < e->onlang.n; i++)
+    if (strcmp(e->onlang.v[i], lang) == 0) return 1;
+  return 0;
+}
+
+
+/*
+** The user's choice: an extension disabled takes its languages with it - mme's own server of each
+** (mme.languageServers) is "" - and enabled gives them back (the extension's own runs them). Only the
+** languages mme has a server for; the running server of one turned off stops.
+*/
+static void set_lang_servers (const Ext *e, int on) {
+  const Json *cur = settings_get("mme\\.languageServers");
+  const Json *saved = settings_get("mme\\.extensions\\.savedServers");	/* what Disable turned off, to give back */
+  Buf b, sv;
+  Vec langs, changed;
+  size_t i;
+  int first = 1, sfirst = 1;
+  vec_init(&langs);
+  vec_init(&changed);
+  for (i = 0; i < e->nlang; i++)
+    if (e->lang[i].id) vec_push(&langs, xstrdup(e->lang[i].id));
+  for (i = 0; i < e->onlang.n; i++) vec_push(&langs, xstrdup(e->onlang.v[i]));
+  buf_init(&b);
+  buf_putc(&b, '{');
+  buf_init(&sv);
+  buf_putc(&sv, '{');
+  for (i = 0; saved && saved->type == J_OBJ && i < saved->n; i++) {	/* the saved ones of other languages stay */
+    const Json *k = saved->kid[i];
+    if (k->key == NULL || served(e, k->key)) continue;
+    buf_puts(&sv, sfirst ? "" : ", ");
+    json_put_str(&sv, k->key, strlen(k->key));
+    buf_puts(&sv, ": ");
+    json_write(&sv, k);
+    sfirst = 0;
+  }
+  for (i = 0; cur && cur->type == J_OBJ && i < cur->n; i++) {	/* the others as they are */
+    const Json *k = cur->kid[i];
+    if (k->key == NULL || served(e, k->key)) continue;
+    buf_puts(&b, first ? "" : ", ");
+    json_put_str(&b, k->key, strlen(k->key));
+    buf_puts(&b, ": ");
+    json_write(&b, k);
+    first = 0;
+  }
+  for (i = 0; i < langs.n; i++) {
+    const char *l = langs.v[i], *def = settings_server_default(l), *now;
+    const Json *had = cur && cur->type == J_OBJ ? json_get(cur, l) : NULL;
+    size_t j;
+    int dup = 0;
+    for (j = 0; j < i && !dup; j++) dup = strcmp(langs.v[j], l) == 0;
+    if (dup) continue;
+    now = settings_server(l);
+    if (!on && now && now[0]) {	/* its server: off, what it was kept */
+      buf_puts(&b, first ? "" : ", ");
+      json_put_str(&b, l, strlen(l));
+      buf_puts(&b, ": \"\"");
+      buf_puts(&sv, sfirst ? "" : ", ");
+      json_put_str(&sv, l, strlen(l));
+      buf_puts(&sv, ": ");
+      json_put_str(&sv, now, strlen(now));
+      sfirst = 0;
+      vec_push(&changed, xstrdup(l));
+    }
+    else if (on && now && !now[0] && (json_str(saved ? json_get(saved, l) : NULL, NULL) || (def && def[0]))) {
+      const char *back = json_str(saved ? json_get(saved, l) : NULL, NULL);	/* back: as it was, else mme's own */
+      if (back == NULL) back = def;
+      buf_puts(&b, first ? "" : ", ");
+      json_put_str(&b, l, strlen(l));
+      buf_puts(&b, ": ");
+      json_put_str(&b, back, strlen(back));
+      vec_push(&changed, xstrdup(l));
+    }
+    else if (had) {	/* as it was */
+      buf_puts(&b, first ? "" : ", ");
+      json_put_str(&b, l, strlen(l));
+      buf_puts(&b, ": ");
+      json_write(&b, had);
+    }
+    else continue;
+    first = 0;
+  }
+  buf_putc(&b, '}');
+  buf_putc(&b, '\0');
+  buf_putc(&sv, '}');
+  buf_putc(&sv, '\0');
+  if (changed.n) {
+    settings_put_json("mme.extensions.savedServers", sv.s);
+    settings_put_json("mme.languageServers", b.s);
+    if (!on)
+      for (i = 0; i < changed.n; i++) lsp_restart(changed.v[i]);	/* its running server stops (enabled: the extension's own serves it) */
+  }
+  buf_free(&b);
+  buf_free(&sv);
+  vec_free(&langs);
+  vec_free(&changed);
+}
+
 /* the Enable / Disable button: its code on or off (a VS Code extension: mme.extensions.run; the others:
 ** mme.extensions.disabled); the extension host starts again without it, or with it */
 static void toggle (size_t k) {
@@ -1539,10 +1652,12 @@ static void toggle (size_t k) {
   it = &g_item[k];
   if (!g_ext[it->ext].code) return;
   if (is_on(it)) {
+    set_lang_servers(&g_ext[it->ext], 0);	/* its languages go with it (mme's own servers of them too) */
     if (g_ext[it->ext].vscode) set_run(it->id, 0);
     else set_disabled(it->id, 1);
   }
   else {
+    set_lang_servers(&g_ext[it->ext], 1);	/* and come back */
     if (ehost_disabled(it->id)) set_disabled(it->id, 0);
     if (g_ext[it->ext].vscode && !ehost_in_run(it->id)) set_run(it->id, 1);
   }

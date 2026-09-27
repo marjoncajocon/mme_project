@@ -688,6 +688,27 @@ static void srv_stop (Srv *s) {
 
 static void diag_drop (const char *uri);
 
+/* an extension serves lang now: mme's own server of it stops, if one runs (VS Code's way: not both) */
+void lsp_yield (const char *lang) {
+  Srv *s = srv_of(lang);
+  size_t k;
+  if (s == NULL || s->dead || lang[0] == '*') return;
+  out_log(s->chan, "[info] An extension serves %s now: this server stops", lang);
+  srv_stop(s);
+  mme_lsp_views_reset();	/* its hints and colors go; the extension's are asked for */
+  for (k = 0; k < g_ndoc; k++) {	/* its files: the extension host has them already */
+    LDoc *l = &g_doc[k];
+    if (l->s != s) continue;
+    diag_drop(l->uri);
+    free(l->last);
+    free(l->uri);
+    free(l->langid);
+    *l = g_doc[--g_ndoc];
+    k--;
+  }
+}
+
+
 /*
 ** mme: Restart Language Server: the server of lang stops, a new one starts
 ** and gets the files the old one had; one that was not found is looked for
@@ -702,6 +723,7 @@ void lsp_restart (const char *lang) {
   if (old) {
     out_log(old->chan, "[info] Restarting the %s language server", lang);
     srv_stop(old);
+    mme_lsp_views_reset();	/* what it drew in the text goes with it */
   }
   ns = start(lang);
   for (k = 0; k < g_ndoc; k++) {
@@ -3276,6 +3298,10 @@ static void answer (Srv *s, const Json *msg) {
   }
   else if (strcmp(method, "window/showDocument") == 0)
     buf_printf(&b, ",\"result\":{\"success\":%s}}", show_document(s, json_get(msg, "params")) ? "true" : "false");
+  else if (strcmp(method, "workspace/inlayHint/refresh") == 0 || strcmp(method, "workspace/semanticTokens/refresh") == 0) {
+    mme_lsp_views_reset();	/* the server has more to say now (it finished loading): asked again */
+    buf_puts(&b, ",\"result\":null}");
+  }
   else if (strcmp(method, "workspace/applyEdit") == 0) {	/* a command's edit: it is done here */
     workspace_edit(s, json_get(msg, "params.edit"));
     buf_puts(&b, ",\"result\":{\"applied\":true}}");

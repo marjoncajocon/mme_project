@@ -1289,6 +1289,7 @@ int ext_is_vscode (size_t i);	/* VS Code's: read only, run only when mme.extensi
 /* ehost.c: the extension host */
 const char *ehost_command (void);	/* the host's command line (node mme-exthost.js); "": nothing to run */
 int ehost_in_run (const char *id);	/* named in mme.extensions.run */
+const char *settings_server_default (const char *lang);	/* econfig.c: mme's own server of lang, NULL none */
 void ehost_restart (void);	/* the host again with what runs now (started if it was not running) */
 int ehost_disabled (const char *id);	/* in mme.extensions.disabled: its code does not run */
 int ehost_inline (const char *lang);	/* an extension gives ghost text for it: asked instead of Copilot */
@@ -1760,6 +1761,8 @@ void lsp_shutdown (void);
 enum { LS_NONE, LS_OFF, LS_MISSING, LS_STARTING, LS_READY, LS_BUSY, LS_DEAD };	/* lsp_state */
 int lsp_state (const char *lang, char *name, size_t n);	/* LS_*; name: the program ("gopls") */
 void lsp_restart (const char *lang);
+void lsp_yield (const char *lang);	/* an extension serves lang: mme's own server of it stops */
+void mme_lsp_views_reset (void);	/* mme.c: a server's inlay hints and semantic colors forgotten */
 const char *lsp_channel (const char *lang);	/* its OUTPUT channel, NULL none */
 int lsp_progress_count (void);	/* $/progress running now */
 int lsp_progress_cancel (int i, int now);	/* it can be cancelled (now: it is); 0: it cannot */

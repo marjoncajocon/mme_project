@@ -2323,6 +2323,25 @@ static struct {
 } SM;
 
 
+/* a language server stopped or changed (an extension disabled, enabled): its inlay hints and semantic
+** colors go, and are asked again of what serves the file now - nothing, perhaps */
+void mme_lsp_views_reset (void) {
+  size_t i;
+  for (i = 0; i < IH.n; i++) free(IH.v[i].label);
+  free(IH.v);
+  free(IH.w);
+  IH.v = NULL;
+  IH.w = NULL;
+  IH.n = 0;
+  IH.ask_d = NULL;
+  free(SM.v);
+  SM.v = NULL;
+  SM.n = 0;
+  SM.ask_d = NULL;
+  scr_redraw();
+}
+
+
 void on_semantic (Doc *d, unsigned long edits, SemTok *v, size_t n) {
   if (d != SM.ask_d) {
     free(v);

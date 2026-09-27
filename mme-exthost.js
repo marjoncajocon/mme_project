@@ -2242,10 +2242,31 @@ function asRelativePath (x, includeFolder) {
 const providers = [];	// {kind, selector, provider, meta, ext}
 let providerSeq = 0;
 
+// mme asks again for what a provider draws in the text (a language server that came late, results changed)
+let refreshTimer = null;
+function refreshViews () {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    notify('mme/refresh', {});
+  }, 300);
+}
+
 function register (kind, selector, provider, meta) {
   const p = {kind, selector, provider, meta: meta || {}, seq: providerSeq++};
   providers.push(p);
   languagesChanged();
+  if (kind === 'inlayHint' || kind === 'semanticTokens' || kind === 'semanticTokensRange' || kind === 'codeLens') {
+    refreshViews();	// Dart's hints come once its server has started: they are asked for then
+    for (const ev of ['onDidChangeInlayHints', 'onDidChangeSemanticTokens', 'onDidChangeCodeLenses'])
+      if (provider && typeof provider[ev] === 'function') {
+        try {
+          provider[ev](() => refreshViews());
+        } catch (e) {
+          // not an event after all
+        }
+      }
+  }
   return new Disposable(() => {
     const i = providers.indexOf(p);
     if (i >= 0) providers.splice(i, 1);
