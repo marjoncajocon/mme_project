@@ -924,7 +924,8 @@ static char *builtin_theme (const char *name) {
   } map[] = {
     {"Dark Modern", "theme-defaults/themes/dark_modern.json"}, {"Dark+", "theme-defaults/themes/dark_plus.json"},
     {"Light+", "theme-defaults/themes/light_plus.json"}, {"Monokai", "theme-monokai/themes/monokai-color-theme.json"},
-    {"Solarized Dark", "theme-solarized-dark/themes/solarized-dark-color-theme.json"}
+    {"Solarized Dark", "theme-solarized-dark/themes/solarized-dark-color-theme.json"},
+    {"Dark High Contrast", "theme-defaults/themes/hc_black.json"}, {"Light High Contrast", "theme-defaults/themes/hc_light.json"}
   };
   size_t i;
   if (g_builtin == NULL) return NULL;
@@ -1577,6 +1578,7 @@ static Frame *root_frame (Grammar *g) {
 typedef struct TCell {
   size_t y, len;
   int used;
+  unsigned gen;	/* the theme's rules its colors came from (g_gen) */
   Out o;
   size_t cap;
   unsigned long stamp;	/* when it was last asked for: the oldest goes first */
@@ -1671,6 +1673,7 @@ static void tc_drop (TDoc *td, size_t y) {
 static TCell *tc_get (TDoc *td, const Doc *d, size_t y) {
   TCell *c = &td->c[y % TC_N];
   if (!c->used || c->y != y || c->len != d->row[y].len) return NULL;
+  if (c->gen != g_gen) return NULL;	/* another color theme: its colors are made again */
   c->stamp = ++td->stamp;
   return c;
 }
@@ -1795,6 +1798,7 @@ int tm_line (Doc *d, const Syntax *sx, size_t y, unsigned char *tok) {
     c->stamp = ++td->stamp;
     after = tok_line(g, td->st[y], r->s, r->len, y == 0, &c->o);
     c->used = 1;
+    c->gen = g_gen;
     c->y = y;
     c->len = r->len;
     LAST.hit = c;

@@ -209,8 +209,22 @@ static Round g_round[MAX_ROUND];
 static int g_nround;
 
 
+/*
+** A style's escape; a high contrast theme's outlines (mme-sdl paints them
+** round the cells) are an underline in their color here: a terminal draws
+** only whole cells
+*/
 static const char *style_sgr (int st) {
-  return theme_sgr(st);
+  static char out[160];
+  unsigned ol = theme_outline(st) & ~(1u << OL_WIDGET | 1u << OL_LINE);	/* a popup, the line: their colors say it */
+  int k;
+  uint32_t c;
+  if (ol == 0) return theme_sgr(st);
+  for (k = 0; !(ol & (1u << k)); k++) ;
+  c = theme_outline_color(k) & 0xFFFFFF;
+  snprintf(out, sizeof(out), "%s\033[4m\033[58;2;%u;%u;%um", theme_sgr(st), (unsigned)(c >> 16),
+           (unsigned)((c >> 8) & 255), (unsigned)(c & 255));
+  return out;
 }
 
 
@@ -505,7 +519,7 @@ void scr_box (int x, int y, int w, int h, int st) {
 void scr_round (int x, int y, int w, int h, int corners, int size) {
   Round *r;
   int k;
-  if (D.z >= 0) return;	/* in a text zone: square */
+  if (D.z >= 0 || theme_hc()) return;	/* in a text zone, in high contrast (its outlines): square */
   if (w < 1 || h < 1 || x < 0 || y < 0 || x + w > S.cols || y + h > S.rows) return;
   if (g_nround > 0) {
     r = &g_round[g_nround - 1];

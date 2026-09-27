@@ -275,6 +275,18 @@ static int oe_height (void);
 static int tl_height (void);
 static void draw_open_editors (int x, int y, int w, int h, int focus);
 static void draw_timeline (int x, int y, int w, int h, int focus);
+#define PV_VARS	4	/* E.panel_view: Jupyter's Variables */
+#define PV_MOVED	5	/* PV_MOVED + MV_*: a view moved into the panel */
+static int pv_shown (void);
+static void pv_open (int mv);
+static void pv_draw (int focus);
+static int pv_tabs (int x, int y, int narrow);
+static void pv_key (int k);
+static int pv_mouse (const Mouse *m, int press);
+static void pv_move_ask (int focused);
+static void pv_move (int mv, int panel);
+static int pv_more_menu (int x, int y);
+static int global_key (int k);
 static void md_preview (int side);
 static void help_page (const char *name, void (*make) (Buf *b));
 static void help_keys_md (Buf *b);
@@ -1780,6 +1792,8 @@ static int text_cols (void) {
 ** for the rows of the lines above it, and a long line cut into thousands
 ** of rows was cut again for each. What *st and *sc point to stays until
 ** wrap_segs is asked for another line with the same slot (WRAP_SLOTS apart).
+** The inlay hints take columns too: a row's column counts the hints before
+** it, and the rows are cut again when the hints change.
 */
 #define WRAP_SLOTS	512
 
@@ -1787,10 +1801,15 @@ typedef struct {
   const Doc *doc;
   const char *s;	/* the row as it was */
   size_t y, len, width, n, cap;
-  unsigned long edits;
+  unsigned long edits, ih;
   int tabw, cc, ui, on;
-  size_t *st, *sc;	/* where each row starts, and its column */
+  size_t *st, *sc;	/* where each row starts, and its column (with the hints before it) */
 } WrapRows;
+
+static unsigned long g_ih_gen = 1;	/* one more whenever the inlay hints change */
+static int ih_on (void);
+static size_t ih_first (size_t y);
+static size_t ih_widths (size_t y, size_t x, size_t *i);
 
 static WrapRows g_wrap[WRAP_SLOTS];
 
@@ -1809,6 +1828,9 @@ static size_t wrap_segs (size_t y, const size_t **st, const size_t **sc) {
   static const size_t zero[1] = { 0 };
   const Row *r = row_at(y);
   size_t x = 0, col = 0, segcol = 0, lastsp = 0, lastcol = 0, width = (size_t)text_cols(), len;
+  size_t hw = 0, lasthw = 0, hi = 0, lasthi = 0;	/* the hints' columns so far, the next hint */
+  int hints = ih_on();
+  unsigned long ih = hints ? g_ih_gen : 0;	/* the hints the rows count, 0: none */
   WrapRows *w = &g_wrap[y % WRAP_SLOTS];
   if (!E.wrap || width < 4) {
     *st = zero;
@@ -1816,7 +1838,8 @@ static size_t wrap_segs (size_t y, const size_t **st, const size_t **sc) {
     return 1;
   }
   if (w->on && w->doc == T->doc && w->y == y && w->edits == T->doc->edits && w->s == r->s && w->len == r->len &&
-      w->width == width && w->tabw == (int)TABW && w->cc == eopt.control_chars && w->ui == eopt.uni_invisible) {
+      w->width == width && w->tabw == (int)TABW && w->cc == eopt.control_chars && w->ui == eopt.uni_invisible &&
+      w->ih == ih) {
     *st = w->st;
     if (sc) *sc = w->sc;
     return w->n;
@@ -1831,24 +1854,35 @@ static size_t wrap_segs (size_t y, const size_t **st, const size_t **sc) {
   w->tabw = (int)TABW;
   w->cc = eopt.control_chars;
   w->ui = eopt.uni_invisible;
+  w->ih = ih;
   w->n = 0;
   wrap_add(w, 0, 0);
+  if (hints) hi = ih_first(y);
   while (x < r->len) {
-    size_t cw = char_width(r, x, col, &len);
-    if (col + cw - segcol > width && x > w->st[w->n - 1]) {	/* it does not fit: a new row */
+    size_t cw = char_width(r, x, col, &len), k = hi, hx = hints ? ih_widths(y, x, &k) : 0;
+    if (col + hw + hx + cw - segcol > width && x > w->st[w->n - 1]) {	/* it does not fit: a new row */
       int atsp = lastsp > w->st[w->n - 1];
       size_t cut = atsp ? lastsp : x;
-      col = segcol = atsp ? lastcol : col;	/* the column is known: not counted again from the start */
-      wrap_add(w, cut, col);
+      if (atsp) {	/* the column is known: not counted again from the start */
+        col = lastcol;
+        hw = lasthw;
+        hi = lasthi;
+      }
+      segcol = col + hw;	/* the hints at the cut go on the new row */
+      wrap_add(w, cut, segcol);
       x = cut;
       lastsp = 0;
       continue;
     }
+    hw += hx;
+    hi = k;
     col += cw;
     x += len;
     if (r->s[x - len] == ' ' || r->s[x - len] == '\t') {
       lastsp = x;
       lastcol = col;
+      lasthw = hw;
+      lasthi = hi;
     }
   }
   *st = w->st;
@@ -2172,8 +2206,9 @@ static int ne_rows_at (size_t *after, int *rows) {
 /*
 ** {==================================================================
 ** What the language server adds to the text: inlay hints (drawn in
-** it, not with word wrap: vcol is a character's column with the hints
-** before it), semantic tokens (the names' colors) and code lenses
+** it, word wrap cutting the rows with them: vcol is a character's column
+** with the hints before it), semantic tokens (the names' colors) and
+** code lenses
 ** ===================================================================
 */
 
@@ -2240,6 +2275,7 @@ static void ih_swatches (void) {
       IH.v[IH.n].at = CD.v[i].a;
       IH.v[IH.n].label = xstrdup("\xE2\x96\xA0 ");	/* a square, in the color */
       IH.v[IH.n].color = i + 1;
+      IH.v[IH.n].id = 0;
       IH.n++;
     }
   }
@@ -2247,6 +2283,7 @@ static void ih_swatches (void) {
   free(IH.w);
   IH.w = (int *)xmalloc((IH.n + 1) * sizeof(int));
   for (i = 0; i < IH.n; i++) IH.w[i] = (int)str_cols(IH.v[i].label);
+  g_ih_gen++;	/* word wrap cuts the rows again */
 }
 
 
@@ -2332,7 +2369,7 @@ void on_inlay (Doc *d, size_t y0, size_t y1, InlayHint *v, size_t n) {
 
 
 static int ih_on (void) {
-  return (opt.inlay || opt.color_decorators) && !E.wrap && IH.n > 0 && IH.d == T->doc;
+  return (opt.inlay || opt.color_decorators) && IH.n > 0 && IH.d == T->doc;
 }
 
 
@@ -2345,6 +2382,14 @@ static size_t ih_first (size_t y) {
     else hi = mid;
   }
   return lo;
+}
+
+
+/* the width of line y's hints at byte x or before it, from index *i on (which moves past them) */
+static size_t ih_widths (size_t y, size_t x, size_t *i) {
+  size_t w = 0;
+  for (; *i < IH.n && IH.v[*i].at.y == y && IH.v[*i].at.x <= x; (*i)++) w += (size_t)IH.w[*i];
+  return w;
 }
 
 
@@ -2456,6 +2501,7 @@ void mme_lsp_views_reset (void) {
   IH.w = NULL;
   IH.n = 0;
   IH.ask_d = NULL;
+  g_ih_gen++;
   free(SM.v);
   SM.v = NULL;
   SM.n = 0;
@@ -2602,7 +2648,7 @@ static void extras_idle (void) {
   if (!HAS_DOC || G->diff || T->page || !lsp_active(T->doc)) return;
   if (opt.color_decorators && time_to_ask(&CD.ask_d, &CD.ask_edits, &CD.seen, &CD.since, 300000)) lsp_colors(T->doc);
   if (opt.links && time_to_ask(&LK.ask_d, &LK.ask_edits, &LK.seen, &LK.since, 500000)) lsp_links(T->doc);
-  if (opt.inlay && !E.wrap) {
+  if (opt.inlay) {
     y0 = T->top > 40 ? T->top - 40 : 0;
     y1 = T->top + (size_t)L.text_h + 40;
     if (y1 > T->doc->n) y1 = T->doc->n;
@@ -2992,7 +3038,7 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
   size_t x = 0, col = 0, len, right = left + (size_t)text_cols(), n = strlen(E.find), m;
   size_t hit_end = 0;	/* a find match lasts to here */
   size_t vs = 0, hi = 0;	/* the inlay hints' columns so far; the next hint */
-  int hints = ih_on() && from == 0, tmc;
+  int hints = ih_on(), tmc;
   /* the inline suggestion's first line: virtual text at the cursor, on the row the cursor is on */
   int ghost = gh_on() && y == GH.at.y && GH.at.x >= from && GH.at.x <= to, gdone = 0;
   const uint32_t *tfg = NULL;	/* a TextMate grammar's colors: the theme's own for each scope */
@@ -3066,6 +3112,10 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
   if (from > 0 && from <= r->len && E.wrap && !((E.find_open || vim_lit()) && n > 0)) {
     x = from;	/* a wrapped line's later row: it starts at column left, no need to walk there */
     col = left;
+    if (hints) {	/* the hints before it are on the rows above: left counts them */
+      vs = ih_widths(y, from - 1, &hi);
+      col = left - vs;
+    }
   }
   while (x < r->len && x < to && col + vs < right) {
     size_t w = char_width(r, x, col, &len), i;
@@ -3776,7 +3826,7 @@ static void status_items (void) {
   }
   if (br[0]) {	/* the branch, on the left */
     char b[160];
-    snprintf(b, sizeof(b), "%s%s", br, git_count() > 0 ? "*" : "");
+    snprintf(b, sizeof(b), "%s%s", git_branch_label(), git_count() > 0 ? "*" : "");
     sb_text(t, sizeof(t), 0xEA68, b);
     snprintf(tip, sizeof(tip), "%s (Git) - Checkout Branch/Tag...", br);
     status_add("status.scm.branch", "Source Control Checkout", 0, 90, t, tip, CMD_GIT_CHECKOUT);
@@ -3917,6 +3967,7 @@ static void draw_status (void) {
   char shown[SB_MAX];
   scr_fill(0, y, E.cols, S_STATUS);
   g_nsbi = 0;
+  remote_status();	/* VS Code's remote indicator, leftmost (eremote.c) */
   status_items();
   vim_status();	/* -- NORMAL --, the : line */
   status_copilot();	/* after the editor's own, left of the bell: where VS Code puts it */
@@ -4423,6 +4474,8 @@ static struct {
   int tab_x0[16], tab_x1[16], ntab;	/* the terminals' tabs */
 } g_pn;
 
+static int g_pn_end;	/* the column after the panel's own tabs (and the views moved into it) */
+
 
 /*
 ** PROBLEMS, OUTPUT, DEBUG CONSOLE and TERMINAL, like VS Code's; E.panel_view
@@ -4431,6 +4484,7 @@ static struct {
 static void draw_panel (void) {
   int y = L.panel_y, x1 = L.panel_x + L.panel_w, ix = x1 - 2, i, focus = E.focus == F_PANEL, narrow = L.panel_w < 60;
   char t[160];
+  if (pv_shown()) pv_draw(focus);	/* a view moved into the panel, the Variables: under the title row */
   for (i = 0; i < L.panel_w; i++) scr_put(L.panel_x + i, y, 0x2500, S_BORDER);
   {	/* the tabs, the one shown underlined */
     int ne, nw;
@@ -4444,6 +4498,7 @@ static void draw_panel (void) {
     g_pn.dbg_x1 = g_pn.dbg_x0 + scr_puts(g_pn.dbg_x0, y, narrow ? " DEBUG " : " DEBUG CONSOLE ", E.panel_view == 2 ? S_PANEL_TAB_ON : S_PANEL_TAB);
     g_pn.term_x0 = g_pn.dbg_x1 + 1;
     g_pn.term_x1 = g_pn.term_x0 + scr_puts(g_pn.term_x0, y, narrow ? " TERM " : " TERMINAL ", E.panel_view == 0 ? S_PANEL_TAB_ON : S_PANEL_TAB);
+    g_pn_end = pv_tabs(g_pn.term_x1, y, narrow);	/* the moved views' after them */
   }
   g_pn.close_x = x1 - 3;
   g_pn.max_x = x1 - 5;
@@ -4453,6 +4508,7 @@ static void draw_panel (void) {
   g_pn.ntab = 0;
   scr_put(g_pn.close_x, y, 0xEA76, S_PANEL_TAB);	/* close */
   scr_put(g_pn.max_x, y, E.panel_max ? 0xEAB4 : 0xEAB7, S_PANEL_TAB);	/* chevron: maximize, restore */
+  if (E.panel_view >= PV_VARS) return;	/* drawn already */
   if (E.panel_view == 1) {
     draw_problems(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
     problems_title(y, ix);	/* after: the counts are known */
@@ -4470,7 +4526,7 @@ static void draw_panel (void) {
     w = (int)str_cols(t);
     g_pn.chan_x1 = ix - 9;
     g_pn.chan_x0 = g_pn.chan_x1 - w;
-    if (g_pn.chan_x0 > g_pn.term_x1 + 1) scr_puts(g_pn.chan_x0, y, t, S_INPUT);
+    if (g_pn.chan_x0 > g_pn_end + 1) scr_puts(g_pn.chan_x0, y, t, S_INPUT);
     out_draw(L.panel_x, y + 1, L.panel_w, L.panel_h - 1, focus);
     return;
   }
@@ -4479,7 +4535,7 @@ static void draw_panel (void) {
   g_pn.prof_x = ix - 11;
   g_pn.add_x = ix - 13;
   if (panel_count() == 1 || L.panel_w < 40) {	/* a tab for each terminal: "1: mmc", the one in front underlined */
-    int tx = g_pn.term_x1 + 2, n = panel_count(), k;
+    int tx = g_pn_end + 2, n = panel_count(), k;
     for (k = 0; k < n && k < 16; k++) {
       int w;
       snprintf(t, sizeof(t), " %d: %s ", k + 1, panel_name(k));
@@ -4496,9 +4552,9 @@ static void draw_panel (void) {
       scr_putsw(tx + 1, y, g_pn.add_x - 3 - tx, t, S_PANEL_TAB);
     }
   }
-  else if (g_pn.term_x1 + 4 < g_pn.add_x - 1) {	/* the tabs list has them: the title only */
+  else if (g_pn_end + 4 < g_pn.add_x - 1) {	/* the tabs list has them: the title only */
     snprintf(t, sizeof(t), "%s", panel_title());
-    scr_putsw(g_pn.term_x1 + 2, y, g_pn.add_x - 3 - g_pn.term_x1, t, S_PANEL_TAB);
+    scr_putsw(g_pn_end + 2, y, g_pn.add_x - 3 - g_pn_end, t, S_PANEL_TAB);
   }
   scr_put(g_pn.add_x, y, 0xEA60, S_PANEL_TAB);	/* codicon add */
   scr_put(g_pn.prof_x, y, 0xEAB4, S_PANEL_TAB);	/* chevron-down: the profiles */
@@ -4861,9 +4917,9 @@ static void compose (void) {
     int tree_h = L.side_h, oe_h = 0, ol_h = 0, tl_h = 0, py, sf = E.focus == F_SIDE;
     if (E.view == VIEW_FILES && L.side_h > 10) {	/* the panes: OPEN EDITORS over the folder, the others under it */
       oe_h = oe_height();
-      tl_h = tl_height();
+      tl_h = view_in_panel(MV_TIMELINE) ? 0 : tl_height();	/* moved into the panel: not here */
       tree_h = L.side_h - oe_h - tl_h;
-      if (HAS_DOC && T->sx && (tree_h > 12 || !OL.open)) {
+      if (HAS_DOC && T->sx && (tree_h > 12 || !OL.open) && !view_in_panel(MV_OUTLINE)) {
         ol_h = OL.open ? tree_h * 2 / 5 : 2;	/* collapsed: its title only */
         tree_h -= ol_h;
       }
@@ -5915,7 +5971,7 @@ static void apply_settings (int report) {
   lsp_ext_settings();	/* workspace.onDidChangeConfiguration */
   E.minimap = opt.minimap;
   scr_cursor_shape(editor_shape());
-  theme_set(opt.theme);
+  theme_set(theme_auto(opt.theme));	/* window.autoDetectHighContrast */
   E.wrap = opt.word_wrap;
   if (report) {
     if (r != 0) toast(1, "settings.json is not valid JSON: not applied");
@@ -6454,7 +6510,7 @@ static int is_absolute (const char *s) {
 
 
 /* VS Code's simple file dialog: a folder's list in the quick input box */
-static char *file_dialog (const char *title, int folders) {
+char *file_dialog (const char *title, int folders) {
   char *dir = xstrdup(side_root());
   for (;;) {
     Pick p;
@@ -8787,6 +8843,9 @@ static int pos_at_screen (int x, int y, Pos *p) {
 }
 
 
+static long hint_at (int sx, int sy);	/* the inlay hint there, below */
+static Pos g_hint_at;	/* the hint whose tooltip was asked for */
+
 /* the mouse has rested a while on a name: ask the server about it */
 static char *hover_expr (Pos p);
 
@@ -8796,6 +8855,15 @@ static void hover_idle (void) {
   if (!HV.waiting || os_now_us() - HV.mt < (long long)opt.hover_delay * 1000) return;	/* editor.hover.delay */
   HV.waiting = 0;
   if (E.focus == F_PANEL && in_panel(HV.mx, HV.my)) return;
+  if (HAS_DOC) {	/* on an inlay hint: its tooltip (inlayHint/resolve) */
+    long h = hint_at(HV.tx, HV.ty);
+    if (h >= 0 && IH.v[h].id) {
+      g_hint_at = IH.v[h].at;
+      HV.from_mouse = 1;
+      lsp_inlay_resolve(T->doc, IH.v[h].id, 0);
+      return;
+    }
+  }
   if (!pos_at_screen(HV.tx, HV.ty, &p)) {	/* not a name: a squiggle's problem still shows */
     Pos q;
     int gw = gutter_width();
@@ -9729,8 +9797,18 @@ static void rename_symbol (void) {
     return;
   }
   old = doc_text(T->doc, a, b, NULL);
-  name = ask_text("Rename: Enter to rename, Escape to cancel", old);
-  if (name && *name && strcmp(name, old) != 0) lsp_rename(T->doc, T->cur, name);
+  {	/* VS Code's rename box: Shift+Enter shows the Refactor Preview first */
+    Pick p;
+    int r;
+    pick_init(&p, "Rename Symbol");
+    p.hint = "Enter to Rename, Shift+Enter to Preview";
+    snprintf(p.text, sizeof(p.text), "%s", old);
+    p.fresh = 1;
+    r = pick_run(&p);
+    pick_free(&p);
+    name = r == PICK_TEXT ? xstrdup(p.text) : NULL;
+    if (name && *name && (p.shift || strcmp(name, old) != 0)) lsp_rename(T->doc, T->cur, name, p.shift);
+  }
   free(name);
   free(old);
 }
@@ -9996,6 +10074,7 @@ static struct {
   char **title;
   size_t n;
   int ready;
+  int what;	/* ACT_QUICKFIX, ACT_REFACTOR, ACT_SOURCE: what was asked for */
 } QF;
 
 
@@ -10019,7 +10098,23 @@ static void quickfix (void) {
   }
   sel_range(&a, &b);
   if (!T->sel) a = b = T->cur;
+  QF.what = ACT_QUICKFIX;
   lsp_actions(T->doc, a, b);
+}
+
+
+/* Refactor... (Ctrl+Shift+R): the server's refactorings of the selection, grouped as VS Code does */
+static void refactor (void) {
+  Pos a, b;
+  if (!HAS_DOC || G->diff || T->page) return;
+  if (!lsp_active(T->doc)) {
+    toast(0, "No refactorings available");
+    return;
+  }
+  sel_range(&a, &b);
+  if (!T->sel) a = b = T->cur;
+  QF.what = ACT_REFACTOR;
+  lsp_refactor(T->doc, a, b);
 }
 
 
@@ -10091,25 +10186,46 @@ static void color_pick_cursor (void) {
 }
 
 
-/* a click on a color's swatch: its picker; 0 not on one */
-static int swatch_click (const Mouse *m) {
+/* the inlay hint (or color swatch) at screen cell sx, sy: its index in IH; -1 none */
+static long hint_at (int sx, int sy) {
   size_t y, from, to, left, c, i, vs = 0;
   int gw = gutter_width(), lens;
   const Row *r;
-  if (!ih_on() || m->x < L.ed_x + gw || !vis_goto_k(m->y - L.text_y, &y, &from, &to, &left, &lens) || lens ||
-      from != 0)
-    return 0;
-  c = (size_t)(m->x - L.ed_x - gw) + left;
+  if (!ih_on() || G->diff || T->page || sx < L.ed_x + gw || sy < L.text_y || sy >= L.text_y + L.text_h ||
+      !vis_goto_k(sy - L.text_y, &y, &from, &to, &left, &lens) || lens)
+    return -1;
+  c = (size_t)(sx - L.ed_x - gw) + left;
   r = row_at(y);
   for (i = ih_first(y); i < IH.n && IH.v[i].at.y == y; i++) {
     size_t at = col_of(r, IH.v[i].at.x) + vs + gh_shift(y, IH.v[i].at.x);
-    if (IH.v[i].color && c >= at && c < at + (size_t)IH.w[i]) {
-      color_pick(IH.v[i].color - 1);
-      return 1;
-    }
+    if (c >= at && c < at + (size_t)IH.w[i]) return (long)i;
     vs += (size_t)IH.w[i];
   }
-  return 0;
+  return -1;
+}
+
+
+/* a click on a color's swatch: its picker; 0 not on one */
+static int swatch_click (const Mouse *m) {
+  long i = hint_at(m->x, m->y);
+  if (i < 0 || !IH.v[i].color) return 0;
+  color_pick(IH.v[i].color - 1);
+  return 1;
+}
+
+
+/* inlayHint/resolve came: the tooltip in the hover (over the hint), or the edits of a double-click */
+void on_inlay_resolved (Doc *d, int apply, const char *tooltip, const TextEdit *v, size_t n) {
+  if (!HAS_DOC || T->doc != d) return;
+  if (apply) {
+    if (n) on_format(d, v, n, 0);
+    return;
+  }
+  if (tooltip == NULL || !HV.from_mouse) return;
+  hover_close();
+  HV.at = g_hint_at;
+  HV.from_mouse = 1;
+  HV.text = xstrdup(tooltip);
 }
 
 
@@ -10185,21 +10301,10 @@ static void color_idle (void) {
 
 
 static void quickfix_idle (void) {
-  Pick p;
-  size_t i;
-  int r;
   color_idle();	/* the color picker's presentations came */
   if (!QF.ready) return;
   QF.ready = 0;
-  if (QF.n == 0) {
-    toast(0, "No code actions available");
-    return;
-  }
-  pick_init(&p, "Quick Fix");
-  for (i = 0; i < QF.n; i++) pick_add(&p, QF.title[i], NULL, 0xEA61);	/* codicon lightbulb */
-  r = pick_run(&p);
-  pick_free(&p);
-  if (r >= 0) lsp_action_run((size_t)r);
+  actions_menu(QF.what, QF.title, QF.n);	/* erefactor.c */
 }
 
 
@@ -10426,7 +10531,7 @@ static void problems_title (int y, int x1) {
   scr_put(PB.coll_x, y, 0xEAC5, S_PANEL_TAB);	/* collapse-all */
   scr_put(PB.funnel_x, y, filtered ? 0xEBCE : 0xEAF1, filtered ? S_TOGGLE_ON : S_PANEL_TAB);	/* filter, filled when on */
   PB.box_x0 = PB.box_x1 = -1;
-  bw = x1 - 11 - (g_pn.term_x1 + 2);
+  bw = x1 - 11 - (g_pn_end + 2);
   if (bw > 44) bw = 44;
   if (bw < 14) return;
   PB.box_x1 = x1 - 11;
@@ -11339,12 +11444,15 @@ static void outline_menu (void) {
   pick_add(&p, "Sort By: Name", OL.sort == 1 ? "on" : NULL, OL.sort == 1 ? 0xEAB2 : 0);
   pick_add(&p, "Sort By: Category", OL.sort == 2 ? "on" : NULL, OL.sort == 2 ? 0xEAB2 : 0);
   pick_add(&p, "Collapse All", NULL, 0xEAC5);
+  pick_add(&p, view_in_panel(MV_OUTLINE) ? "Move To Primary Side Bar" : "Move To Panel", NULL, 0);	/* where the view goes */
+  if (view_in_panel(MV_OUTLINE)) pick_add(&p, "Reset Location", NULL, 0);
   r = pick_run(&p);
   pick_free(&p);
   if (r == 0) OL.nofollow = !OL.nofollow;
   else if (r == 1) OL.nofilter = !OL.nofilter;
   else if (r >= 2 && r <= 4) OL.sort = r - 2;
   else if (r == 5) run_command(CMD_OUTLINE_COLLAPSE);
+  else if (r >= 6) pv_move(MV_OUTLINE, !view_in_panel(MV_OUTLINE));
 }
 
 
@@ -12087,40 +12195,6 @@ static void hierarchy_ask (int what) {
   if (!lsp_active(T->doc) || !lsp_hierarchy(T->doc, T->cur, what))
     toast(0, "No %s provider for '%s' files.", what <= LOC_CALLS_OUT ? "call hierarchy" : "type hierarchy",
           syntax_name(T->sx));
-}
-
-
-/* a rename's edits: across several files, asked first (VS Code's refactor preview, simply) */
-void on_edit_confirm (const TextEdit *v, size_t n) {
-  static const char *const bt[] = {"Apply", "Cancel"};
-  char msg[200];
-  Buf d;
-  size_t i, j, files = 0;
-  for (i = 0; i < n; i++) {
-    for (j = 0; j < i && m_fncmp(v[j].path, v[i].path) != 0; j++) ;
-    if (j == i) files++;
-  }
-  if (files <= 1) {
-    on_edit(v, n);
-    return;
-  }
-  buf_init(&d);
-  for (i = 0; i < n; i++) {
-    size_t c = 0;
-    for (j = 0; j < i && m_fncmp(v[j].path, v[i].path) != 0; j++) ;
-    if (j < i) continue;
-    for (j = i; j < n; j++)
-      if (m_fncmp(v[j].path, v[i].path) == 0) c++;
-    if (d.len > 160) {
-      buf_puts(&d, ", ...");
-      break;
-    }
-    buf_printf(&d, "%s%s (%lu)", d.len ? ", " : "", path_basename(v[i].path), (unsigned long)c);
-  }
-  buf_putc(&d, '\0');
-  snprintf(msg, sizeof(msg), "Rename will make %lu edits in %lu files.", (unsigned long)n, (unsigned long)files);
-  if (dialog(msg, d.s, bt, 2) == 0) on_edit(v, n);
-  buf_free(&d);
 }
 
 
@@ -13296,6 +13370,10 @@ static void change_indentation (void) {
 */
 
 static void show_view (int v) {
+  if (v == VIEW_SEARCH && view_in_panel(MV_SEARCH)) {	/* moved into the panel: there */
+    pv_open(MV_SEARCH);
+    return;
+  }
   E.side = 1;
   E.view = v;
   E.focus = F_SIDE;
@@ -13523,6 +13601,13 @@ static void used_load (void) {
 }
 
 
+/* Settings Sync wrote them (globalState.json): read again when next asked */
+void palette_used_reload (void) {
+  if (g_cmd_used_read) vec_free(&g_cmd_used);
+  g_cmd_used_read = 0;
+}
+
+
 static void used_add (int cmd) {
   const char *id = cmd_id(cmd);
   char *f;
@@ -13566,7 +13651,7 @@ static void palette (const char *init) {
   for (i = 0; i < g_cmd_used.n; i++) {	/* VS Code's "recently used" first */
     char d[96];
     c = cmd_by_id(g_cmd_used.v[i]);
-    if (c <= 0 || c >= all || c == CMD_PALETTE || used[c] || (c >= CMD_N && !ehost_listed(c))) continue;
+    if (c <= 0 || c >= all || c == CMD_PALETTE || used[c] || (c >= CMD_N && !ehost_listed(c)) || remote_hidden(c)) continue;
     used[c] = 1;
     if (n == 0) snprintf(d, sizeof(d), "%s%srecently used", cmd_keys(c), *cmd_keys(c) ? "   " : "");
     else snprintf(d, sizeof(d), "%s", cmd_keys(c));
@@ -13575,7 +13660,7 @@ static void palette (const char *init) {
   }
   for (c = 1; c < all; c++) {	/* mme's, then the extensions' */
     char d[96];
-    if (c == CMD_PALETTE || used[c] || (c >= CMD_N && !ehost_listed(c))) continue;
+    if (c == CMD_PALETTE || used[c] || (c >= CMD_N && !ehost_listed(c)) || remote_hidden(c)) continue;
     if (n > 0 && used[0] == 0) snprintf(d, sizeof(d), "%s%sother commands", cmd_keys(c), *cmd_keys(c) ? "   " : "");
     else snprintf(d, sizeof(d), "%s", cmd_keys(c));
     used[0] = 1;	/* the label only once */
@@ -14245,6 +14330,204 @@ static void panel_more_menu (int x, int y) {
       break;
   }
 }
+
+
+/*
+** {==================================================================
+** Views in the panel, like VS Code's: Search, Outline and Timeline moved
+** there (View: Move View, a view's Move To Panel; eside.c remembers where
+** they are) and back (Move To Primary Side Bar, Reset Location), each a
+** tab of the panel; and Jupyter's Variables. E.panel_view is PV_VARS, or
+** PV_MOVED + MV_* for a moved view.
+** ===================================================================
+*/
+
+static struct {
+  int x0[MV_N + 1], x1[MV_N + 1];	/* their tabs in the panel's title row; [MV_N]: JUPYTER */
+  int vars;	/* the JUPYTER tab shows (a kernel said its variables, or it was opened) */
+} g_pv;
+
+
+/* the panel's view shown is one of these; a moved view that went back: the terminal's instead */
+static int pv_shown (void) {
+  if (E.panel_view >= PV_MOVED && !view_in_panel(E.panel_view - PV_MOVED)) E.panel_view = 1;
+  return E.panel_view >= PV_VARS;
+}
+
+
+/* the view moved into the panel shown, its keys taken */
+static void pv_open (int mv) {
+  E.panel = 1;
+  E.panel_view = PV_MOVED + mv;
+  E.focus = F_PANEL;
+  if (mv == MV_TIMELINE) TL.open = TL.stale = 1;
+  if (mv == MV_OUTLINE) OL.open = 1;
+}
+
+
+/* its body, drawn before the panel's title row (which goes over the view's own title) */
+static void pv_draw (int focus) {
+  int x = L.panel_x, y = L.panel_y, w = L.panel_w, h = L.panel_h;
+  if (E.panel_view == PV_VARS) nb_vars_draw(x, y + 1, w, h - 1, focus);
+  else if (E.panel_view == PV_MOVED + MV_SEARCH) search_draw(x, y, w, h, focus);
+  else if (E.panel_view == PV_MOVED + MV_OUTLINE) {
+    OL.open = 1;
+    draw_outline(x, y, w, h, focus);
+  }
+  else if (E.panel_view == PV_MOVED + MV_TIMELINE) {
+    TL.open = 1;
+    tl_height();	/* its entries, for the file in front */
+    draw_timeline(x, y, w, h, focus);
+  }
+}
+
+
+/* their tabs after TERMINAL's, from column x; the column after them */
+static int pv_tabs (int x, int y, int narrow) {
+  int v;
+  for (v = 0; v <= MV_N; v++) {
+    int on = v == MV_N ? E.panel_view == PV_VARS : E.panel_view == PV_MOVED + v;
+    char t[40];
+    g_pv.x0[v] = g_pv.x1[v] = -1;
+    if (v < MV_N && !view_in_panel(v)) continue;
+    if (v == MV_N && !(g_pv.vars || nb_vars_known() || on)) continue;
+    snprintf(t, sizeof(t), " %s ", v == MV_N ? "JUPYTER" : view_title(v));
+    if (narrow) t[5] = ' ', t[6] = '\0';	/* " SEAR ": short, as the others are */
+    g_pv.x0[v] = x + 1;
+    g_pv.x1[v] = g_pv.x0[v] + scr_puts(g_pv.x0[v], y, t, on ? S_PANEL_TAB_ON : S_PANEL_TAB);
+    x = g_pv.x1[v];
+  }
+  return x;
+}
+
+
+/* a key while one of them has the focus */
+static void pv_key (int k) {
+  int code = KEY_CODE(k);
+  E.follow = 0;
+  if (E.panel_view == PV_MOVED + MV_SEARCH) {
+    SideAct act;
+    memset(&act, 0, sizeof(act));
+    if (global_key(k)) ;
+    else if (search_key(k, &act)) apply_act(&act);
+    else if (code == K_ESC || code == K_TAB) E.focus = F_EDITOR;
+    return;
+  }
+  if (global_key(k)) return;
+  if (code == K_ESC) E.focus = F_EDITOR;
+  else if (E.panel_view == PV_VARS) nb_vars_key(k);
+  else if (E.panel_view == PV_MOVED + MV_OUTLINE) outline_key(k);
+  else if (E.panel_view == PV_MOVED + MV_TIMELINE) tl_key(k);
+}
+
+
+/* the mouse in the panel: their tabs, their rows; 1 taken */
+static int pv_mouse (const Mouse *m, int press) {
+  int v;
+  if (press && m->y == L.panel_y)
+    for (v = 0; v <= MV_N; v++)
+      if (g_pv.x0[v] >= 0 && m->x >= g_pv.x0[v] && m->x < g_pv.x1[v]) {
+        if (v == MV_N) {
+          E.panel_view = PV_VARS;
+          E.focus = F_PANEL;
+        }
+        else pv_open(v);
+        return 1;
+      }
+  if (!pv_shown() || m->y <= L.panel_y) return 0;
+  if (m->wheel) {
+    if (E.panel_view == PV_VARS) nb_vars_wheel(m->wheel);
+    else if (E.panel_view == PV_MOVED + MV_SEARCH) search_wheel(m->wheel);
+    return 1;
+  }
+  if (!press) return 1;
+  E.focus = F_PANEL;
+  if (E.panel_view == PV_MOVED + MV_SEARCH) {
+    SideAct act;
+    memset(&act, 0, sizeof(act));
+    search_click(m->y - L.panel_y, m->x - L.panel_x, &act);
+    apply_act(&act);
+  }
+  else if (E.panel_view == PV_MOVED + MV_TIMELINE) tl_click(m->y - TL.y0, m->x, m->button);
+  else if (E.panel_view == PV_MOVED + MV_OUTLINE && m->y == OL.y0 + 1 && m->x - L.panel_x >= L.panel_w - 4) outline_menu();
+  else if (E.panel_view == PV_MOVED + MV_OUTLINE && m->y >= OL.y0 + 2) {
+    size_t n, k = OL.top + (size_t)(m->y - OL.y0 - 2);
+    outline_rows(&n);
+    if (k < OL.nvis) {
+      OL.sel = k;
+      outline_go(1);
+    }
+  }
+  return 1;
+}
+
+
+/* view mv to the panel (1) or back to the side bar (0), shown where it went */
+static void pv_move (int mv, int panel) {
+  view_set_panel(mv, panel);
+  if (panel) pv_open(mv);
+  else {
+    if (E.panel_view == PV_MOVED + mv) E.panel_view = 1;
+    if (mv == MV_SEARCH) show_view(VIEW_SEARCH);
+    else {
+      show_view(VIEW_FILES);
+      if (mv == MV_OUTLINE) OL.open = 1;
+      else TL.open = TL.stale = 1;
+      E.outline_focus = mv == MV_OUTLINE ? PANE_OUTLINE : PANE_TIMELINE;
+    }
+  }
+}
+
+
+/* the view with the focus now that can move (MV_*), -1 none */
+static int pv_focused (void) {
+  if (E.focus == F_PANEL && E.panel && E.panel_view >= PV_MOVED) return E.panel_view - PV_MOVED;
+  if (E.focus == F_SIDE && E.side && E.view == VIEW_SEARCH) return MV_SEARCH;
+  if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus == PANE_OUTLINE) return MV_OUTLINE;
+  if (E.focus == F_SIDE && E.side && E.view == VIEW_FILES && E.outline_focus == PANE_TIMELINE) return MV_TIMELINE;
+  return -1;
+}
+
+
+/* View: Move View (which one, then where) and View: Move Focused View (where) */
+static void pv_move_ask (int focused) {
+  static const char *const name[MV_N] = {"Search", "Outline", "Timeline"};
+  int mv = focused ? pv_focused() : -1, r, v;
+  Pick p;
+  if (focused && mv < 0) {
+    toast(1, "There is no view with the focus that can be moved: Search, Outline and Timeline can.");
+    return;
+  }
+  if (mv < 0) {
+    pick_init(&p, "Select a View to Move");
+    p.keep_order = 1;
+    for (v = 0; v < MV_N; v++) pick_add(&p, name[v], view_in_panel(v) ? "Panel" : v == MV_SEARCH ? "Side Bar: Search" : "Side Bar: Explorer", 0);
+    mv = pick_run(&p);
+    pick_free(&p);
+    if (mv < 0) return;
+  }
+  pick_init(&p, "Select Destination");
+  p.keep_order = 1;
+  pick_add(&p, "Panel", view_in_panel(mv) ? "current" : NULL, 0);
+  pick_add(&p, "Primary Side Bar", view_in_panel(mv) ? NULL : "current", 0);
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r >= 0 && (r == 0) != view_in_panel(mv)) pv_move(mv, r == 0);
+}
+
+
+/* the panel's "..." while a moved view shows: Move To Primary Side Bar, Reset Location; 1 it was */
+static int pv_more_menu (int x, int y) {
+  static const char *const label[] = {"Move To Primary Side Bar", "Reset Location"};
+  static const int flags[] = {0, 0};
+  int r;
+  if (!pv_shown() || E.panel_view == PV_VARS) return 0;
+  r = popup_list(x - popup_width(label, flags, 2) + 2, y, label, flags, 2);
+  if (r >= 0) pv_move(E.panel_view - PV_MOVED, 0);
+  return 1;
+}
+
+/* }================================================================== */
 
 
 /* the activity bar's badges: the changes, the tests that failed; a dot while debugging */
@@ -15156,6 +15439,11 @@ void mme_lsp_reopen (void) {
 /* ehost.c: an extension ran one of mme's commands, changed a setting, saved a file */
 void mme_command (int cmd) {
   run_command(cmd);
+}
+
+
+int mme_quitting (void) {	/* eremote.c: the window is closing (Close Window was not cancelled) */
+  return E.quit;
 }
 
 
@@ -16479,6 +16767,24 @@ static void compare_files (const char *left, const char *right) {
 }
 
 
+static int is_folder (const char *p) {
+  OsStat st;
+  return p && os_stat(p, &st) == 0 && st.is_dir;
+}
+
+
+/* Compare Folders: the two folders' files in the multi-diff editor's page (emdiff.c) */
+static void open_compare_folders (const char *left, const char *right) {
+  void *md = mdiff_folders(left, right);
+  if (md == NULL) return;
+  tab_new();
+  T->page = PAGE_MDIFF;
+  T->pdata = md;
+  G->diff = 0;
+  E.focus = F_EDITOR;
+}
+
+
 /* File: Compare Active File With...: a file of the folder, picked like Ctrl+P */
 static void compare_with (void) {
   Pick p;
@@ -17484,7 +17790,12 @@ static void run_command (int cmd) {
       break;
     }
     case CMD_REMOTE_CONNECT: remote_connect(); break;
-    case CMD_SYNC_ON: case CMD_SYNC_OFF: case CMD_SYNC_NOW: case CMD_SYNC_SHOW: sync_command(cmd); break;
+    case CMD_REMOTE_MENU: case CMD_REMOTE_CLOSE: case CMD_REMOTE_EXPLORER: case CMD_WSL_CONNECT: case CMD_WSL_DISTRO:
+    case CMD_WSL_OPEN: case CMD_WSL_REOPEN: case CMD_WSL_WINDOWS: case CMD_DC_REOPEN: case CMD_DC_OPEN: case CMD_DC_ATTACH:
+    case CMD_DC_REBUILD: case CMD_DC_REBUILD_REOPEN: case CMD_DC_LOCAL: remote_command(cmd); break;	/* eremote.c */
+    case CMD_SYNC_ON: case CMD_SYNC_OFF: case CMD_SYNC_NOW: case CMD_SYNC_SHOW: case CMD_SYNC_CONFIGURE:
+      sync_command(cmd);
+      break;
     case CMD_PORT_FORWARD: case CMD_PORTS: ports_command(cmd); break;
     case CMD_EDITOR_TO_WINDOW: editor_to_window(1); break;
     case CMD_ACC_VIEW: accessible_view(); break;
@@ -17593,7 +17904,20 @@ static void run_command (int cmd) {
     }
     case CMD_COMPARE_SELECTED: {
       const char *f = files_selected();
-      if (g_cmp_sel && f) compare_files(g_cmp_sel, f);
+      if (g_cmp_sel && f && is_folder(g_cmp_sel) && is_folder(f)) open_compare_folders(g_cmp_sel, f);	/* two folders */
+      else if (g_cmp_sel && f) compare_files(g_cmp_sel, f);
+      break;
+    }
+    case CMD_COMPARE_FOLDERS: {	/* Compare Folders...: the two asked for */
+      char *a = ask_text("Compare Folders: the first folder (left)", g_cmp_sel && is_folder(g_cmp_sel) ? g_cmp_sel : side_root()), *b;
+      if (a == NULL || a[0] == '\0') {
+        free(a);
+        break;
+      }
+      b = ask_text("Compare Folders: the folder to compare it with (right)", side_root());
+      if (b && b[0]) open_compare_folders(a, b);
+      free(a);
+      free(b);
       break;
     }
     case CMD_ENCODING: change_encoding(); break;
@@ -17673,6 +17997,10 @@ static void run_command (int cmd) {
     case CMD_MD_SIDE: md_preview(1); break;
     case CMD_OPEN_EDITORS:
     case CMD_TIMELINE:
+      if (cmd == CMD_TIMELINE && view_in_panel(MV_TIMELINE)) {	/* moved into the panel */
+        pv_open(MV_TIMELINE);
+        break;
+      }
       show_view(VIEW_FILES);
       if (cmd == CMD_OPEN_EDITORS) OE.open = 1;
       else TL.open = TL.stale = 1;
@@ -17801,6 +18129,8 @@ static void run_command (int cmd) {
       dbg_command(cmd);
       break;
     case CMD_TASK_RUN: case CMD_TASK_BUILD: case CMD_TASK_CONFIGURE: task_command(cmd); break;
+    case CMD_TASK_TERMINATE: task_command(cmd); break;
+    case CMD_DEBUG_DISASM: dbg_command(cmd); break;
     case CMD_TERMINAL:	/* show it and go there; from there: hide it */
       if (E.panel && E.focus == F_PANEL && E.panel_view == 0) {
         E.panel = E.panel_max = 0;
@@ -17942,8 +18272,14 @@ static void run_command (int cmd) {
     case CMD_SOURCE_ACTION:
       if (!HAS_DOC || G->diff || T->page) break;
       if (!lsp_active(T->doc)) toast(0, "No source actions available");
-      else lsp_source_action(T->doc, "source", 0);
+      else {
+        QF.what = ACT_SOURCE;
+        lsp_source_action(T->doc, "source", 0);
+      }
       break;
+    case CMD_REFACTOR: refactor(); break;
+    case CMD_EMMET_WRAP: case CMD_EMMET_BALANCE_OUT: case CMD_EMMET_BALANCE_IN: case CMD_EMMET_UPDATE_TAG:
+    case CMD_EMMET_REMOVE_TAG: case CMD_EMMET_MATCH_TAG: emmet_command(cmd); break;
     case CMD_EXPAND_SEL: expand_selection(); break;
     case CMD_SHRINK_SEL: shrink_selection(); break;
     case CMD_CALL_HIERARCHY: hierarchy_ask(LOC_CALLS_IN); break;
@@ -17955,6 +18291,21 @@ static void run_command (int cmd) {
     case CMD_NB_OUT_BROWSER:
       if (HAS_DOC && !G->diff && T->page == PAGE_NOTEBOOK) nb_command(T->pdata, NB_OUT_BROWSER);
       else toast(0, "Open a notebook first.");
+      break;
+    case CMD_MOVE_VIEW: pv_move_ask(0); break;	/* the views in the panel */
+    case CMD_MOVE_FOCUSED_VIEW: pv_move_ask(1); break;
+    case CMD_RESET_VIEW_LOCATIONS: {
+      int v;
+      for (v = 0; v < MV_N; v++)
+        if (view_in_panel(v)) view_set_panel(v, 0);
+      if (E.panel_view >= PV_MOVED) E.panel_view = 1;
+      break;
+    }
+    case CMD_NB_VARIABLES:
+      g_pv.vars = 1;
+      E.panel = 1;
+      E.panel_view = PV_VARS;
+      E.focus = F_PANEL;
       break;
     case CMD_ZEN:
       E.zen = !E.zen;
@@ -18128,7 +18479,7 @@ static void run_command (int cmd) {
         break;
       }
       if ((cmd >= CMD_GIT_CHECKOUT && cmd <= CMD_GIT_MORE) || cmd == CMD_GIT_WT_CREATE || cmd == CMD_GIT_WT_OPEN ||
-          cmd == CMD_GIT_WT_DELETE) {	/* egitlog.c */
+          cmd == CMD_GIT_WT_DELETE || (cmd >= CMD_GIT_REBASE && cmd <= CMD_GIT_SELECT_REPO)) {	/* egitlog.c */
         SideAct act;
         memset(&act, 0, sizeof(act));
         git_command(cmd, G->diff ? diff_path() : (HAS_DOC ? T->real : NULL), &act);
@@ -18330,7 +18681,7 @@ static int global_key (int k) {
     }
   }
   if ((code == K_F5 || code == K_F9 || ((code == K_F6 || code == K_F10 || code == K_F11) && dbg_active())) &&
-      !(k & KM_ALT)) {
+      !(k & KM_ALT) && !(code == K_F10 && (k & KM_SHIFT))) {	/* Shift+F10: a context menu, not a step */
     int cs5 = k & (KM_CTRL | KM_SHIFT);	/* Run and Debug's keys, VS Code's */
     if (code == K_F5 && cs5 == 0 && E.focus == F_SIDE && E.view == VIEW_FILES && !dbg_active()) return 0;	/* the Explorer's refresh */
     if (code == K_F5) run_command(cs5 == (KM_CTRL | KM_SHIFT) ? CMD_DEBUG_RESTART : cs5 == KM_SHIFT ? CMD_DEBUG_STOP
@@ -18506,6 +18857,40 @@ int editor_put (const char *s, size_t n) {
 }
 
 
+/* the editor's context menu (the right button, Shift+F10), VS Code's items */
+static void editor_menu (int x, int y) {
+  static const int cmd[] = {CMD_DEFINITION, CMD_REFERENCES, CMD_PEEK_DEF, 0, CMD_RENAME, CMD_CHANGE_ALL, CMD_FORMAT,
+                            CMD_REFACTOR, CMD_SOURCE_ACTION, 0, CMD_CUT, CMD_COPY, CMD_PASTE, 0, CMD_PALETTE, -1};
+  int c = menu_popup(x, y, cmd, NULL);
+  if (c != CMD_NONE) run_command(c);
+}
+
+
+/* Emmet's commands: a .. b selected, the cursor at b */
+int editor_select (Pos a, Pos b) {
+  if (!HAS_DOC || G->diff || T->page || T->md) return 0;
+  T->nmc = 0;
+  T->anchor = doc_clamp(T->doc, a);
+  T->cur = doc_clamp(T->doc, b);
+  T->sel = pos_cmp(T->anchor, T->cur) != 0;
+  T->want = col_of(row_at(T->cur.y), T->cur.x);
+  scroll_to_cursor();
+  return 1;
+}
+
+
+/* a snippet's body (Emmet: Wrap with Abbreviation's) in place of a .. b */
+int editor_snippet (Pos a, Pos b, const char *body) {
+  if (!HAS_DOC || G->diff || T->page || T->md) return 0;
+  T->nmc = 0;
+  T->sel = 0;
+  doc_group(T->doc);
+  snippet_insert(doc_clamp(T->doc, a), doc_clamp(T->doc, b), body);
+  scroll_to_cursor();
+  return 1;
+}
+
+
 /* Inline Chat's answer (or a code block's Apply): text for a .. b of d, drawn as a next edit, to accept */
 int editor_propose (const Doc *d, unsigned long edits, Pos a, Pos b, const char *text) {
   if (!HAS_DOC || T->doc != d || d->edits != edits || G->diff || T->page || T->md) return 0;
@@ -18568,7 +18953,61 @@ void on_debug (int what, const char *path, size_t line) {
       }
       E.focus = F_EDITOR;
       break;
+    case DE_RELOAD:	/* the Disassembly: its text again from the disk, where it is open */
+      for (g = 0; g < g_ngrp; g++)
+        for (i = 0; i < g_grp[g].ntab; i++) {
+          Tab *t = g_grp[g].tab[i];
+          Doc *d = t->doc;
+          if (d->path && !t->page && m_fncmp(d->path, path) == 0 && !doc_dirty(d)) {
+            int refs = d->refs;
+            unsigned long edits = d->edits;
+            char *p = xstrdup(d->path);
+            lsp_close(d);
+            doc_free(d);
+            doc_init(d);
+            doc_load(d, p);
+            d->refs = refs;
+            d->edits = edits + 1;
+            free(p);
+            lsp_open(d, t->sx ? syntax_name(t->sx) : NULL);
+            t->cur = doc_clamp(d, t->cur);
+            t->anchor = doc_clamp(d, t->anchor);
+            if (t->top >= d->n) t->top = d->n - 1;
+            t->nmc = 0;
+            t->nfold = 0;
+          }
+        }
+      break;
+    case DE_MEMORY:	/* a debugger's memory: the hex viewer, its offsets the addresses */
+      if (path == NULL) return;
+      for (g = 0; g < G->ntab; g++)	/* open already: read again */
+        if (G->tab[g]->page == PAGE_HEX && G->tab[g]->ppath && m_fncmp(G->tab[g]->ppath, path) == 0) {
+          focus_tab(g);
+          hex_reload(T->pdata);
+          break;
+        }
+      if ((g < G->ntab || page_file_open(PAGE_HEX, path, 0) == 0) && T->page == PAGE_HEX)
+        hex_set_base(T->pdata, (unsigned long long)line);
+      E.focus = F_EDITOR;
+      break;
   }
+}
+
+
+/* a task's program in a terminal of its own (etask.c): flags TT_*, and a PR_* for which one it takes */
+int on_task_run (const char *name, char **argv, const char *echo, const char *cwd, int id, int flags) {
+  if (!(flags & TT_HIDE)) {
+    E.panel = 1;
+    E.panel_view = 0;
+  }
+  if (argv == NULL) return 0;	/* presentation.reveal "silent": shown now that it failed */
+  layout();
+  if (panel_run_argv(PANEL_COLS, L.panel_h - 1, name, argv, echo, cwd, id, flags & 3) != 0) {
+    if (!panel_alive()) E.panel = 0;
+    return -1;
+  }
+  if (flags & TT_FOCUS) E.focus = F_PANEL;
+  return 0;
 }
 
 
@@ -20719,7 +21158,8 @@ static void editor_key_one (int k) {
       {'H' | KM_ALT, CMD_CALL_HIERARCHY}, {'h' | KM_ALT | KM_SHIFT, CMD_CALL_HIERARCHY}, {'H' | KM_ALT | KM_SHIFT, CMD_CALL_HIERARCHY},
       {'I' | KM_ALT, CMD_CURSORS_LINE_ENDS}, {'i' | KM_ALT | KM_SHIFT, CMD_CURSORS_LINE_ENDS}, {'I' | KM_ALT | KM_SHIFT, CMD_CURSORS_LINE_ENDS},
       {CTRL('u'), CMD_CURSOR_UNDO}, {'u' | KM_CTRL, CMD_CURSOR_UNDO}, {K_F2 | KM_CTRL, CMD_CHANGE_ALL},
-      {'m' | KM_CTRL, CMD_TAB_FOCUS}
+      {'m' | KM_CTRL, CMD_TAB_FOCUS},
+      {'r' | KM_CTRL | KM_SHIFT, CMD_REFACTOR}, {'R' | KM_CTRL | KM_SHIFT, CMD_REFACTOR}
     };
     size_t i;
     for (i = 0; i < sizeof(ek) / sizeof(ek[0]); i++)
@@ -20727,6 +21167,15 @@ static void editor_key_one (int k) {
         run_command(ek[i].cmd);
         return;
       }
+  }
+  if (k == (K_F10 | KM_SHIFT)) {	/* the context menu, at the cursor */
+    int sx, sy;
+    if (!screen_at(T->cur, &sx, &sy)) {
+      sx = L.ed_x + gutter_width();
+      sy = L.text_y;
+    }
+    editor_menu(sx, sy + 1);
+    return;
   }
   if (k == CTRL('d')) {
     if (!T->sel) select_word();
@@ -20806,8 +21255,9 @@ const char *when_ctx (const char *key) {
     return "true";
   }
   if (strcmp(key, "editorTextFocus") == 0 || strcmp(key, "editorFocus") == 0) return B(ed);
-  if (strcmp(key, "textInputFocus") == 0) return B(ed || E.finding || (E.focus == F_SIDE && E.view == VIEW_SEARCH));
-  if (strcmp(key, "inputFocus") == 0) return B(ed || E.finding || (E.focus == F_SIDE && E.view == VIEW_SEARCH));
+  if (strcmp(key, "textInputFocus") == 0 || strcmp(key, "inputFocus") == 0)	/* the Search view's boxes too, in the panel as well */
+    return B(ed || E.finding || (E.focus == F_SIDE && E.view == VIEW_SEARCH) ||
+             (E.focus == F_PANEL && E.panel && E.panel_view == PV_MOVED + MV_SEARCH));
   if (strcmp(key, "editorIsOpen") == 0) return B(HAS_DOC);
   if (strcmp(key, "editorHasSelection") == 0) return B(HAS_DOC && T->sel);
   if (strcmp(key, "editorHasMultipleSelections") == 0) return B(HAS_DOC && T->nmc > 0);
@@ -20937,7 +21387,7 @@ static void on_key (int k) {
       console_paste(b.s ? b.s : "", b.len);
       buf_free(&b);
     }
-    else if (!global_key(k) && !console_key(k) && KEY_CODE(k) == K_ESC) E.focus = F_EDITOR;
+    else if ((k == (' ' | KM_CTRL) || !global_key(k)) && !console_key(k) && KEY_CODE(k) == K_ESC) E.focus = F_EDITOR;	/* Ctrl+Space: its suggestions */
     E.follow = 0;
     goto done;
   }
@@ -20949,6 +21399,10 @@ static void on_key (int k) {
   if (E.focus == F_PANEL && E.panel && E.panel_view == 3) {	/* the output */
     if (KEY_CODE(k) == K_ESC) E.focus = F_EDITOR;
     else if (!global_key(k)) out_key(k);
+    goto done;
+  }
+  if (E.focus == F_PANEL && E.panel && pv_shown()) {	/* a view moved into the panel, the Variables */
+    pv_key(k);
     goto done;
   }
   if (E.focus == F_PANEL && E.panel && panel_finding() && !panel_passes(k) && panel_find_key(k)) goto done;
@@ -21562,6 +22016,7 @@ static void on_mouse (void) {
     return;
   }
   if (in_panel(m->x, m->y)) {
+    if (pv_mouse(m, press)) return;	/* the moved views' tabs and rows */
     if (m->wheel && E.panel_view == 1) {
       size_t st = (size_t)wheel_step(m->mods);
       if (m->wheel < 0) PB.sel = PB.sel > st ? PB.sel - st : 0;
@@ -21588,7 +22043,7 @@ static void on_mouse (void) {
         E.focus = F_EDITOR;
       }
       else if (m->x == g_pn.max_x) run_command(CMD_PANEL_MAX);
-      else if (m->x == g_pn.more_x) panel_more_menu(m->x, m->y + 1);
+      else if (m->x == g_pn.more_x && !pv_more_menu(m->x, m->y + 1)) panel_more_menu(m->x, m->y + 1);
       else if (E.panel_view == 1 && problems_title_click(m->x)) ;	/* the filter box, the funnel, Collapse All */
       else if (m->x >= g_pn.prob_x0 && m->x < g_pn.prob_x1) {
         E.panel_view = 1;
@@ -21732,6 +22187,13 @@ static void on_mouse (void) {
       E.focus = F_SIDE;
       memset(&act, 0, sizeof(act));
       debug_menu(debug_row_at(m->y - L.body_y), m->x, m->y + 1, &act);
+      apply_act(&act);
+      return;
+    }
+    if (m->button == 2 && m->press && !m->drag && E.view == VIEW_GIT) {	/* Source Control: a row's menu (the graph's commits) */
+      E.focus = F_SIDE;
+      memset(&act, 0, sizeof(act));
+      git_menu(m->y - L.body_y, m->x, m->y + 1, &act);
       apply_act(&act);
       return;
     }
@@ -21926,6 +22388,15 @@ static void on_mouse (void) {
       return;
     }
   }
+  if (m->button == 2 && m->press && !m->drag && zm.y >= L.text_y && zm.y < L.text_y + L.text_h &&
+      zm.x >= L.ed_x + gutter_width()) {	/* the right button in the text: the context menu */
+    Pos p = mouse_pos(&zm), a, b;
+    E.focus = F_EDITOR;
+    sel_range(&a, &b);
+    if (!T->sel || pos_cmp(p, a) < 0 || pos_cmp(p, b) > 0) text_click(&zm, 0);	/* outside the selection: there */
+    editor_menu(m->x, m->y);
+    return;
+  }
   if (press && m->y >= L.text_y) {
     E.focus = F_EDITOR;
     E.finding = 0;
@@ -21958,6 +22429,13 @@ static void on_mouse (void) {
       lx = m->x;
       ly = m->y;
       E.drag_unit = (m->mods & KM_SHIFT) ? 1 : count;
+    }
+    if (E.drag_unit == 2) {	/* a double-click on an inlay hint: its textEdits go in (inlayHint/resolve) */
+      long h = hint_at(zm.x, zm.y);
+      if (h >= 0 && IH.v[h].id) {
+        lsp_inlay_resolve(T->doc, IH.v[h].id, 1);
+        return;
+      }
     }
     if (E.drag_unit == 1 && !(m->mods & KM_SHIFT) && T->sel && T->nmc == 0 && opt.drag_drop) {
       Pos p = mouse_pos(&zm), a, b;
@@ -22065,6 +22543,7 @@ int main (int argc, char **argv) {
     return 0;
   }
   if (argc > 1 && strncmp(argv[1], "--remote=", 9) == 0) return remote_main(argv[1] + 9);	/* Remote-SSH: a window over ssh */
+  if (argc > 1 && strncmp(argv[1], "--port-relay=", 13) == 0) return ports_relay_main(argv[1] + 13);	/* a container's port, for the window */
   if (argc > 1 && strncmp(argv[1], "--duplicate=", 12) == 0) {	/* Duplicate As Workspace: the folder again, on purpose */
     dup = 1;
     argv[1] += 12;
@@ -22149,6 +22628,7 @@ int main (int argc, char **argv) {
   atexit(cleanup);
   win_register(g_session ? (ws_active() ? ws_file() : side_root()) : "", term_can_raise());	/* the other windows see this one */
   sync_init();
+  ports_init();	/* a remote mme: devcontainer.json's forwardPorts */
   ui_background = background;
   check_size();
   layout();
@@ -22174,6 +22654,7 @@ int main (int argc, char **argv) {
     lsp_poll();
     ehost_idle();	/* the extensions installed, uninstalled: the extension host again */
     dbg_poll();
+    task_poll();	/* dependsOn, a background task ready, a preLaunchTask done */
     nb_poll();
     sync_poll();
     switch (win_poll()) {	/* another window asked: Exit, or this folder is wanted */
@@ -22200,7 +22681,7 @@ int main (int argc, char **argv) {
       ghost_idle();
       nedit_idle();
       extras_idle();
-      side_idle(E.view);
+      side_idle(E.panel && E.panel_view == PV_MOVED + MV_SEARCH ? VIEW_SEARCH : E.view);	/* the Search view in the panel too */
       files_index_idle();
       work_idle();
       continue;

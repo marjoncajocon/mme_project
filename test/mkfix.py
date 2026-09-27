@@ -279,6 +279,35 @@ body {
 }
 """
 
+MATH_MD_FILE = r"""# Math and diagrams
+
+Inline: $E = mc^2$, $a_i + b_{ij}$, $\alpha \leq \beta$, $\frac{a+b}{c}$, $\sqrt{x^2+y^2}$; not math: $5 and $10.
+
+$$
+\sum_{i=1}^{n} i = \frac{n(n+1)}{2}
+$$
+
+```mermaid
+graph TD
+  A[Start] --> B{Is it?}
+  B -->|Yes| C[OK]
+  B -->|No| D(Retry)
+  D --> A
+  C --> E[End]
+```
+
+```mermaid
+graph LR
+  X[Input] --> Y[Parse] --> Z[Output]
+  X --> Z
+```
+
+```mermaid
+sequenceDiagram
+  Alice->>Bob: Hello
+```
+"""
+
 MD_FILE = """# mme regression fixture
 
 A paragraph with **bold**, *italic*, `code` and a [link](https://example.com).
@@ -553,6 +582,7 @@ def build_tree():
     w(os.path.join(lang, "app.js"), JS_FILE)
     w(os.path.join(lang, "site.css"), CSS_FILE)
     w(os.path.join(lang, "doc.md"), MD_FILE)
+    w(os.path.join(FIX, "mdmath", "math.md"), MATH_MD_FILE)
     w(os.path.join(lang, "conf.json"), JSON_FILE)
     w(os.path.join(lang, "util.py"), PY_FILE)
     w(os.path.join(lang, "nb.ipynb"), NB_FILE)
@@ -588,6 +618,36 @@ def build_tree():
     w(os.path.join(lsp, "links.c"), LSP_LINKS_C)
     w(os.path.join(lsp, "renamer", "main.c"), LSP_RENAMER_MAIN)
     w(os.path.join(lsp, "renamer", "util.h"), "int util (void);\n")
+    # stublsp.py --f3: count_items in three files (a rename edits all of
+    # them), its parameters' inlay hints on a line long enough to wrap, and
+    # a page for the Emmet commands
+    f3 = os.path.join(lsp, "f3")
+    w(os.path.join(f3, "main.c"),
+      "#include \"util.h\"\n"
+      "int main (void) {\n"
+      "\tint n = count_items(12, 34, \"a label long enough to wrap\", 1) + count_items(5, 6, \"x\", 0);\n"
+      "\treturn n;\n"
+      "}\n")
+    w(os.path.join(f3, "util.h"), "int count_items (int a, int b, const char *s, int f);\n")
+    w(os.path.join(f3, "util.c"),
+      "#include \"util.h\"\n"
+      "int count_items (int a, int b, const char *s, int f) {\n"
+      "\treturn a + b + f + (s != 0);\n"
+      "}\n")
+    w(os.path.join(f3, "notes.txt"), "watched by *.txt\n")
+    w(os.path.join(f3, "page.html"),
+      "<!DOCTYPE html>\n"
+      "<html>\n"
+      "<body>\n"
+      "\t<div class=\"box\">\n"
+      "\t\t<p>Hello <b>world</b></p>\n"
+      "\t\t<img src=\"a.png\">\n"
+      "\t</div>\n"
+      "apples\n"
+      "pears\n"
+      "plums\n"
+      "</body>\n"
+      "</html>\n")
 
     # the Search Editor's folder: "total" twice on one line, matches far
     # enough apart that the context lines around them leave a gap, "Total"
@@ -647,8 +707,54 @@ def build_tree():
     parts.append("var tail = 1;\n")
     w(os.path.join(mini, "mid.js"), "".join(parts))
 
+    build_debug()
     build_git()
     print("fixtures in", FIX)
+
+
+# the task-* and debug-* scenarios' folder: tasks.json (dependsOn, inputs, a problem matcher of its own),
+# launch.json (preLaunchTask, runInTerminal, a compound) for test/stubdap.py, a debug adapter of type "stub"
+DBG_TASKS = r"""{
+  "version": "2.0.0",
+  "inputs": [
+    {"id": "who", "type": "promptString", "description": "Who is it built for?", "default": "World"},
+    {"id": "mode", "type": "pickString", "description": "Build mode", "options": ["debug", "release"], "default": "release"}
+  ],
+  "tasks": [
+    {"label": "gen A", "type": "shell", "command": "echo generating A"},
+    {"label": "gen B", "type": "shell", "command": "echo generating B, %GREETING%",
+     "options": {"env": {"GREETING": "hi from options.env"}}},
+    {"label": "build", "type": "shell", "dependsOn": ["gen A", "gen B"], "dependsOrder": "sequence",
+     "command": "echo building ${input:mode} for ${input:who} && echo prog.py:3:5: warning: unused thing",
+     "problemMatcher": {"owner": "demo", "fileLocation": ["relative", "${workspaceFolder}"],
+       "pattern": {"regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                   "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5}}},
+    {"label": "fail", "type": "shell", "command": "echo failing on purpose && exit 3"}
+  ]
+}
+"""
+
+DBG_LAUNCH = r"""{
+  "version": "0.2.0",
+  "configurations": [
+    {"name": "Stub: plain", "type": "stub", "request": "launch", "program": "${workspaceFolder}/prog.py"},
+    {"name": "Stub: fails first", "type": "stub", "request": "launch", "program": "${workspaceFolder}/prog.py",
+     "preLaunchTask": "fail"},
+    {"name": "Stub: terminal", "type": "stub", "request": "launch", "program": "${workspaceFolder}/prog.py",
+     "runInTerminal": true}
+  ],
+  "compounds": [
+    {"name": "Both", "configurations": ["Stub: plain", "Stub: terminal"], "stopAll": true}
+  ]
+}
+"""
+
+
+def build_debug():
+    d = os.path.join(FIX, "dbg")
+    w(os.path.join(d, "prog.py"), "def main():\n    count = 42\n    counter = 7\n    print(count + counter)\n\n\nmain()\n")
+    w(os.path.join(d, ".vscode", "tasks.json"), DBG_TASKS)
+    w(os.path.join(d, ".vscode", "launch.json"), DBG_LAUNCH)
 
 
 GIT_BASE_C = """#include <stdio.h>

@@ -251,6 +251,7 @@ const char *term_profile_setting (void);	/* "terminal.integrated.defaultProfile.
 void settings_put_json (const char *key, const char *json);	/* "key": true, 4 ... */
 void settings_reset (const char *key);	/* its line goes: the default again */
 const Json *settings_value (const char *key);	/* as the file says, NULL: not set */
+const char *settings_default (const char *key);	/* its default, JSON text; NULL: not a setting of mme's */
 void settings_put_raw (const char *key, const char *value);	/* "key": value, JSON as it is */
 
 /* }================================================================== */
@@ -423,6 +424,7 @@ int sync_on (void);
 void sync_init (void);	/* at start: a sync once the window is up */
 void sync_poll (void);	/* the main loop's */
 void sync_changed (void);	/* settings.json, keybindings.json or a snippets file changed here */
+void palette_used_reload (void);	/* mme.c: Settings Sync wrote the Command Palette's recently used */
 void user_files_changed (int settings, int keys, int snippets);	/* mme.c: they were written by Settings Sync: applied */
 
 /* eaccess.c - accessibility: mme's own voice, and VS Code's accessibility signals */
@@ -448,7 +450,6 @@ int ports_remote (void);	/* this mme runs on a Remote-SSH host (MME_REMOTE) */
 void ports_command (int cmd);	/* CMD_PORT_FORWARD, CMD_PORTS: on the host */
 void ports_scan (const char *s, size_t n);	/* the host's terminal output: localhost URLs forwarded */
 void ports_reply (const char *text);	/* eterm.c: the window's answer (OSC 7717 on the input) */
-void ports_host (const char *host);	/* eremote.c: the window's host */
 void ports_osc (const char *text);	/* epanel.c: the host's mme asks (OSC 7717), in a Remote-SSH window */
 void ports_poll (void);	/* the Remote-SSH window's loop */
 void ports_stop_all (void);
@@ -458,6 +459,17 @@ void remote_connect (void);	/* eremote.c: Remote-SSH: Connect to Host... */
 int remote_main (const char *spec);	/* the window of mme --remote=host::folder */
 extern int remote_mode;	/* this window is a remote one */
 extern int remote_close;	/* its x was pressed: 1 asked the remote mme, 2 the window goes */
+/* eremote.c: WSL and Dev Containers too, VS Code's remote indicator and its menu */
+void remote_command (int cmd);	/* CMD_REMOTE_MENU .. CMD_DC_LOCAL */
+int remote_hidden (int cmd);	/* the palette leaves it out here (WSL's in a WSL window ...) */
+void remote_status (void);	/* the status bar's remote indicator (leftmost) */
+int remote_osc (const char *text);	/* eports.c: the remote mme asks the window (reopen-local, rebuild); 1 taken */
+void ports_target (int kind, const char *name);	/* eports.c: how a port is forwarded (PT_SSH host, PT_WSL, PT_DOCKER container) */
+void ports_init (void);	/* the remote mme at start: MME_FORWARD_PORTS (devcontainer.json's forwardPorts) */
+int ports_relay_main (const char *spec);	/* mme --port-relay=PORT: stdin, stdout to 127.0.0.1:PORT (a container's forward) */
+enum { PT_SSH, PT_WSL, PT_DOCKER };
+char *file_dialog (const char *title, int folders);	/* mme.c: VS Code's simple file dialog */
+int mme_quitting (void);	/* mme.c: E.quit */
 void md_page (const char *dir, const char *name, const char *text);	/* mme.c: text as mme-data/dir/name, its Markdown preview in front */
 void browse (const char *url);	/* mme.c: the system's browser */
 int open_path (const char *path);	/* mme.c: a file in an editor (its own, as open_file) */
@@ -553,10 +565,16 @@ int theme_count (void);
 const char *theme_name (int i);
 int theme_current (void);
 typedef int (*ThemeLoad) (void *arg, uint32_t *color);	/* an extension's colors over the base */
-void theme_add (const char *name, int light, ThemeLoad load, void *arg);
+void theme_add (const char *name, int light, ThemeLoad load, void *arg);	/* light: 0 dark, 1 light, 2 hc-black, 3 hc-light */
 void theme_customize (uint32_t *color, const char *theme);	/* workbench.colorCustomizations over it */
 void tm_theme_again (void);	/* the grammar's rules are built again: the settings changed */
 void theme_clear_added (void);
+/* high contrast themes: outlines round cells of a style, instead of colors (mme-sdl paints them; a terminal underlines) */
+enum { OL_FOCUS, OL_CUR, OL_WIDGET, OL_INPUT, OL_TOGGLE, OL_MATCH, OL_LINE, OL_ADD, OL_DEL, OL_N };
+int theme_hc (void);	/* 1 a dark high contrast theme is on, 2 a light one, 0 not */
+unsigned theme_outline (int st);	/* 1 << OL_*: the outlines style st's cells are inside */
+uint32_t theme_outline_color (int ol);	/* 0xRRGGBB; bit 24: dashed */
+const char *theme_auto (const char *name);	/* window.autoDetectHighContrast: the theme to show for workbench.colorTheme */
 
 void scr_resize (int cols, int rows);
 int scr_cols (void);
@@ -743,6 +761,18 @@ enum {
   CMD_ACC_VIEW, CMD_ACC_HELP,	/* Accessible View, Accessibility Help (eaccess.c) */
   CMD_ICON_THEME,	/* Preferences: File Icon Theme (eicons.c) */
   CMD_NB_OUT_BROWSER,	/* Notebook: Open Output in Browser (enb.c: the extensions' renderers) */
+  CMD_REMOTE_MENU, CMD_REMOTE_CLOSE, CMD_REMOTE_EXPLORER,	/* eremote.c: remote_command, these ... */
+  CMD_WSL_CONNECT, CMD_WSL_DISTRO, CMD_WSL_OPEN, CMD_WSL_REOPEN, CMD_WSL_WINDOWS,
+  CMD_DC_REOPEN, CMD_DC_OPEN, CMD_DC_ATTACH, CMD_DC_REBUILD, CMD_DC_REBUILD_REOPEN, CMD_DC_LOCAL,	/* ... to here */
+  CMD_GIT_REBASE, CMD_GIT_REBASE_ABORT, CMD_GIT_CHERRY_PICK, CMD_GIT_TAG_CREATE, CMD_GIT_TAG_DELETE,
+  CMD_GIT_TAG_PUSH, CMD_GIT_REMOTE_ADD, CMD_GIT_REMOTE_REMOVE, CMD_GIT_SELECT_REPO,	/* egitlog.c: git_command */
+  CMD_COMPARE_FOLDERS,	/* Compare Folders... (emdiff.c) */
+  CMD_SYNC_CONFIGURE,	/* Settings Sync: Configure... (esync.c) */
+  CMD_REFACTOR, CMD_EMMET_WRAP, CMD_EMMET_BALANCE_OUT, CMD_EMMET_BALANCE_IN, CMD_EMMET_UPDATE_TAG,	/* Refactor..., */
+  CMD_EMMET_REMOVE_TAG, CMD_EMMET_MATCH_TAG,	/* Emmet: ... (eemmet.c) */
+  CMD_MOVE_VIEW, CMD_MOVE_FOCUSED_VIEW, CMD_RESET_VIEW_LOCATIONS,	/* View: Move View ... (eside.c's view_in_panel) */
+  CMD_NB_VARIABLES,	/* Jupyter: Open Variables View (enb.c) */
+  CMD_TASK_TERMINATE, CMD_DEBUG_DISASM,	/* Tasks: Terminate Task (etask.c), Open Disassembly View (edebug.c) */
   CMD_N
 };
 
@@ -829,6 +859,7 @@ int md_link_at (int x, int y, char **link);	/* the link under the mouse; *link t
 
 /* ehex.c - the hex viewer for binaries (read-only, like VS Code's Hex Editor) */
 void *hex_open (const char *path);	/* NULL: too big, or unreadable */
+void hex_set_base (void *page, unsigned long long base);	/* its offsets are addresses from base (a debug memory view) */
 void hex_close (void *page);
 void hex_reload (void *page);
 size_t hex_size (void *page);
@@ -870,6 +901,7 @@ enum { EMMET_NONE, EMMET_HTML, EMMET_JSX, EMMET_XML, EMMET_CSS };
 int emmet_mode (const char *lang, const char *path);	/* EMMET_* for a file */
 size_t emmet_start (const char *s, size_t x, int mode);	/* where the abbreviation before x starts */
 char *emmet_expand (const char *abbr, size_t n, int mode, int *worth);	/* a snippet body, NULL: none */
+void emmet_command (int cmd);	/* CMD_EMMET_*: Wrap with Abbreviation, Balance, Update Tag ... on the editor in front */
 
 /* ekeys.c - keybindings.json, VS Code's */
 int keys_load (void);	/* -1: the file is not good JSON */
@@ -915,11 +947,12 @@ typedef struct Pick {
   const char *modes;	/* Go to File: one of these typed first switches (PICK_MODE) */
   int match_detail;	/* the detail is a path: what is typed matches "detail/label" too */
   const char *status;	/* dim, at the input's right end ("Indexing... 1200 files"), or NULL */
-  const char *group_label[2];	/* dim at the right of each group's first item ("recently opened"), or NULL */
+  const char *group_label[8];	/* dim at the right of each group's first item ("recently opened"), or NULL */
   int group;	/* pick_add gives the items this group */
   int line_suffix;	/* Go to File: ":12" or ":12:5" at the end is where to go, not matched */
   int typed_group;	/* Go to File: the items of this group and after show once something is typed; 0: always */
   int side;	/* set by pick_run: Ctrl+Enter took the item (to the side) */
+  int shift;	/* set by pick_run: Shift+Enter took it (the rename box: Refactor Preview) */
   char text[512];	/* what is typed */
 } Pick;
 
@@ -1116,6 +1149,11 @@ int side_key (int view, int k, SideAct *act);	/* 0: not used */
 void side_click (int view, int row, int col, SideAct *act);
 void side_wheel (int view, int d);
 int side_idle (int view);	/* 1: something changed, draw again */
+/* eside.c: the views that move between the side bar and the panel (View: Move View), where they are */
+enum { MV_SEARCH, MV_OUTLINE, MV_TIMELINE, MV_N };
+int view_in_panel (int v);	/* MV_*: 1 it is in the panel */
+void view_set_panel (int v, int panel);	/* into the panel (1), back (0); remembered */
+const char *view_title (int v);	/* "SEARCH" */
 
 uint32_t file_icon (const char *name, int *st);	/* Seti's icon and its color (or the icon theme's) */
 
@@ -1223,6 +1261,12 @@ int diff_open_files (const char *path, const char *old_file, const char *new_fil
 unsigned git_status_gen (void);	/* counts the times git's status was read */
 size_t git_changes (int staged);	/* the files of Staged Changes (staged) or Changes */
 const char *git_change (int staged, size_t i, char *letter);	/* the i-th: its path, and its letter */
+const char *git_branch_label (void);	/* "main (Rebasing)" while a rebase waits, else git_branch */
+int git_rebasing (void);	/* a rebase stopped (a conflict): the view's Continue / Abort */
+int git_conflicts (void);	/* the files still in Merge Changes */
+void git_select_repo (int i);	/* the repository the view and the commands work on; -1: picked from a list */
+void git_rescan (void);	/* git_refresh, the workspace's repositories looked for again */
+void git_menu (int row, int x, int y, SideAct *act);	/* the right button on a row of the view */
 void *diff_take (void);	/* the diff editor's diff set aside, the editor left empty */
 void diff_put_back (void *s);	/* and back in it (the diff there now goes) */
 void diff_swap (void *s);	/* the one set aside and the one in the editor change places */
@@ -1254,6 +1298,11 @@ void nb_command (void *page, int what);	/* NB_* */
 int nb_poll (void);	/* the kernels' answers; 1: something changed */
 int nb_busy (void);	/* a kernel works */
 void nb_shutdown (void);	/* the kernels stop */
+/* the Variables view (Jupyter's, in the panel): the kernel's variables of the notebook in front */
+int nb_vars_known (void);	/* a kernel said its variables */
+void nb_vars_draw (int x, int y, int w, int h, int focus);
+int nb_vars_key (int k);	/* 1 used */
+void nb_vars_wheel (int d);
 
 /* emdiff.c - the multi-diff editor: every changed file's diff in one tab (PAGE_MDIFF) */
 void *mdiff_new (int staged);	/* Changes, or Staged Changes */
@@ -1262,6 +1311,7 @@ const char *mdiff_title (void *page);	/* "Git: Changes" */
 void mdiff_draw (void *page, int x, int y, int w, int h, int focus);
 void mdiff_key (void *page, int k, SideAct *act);	/* act: a file to open at a line */
 void mdiff_mouse (void *page, const Mouse *m, SideAct *act);
+void *mdiff_folders (const char *left, const char *right);	/* Compare Folders: the page; NULL (a toast): no */
 void mdiff_fold_all (void *page, int fold);	/* Collapse All, Expand All */
 
 /* egitlog.c - the Source Control Graph, branches, the git commands, blame */
@@ -1281,6 +1331,9 @@ const char *git_sync_text (void);	/* "1\xE2\x86\x93 2\xE2\x86\x91" behind / ahea
 int git_has_upstream (void);
 void git_command (int cmd, const char *path, SideAct *act);	/* a CMD_GIT_*; act: what to show */
 void git_error (const Buf *b, const char *fallback);	/* git's message in a toast */
+enum { GA_CHECKOUT, GA_BRANCH, GA_TAG, GA_CHERRY_PICK, GA_COPY_ID, GA_COPY_MESSAGE };	/* the graph's menu */
+void git_graph_action (int what, size_t commit, SideAct *act);	/* on the graph's commit */
+void git_rebase_continue (void);	/* the view's Continue (and Git: Commit while rebasing) */
 void git_ago (long long t, char *out, size_t n);	/* "3 days ago" */
 const char *git_blame (const char *path, size_t y, int short_form);	/* NULL: none */
 void blame_clear (void);
@@ -1529,6 +1582,10 @@ void panel_select (int i);
 const char *panel_name (int i);
 void panel_send (const char *s, size_t n);	/* raw, to the terminal in front */
 int panel_run (int cols, int rows, const char *name, const char *cmd, const char *cwd, int task);	/* a task's terminal */
+enum { PR_SHARED, PR_DEDICATED, PR_NEW };	/* presentation.panel: which finished task terminal a task takes */
+int panel_run_argv (int cols, int rows, const char *name, char **argv, const char *echo, const char *cwd, int task,
+                    int reuse);	/* the same, with a program and its arguments (no shell); echo NULL: no header */
+int panel_kill_task (int task);	/* the terminal of that task ends; -1 none */
 int panel_new_profile (int cols, int rows, int p);	/* with a shell of panel_profiles */
 int panel_split (void);	/* one more next to the one in front, in its group */
 int panel_group_size (void);	/* the terminals shown side by side */
@@ -1624,6 +1681,7 @@ typedef struct InlayHint {	/* a server's hint shown in the text: "a:", ": int" *
   Pos at;	/* before the character there */
   char *label;	/* with its padding */
   size_t color;	/* editor.colorDecorators: a swatch, 1 + its color's index; 0 a hint */
+  size_t id;	/* a hint: lsp_inlay_resolve's; 0 none */
 } InlayHint;
 
 typedef struct DocColor {	/* textDocument/documentColor: bytes a .. b of the text are a color */
@@ -1680,7 +1738,7 @@ void lsp_complete (Doc *d, Pos at);	/* the answer comes to on_completion */
 void lsp_define (Doc *d, Pos at);	/* the answer comes to on_definition */
 void lsp_hover (Doc *d, Pos at);	/* to on_hover */
 void lsp_signature (Doc *d, Pos at);	/* to on_signature */
-void lsp_rename (Doc *d, Pos at, const char *name);	/* to on_edit */
+void lsp_rename (Doc *d, Pos at, const char *name, int preview);	/* to on_edit_confirm (preview: always) */
 void lsp_actions (Doc *d, Pos a, Pos b);
 void lsp_bulb (Doc *d, size_t y);	/* to on_bulb */
 void lsp_inlay (Doc *d, size_t y0, size_t y1);	/* to on_inlay */
@@ -1837,7 +1895,18 @@ void on_format (Doc *d, const TextEdit *v, size_t n, int failed);
 void on_comp_resolve (Doc *d, unsigned gen, size_t i, const char *detail, const char *doc, TextEdit *extra, size_t nextra);	/* takes extra */
 void on_selection_ranges (Doc *d, Pos at, const Pos *v, size_t n);	/* v: n pairs, the innermost first */
 void on_folding (Doc *d, unsigned long edits, FoldRange *v, size_t n);	/* takes v */
-void on_edit_confirm (const TextEdit *v, size_t n);	/* a rename's edits: several files are asked about first */
+void on_edit_confirm (const TextEdit *v, size_t n, int always);	/* erefactor.c: several files (always: any) previewed first */
+/* refactorings, inlay hint resolve, watched files (elsp.c) and their Refactor Preview (erefactor.c) */
+void lsp_refactor (Doc *d, Pos a, Pos b);	/* the code actions of kind refactor, to on_actions */
+const char *lsp_action_kind (size_t i);	/* on_actions's action i: its kind, "" none */
+const char *lsp_action_disabled (size_t i);	/* why it is disabled, NULL: it is not */
+void lsp_inlay_resolve (Doc *d, size_t id, int apply);	/* inlayHint/resolve, to on_inlay_resolved */
+void on_inlay_resolved (Doc *d, int apply, const char *tooltip, const TextEdit *v, size_t n);	/* its tooltip, its edits */
+void lsp_watch_nudge (void);	/* files changed (a save, git): the watching servers are told soon */
+enum { ACT_QUICKFIX, ACT_REFACTOR, ACT_SOURCE };
+void actions_menu (int what, char *const *titles, size_t n);	/* erefactor.c: on_actions's, grouped by kind; one runs */
+int editor_select (Pos a, Pos b);	/* mme.c: a .. b selected in the editor in front (the cursor at b); 0 none */
+int editor_snippet (Pos a, Pos b, const char *body);	/* mme.c: a snippet's body in place of a .. b; 0 none */
 char *open_doc_text (const char *path, size_t *len);	/* mme.c: the editor's text of path, NULL: not open */
 void open_docs_list (Vec *out);	/* mme.c: the paths the editor has open (Search reads these itself) */
 int open_doc_edit (const char *path, const TextEdit *v, size_t n);	/* mme.c: edited there; 0: not open */
@@ -1852,7 +1921,8 @@ int open_doc_edit (const char *path, const TextEdit *v, size_t n);	/* mme.c: edi
 */
 
 enum { DM_BP = 1, DM_UNVERIFIED = 2, DM_DISABLED = 4, DM_TOP = 8, DM_FRAME = 16, DM_COND = 32, DM_LOG = 64 };	/* dbg_mark */
-enum { DE_START, DE_STOP, DE_CONT, DE_END, DE_OPEN };	/* on_debug */
+enum { DE_START, DE_STOP, DE_CONT, DE_END, DE_OPEN, DE_RELOAD, DE_MEMORY };	/* on_debug (DE_RELOAD: the file again
+							** from the disk; DE_MEMORY: in the hex viewer, line: its address) */
 
 int dbg_active (void);	/* a session runs */
 int dbg_stopped (void);	/* and it is paused */
@@ -1885,9 +1955,15 @@ void dbg_toolbar_draw (int x, int w, int y);	/* the floating toolbar, while debu
 int dbg_toolbar_hit (int x, int y);	/* the command clicked; -1 on it, 0 not */
 
 char *vs_subst (const char *s);	/* ${workspaceFolder}, ${file} ... put in */
+void vs_inputs (const Json *inputs);	/* a run begins: its file's "inputs", for ${input:id} (each asked once) */
+int vs_cancelled (void);	/* an input was not answered: what vs_subst gave is not to be used */
 void task_command (int cmd);	/* CMD_TASK_* */
 void task_output (int id, const char *s, size_t n);	/* epanel.c: a task's terminal printed */
-void task_done (int id, int code);
+void task_done (int id, int code);	/* and ended (-1: killed) */
+int task_poll (void);	/* the main loop: the tasks moved on (dependsOn, background ones ready); 1 changed */
+typedef void (*TaskCb) (void *ud, int ok, int code, int errors);	/* a task ended (a background one: is ready) */
+int task_run_label (const char *label, TaskCb cb, void *ud);	/* 0 it runs; -1 no such task; -2 not run */
+int task_run_in_terminal (const char *title, char **argv, const char *cwd, const Json *env);	/* runInTerminal */
 
 /* mme.c */
 const char *editor_file (void);	/* the file in front, NULL none */
@@ -1895,6 +1971,9 @@ size_t editor_line (void);	/* the cursor's line there, from 0 */
 void editor_save_all (void);	/* every file with changes saved (before a run) */
 void on_debug (int what, const char *path, size_t line);	/* DE_*: the session started, stopped at path:line ... */
 int on_task_terminal (const char *name, const char *cmd, const char *cwd, int id);	/* 0: it runs */
+enum { TT_HIDE = 4, TT_FOCUS = 8 };	/* on_task_run's flags, with a PR_* */
+int on_task_run (const char *name, char **argv, const char *echo, const char *cwd, int id, int flags);	/* argv NULL:
+							** only the terminals shown */
 
 /* }================================================================== */
 

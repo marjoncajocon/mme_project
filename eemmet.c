@@ -7,6 +7,11 @@
 ** ("!", "link:css", "input:text" ...). CSS: "m10" becomes "margin: 10px;",
 ** "p10-20", "w100p", "df" ... The result is a snippet's body: its empty
 ** attributes and contents are tab stops ($1, $2 ...).
+**
+** VS Code's Emmet commands are here too: Wrap with Abbreviation (the
+** selection goes into the innermost last element; "ul>li*" puts each line
+** in an li of its own), Balance (outward) and (inward), Update Tag, Remove
+** Tag and Go to Matching Pair, on the tags of the text around the cursor.
 */
 
 #include "mme.h"
@@ -33,6 +38,7 @@ typedef struct ENode {
   Attr *attr;
   int nattr, capattr;
   int mul;	/* *n */
+  int rep;	/* a * with no number: as many as the lines wrapped */
   int *kid;
   int nkid, capkid;
   int parent;
@@ -230,6 +236,7 @@ static int parse_item (Parser *p) {
   if (p->s < p->e && *p->s == '*') {
     int m = 0;
     p->s++;
+    nd->rep = p->s >= p->e || *p->s < '0' || *p->s > '9';
     for (; p->s < p->e && *p->s >= '0' && *p->s <= '9'; p->s++)
       if (m < 100000) m = m * 10 + (*p->s - '0');	/* li*99999999999: no overflow */
     nd->mul = m > 0 ? (m > 1000 ? 1000 : m) : 1;
@@ -376,6 +383,11 @@ typedef struct Out {
   Buf b;
   int stop;	/* the last tab stop number */
   int mode;	/* EMMET_HTML, EMMET_JSX, EMMET_XML */
+  char **wl;	/* Wrap with Abbreviation: the lines wrapped (NULL: expanding) */
+  int nwl;
+  int target;	/* the node they go into */
+  int each;	/* a node with a bare *: a line into each copy; line: the copy's */
+  int line;
 } Out;
 
 
@@ -588,6 +600,19 @@ static void emit_node (Parser *p, Out *o, int k, const char *parent, int depth, 
       indent(o, depth);
     }
   }
+  else if (o->wl && k == o->target) {	/* the text wrapped: a line of it into each copy, or all of it */
+    int from = o->each >= 0 ? o->line : 0, to = o->each >= 0 ? o->line + 1 : o->nwl, q;
+    if (to - from == 1) put_lit(o, o->wl[from]);
+    else {
+      for (q = from; q < to; q++) {
+        buf_putc(&o->b, '\n');
+        indent(o, depth + 1);
+        put_lit(o, o->wl[q]);
+      }
+      buf_putc(&o->b, '\n');
+      indent(o, depth);
+    }
+  }
   else if (!nd->text) buf_printf(&o->b, "${%d}", ++o->stop);
   buf_puts(&o->b, "</");
   put_lit(o, name);
@@ -602,9 +627,11 @@ static void emit_list (Parser *p, Out *o, const int *kids, int nkid, const char 
   int i, c;
   for (i = 0; i < nkid; i++) {
     const ENode *nd = &p->v[kids[i]];
-    for (c = 1; c <= nd->mul && o->b.len < EMMET_MAX; c++)	/* a*1000>b*1000>c*1000: it stops */
-      emit_node(p, o, kids[i], parent, depth, nd->mul > 1 ? c : idx, nd->mul > 1 ? nd->mul : total,
-                multiline, first);
+    int mul = o->wl && kids[i] == o->each ? o->nwl : nd->mul;	/* li*: one for each line wrapped */
+    for (c = 1; c <= mul && o->b.len < EMMET_MAX; c++) {	/* a*1000>b*1000>c*1000: it stops */
+      if (kids[i] == o->each) o->line = c - 1;
+      emit_node(p, o, kids[i], parent, depth, mul > 1 ? c : idx, mul > 1 ? mul : total, multiline, first);
+    }
   }
 }
 
@@ -636,6 +663,50 @@ static char *expand_html (const char *abbr, size_t n, int mode) {
   emit_list(&p, &o, p.v[root].kid, p.v[root].nkid, NULL, 0, 1, 1, kids_block(&p, root, NULL), &first);
   free_nodes(&p);
   if (o.b.len >= EMMET_MAX) {	/* too big to be meant */
+    buf_free(&o.b);
+    return NULL;
+  }
+  buf_putc(&o.b, '\0');
+  return buf_take(&o.b);
+}
+
+
+/* the innermost last element under node k: where wrapped text goes */
+static int deepest_last (const Parser *p, int k) {
+  while (p->v[k].nkid > 0) k = p->v[k].kid[p->v[k].nkid - 1];
+  return k;
+}
+
+
+/*
+** Wrap with Abbreviation: the abbreviation's snippet body with the lines
+** wl in its innermost last element; with a bare * ("ul>li*") the element
+** is repeated, a line in each. NULL: not an abbreviation.
+*/
+static char *wrap_html (const char *abbr, size_t n, int mode, char **wl, int nwl) {
+  Parser p;
+  Out o;
+  int root, first = 1, k;
+  memset(&p, 0, sizeof(p));
+  p.s = abbr;
+  p.e = abbr + n;
+  root = parse_list(&p, 0);
+  if (p.bad || p.s != p.e || p.v[root].nkid == 0) {
+    free_nodes(&p);
+    return NULL;
+  }
+  memset(&o, 0, sizeof(o));
+  buf_init(&o.b);
+  o.mode = mode;
+  o.wl = wl;
+  o.nwl = nwl;
+  o.each = -1;
+  for (k = 0; k < p.n && o.each < 0; k++)
+    if (p.v[k].rep && p.v[k].name) o.each = k;
+  o.target = deepest_last(&p, o.each >= 0 ? o.each : root);
+  emit_list(&p, &o, p.v[root].kid, p.v[root].nkid, NULL, 0, 1, 1, kids_block(&p, root, NULL) || nwl > 1, &first);
+  free_nodes(&p);
+  if (o.b.len >= EMMET_MAX) {
     buf_free(&o.b);
     return NULL;
   }
@@ -911,6 +982,446 @@ char *emmet_expand (const char *abbr, size_t n, int mode, int *worth) {
   r = expand_html(abbr, n, mode);
   if (r) *worth = html_worth(abbr, n);
   return r;
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The commands: Wrap with Abbreviation, Balance, Update Tag, Remove Tag,
+** Go to Matching Pair
+** ===================================================================
+*/
+
+typedef struct ETag {
+  size_t o0, o1;	/* the opening tag: its < and past its > */
+  size_t c0, c1;	/* the closing one; none (<br>, <img/>, never closed): both o1 */
+  size_t name, nlen;	/* its name, in the opening tag */
+  int parent;	/* -1: none */
+} ETag;
+
+
+static int tag_char (int c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+         c == ':' || c == '.';
+}
+
+
+/* past the > of the tag at i (quoted values may have one), n: none */
+static size_t tag_end (const char *s, size_t n, size_t i) {
+  char q = 0;
+  for (; i < n; i++) {
+    if (q) {
+      if (s[i] == q) q = 0;
+    }
+    else if (s[i] == '"' || s[i] == '\'') q = s[i];
+    else if (s[i] == '>') return i + 1;
+  }
+  return n;
+}
+
+
+static size_t find (const char *s, size_t n, size_t i, const char *what) {
+  size_t k = strlen(what);
+  for (; i + k <= n; i++)
+    if (memcmp(s + i, what, k) == 0) return i;
+  return n;
+}
+
+
+/* the elements of the text s, in the order they open (*v, malloc'd); how many */
+static size_t tags_scan (const char *s, size_t n, int html, ETag **v) {
+  ETag *t = NULL;
+  size_t nt = 0, cap = 0, i = 0;
+  int *stack = NULL, ns = 0, caps = 0;
+  while (i < n) {
+    size_t e, j;
+    if (s[i] != '<') {
+      i++;
+      continue;
+    }
+    if (i + 4 <= n && memcmp(s + i, "<!--", 4) == 0) {	/* a comment */
+      e = find(s, n, i + 4, "-->");
+      i = e < n ? e + 3 : n;
+      continue;
+    }
+    if (i + 1 < n && (s[i + 1] == '!' || s[i + 1] == '?')) {	/* <!DOCTYPE>, <?xml?> */
+      i = tag_end(s, n, i + 1);
+      continue;
+    }
+    if (i + 1 < n && s[i + 1] == '/') {	/* a closing tag: the open one of its name closes, and those in it */
+      int k;
+      for (j = i + 2; j < n && tag_char((unsigned char)s[j]); j++) ;
+      e = tag_end(s, n, j);
+      for (k = ns - 1; k >= 0; k--)
+        if (t[stack[k]].nlen == j - i - 2 && memcmp(s + t[stack[k]].name, s + i + 2, j - i - 2) == 0) break;
+      if (k >= 0) {
+        t[stack[k]].c0 = i;
+        t[stack[k]].c1 = e;
+        ns = k;	/* the ones opened in it and never closed stay without */
+      }
+      i = e;
+      continue;
+    }
+    for (j = i + 1; j < n && tag_char((unsigned char)s[j]); j++) ;
+    if (j == i + 1) {	/* "a < b": no tag */
+      i++;
+      continue;
+    }
+    e = tag_end(s, n, j);
+    if (nt == cap) {
+      cap = cap ? cap * 2 : 64;
+      t = (ETag *)xrealloc(t, cap * sizeof(ETag));
+    }
+    t[nt].o0 = i;
+    t[nt].o1 = t[nt].c0 = t[nt].c1 = e;
+    t[nt].name = i + 1;
+    t[nt].nlen = j - i - 1;
+    t[nt].parent = ns ? stack[ns - 1] : -1;
+    {
+      char nm[16];
+      int isvoid = 0;
+      if (t[nt].nlen < sizeof(nm)) {
+        size_t q;
+        for (q = 0; q < t[nt].nlen; q++) nm[q] = (char)(s[i + 1 + q] | (s[i + 1 + q] >= 'A' && s[i + 1 + q] <= 'Z' ? 0x20 : 0));
+        nm[t[nt].nlen] = '\0';
+        isvoid = html && in(void_tags, nm);
+        if (html && (strcmp(nm, "script") == 0 || strcmp(nm, "style") == 0) && s[e - 2] != '/') {	/* its text is not tags */
+          size_t c = find(s, n, e, strcmp(nm, "script") == 0 ? "</script" : "</style");
+          t[nt].c0 = c;
+          t[nt].c1 = c < n ? tag_end(s, n, c) : n;
+          nt++;
+          i = t[nt - 1].c1;
+          continue;
+        }
+      }
+      if (!isvoid && !(e >= 2 && s[e - 2] == '/')) {	/* not <br>, not <x/>: it stays open */
+        if (ns == caps) {
+          caps = caps ? caps * 2 : 32;
+          stack = (int *)xrealloc(stack, (size_t)caps * sizeof(int));
+        }
+        stack[ns++] = (int)nt;
+      }
+    }
+    nt++;
+    i = e;
+  }
+  free(stack);
+  *v = t;
+  return nt;
+}
+
+
+static int closed (const ETag *t) {
+  return t->c1 > t->o1;
+}
+
+
+/* the element's content, without the spaces and newlines at its ends */
+static void inner (const char *s, const ETag *t, size_t *a, size_t *b) {
+  *a = t->o1;
+  *b = t->c0;
+  while (*a < *b && (s[*a] == ' ' || s[*a] == '\t' || s[*a] == '\n' || s[*a] == '\r')) (*a)++;
+  while (*b > *a && (s[*b - 1] == ' ' || s[*b - 1] == '\t' || s[*b - 1] == '\n' || s[*b - 1] == '\r')) (*b)--;
+}
+
+
+/* the innermost element around offset x (in its tags or its content); -1 none */
+static int around (const ETag *t, size_t nt, size_t x) {
+  int best = -1;
+  size_t i;
+  for (i = 0; i < nt; i++) {
+    size_t end = closed(&t[i]) ? t[i].c1 : t[i].o1;
+    if (t[i].o0 <= x && x <= end && (best < 0 || t[i].o0 >= t[best].o0)) best = (int)i;
+  }
+  return best;
+}
+
+
+/* the text's offsets and the editor's places */
+static size_t off_of (const char *s, size_t n, Pos p) {
+  size_t i = 0, y = 0;
+  while (i < n && y < p.y) {
+    if (s[i] == '\n') y++;
+    i++;
+  }
+  return i + p.x < n ? i + p.x : n;
+}
+
+
+static Pos pos_of (const char *s, size_t n, size_t off) {
+  Pos p;
+  size_t i, ls = 0;
+  p.y = 0;
+  for (i = 0; i < off && i < n; i++)
+    if (s[i] == '\n') {
+      p.y++;
+      ls = i + 1;
+    }
+  p.x = off - ls;
+  return p;
+}
+
+
+/* an edit of the text, at offsets a .. b */
+static void edit_at (TextEdit *e, const char *s, size_t n, size_t a, size_t b, const char *text) {
+  Pos pa = pos_of(s, n, a), pb = pos_of(s, n, b);
+  e->path = NULL;
+  e->l0 = pa.y;
+  e->c0 = pa.x;
+  e->l1 = pb.y;
+  e->c1 = pb.x;
+  e->text = (char *)text;
+  e->utf16 = 0;
+}
+
+
+/* the lines to wrap: each trimmed (a bare *), else without the indent they share */
+static int wrap_lines (const char *t, int each, char ***out) {
+  char **v = NULL;
+  int n = 0, cap = 0, k;
+  size_t common = (size_t)-1, i = 0, len = strlen(t);
+  while (i <= len) {
+    size_t e = i, a;
+    while (e < len && t[e] != '\n') e++;
+    a = i;
+    while (a < e && (t[a] == ' ' || t[a] == '\t')) a++;
+    if (a < e) {	/* blank lines do not count */
+      size_t z = e;
+      if (z > a && t[z - 1] == '\r') z--;
+      if (n == cap) v = (char **)xrealloc(v, (size_t)(cap = cap ? cap * 2 : 16) * sizeof(char *));
+      if (!each && a - i < common) common = a - i;
+      v[n] = (char *)xmalloc(z - i + 1);
+      memcpy(v[n], t + i, z - i);
+      v[n][z - i] = '\0';
+      n++;
+    }
+    i = e + 1;
+  }
+  for (k = 0; k < n; k++) {	/* the indent off */
+    size_t cut = 0;
+    if (each)
+      while (v[k][cut] == ' ' || v[k][cut] == '\t') cut++;
+    else cut = common;
+    memmove(v[k], v[k] + cut, strlen(v[k] + cut) + 1);
+    if (each) {
+      size_t z = strlen(v[k]);
+      while (z > 0 && (v[k][z - 1] == ' ' || v[k][z - 1] == '\t')) v[k][--z] = '\0';
+    }
+  }
+  *out = v;
+  return n;
+}
+
+
+static void wrap_abbreviation (const EdCtx *c, int mode) {
+  Pos a = c->a, b = c->b;
+  char *text, *abbr, *body, **wl;
+  int nwl, k, each;
+  if (!c->sel) {	/* no selection: the line, without its indent */
+    const char *line;
+    size_t len, x = 0;
+    Pos e;
+    e.y = a.y;
+    e.x = (size_t)-1;
+    a.x = 0;
+    text = doc_text(c->doc, a, doc_clamp(c->doc, e), &len);
+    line = text ? text : "";
+    while (x < len && (line[x] == ' ' || line[x] == '\t')) x++;
+    a.x = x;
+    b = doc_clamp(c->doc, e);
+    free(text);
+  }
+  else if (b.x == 0 && b.y > a.y) {	/* whole lines: not the newline after the last */
+    b.y--;
+    b.x = (size_t)-1;
+    b = doc_clamp(c->doc, b);
+  }
+  text = doc_text(c->doc, a, b, NULL);
+  abbr = ask_text("Enter Abbreviation", NULL);	/* VS Code's prompt */
+  if (abbr == NULL || !*abbr || text == NULL) {
+    free(abbr);
+    free(text);
+    return;
+  }
+  each = strchr(abbr, '*') != NULL;
+  nwl = wrap_lines(text, 0, &wl);
+  if (each) {	/* li* wraps each line: they are trimmed then */
+    for (k = 0; k < nwl; k++) free(wl[k]);
+    free(wl);
+    nwl = wrap_lines(text, 1, &wl);
+  }
+  body = nwl ? wrap_html(abbr, strlen(abbr), mode, wl, nwl) : NULL;
+  if (body == NULL) toast(0, "Emmet: '%s' is not an abbreviation", abbr);
+  else editor_snippet(a, b, body);
+  for (k = 0; k < nwl; k++) free(wl[k]);
+  free(wl);
+  free(body);
+  free(abbr);
+  free(text);
+}
+
+
+void emmet_command (int cmd) {
+  EdCtx c;
+  Pos z, e;
+  char *s;
+  size_t n = 0, nt, a, b, i;
+  ETag *t = NULL;
+  int mode, k;
+  if (!editor_context(&c, 0)) return;
+  mode = emmet_mode(c.lang, c.path);
+  if (mode == 0 || mode == EMMET_CSS) {
+    toast(0, "Emmet: not an HTML, XML or JSX file");
+    editor_ctx_free(&c);
+    return;
+  }
+  if (cmd == CMD_EMMET_WRAP) {
+    wrap_abbreviation(&c, mode);
+    editor_ctx_free(&c);
+    return;
+  }
+  z.y = z.x = 0;
+  e = doc_end(c.doc);
+  s = doc_text(c.doc, z, e, &n);
+  if (s == NULL) {
+    editor_ctx_free(&c);
+    return;
+  }
+  nt = tags_scan(s, n, mode == EMMET_HTML, &t);
+  a = off_of(s, n, c.a);
+  b = off_of(s, n, c.b);
+  if (cmd == CMD_EMMET_BALANCE_OUT) {	/* the smallest content or element around the selection, bigger than it */
+    size_t ba = 0, bb = n;
+    int found = 0;
+    for (i = 0; i < nt; i++) {
+      size_t ia, ib, oa = t[i].o0, ob = closed(&t[i]) ? t[i].c1 : t[i].o1;
+      if (closed(&t[i])) {
+        inner(s, &t[i], &ia, &ib);
+        if (ia <= a && b <= ib && (ia != a || ib != b) && (!found || ib - ia < bb - ba)) {
+          ba = ia;
+          bb = ib;
+          found = 1;
+        }
+      }
+      if (oa <= a && b <= ob && (oa != a || ob != b) && (!found || ob - oa < bb - ba)) {
+        ba = oa;
+        bb = ob;
+        found = 1;
+      }
+    }
+    if (found) editor_select(pos_of(s, n, ba), pos_of(s, n, bb));
+  }
+  else if (cmd == CMD_EMMET_BALANCE_IN) {	/* an element's content, then its first child */
+    int done = 0;
+    for (i = 0; i < nt && !done; i++) {
+      size_t ia, ib;
+      if (!closed(&t[i])) continue;
+      inner(s, &t[i], &ia, &ib);
+      if (t[i].o0 == a && t[i].c1 == b && ib > ia) {
+        editor_select(pos_of(s, n, ia), pos_of(s, n, ib));
+        done = 1;
+      }
+      else if (ia == a && ib == b) {
+        size_t q;
+        for (q = i + 1; q < nt && t[q].parent != (int)i; q++) ;
+        if (q < nt) editor_select(pos_of(s, n, t[q].o0), pos_of(s, n, closed(&t[q]) ? t[q].c1 : t[q].o1));
+        done = 1;
+      }
+    }
+    if (!done && a == b && (k = around(t, nt, a)) >= 0) {	/* the cursor: its element */
+      size_t ia, ib;
+      inner(s, &t[k], &ia, &ib);
+      if (closed(&t[k]) && ia <= a && a <= ib && ib > ia) editor_select(pos_of(s, n, ia), pos_of(s, n, ib));
+      else editor_select(pos_of(s, n, t[k].o0), pos_of(s, n, closed(&t[k]) ? t[k].c1 : t[k].o1));
+    }
+  }
+  else if (cmd == CMD_EMMET_MATCH_TAG) {	/* in one tag: to the other */
+    for (i = 0; i < nt; i++) {
+      if (!closed(&t[i])) continue;
+      if (t[i].o0 <= b && b < t[i].o1) {
+        editor_select(pos_of(s, n, t[i].c0), pos_of(s, n, t[i].c0));
+        break;
+      }
+      if (t[i].c0 <= b && b < t[i].c1) {
+        editor_select(pos_of(s, n, t[i].o0), pos_of(s, n, t[i].o0));
+        break;
+      }
+    }
+  }
+  else if ((k = around(t, nt, b)) < 0) toast(0, "Emmet: no tag at the cursor");
+  else if (cmd == CMD_EMMET_UPDATE_TAG) {
+    char *old = (char *)xmalloc(t[k].nlen + 1), *name;
+    memcpy(old, s + t[k].name, t[k].nlen);
+    old[t[k].nlen] = '\0';
+    name = ask_text("Enter Tag", old);	/* VS Code's prompt; nothing: the tag goes */
+    if (name && strcmp(name, old) != 0) {
+      TextEdit ed[4];
+      int m = 0;
+      if (*name == '\0') {	/* the tags go, the content stays */
+        edit_at(&ed[m++], s, n, t[k].o0, t[k].o1, "");
+        if (closed(&t[k])) edit_at(&ed[m++], s, n, t[k].c0, t[k].c1, "");
+      }
+      else {
+        edit_at(&ed[m++], s, n, t[k].name, t[k].name + t[k].nlen, name);
+        if (closed(&t[k])) edit_at(&ed[m++], s, n, t[k].c0 + 2, t[k].c0 + 2 + t[k].nlen, name);
+      }
+      on_format((Doc *)c.doc, ed, (size_t)m, 0);
+    }
+    free(name);
+    free(old);
+  }
+  else if (cmd == CMD_EMMET_REMOVE_TAG) {	/* its tags go (their lines too when alone there); its content is dedented */
+    TextEdit *ed;
+    size_t m = 0, oa = t[k].o0, ob = t[k].o1, ca = t[k].c0, cb = t[k].c1, ls, le, cut = 0, lines = 3;
+    int alone_o, alone_c;
+    for (i = t[k].o0; i < t[k].c1; i++) lines += s[i] == '\n';
+    ed = (TextEdit *)xmalloc(lines * sizeof(TextEdit));
+    ls = oa;
+    while (ls > 0 && (s[ls - 1] == ' ' || s[ls - 1] == '\t')) ls--;
+    le = ob;
+    while (le < n && (s[le] == ' ' || s[le] == '\t' || s[le] == '\r')) le++;
+    alone_o = (ls == 0 || s[ls - 1] == '\n') && (le == n || s[le] == '\n');
+    if (alone_o) {
+      oa = ls;
+      ob = le < n ? le + 1 : le;
+    }
+    alone_c = 0;
+    if (closed(&t[k])) {
+      ls = ca;
+      while (ls > 0 && (s[ls - 1] == ' ' || s[ls - 1] == '\t')) ls--;
+      le = cb;
+      while (le < n && (s[le] == ' ' || s[le] == '\t' || s[le] == '\r')) le++;
+      alone_c = (ls == 0 || s[ls - 1] == '\n') && (le == n || s[le] == '\n') && ls >= ob;
+      if (alone_c) {
+        ca = ls;
+        cb = le < n ? le + 1 : le;
+      }
+    }
+    if (alone_o && alone_c) {	/* the content's lines lose what their first one has more than the tag's */
+      size_t ti = t[k].o0 - oa, f = ob;
+      while (f < ca && (s[f] == ' ' || s[f] == '\t')) f++;
+      if (f - ob > ti) cut = f - ob - ti;
+    }
+    edit_at(&ed[m++], s, n, oa, ob, "");
+    if (cut) {
+      size_t l = ob;
+      while (l < ca && m + 1 < lines) {
+        size_t q = 0;
+        while (q < cut && l + q < ca && (s[l + q] == ' ' || s[l + q] == '\t')) q++;
+        if (q) edit_at(&ed[m++], s, n, l, l + q, "");
+        while (l < ca && s[l] != '\n') l++;
+        l++;
+      }
+    }
+    if (closed(&t[k])) edit_at(&ed[m++], s, n, ca, cb, "");
+    on_format((Doc *)c.doc, ed, m, 0);
+    free(ed);
+  }
+  free(t);
+  free(s);
+  editor_ctx_free(&c);
 }
 
 /* }================================================================== */

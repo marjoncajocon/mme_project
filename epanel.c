@@ -713,6 +713,7 @@ int panel_group_size (void) {
 static void term_free (int i) {
   Term *t = g_term[i];
   int grp = t->grp, j, was = i == g_cur;
+  if (t->task && !t->done) task_done(t->task, -1);	/* killed while it ran: its task ended (etask.c waits for it) */
   if (t->pty) pty_close(t->pty);
   vt_free(&t->vt);
   grid_free(t->g);
@@ -772,17 +773,8 @@ int panel_confirm_exit (void) {
 ** closes it.
 */
 int panel_run (int cols, int rows, const char *name, const char *cmd, const char *cwd, int task) {
-  char *sh, *argv[5], *here, head[1024];
-  Term *t;
-  int i;
-  for (i = 0; i < g_n; i++)	/* a finished task's terminal is used again */
-    if (g_term[i]->done) {
-      term_free(i);
-      break;
-    }
-  if (g_n == MAX_TERM) return -1;
-  if (cols < 2) cols = 2;
-  if (rows < 1) rows = 1;
+  char *sh, *argv[5];
+  int r;
 #ifdef _WIN32
   sh = os_getenv("ComSpec");
   if (sh == NULL) sh = xstrdup("C:\\Windows\\System32\\cmd.exe");
@@ -798,17 +790,42 @@ int panel_run (int cols, int rows, const char *name, const char *cmd, const char
   argv[2] = (char *)cmd;
   argv[3] = NULL;
 #endif
+  r = panel_run_argv(cols, rows, name, argv, cmd, cwd, task, PR_SHARED);
+  free(sh);
+  return r;
+}
+
+
+/*
+** The same with the program and its arguments given (a "process" task, a
+** shell of options.shell, a debug adapter's runInTerminal). echo: the line
+** " *  Executing task: echo" first, NULL none. reuse: presentation.panel,
+** which finished terminal goes for it: any (PR_SHARED), the one of the same
+** name (PR_DEDICATED), none (PR_NEW).
+*/
+int panel_run_argv (int cols, int rows, const char *name, char **argv, const char *echo, const char *cwd, int task,
+                    int reuse) {
+  char *here, head[1024];
+  Term *t;
+  int i;
+  for (i = 0; i < g_n && reuse != PR_NEW; i++)	/* a finished task's terminal is used again */
+    if (g_term[i]->done && (reuse == PR_SHARED || strcmp(g_term[i]->name, name) == 0)) {
+      term_free(i);
+      break;
+    }
+  if (g_n == MAX_TERM) return -1;
+  if (cols < 2) cols = 2;
+  if (rows < 1) rows = 1;
   os_setenv("TERM", "xterm-256color");
   os_setenv("COLORTERM", "truecolor");
   os_setenv("TERM_PROGRAM", MME_NAME);
   t = (Term *)xmalloc(sizeof(Term));
   memset(t, 0, sizeof(*t));
   here = os_getcwd();
-  os_chdir(cwd ? cwd : side_root());
-  t->pty = pty_spawn(sh, argv, cols, rows);
+  os_chdir(cwd && *cwd ? cwd : side_root());
+  t->pty = pty_spawn(argv[0], argv, cols, rows);
   if (here) os_chdir(here);
   free(here);
-  free(sh);
   if (t->pty == NULL) {
     toast(1, "The task could not start");
     free(t);
@@ -824,12 +841,26 @@ int panel_run (int cols, int rows, const char *name, const char *cmd, const char
   t->vt.title = set_title;
   t->cols = cols;
   t->rows = rows;
-  snprintf(head, sizeof(head), "\033[0m *  Executing task: %s \r\n\r\n", cmd);
   buf_init(&t->osc);
-  term_feed(t, head, strlen(head));
+  if (echo) {
+    snprintf(head, sizeof(head), "\033[0m *  Executing task: %s \r\n\r\n", echo);
+    term_feed(t, head, strlen(head));
+  }
   g_term[g_n] = t;
   g_cur = g_n++;
   return 0;
+}
+
+
+/* Tasks: Terminate Task: the terminal of task id ends (its task is told it did); -1 none */
+int panel_kill_task (int task) {
+  int i;
+  for (i = 0; i < g_n; i++)
+    if (g_term[i]->task == task && !g_term[i]->done) {
+      term_free(i);
+      return 0;
+    }
+  return -1;
 }
 
 
@@ -1658,6 +1689,8 @@ void panel_hover (int x, int y) {
 
 
 /* terminal t in x, y, w, h: its screen, the link under the mouse underlined, find's matches lit */
+static void sug_draw (Term *t, int x, int y, int w, int h, int focus);
+
 static void draw_term (Term *t, int x, int y, int w, int h, int focus) {
   int row, lrow = -1, lc0 = 0, lc1 = 0, sel = shown_sel(t), mk = 0;
   resize(t, w - 2, h);
@@ -1738,6 +1771,7 @@ static void draw_term (Term *t, int x, int y, int w, int h, int focus) {
       }
     }
   }
+  if (t == &P) sug_draw(t, x, y, w, h, focus && !FD.open);	/* terminal.integrated.suggest.enabled */
   if (focus && t == &P && !FD.open && t->g->view == 0 && t->g->cursor_on && t->g->cy < h)
     scr_cursor(x + 1 + t->g->cx, y + t->g->cy);
 }
@@ -2328,6 +2362,292 @@ int panel_key_cmd (int k) {
 }
 
 
+/*
+** {==================================================================
+** Suggestions (terminal.integrated.suggest.enabled), like VS Code's: as
+** a command line is typed (shell integration says where it starts), the
+** files and folders of the shell's folder, the commands on the PATH and
+** the command lines run before that go on from the word at the cursor;
+** Tab or Enter sends the rest of the one selected
+** ===================================================================
+*/
+
+enum { SK_FILE, SK_FOLDER, SK_COMMAND, SK_HISTORY };
+
+static struct {
+  int armed;	/* a character was typed since the list was taken away */
+  int shown;	/* drawn with the last picture: the keys go to it */
+  char line[1024];	/* the command line up to the cursor the list was made for */
+  size_t word;	/* where its word starts in it */
+  Vec item;	/* what they are ... */
+  unsigned char *kind;	/* ... SK_* */
+  int sel, top;
+  Vec path_cmd;	/* the commands on the PATH, read once */
+  int path_read;
+} SG;
+
+
+static int sug_enabled (void) {
+  return json_bool(settings_get("terminal\\.integrated\\.suggest\\.enabled"), 0) && opt.term_shell_int;
+}
+
+
+static void sug_clear (void) {
+  vec_free(&SG.item);
+  free(SG.kind);
+  SG.kind = NULL;
+  SG.sel = SG.top = 0;
+}
+
+
+static int sug_starts (const char *s, const char *pre) {
+#ifdef _WIN32
+  return m_strnicmp(s, pre, strlen(pre)) == 0;	/* Windows' names do not care for case */
+#else
+  return strncmp(s, pre, strlen(pre)) == 0;
+#endif
+}
+
+
+static void sug_add (const char *s, int kind) {
+  size_t i;
+  if (SG.item.n >= 300) return;
+  for (i = 0; i < SG.item.n; i++)
+    if (strcmp(SG.item.v[i], s) == 0) return;
+  SG.kind = (unsigned char *)xrealloc(SG.kind, SG.item.n + 1);
+  SG.kind[SG.item.n] = (unsigned char)kind;
+  vec_push(&SG.item, xstrdup(s));
+}
+
+
+/* the programs in the PATH's folders, their names as they are typed (git, not git.exe) */
+static void sug_path_read (void) {
+  char *path = os_getenv("PATH");
+  Vec dirs, out;
+  size_t i, k;
+  SG.path_read = 1;
+  vec_init(&SG.path_cmd);
+  if (path == NULL) return;
+  vec_init(&dirs);
+  path_list_split(path, &dirs);
+  for (i = 0; i < dirs.n && SG.path_cmd.n < 20000; i++) {
+    vec_init(&out);
+    if (os_listdir(dirs.v[i], &out) == 0)
+      for (k = 0; k < out.n; k++) {
+        char *name = out.v[k], *dot = strrchr(name, '.');
+#ifdef _WIN32
+        if (dot == NULL || !(m_stricmp(dot, ".exe") == 0 || m_stricmp(dot, ".cmd") == 0 || m_stricmp(dot, ".bat") == 0 ||
+                             m_stricmp(dot, ".com") == 0 || m_stricmp(dot, ".ps1") == 0)) continue;
+        vec_push(&SG.path_cmd, xstrndup(name, (size_t)(dot - name)));
+#else
+        char *full = path_join(dirs.v[i], name);
+        (void)dot;
+        if (os_is_exec(full)) vec_push(&SG.path_cmd, xstrdup(name));
+        free(full);
+#endif
+      }
+    vec_free(&out);
+  }
+  vec_free(&dirs);
+  free(path);
+  vec_sort(&SG.path_cmd);
+}
+
+
+/* the list for the command line typed so far (line) in t */
+static void sug_make (Term *t, const char *line) {
+  const char *w = line + strlen(line);
+  int first;
+  size_t i;
+  char sep = t->kind == SH_BASH ? '/' : '\\';
+  while (w > line && w[-1] != ' ') w--;
+  sug_clear();
+  snprintf(SG.line, sizeof(SG.line), "%s", line);
+  SG.word = (size_t)(w - line);
+  if (*w == '\0') return;	/* no word yet */
+  {
+    const char *p = line;
+    while (*p == ' ') p++;
+    first = p == w;	/* the command's own name */
+  }
+  if (first) {	/* the command lines run before */
+    hist_load();
+    for (i = 0; i < g_hist.n; i++)
+      if (strcmp(g_hist.v[i], line) != 0 && strncmp(g_hist.v[i], line, strlen(line)) == 0)
+        sug_add(g_hist.v[i], SK_HISTORY);
+  }
+  {	/* the folders and files: of the shell's folder, or of the one the word names ("src/ma") */
+    const char *slash = w + strlen(w);
+    char *dir, *native;
+    Vec out;
+    while (slash > w && slash[-1] != '/' && slash[-1] != '\\') slash--;
+    dir = xstrndup(w, (size_t)(slash - w));
+    native = dir[0] == '\0' ? xstrdup(t->cwd[0] ? t->cwd : ".") :
+             (path_is_sep(dir[0]) || (dir[0] && dir[1] == ':')) ? xstrdup(dir) : path_join(t->cwd[0] ? t->cwd : ".", dir);
+    vec_init(&out);
+    if (os_listdir(native, &out) == 0) {
+      int pass;
+      vec_sort(&out);
+      for (pass = 0; pass < 2; pass++)	/* the folders first */
+        for (i = 0; i < out.n && i < 5000; i++) {
+          char *full, *label;
+          OsStat st;
+          if (!sug_starts(out.v[i], slash) || (slash[0] != '.' && out.v[i][0] == '.')) continue;
+          full = path_join(native, out.v[i]);
+          if (os_stat(full, &st) == 0 && (st.is_dir != 0) == (pass == 0)) {
+            label = (char *)xmalloc(strlen(dir) + strlen(out.v[i]) + 2);
+            sprintf(label, "%s%s%s", dir, out.v[i], pass == 0 ? (sep == '/' ? "/" : "\\") : "");
+            sug_add(label, pass == 0 ? SK_FOLDER : SK_FILE);
+            free(label);
+          }
+          free(full);
+        }
+    }
+    vec_free(&out);
+    free(native);
+    free(dir);
+  }
+  if (first && strpbrk(w, "/\\") == NULL) {	/* the commands on the PATH */
+    if (!SG.path_read) sug_path_read();
+    for (i = 0; i < SG.path_cmd.n; i++)
+      if (sug_starts(SG.path_cmd.v[i], w)) sug_add(SG.path_cmd.v[i], SK_COMMAND);
+  }
+  for (i = 0; i < SG.item.n; i++)	/* only the word itself: nothing to add */
+    if (SG.kind[i] != SK_HISTORY && strcmp(SG.item.v[i], w) == 0 && SG.item.n == 1) sug_clear();
+}
+
+
+/* the command line from its start (633;B) to the cursor, when the cursor is on its row; NULL: not typing one */
+static char *sug_line (Term *t) {
+  Buf b;
+  long row = t->b_line - t->base;
+  if (!t->has_b || t->g->alt || t->g->view != 0 || row != t->g->cy || t->g->cx < t->b_col) return NULL;
+  buf_init(&b);
+  cell_text(t, (int)row, t->b_col, t->g->cx, 0, &b);
+  buf_putc(&b, '\0');
+  return buf_take(&b);
+}
+
+
+/* the list under (or over) the cursor of the terminal in front, when there is one */
+static void sug_draw (Term *t, int x, int y, int w, int h, int focus) {
+  char *line;
+  int n, rows, lw = 0, bx, by, cx, cy, i;
+  size_t wl;
+  SG.shown = 0;
+  if (!focus || !SG.armed || !sug_enabled() || (line = sug_line(t)) == NULL) return;
+  if (strcmp(line, SG.line) != 0 || SG.item.n == 0) sug_make(t, line);
+  free(line);
+  if (SG.item.n == 0) return;
+  n = (int)SG.item.n;
+  wl = str_cols(SG.line + SG.word);
+  for (i = 0; i < n; i++)
+    if ((int)str_cols(SG.item.v[i]) > lw) lw = (int)str_cols(SG.item.v[i]);
+  lw += 5;	/* the icon, the margins */
+  if (lw > 60) lw = 60;
+  if (lw > w - 2) lw = w - 2;
+  cx = x + 1 + t->g->cx;
+  cy = y + t->g->cy;
+  rows = n < 12 ? n : 12;
+  bx = cx - (int)wl - 3;	/* the labels under the word */
+  if (bx + lw > x + w) bx = x + w - lw;
+  if (bx < x) bx = x;
+  if (cy + 1 + rows <= y + h) by = cy + 1;
+  else if (cy - rows >= 0) by = cy - rows;
+  else {
+    by = cy + 1;
+    rows = y + h - by;
+  }
+  if (rows < 1 || lw < 8) return;
+  if (SG.sel >= n) SG.sel = n - 1;
+  if (SG.sel < SG.top) SG.top = SG.sel;
+  if (SG.sel >= SG.top + rows) SG.top = SG.sel - rows + 1;
+  scr_box(bx, by, lw, rows, S_BOX);
+  for (i = 0; i < rows && SG.top + i < n; i++) {
+    int k = SG.top + i, st = k == SG.sel ? S_BOX_SEL : S_BOX, hit = k == SG.sel ? S_BOX_HIT_SEL : S_BOX_HIT;
+    static const uint32_t icon[] = {0xEA7B, 0xEA83, 0xEA85, 0xEA82};	/* codicons file, folder, terminal, history */
+    const char *s = SG.item.v[k];
+    size_t hl = SG.kind[k] == SK_HISTORY ? strlen(SG.line) : strlen(SG.line + SG.word);
+    scr_fill(bx, by + i, lw, st);
+    scr_put(bx + 1, by + i, icon[SG.kind[k]], st);
+    {	/* the part typed in the highlight's color */
+      int cxx = bx + 3, room = lw - 4;
+      size_t j = 0, len;
+      while (s[j] && room > 0) {
+        uint32_t cp = utf8_decode(s + j, strlen(s + j), &len);
+        int cw = scr_put(cxx, by + i, cp, j < hl ? hit : st);
+        cxx += cw;
+        room -= cw;
+        j += len ? len : 1;
+      }
+    }
+  }
+  SG.shown = 1;
+}
+
+
+/* the selected one taken: the rest of its word sent to the shell */
+static void sug_accept (void) {
+  const char *s = SG.item.v[SG.sel], *w = SG.line + SG.word;
+  size_t wl = strlen(w);
+  Buf b;
+  buf_init(&b);
+  if (SG.kind[SG.sel] == SK_HISTORY) buf_puts(&b, s + strlen(SG.line));
+  else if (strncmp(s, w, wl) == 0) buf_puts(&b, s + wl);
+  else {	/* another case: the word typed again */
+    size_t i, n = 0, len;
+    for (i = 0; i < wl; i += len ? len : 1, n++) utf8_decode(w + i, wl - i, &len);
+    for (i = 0; i < n; i++) buf_putc(&b, '\177');
+    buf_puts(&b, s);
+  }
+  if (b.len) pty_write(P.pty, b.s, b.len);
+  SG.armed = SG.kind[SG.sel] == SK_FOLDER;	/* into a folder: its names next */
+  SG.shown = 0;
+  sug_clear();
+  SG.line[0] = '\0';
+  buf_free(&b);
+}
+
+
+/* a key while the list shows (Up, Down, Tab, Enter, Escape); 1: it was the list's */
+static int sug_key (int k) {
+  int code = KEY_CODE(k);
+  if (!sug_enabled()) return 0;
+  if (k == (' ' | KM_CTRL) || k == 0) {	/* Ctrl+Space: workbench.action.terminal.triggerSuggest */
+    SG.armed = 1;
+    SG.line[0] = '\0';
+    return 1;
+  }
+  if (!SG.shown || SG.item.n == 0) {
+    SG.armed = IS_TEXT(k) || code == K_BS ? 1 : 0;	/* typing brings it */
+    if (!SG.armed) SG.line[0] = '\0';
+    return 0;
+  }
+  if (code == K_UP || code == K_DOWN) {
+    int n = (int)SG.item.n;
+    SG.sel = (SG.sel + (code == K_UP ? n - 1 : 1)) % n;
+    return 1;
+  }
+  if ((code == K_TAB || code == K_ENTER) && !(k & (KM_CTRL | KM_ALT | KM_SHIFT))) {
+    if (code == K_ENTER && strcmp(SG.item.v[SG.sel], SG.line + SG.word) == 0) {	/* typed whole already: Enter runs it */
+      SG.armed = SG.shown = 0;
+      return 0;
+    }
+    sug_accept();
+    return 1;
+  }
+  if (code == K_ESC) {
+    SG.armed = 0;
+    SG.shown = 0;
+    return 1;
+  }
+  SG.armed = IS_TEXT(k) || code == K_BS || code == K_LEFT || code == K_RIGHT;
+  return 0;
+}
+
+/* }================================================================== */
+
+
 /* a key as a terminal sends it: ESC [ 1 ; m A for Ctrl+Up and so on */
 void panel_key (int k) {
   int code = KEY_CODE(k), m = 1, i;
@@ -2349,6 +2669,7 @@ void panel_key (int k) {
     term_free(g_cur);
     return;
   }
+  if (sug_key(k)) return;	/* the suggestions' keys while they show */
   if ((code == K_PGUP || code == K_PGDN) && (k & (KM_SHIFT | KM_CTRL | KM_ALT)) == KM_SHIFT && !P.g->alt) {
     panel_scroll(0, code == K_PGUP ? -1 : 1);	/* Shift+PgUp: the scrollback, like VS Code */
     return;

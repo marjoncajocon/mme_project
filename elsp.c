@@ -22,7 +22,7 @@ enum { RQ_INIT, RQ_COMPLETE, RQ_DEFINE, RQ_HOVER, RQ_SIGNATURE, RQ_RENAME, RQ_AC
        RQ_WSYM, RQ_HIGHLIGHT, RQ_BULB, RQ_INLAY, RQ_SEMANTIC, RQ_LENS, RQ_LENS_RESOLVE, RQ_COMP_RESOLVE,
        RQ_ONTYPE, RQ_SOURCE, RQ_SOURCE_RESOLVE, RQ_SELRANGE, RQ_FOLDING, RQ_HPREP, RQ_HIER, RQ_INLINE, RQ_NEDIT,
        RQ_SIGNIN, RQ_SIGNOUT, RQ_CHECK, RQ_DEVICE, RQ_PULL, RQ_COLOR, RQ_COLOR_PRES, RQ_LINK,
-       RQ_LINK_RESOLVE, RQ_WILL_RENAME,
+       RQ_LINK_RESOLVE, RQ_WILL_RENAME, RQ_INLAY_RESOLVE,
        RQ_OTHER };
 
 typedef struct Req {
@@ -72,6 +72,7 @@ typedef struct Srv {
   char pull_id[64];	/* and the identifier it gave them */
   int can_color, can_link, link_resolve;	/* colorProvider, documentLinkProvider (and its resolve) */
   char *will_ren, *did_ren;	/* workspace.fileOperations: the filters of the renames it wants, as JSON */
+  int hint_resolve;	/* inlayHintProvider.resolveProvider: a hint's tooltip and edits are asked for */
 } Srv;
 
 typedef struct LDoc {
@@ -627,7 +628,8 @@ static Srv *start (const char *lang) {
                  "\"rename\":{},\"documentSymbol\":{\"hierarchicalDocumentSymbolSupport\":true},"
                  "\"references\":{},\"implementation\":{\"linkSupport\":true},"
                  "\"typeDefinition\":{\"linkSupport\":true},\"documentHighlight\":{},"
-                 "\"inlayHint\":{},\"codeLens\":{},"
+                 "\"inlayHint\":{\"resolveSupport\":{\"properties\":[\"tooltip\",\"textEdits\",\"label.tooltip\"]}},"
+                 "\"codeLens\":{},"
                  "\"semanticTokens\":{\"requests\":{\"full\":true},\"formats\":[\"relative\"],"
                  "\"tokenTypes\":[\"namespace\",\"type\",\"class\",\"enum\",\"interface\",\"struct\","
                  "\"typeParameter\",\"parameter\",\"variable\",\"property\",\"enumMember\",\"event\","
@@ -637,11 +639,13 @@ static Srv *start (const char *lang) {
                  "\"deprecated\",\"abstract\",\"async\",\"modification\",\"documentation\","
                  "\"defaultLibrary\"]},"
                  "\"codeAction\":{\"codeActionLiteralSupport\":{\"codeActionKind\":{\"valueSet\":"
-                 "[\"quickfix\",\"refactor\",\"source\",\"source.organizeImports\"]}},"
+                 "[\"quickfix\",\"refactor\",\"refactor.extract\",\"refactor.inline\",\"refactor.rewrite\","
+                 "\"refactor.move\",\"source\",\"source.organizeImports\"]}},\"disabledSupport\":true,\"dataSupport\":true,"
                  "\"resolveSupport\":{\"properties\":[\"edit\"]}}},"
                  "\"workspace\":{\"workspaceFolders\":true,\"configuration\":true,\"symbol\":{},"
                  "\"applyEdit\":true,\"workspaceEdit\":{\"documentChanges\":true},"
                  "\"diagnostics\":{\"refreshSupport\":true},"
+                 "\"didChangeWatchedFiles\":{\"dynamicRegistration\":true,\"relativePatternSupport\":true},"
                  "\"fileOperations\":{\"willRename\":true,\"didRename\":true}}}");
     /* editorInfo: Copilot's server asks who it is talking to, and a server
     ** that does not know these options ignores them. gopls wants its own at
@@ -1165,6 +1169,8 @@ static const Doc *nedit_doc (void);
 static const Doc *inline_doc (void);
 
 
+static void hints_drop (const Doc *d);
+
 void lsp_close (Doc *d) {
   int i, k;
   for (i = 0; i < g_nsrv; i++)	/* its answers still to come are dropped: d is about to go */
@@ -1175,6 +1181,7 @@ void lsp_close (Doc *d) {
       }
   lens_forget(d);	/* its lenses too: lsp_lens_run would use d after it is freed */
   link_forget(d);
+  hints_drop(d);	/* and its inlay hints, kept for inlayHint/resolve */
   if (inline_doc() == d) inline_forget();	/* and its inline suggestions */
   if (nedit_doc() == d) nedit_forget();	/* and the next edit it was offered */
   for (i = (int)g_ndoc - 1; i >= 0; i--)	/* a document may be on two servers */
@@ -1220,7 +1227,7 @@ void lsp_signature (Doc *d, Pos at) {
 }
 
 
-void lsp_rename (Doc *d, Pos at, const char *name) {
+void lsp_rename (Doc *d, Pos at, const char *name, int preview) {
   LDoc *l = synced(d);
   Buf b;
   if (l == NULL) return;
@@ -1230,6 +1237,7 @@ void lsp_rename (Doc *d, Pos at, const char *name) {
   json_put_str(&b, name, strlen(name));
   buf_putc(&b, '}');
   request(l->s, "textDocument/rename", b.s, RQ_RENAME, d);
+  l->s->req[l->s->nreq - 1].at.x = (size_t)preview;	/* Shift+Enter: the Refactor Preview, even for one file */
   buf_free(&b);
 }
 
@@ -1238,6 +1246,7 @@ void lsp_rename (Doc *d, Pos at, const char *name) {
 static struct {
   Srv *s;
   char **json;
+  char **kind, **why;	/* its kind ("refactor.extract"), and why it is disabled (NULL: it is not) */
   size_t n;
 } g_act;
 
@@ -1320,6 +1329,89 @@ void lsp_inlay (Doc *d, size_t y0, size_t y1) {
   buf_free(&b);
   l->s->req[l->s->nreq - 1].at.y = y0;
   l->s->req[l->s->nreq - 1].at.x = y1;
+}
+
+
+/* the last inlay hints, as the server sent them: InlayHint.id - 1 is one's index */
+static struct {
+  Srv *s;
+  const Doc *d;
+  char **json;
+  size_t n;
+} g_ih;
+
+
+static void hints_forget (void) {
+  size_t i;
+  for (i = 0; i < g_ih.n; i++) free(g_ih.json[i]);
+  free(g_ih.json);
+  memset(&g_ih, 0, sizeof(g_ih));
+}
+
+
+static void hints_drop (const Doc *d) {
+  if (g_ih.d == d) hints_forget();
+}
+
+
+static void hints_keep (Srv *s, const Doc *d, const Json *res) {
+  size_t i;
+  hints_forget();
+  if (res == NULL || res->type != J_ARR || res->n == 0) return;
+  g_ih.s = s;
+  g_ih.d = d;
+  g_ih.json = (char **)xmalloc(res->n * sizeof(char *));
+  for (i = 0; i < res->n; i++) g_ih.json[i] = json_text(res->kid[i]);
+  g_ih.n = res->n;
+}
+
+
+static TextEdit *text_edits (Srv *s, const Json *res, size_t *n);
+static char *markup (const Json *j);
+
+/* a hint's tooltip (its label parts' too) and its textEdits, to on_inlay_resolved */
+static void hint_done (Srv *s, Doc *d, const Json *h, int apply) {
+  const Json *lb = json_get(h, "label"), *tip = json_get(h, "tooltip");
+  TextEdit *v;
+  size_t n = 0, q;
+  Buf b;
+  buf_init(&b);
+  if (tip) {
+    char *t = markup(tip);
+    buf_puts(&b, t);
+    free(t);
+  }
+  for (q = 0; lb && lb->type == J_ARR && q < lb->n; q++)	/* a part's own: "a: the first parameter" */
+    if (json_get(lb->kid[q], "tooltip")) {
+      char *t = markup(json_get(lb->kid[q], "tooltip"));
+      if (*t) buf_printf(&b, "%s`%s` %s", b.len ? "\n\n" : "", json_str(json_get(lb->kid[q], "value"), ""), t);
+      free(t);
+    }
+  buf_putc(&b, '\0');
+  v = text_edits(s, json_get(h, "textEdits"), &n);
+  on_inlay_resolved(d, apply, b.s[0] ? b.s : NULL, v, n);
+  for (q = 0; q < n; q++) free(v[q].text);
+  free(v);
+  buf_free(&b);
+}
+
+
+/*
+** inlayHint/resolve: hint id of the last ones (the server fills in what it
+** left out: its tooltip, its textEdits) for the hover (apply 0) or a
+** double-click (apply 1), which puts its textEdits into the text
+*/
+void lsp_inlay_resolve (Doc *d, size_t id, int apply) {
+  Json *h;
+  if (d != g_ih.d || id < 1 || id > g_ih.n || g_ih.s == NULL || g_ih.s->dead) return;
+  if ((h = json_parse(g_ih.json[id - 1], strlen(g_ih.json[id - 1]))) == NULL) return;
+  if (g_ih.s->hint_resolve && !json_get(h, apply ? "textEdits" : "tooltip")) {
+    request(g_ih.s, "inlayHint/resolve", g_ih.json[id - 1], RQ_INLAY_RESOLVE, d);
+    g_ih.s->req[g_ih.s->nreq - 1].at.y = id;
+    g_ih.s->req[g_ih.s->nreq - 1].at.x = (size_t)apply;
+  }
+  else hint_done(g_ih.s, d, h, apply);
+  json_free(h);
 }
 
 
@@ -2578,6 +2670,7 @@ int lsp_ext_wait (int ms, int (*done) (void)) {
 void lsp_ext_saved (Doc *d) {
   LDoc *l = ldoc_ext(d);
   Buf b;
+  lsp_watch_nudge();	/* every save: the servers watching it hear of it soon */
   if (l == NULL || !l->opened || l->s->dead) return;
   if (l->sent != d->edits) did_change(l);
   td_begin(&b, l);
@@ -3113,7 +3206,7 @@ static void add_symbols (const Json *list, int depth, Sym **v, size_t *n, size_t
 }
 
 
-static int g_confirm;	/* the edit is a rename's: on_edit_confirm */
+static int g_confirm;	/* a rename's or a code action's edit: on_edit_confirm (2: its preview always) */
 
 /* a WorkspaceEdit: the edits of each file, handed to on_edit */
 static void workspace_edit (Srv *s, const Json *we) {
@@ -3144,7 +3237,7 @@ static void workspace_edit (Srv *s, const Json *we) {
     for (i = 0; i < changes->n; i++) ADD_EDITS(changes->kid[i]->key, changes->kid[i]);
   }
 #undef ADD_EDITS
-  if (g_confirm) on_edit_confirm(v, n);
+  if (g_confirm) on_edit_confirm(v, n, g_confirm == 2);
   else on_edit(v, n);
   for (i = 0; i < n; i++) {
     free(v[i].path);
@@ -3242,9 +3335,15 @@ static void signature (const Json *res) {
 static void actions (Srv *s, const Json *res) {
   size_t i;
   char **titles;
-  for (i = 0; i < g_act.n; i++) free(g_act.json[i]);
+  for (i = 0; i < g_act.n; i++) {
+    free(g_act.json[i]);
+    free(g_act.kind[i]);
+    free(g_act.why[i]);
+  }
   free(g_act.json);
-  g_act.json = NULL;
+  free(g_act.kind);
+  free(g_act.why);
+  g_act.json = g_act.kind = g_act.why = NULL;
   g_act.n = 0;
   g_act.s = s;
   if (res == NULL || res->type != J_ARR || res->n == 0) {
@@ -3252,13 +3351,18 @@ static void actions (Srv *s, const Json *res) {
     return;
   }
   g_act.json = (char **)xmalloc(res->n * sizeof(char *));
+  g_act.kind = (char **)xmalloc(res->n * sizeof(char *));
+  g_act.why = (char **)xmalloc(res->n * sizeof(char *));
   titles = (char **)xmalloc(res->n * sizeof(char *));
   for (i = 0; i < res->n; i++) {
+    const char *why = json_str(json_get(res->kid[i], "disabled.reason"), NULL);
     Buf b;
     buf_init(&b);
     json_write(&b, res->kid[i]);
     buf_putc(&b, '\0');
     g_act.json[i] = buf_take(&b);
+    g_act.kind[i] = xstrdup(json_str(json_get(res->kid[i], "kind"), ""));	/* a bare Command has none */
+    g_act.why[i] = why ? xstrdup(why) : NULL;
     titles[i] = (char *)json_str(json_get(res->kid[i], "title"), "?");
   }
   g_act.n = res->n;
@@ -3300,8 +3404,29 @@ void lsp_action_run (size_t i) {
   if (a == NULL) return;
   if (!json_get(a, "edit") && !json_get(a, "command") && json_get(a, "data"))	/* the server fills it in */
     request(g_act.s, "codeAction/resolve", g_act.json[i], RQ_RESOLVE, NULL);
-  else do_action(g_act.s, a);
+  else {
+    g_confirm = 1;	/* an edit of several files: the Refactor Preview first */
+    do_action(g_act.s, a);
+    g_confirm = 0;
+  }
   json_free(a);
+}
+
+
+/* on_actions's action i: its kind ("" none), and why it is disabled (NULL: it is not) */
+const char *lsp_action_kind (size_t i) {
+  return i < g_act.n ? g_act.kind[i] : "";
+}
+
+
+const char *lsp_action_disabled (size_t i) {
+  return i < g_act.n ? g_act.why[i] : NULL;
+}
+
+
+/* Refactor... (editor.action.refactor): the refactorings of a .. b, to on_actions */
+void lsp_refactor (Doc *d, Pos a, Pos b) {
+  ask_actions_only(d, a, b, RQ_ACTIONS, "refactor");
 }
 
 
@@ -3355,6 +3480,8 @@ static int show_document (Srv *s, const Json *params) {
 }
 
 
+static void watch_register (Srv *s, const Json *params, int add);
+
 /* a request of the server: answered with nothing, which every server takes */
 static void answer (Srv *s, const Json *msg) {
   const Json *id = json_get(msg, "id");
@@ -3405,6 +3532,8 @@ static void answer (Srv *s, const Json *msg) {
               question_done, q);
     return;
   }
+  if (strcmp(method, "client/registerCapability") == 0) watch_register(s, json_get(msg, "params"), 1);
+  else if (strcmp(method, "client/unregisterCapability") == 0) watch_register(s, json_get(msg, "params"), 0);
   buf_init(&b);
   buf_puts(&b, "{\"jsonrpc\":\"2.0\",\"id\":");
   if (id->type == J_STR) json_put_str(&b, id->str, id->len);
@@ -3524,6 +3653,7 @@ static void handle (Srv *s, const Json *msg) {
         p = json_get(c, "documentLinkProvider");
         s->can_link = p && (p->type == J_OBJ || (p->type == J_BOOL && p->b));
         s->link_resolve = json_bool(json_get(p, "resolveProvider"), 0);
+        s->hint_resolve = json_bool(json_get(c, "inlayHintProvider.resolveProvider"), 0);
         free(s->will_ren);
         free(s->did_ren);
         s->will_ren = json_text(json_get(c, "workspace.fileOperations.willRename.filters"));
@@ -3564,13 +3694,17 @@ static void handle (Srv *s, const Json *msg) {
       const Json *err = json_get(msg, "error.message");
       if (err) toast(1, "%s", json_str(err, "Rename failed"));
       else if (json_get(msg, "result")) {
-        g_confirm = 1;
+        g_confirm = r.at.x ? 2 : 1;
         workspace_edit(s, json_get(msg, "result"));
         g_confirm = 0;
       }
     }
     else if (r.kind == RQ_ACTIONS) actions(s, json_get(msg, "result"));
-    else if (r.kind == RQ_RESOLVE && json_get(msg, "result")) do_action(s, json_get(msg, "result"));
+    else if (r.kind == RQ_RESOLVE && json_get(msg, "result")) {
+      g_confirm = 1;
+      do_action(s, json_get(msg, "result"));
+      g_confirm = 0;
+    }
     else if (r.kind >= RQ_LOC_REFS && r.kind <= RQ_LOC_PEEK) {
       if (json_get(msg, "error")) on_locations(r.kind - RQ_LOC_REFS, NULL, 0);
       else locations(s, json_get(msg, "result"), r.kind - RQ_LOC_REFS);
@@ -3581,6 +3715,7 @@ static void handle (Srv *s, const Json *msg) {
       InlayHint *v = NULL;
       size_t k, n = 0;
       if (res && res->type == J_ARR && res->n) v = (InlayHint *)xmalloc(res->n * sizeof(InlayHint));
+      hints_keep(s, r.d, res);	/* as they came: inlayHint/resolve sends one back */
       for (k = 0; res && res->type == J_ARR && k < res->n; k++) {
         const Json *h = res->kid[k], *lb = json_get(h, "label");
         Buf b;
@@ -3596,9 +3731,23 @@ static void handle (Srv *s, const Json *msg) {
         v[n].at = pos_in(s, r.d, json_get(h, "position"));
         v[n].label = buf_take(&b);
         v[n].color = 0;
+        v[n].id = k + 1;
         n++;
       }
       on_inlay(r.d, r.at.y, r.at.x, v, n);
+    }
+    else if (r.kind == RQ_INLAY_RESOLVE) {	/* the hint again, with its tooltip and edits */
+      const Json *res = json_get(msg, "result");
+      Json *old = NULL;
+      if (r.d == g_ih.d && r.at.y >= 1 && r.at.y <= g_ih.n) {
+        if (res && res->type == J_OBJ) {	/* kept resolved: the next hover asks nothing */
+          free(g_ih.json[r.at.y - 1]);
+          g_ih.json[r.at.y - 1] = json_text(res);
+        }
+        else res = old = json_parse(g_ih.json[r.at.y - 1], strlen(g_ih.json[r.at.y - 1]));	/* it failed: what it had */
+      }
+      if (res && res->type == J_OBJ && r.d) hint_done(s, r.d, res, (int)r.at.x);
+      if (old) json_free(old);
     }
     else if (r.kind == RQ_SEMANTIC) {	/* relative: line, start, length, type, modifiers */
       const Json *data = json_get(msg, "result.data");
@@ -3871,7 +4020,7 @@ static void srv_read (Srv *s) {
 /* a stopped server something still points at: a document, a question, what a menu keeps to answer it */
 static int srv_used (const Srv *s) {
   size_t k;
-  if (s->refs || g_act.s == s || g_lens.s == s || g_link.s == s || g_inl.s == s || g_inl.asked == s ||
+  if (s->refs || g_act.s == s || g_ih.s == s || g_lens.s == s || g_link.s == s || g_inl.s == s || g_inl.asked == s ||
       g_ne.s == s || g_ne.asked == s)
     return 1;
   for (k = 0; k < g_ndoc; k++)
@@ -3880,12 +4029,16 @@ static int srv_used (const Srv *s) {
 }
 
 
+static void watch_drop (Srv *s, const char *id);
+static void watch_idle (void);
+
 /* the stopped servers nothing points at are let go, their slots with them (restarts would use them all up) */
 static void srv_gc (void) {
   int i, n = 0;
   for (i = 0; i < g_nsrv; i++) {
     Srv *s = g_srv[i];
     if (s->gone && s->reaped && !srv_used(s)) {
+      watch_drop(s, NULL);
       buf_free(&s->in);
       free(s->will_ren);
       free(s->did_ren);
@@ -3941,6 +4094,7 @@ int lsp_poll (void) {
     if (now - l->seen_at >= SYNC_WAIT) did_change(l);
   }
   auth_idle();	/* a device flow nobody will ever answer is given up on */
+  watch_idle();	/* workspace/didChangeWatchedFiles */
   g_busy--;
   return got;
 }
@@ -4096,6 +4250,7 @@ void lsp_will_rename (const char *from, const char *to, int dir) {
 void lsp_did_rename (const char *from, const char *to, int dir) {
   char *params = NULL;
   int i;
+  lsp_watch_nudge();
   for (i = 0; i < g_nsrv; i++) {
     Srv *s = g_srv[i];
     if (s->gone || s->dead || !s->ready || !(ren_wanted(s->did_ren, from, dir) || ren_wanted(s->did_ren, to, dir)))
@@ -4104,6 +4259,358 @@ void lsp_did_rename (const char *from, const char *to, int dir) {
     notify(s, "workspace/didRenameFiles", params);
   }
   free(params);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** workspace/didChangeWatchedFiles: a server registers watchers
+** (client/registerCapability: a glob of the whole path, of the folder's
+** files - go.mod - or a RelativePattern of a folder) and is told which of those files were created,
+** changed or deleted. There is no watcher of the system's here: a worker
+** looks at the folder now and then (only while a glob is registered;
+** .git, node_modules and the like are left out, as files.watcherExclude
+** leaves them) and the main loop tells the servers what differs from the
+** last look. A save, a git command (checkout, pull, stash ...) and a
+** rename in the Explorer make the next look come soon.
+** ===================================================================
+*/
+
+#define WATCH_EVERY	2000000	/* us between two looks, at least (a slow folder: more) */
+#define WATCH_SOON	300000	/* us after a save or a git command */
+#define WATCH_MAX	50000	/* entries a look goes through at most: a huge folder is not walked whole */
+
+typedef struct Watcher {
+  Srv *s;
+  char *id;	/* its registration's */
+  char *glob;
+  char *base;	/* a RelativePattern's folder, '/' between its names; NULL: the glob is for the whole path */
+  int kind;	/* WatchKind: 1 create, 2 change, 4 delete */
+} Watcher;
+
+typedef struct WFile {
+  char *path;	/* '/' between the names */
+  long long mtime, size;
+} WFile;
+
+typedef struct WJob {	/* a look, on a worker */
+  char *root;
+  Watcher *w;	/* copies of the globs (no server: the worker never touches one) */
+  size_t nw;
+  WFile *f;
+  size_t n, cap, seen;
+  unsigned gen;	/* the watchers it was made for */
+  int done;
+  Mutex *mx;
+} WJob;
+
+static Watcher *g_wt;
+static size_t g_nwt;
+static unsigned g_wt_gen;	/* one more for each change of the watchers: a look made for others is a baseline */
+static WFile *g_wf;	/* what the last look found, sorted by path */
+static size_t g_nwf;
+static int g_wf_ok;	/* g_wf is for the watchers there are: the next look tells what changed */
+static long long g_wf_next, g_wf_every = WATCH_EVERY;
+static WJob *g_wjob;
+static Thread *g_wth;
+
+
+static void wf_free (WFile *v, size_t n) {
+  size_t i;
+  for (i = 0; i < n; i++) free(v[i].path);
+  free(v);
+}
+
+
+/* the next look soon: a save, a git command, a rename */
+void lsp_watch_nudge (void) {
+  long long soon = os_now_us() + WATCH_SOON;
+  if (g_nwt && g_wf_next > soon) g_wf_next = soon;
+}
+
+
+static char *slashed (const char *native) {
+  char *p = xstrdup(native);
+  size_t i;
+  for (i = 0; p[i]; i++)
+    if (p[i] == '\\' && path_is_sep('\\')) p[i] = '/';
+  return p;
+}
+
+
+/* p's part under the folder base ('/' separators), NULL: not in it */
+static const char *wt_under (const char *base, const char *p) {
+  size_t i;
+  int nocase = path_is_sep('\\');
+  for (i = 0; base[i]; i++)
+    if (nocase ? fold_case((unsigned char)base[i]) != fold_case((unsigned char)p[i]) : base[i] != p[i]) return NULL;
+  if (i > 0 && base[i - 1] == '/') return p + i;
+  return p[i] == '/' ? p + i + 1 : NULL;
+}
+
+
+/* does watcher w take path p ('/' separators)? rel: p in the folder, for a glob like "go.mod" */
+static int wt_match (const Watcher *w, const char *p, const char *rel) {
+  int nocase = path_is_sep('\\');
+  if (w->base) {
+    const char *in = wt_under(w->base, p);
+    return in && glob_match(w->glob, in, nocase);
+  }
+  return glob_match(w->glob, p, nocase) || (rel && glob_match(w->glob, rel, nocase));
+}
+
+
+static int wt_any (const WJob *j, const char *p, const char *rel) {
+  size_t i;
+  for (i = 0; i < j->nw; i++)
+    if (wt_match(&j->w[i], p, rel)) return 1;
+  return 0;
+}
+
+
+static int wt_skip (const char *name) {	/* files.watcherExclude's folders, simply */
+  return strcmp(name, ".git") == 0 || strcmp(name, ".hg") == 0 || strcmp(name, ".svn") == 0 ||
+         strcmp(name, "node_modules") == 0;
+}
+
+
+static void walk (WJob *j, const char *dir, int depth) {
+  Vec v;
+  size_t i, rl = strlen(j->root);
+  vec_init(&v);
+  if (depth > 32 || os_listdir(dir, &v) != 0) {
+    vec_free(&v);
+    return;
+  }
+  for (i = 0; i < v.n && j->seen < WATCH_MAX; i++) {
+    char *full = path_join(dir, v.v[i]), *p;
+    OsStat st;
+    j->seen++;
+    if (os_stat(full, &st) != 0 || !st.exists) {
+      free(full);
+      continue;
+    }
+    if (st.is_dir) {
+      if (!wt_skip(v.v[i])) walk(j, full, depth + 1);
+      free(full);
+      continue;
+    }
+    p = slashed(full);
+    free(full);
+    if (!wt_any(j, p, strlen(p) > rl ? p + rl + 1 : NULL)) {
+      free(p);
+      continue;
+    }
+    if (j->n == j->cap) {
+      j->cap = j->cap ? j->cap * 2 : 64;
+      j->f = (WFile *)xrealloc(j->f, j->cap * sizeof(WFile));
+    }
+    j->f[j->n].path = p;
+    j->f[j->n].mtime = (long long)st.mtime;
+    j->f[j->n].size = st.size;
+    j->n++;
+  }
+  vec_free(&v);
+}
+
+
+static int cmp_wf (const void *a, const void *b) {
+  return strcmp(((const WFile *)a)->path, ((const WFile *)b)->path);
+}
+
+
+static void walk_main (void *ud) {
+  WJob *j = (WJob *)ud;
+  char *root = xstrdup(j->root);
+  size_t i;
+  for (i = 0; root[i]; i++)
+    if (root[i] == '/' && path_is_sep('\\')) root[i] = '\\';
+  walk(j, root, 0);
+  free(root);
+  if (j->n) qsort(j->f, j->n, sizeof(WFile), cmp_wf);
+  mx_lock(j->mx);
+  j->done = 1;
+  mx_unlock(j->mx);
+}
+
+
+static void job_free (WJob *j) {
+  size_t i;
+  for (i = 0; i < j->nw; i++) {
+    free(j->w[i].glob);
+    free(j->w[i].base);
+  }
+  free(j->w);
+  free(j->root);
+  if (j->f) wf_free(j->f, j->n);
+  mx_free(j->mx);
+  free(j);
+}
+
+
+/* change type (1 created, 2 changed, 3 deleted) of p: to each server one of whose watchers wants it */
+static void wt_tell (Buf *out, const char *p, const char *rel, int type) {
+  size_t i;
+  int k;
+  char said[MAX_SRV];
+  memset(said, 0, sizeof(said));
+  for (i = 0; i < g_nwt; i++) {
+    const Watcher *w = &g_wt[i];
+    char *native, *uri;
+    for (k = 0; k < g_nsrv && g_srv[k] != w->s; k++) ;
+    if (k == g_nsrv || said[k] || !(w->kind & (1 << (type - 1))) || !wt_match(w, p, rel)) continue;
+    said[k] = 1;
+    native = xstrdup(p);
+    for (uri = native; *uri; uri++)
+      if (*uri == '/' && path_is_sep('\\')) *uri = '\\';
+    uri = to_uri(native);
+    buf_puts(&out[k], out[k].len ? "," : "{\"changes\":[");
+    buf_printf(&out[k], "{\"uri\":\"%s\",\"type\":%d}", uri, type);
+    free(uri);
+    free(native);
+  }
+}
+
+
+/* a look came back: what differs from the last one, to the servers */
+static void watch_done (WJob *j) {
+  Buf out[MAX_SRV];
+  size_t a = 0, b = 0, rl = strlen(j->root);
+  int k;
+  if (j->gen != g_wt_gen || !g_wf_ok) {	/* the first look for these watchers: nothing to tell yet */
+    wf_free(g_wf, g_nwf);
+    g_wf = j->f;
+    g_nwf = j->n;
+    j->f = NULL;
+    g_wf_ok = j->gen == g_wt_gen;
+    return;
+  }
+  for (k = 0; k < MAX_SRV; k++) buf_init(&out[k]);
+  while (a < g_nwf || b < j->n) {
+    int c = a == g_nwf ? 1 : b == j->n ? -1 : strcmp(g_wf[a].path, j->f[b].path);
+    const char *p = c < 0 ? g_wf[a].path : j->f[b].path;
+    const char *rel = strlen(p) > rl ? p + rl + 1 : NULL;
+    if (c < 0) wt_tell(out, p, rel, 3);	/* gone */
+    else if (c > 0) wt_tell(out, p, rel, 1);	/* new */
+    else if (g_wf[a].mtime != j->f[b].mtime || g_wf[a].size != j->f[b].size) wt_tell(out, p, rel, 2);
+    if (c <= 0) a++;
+    if (c >= 0) b++;
+  }
+  for (k = 0; k < g_nsrv; k++)
+    if (out[k].len) {
+      buf_puts(&out[k], "]}");
+      buf_putc(&out[k], '\0');
+      if (!g_srv[k]->dead && g_srv[k]->ready) notify(g_srv[k], "workspace/didChangeWatchedFiles", out[k].s);
+    }
+  for (k = 0; k < MAX_SRV; k++) buf_free(&out[k]);
+  wf_free(g_wf, g_nwf);
+  g_wf = j->f;
+  g_nwf = j->n;
+  j->f = NULL;
+}
+
+
+/* from lsp_poll: a look done is told; the next one started when it is time */
+static void watch_idle (void) {
+  long long now;
+  size_t i;
+  if (g_wjob) {
+    int done;
+    mx_lock(g_wjob->mx);
+    done = g_wjob->done;
+    mx_unlock(g_wjob->mx);
+    if (!done) return;
+    th_join(g_wth);
+    g_wth = NULL;
+    now = os_now_us() - g_wf_next;	/* how long it took: a slow folder is looked at less often */
+    g_wf_every = now * 20 > WATCH_EVERY ? now * 20 : WATCH_EVERY;
+    if (g_wf_every > 30 * WATCH_EVERY) g_wf_every = 30 * WATCH_EVERY;
+    watch_done(g_wjob);
+    job_free(g_wjob);
+    g_wjob = NULL;
+    g_wf_next = os_now_us() + g_wf_every;
+    return;
+  }
+  if (g_nwt == 0 || (now = os_now_us()) < g_wf_next) return;
+  g_wjob = (WJob *)xmalloc(sizeof(WJob));
+  memset(g_wjob, 0, sizeof(*g_wjob));
+  g_wjob->root = slashed(side_root());
+  g_wjob->gen = g_wt_gen;
+  g_wjob->w = (Watcher *)xmalloc(g_nwt * sizeof(Watcher));
+  for (i = 0; i < g_nwt; i++) {
+    g_wjob->w[i] = g_wt[i];
+    g_wjob->w[i].s = NULL;
+    g_wjob->w[i].id = NULL;
+    g_wjob->w[i].glob = xstrdup(g_wt[i].glob);
+    g_wjob->w[i].base = g_wt[i].base ? xstrdup(g_wt[i].base) : NULL;
+  }
+  g_wjob->nw = g_nwt;
+  g_wjob->mx = mx_new();
+  g_wf_next = now;	/* when it started, for how long it takes */
+  if ((g_wth = th_start(walk_main, g_wjob)) == NULL) {
+    job_free(g_wjob);
+    g_wjob = NULL;
+    g_wf_next = now + 30 * WATCH_EVERY;
+  }
+}
+
+
+/* s's watchers of registration id go (NULL: all of them: it stopped) */
+static void watch_drop (Srv *s, const char *id) {
+  size_t i, k = 0;
+  for (i = 0; i < g_nwt; i++) {
+    if (g_wt[i].s == s && (id == NULL || strcmp(g_wt[i].id, id) == 0)) {
+      free(g_wt[i].id);
+      free(g_wt[i].glob);
+      free(g_wt[i].base);
+      continue;
+    }
+    g_wt[k++] = g_wt[i];
+  }
+  if (k != g_nwt) g_wt_gen++;
+  g_nwt = k;
+}
+
+
+/* client/registerCapability, client/unregisterCapability: the watchers of workspace/didChangeWatchedFiles */
+static void watch_register (Srv *s, const Json *params, int add) {
+  const Json *regs = json_get(params, add ? "registrations" : "unregisterations");	/* sic, the protocol's */
+  size_t i, k;
+  for (i = 0; regs && regs->type == J_ARR && i < regs->n; i++) {
+    const Json *r = regs->kid[i], *ws = json_get(r, "registerOptions.watchers");
+    const char *id = json_str(json_get(r, "id"), "");
+    if (strcmp(json_str(json_get(r, "method"), ""), "workspace/didChangeWatchedFiles") != 0) continue;
+    if (!add) {
+      watch_drop(s, id);
+      continue;
+    }
+    for (k = 0; ws && ws->type == J_ARR && k < ws->n; k++) {
+      const Json *gp = json_get(ws->kid[k], "globPattern"), *bu;
+      const char *glob = gp && gp->type == J_STR ? gp->str : json_str(json_get(gp, "pattern"), NULL);
+      Watcher *w;
+      if (glob == NULL || !*glob) continue;
+      g_wt = (Watcher *)xrealloc(g_wt, (g_nwt + 1) * sizeof(Watcher));
+      w = &g_wt[g_nwt++];
+      w->s = s;
+      w->id = xstrdup(id);
+      w->glob = xstrdup(glob);
+      w->base = NULL;
+      w->kind = inum(json_get(ws->kid[k], "kind"), 7);
+      if (gp->type == J_OBJ && (bu = json_get(gp, "baseUri")) != NULL) {	/* a URI, or a WorkspaceFolder */
+        const char *u = bu->type == J_STR ? bu->str : json_str(json_get(bu, "uri"), NULL);
+        if (u) {
+          char *native = lsp_path(u);
+          w->base = slashed(native);
+          free(native);
+        }
+      }
+      out_log(s->chan, "[info] Watching %s%s%s", w->base ? w->base : "", w->base ? "/" : "", w->glob);
+    }
+    g_wt_gen++;
+    g_wf_next = 0;	/* a first look for these at once */
+  }
 }
 
 /* }================================================================== */

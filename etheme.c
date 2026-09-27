@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 
 typedef struct Color {
   int slot;
@@ -172,16 +177,112 @@ static const Color solarized[] = {
   {C_TOK + T_WS, 0x0E4B58}
 };
 
+
+/*
+** High contrast (VS Code's "hc-black" and "hc-light"): no colors to tell
+** things apart but black (white) and the text, and outlines instead -
+** contrastBorder round the widgets, the inputs, the panels,
+** contrastActiveBorder round what has the focus (theme_outline says which
+*/
+static const Color hc_dark[] = {
+  {C_EDITOR_BG, 0x000000}, {C_EDITOR_FG, 0xFFFFFF}, {C_LINE_BG, 0x010101},	/* not the editor's: its cells are known */
+  {C_SEL_BG, 0xF3F518}, {C_MATCH_BG, 0x000000}, {C_GUTTER, 0xFFFFFF},
+  {C_GUTTER_ON, 0xF38518}, {C_CTRL, 0x7F7F7F}, {C_WS, 0x7F7F7F},
+  {C_STATUS_BG, 0x000000}, {C_STATUS_FG, 0xFFFFFF}, {C_STATUS_ITEM, 0x000000},
+  {C_TITLE_BG, 0x000000}, {C_TITLE_FG, 0xFFFFFF}, {C_TITLE_ON, 0x000000},
+  {C_MENU_BG, 0x000000}, {C_MENU_FG, 0xFFFFFF}, {C_MENU_SEL_BG, 0x000000},
+  {C_MENU_SEL_FG, 0xFFFFFF}, {C_MENU_DIM, 0xFFFFFF}, {C_MENU_SEP, 0x6FC3DF},
+  {C_ACT_BG, 0x000000}, {C_ACT_FG, 0xFFFFFF}, {C_ACT_DIM, 0xFFFFFF},
+  {C_SIDE_BG, 0x000000}, {C_SIDE_FG, 0xFFFFFF}, {C_SIDE_HEAD, 0xFFFFFF},
+  {C_LIST_SEL_BG, 0x000000}, {C_LIST_SEL_FG, 0xFFFFFF}, {C_LIST_CUR_BG, 0x000000},
+  {C_DIM, 0xB3B3B3}, {C_BORDER, 0x6FC3DF},
+  {C_INPUT_BG, 0x000000}, {C_INPUT_FG, 0xFFFFFF}, {C_INPUT_HINT, 0xB3B3B3},
+  {C_TOGGLE_BG, 0x000000}, {C_HIT, 0xF38518}, {C_TOAST_BG, 0x0C141F},
+  {C_ERROR, 0xF48771}, {C_WARNING, 0xFFD370}, {C_INFO, 0x3794FF},
+  {C_GIT_M, 0xE2C08D}, {C_GIT_A, 0xA1E3AD}, {C_GIT_D, 0xC74E39}, {C_GIT_U, 0x73C991},
+  {C_DIFF_ADD, 0x000000}, {C_DIFF_ADD_HI, 0x000000}, {C_DIFF_DEL, 0x000000}, {C_DIFF_DEL_HI, 0x000000},
+  {C_TABS_BG, 0x000000}, {C_TAB_BG, 0x000000}, {C_TAB_FG, 0xFFFFFF},
+  {C_TAB_ON_BG, 0x000000}, {C_TAB_ON_FG, 0xFFFFFF}, {C_CRUMB, 0xCCCCCC},
+  {C_ACCENT, 0xF38518}, {C_MCURSOR, 0xFFFFFF}, {C_LIGHTBULB, 0xFFCC00},
+  {C_MINIMAP_SLIDER, 0x437586}, {C_THUMB, 0x437586}, {C_THUMB_ON, 0x6FC3DF},
+  {C_BRACKET1, 0xFFD700}, {C_BRACKET2, 0xDA70D6}, {C_BRACKET3, 0x87CEFA},
+  {C_BRACKET_MATCH, 0x000000},
+  {C_GUIDE, 0x7F7F7F}, {C_GUIDE_ON, 0xFFFFFF}, {C_RULER, 0xFFFFFF},
+  {C_INLAY_FG, 0xFFFFFF}, {C_INLAY_BG, 0x000000}, {C_LENS, 0x999999}, {C_GHOST, 0x999999},
+  {C_TERM_FG, 0xFFFFFF}, {C_TERM_BG, 0x000000},
+  {C_ANSI + 0, 0x000000}, {C_ANSI + 1, 0xCD0000}, {C_ANSI + 2, 0x00CD00},
+  {C_ANSI + 3, 0xCDCD00}, {C_ANSI + 4, 0x0000EE}, {C_ANSI + 5, 0xCD00CD},
+  {C_ANSI + 6, 0x00CDCD}, {C_ANSI + 7, 0xE5E5E5}, {C_ANSI + 8, 0x7F7F7F},
+  {C_ANSI + 9, 0xFF0000}, {C_ANSI + 10, 0x00FF00}, {C_ANSI + 11, 0xFFFF00},
+  {C_ANSI + 12, 0x5C5CFF}, {C_ANSI + 13, 0xFF00FF}, {C_ANSI + 14, 0x00FFFF},
+  {C_ANSI + 15, 0xFFFFFF},
+  {C_TOK + T_TEXT, 0xFFFFFF}, {C_TOK + T_KEYWORD, 0xC586C0}, {C_TOK + T_STORAGE, 0x569CD6},
+  {C_TOK + T_TYPE, 0x4EC9B0}, {C_TOK + T_FUNC, 0xDCDCAA}, {C_TOK + T_STRING, 0xCE9178},
+  {C_TOK + T_NUMBER, 0xB5CEA8}, {C_TOK + T_COMMENT, 0x7CA668}, {C_TOK + T_VAR, 0x9CDCFE},
+  {C_TOK + T_CONST, 0x569CD6}, {C_TOK + T_ESCAPE, 0xD7BA7D}, {C_TOK + T_HEADING, 0x6796E6},
+  {C_TOK + T_WS, 0x7F7F7F}
+};
+
+static const Color hc_light[] = {
+  {C_EDITOR_BG, 0xFFFFFF}, {C_EDITOR_FG, 0x292929}, {C_LINE_BG, 0xFEFEFE},
+  {C_SEL_BG, 0x0F4A85}, {C_MATCH_BG, 0xFFFFFF}, {C_GUTTER, 0x292929},
+  {C_GUTTER_ON, 0x006BBD}, {C_CTRL, 0x7F7F7F}, {C_WS, 0x7F7F7F},
+  {C_STATUS_BG, 0xFFFFFF}, {C_STATUS_FG, 0x292929}, {C_STATUS_ITEM, 0xFFFFFF},
+  {C_TITLE_BG, 0xFFFFFF}, {C_TITLE_FG, 0x292929}, {C_TITLE_ON, 0xFFFFFF},
+  {C_MENU_BG, 0xFFFFFF}, {C_MENU_FG, 0x292929}, {C_MENU_SEL_BG, 0xE7EDF3},
+  {C_MENU_SEL_FG, 0x292929}, {C_MENU_DIM, 0x292929}, {C_MENU_SEP, 0x0F4A85},
+  {C_ACT_BG, 0xFFFFFF}, {C_ACT_FG, 0x292929}, {C_ACT_DIM, 0x292929},
+  {C_SIDE_BG, 0xFFFFFF}, {C_SIDE_FG, 0x292929}, {C_SIDE_HEAD, 0x292929},
+  {C_LIST_SEL_BG, 0xE7EDF3}, {C_LIST_SEL_FG, 0x292929}, {C_LIST_CUR_BG, 0xE7EDF3},
+  {C_DIM, 0x696969}, {C_BORDER, 0x0F4A85},
+  {C_INPUT_BG, 0xFFFFFF}, {C_INPUT_FG, 0x292929}, {C_INPUT_HINT, 0x696969},
+  {C_TOGGLE_BG, 0xFFFFFF}, {C_HIT, 0x006BBD}, {C_TOAST_BG, 0xFFFFFF},
+  {C_ERROR, 0xB5200D}, {C_WARNING, 0x895503}, {C_INFO, 0x1A85FF},
+  {C_GIT_M, 0x895503}, {C_GIT_A, 0x374E06}, {C_GIT_D, 0xAD0707}, {C_GIT_U, 0x007100},
+  {C_DIFF_ADD, 0xFFFFFF}, {C_DIFF_ADD_HI, 0xFFFFFF}, {C_DIFF_DEL, 0xFFFFFF}, {C_DIFF_DEL_HI, 0xFFFFFF},
+  {C_TABS_BG, 0xFFFFFF}, {C_TAB_BG, 0xFFFFFF}, {C_TAB_FG, 0x292929},
+  {C_TAB_ON_BG, 0xFFFFFF}, {C_TAB_ON_FG, 0x292929}, {C_CRUMB, 0x545454},
+  {C_ACCENT, 0x006BBD}, {C_MCURSOR, 0x0F4A85}, {C_LIGHTBULB, 0x007ACC},
+  {C_MINIMAP_SLIDER, 0x9FB7CE}, {C_THUMB, 0x9FB7CE}, {C_THUMB_ON, 0x0F4A85},
+  {C_BRACKET1, 0x0431FA}, {C_BRACKET2, 0x319331}, {C_BRACKET3, 0x7B3814},
+  {C_BRACKET_MATCH, 0xFFFFFF},
+  {C_GUIDE, 0xA5A5A5}, {C_GUIDE_ON, 0x292929}, {C_RULER, 0x292929},
+  {C_INLAY_FG, 0x292929}, {C_INLAY_BG, 0xFFFFFF}, {C_LENS, 0x292929}, {C_GHOST, 0x7F7F7F},
+  {C_TERM_FG, 0x292929}, {C_TERM_BG, 0xFFFFFF},
+  {C_ANSI + 0, 0x292929}, {C_ANSI + 1, 0xCD3131}, {C_ANSI + 2, 0x136C13},
+  {C_ANSI + 3, 0x949800}, {C_ANSI + 4, 0x0451A5}, {C_ANSI + 5, 0xBC05BC},
+  {C_ANSI + 6, 0x0598BC}, {C_ANSI + 7, 0x555555}, {C_ANSI + 8, 0x666666},
+  {C_ANSI + 9, 0xCD3131}, {C_ANSI + 10, 0x00BC00}, {C_ANSI + 11, 0xB5BA00},
+  {C_ANSI + 12, 0x0451A5}, {C_ANSI + 13, 0xBC05BC}, {C_ANSI + 14, 0x0598BC},
+  {C_ANSI + 15, 0xA5A5A5},
+  {C_TOK + T_TEXT, 0x292929}, {C_TOK + T_KEYWORD, 0xB5200D}, {C_TOK + T_STORAGE, 0x0F4A85},
+  {C_TOK + T_TYPE, 0x185E73}, {C_TOK + T_FUNC, 0x5E2CBC}, {C_TOK + T_STRING, 0x0F4A85},
+  {C_TOK + T_NUMBER, 0x096D48}, {C_TOK + T_COMMENT, 0x515151}, {C_TOK + T_VAR, 0x001080},
+  {C_TOK + T_CONST, 0x02715D}, {C_TOK + T_ESCAPE, 0xEE0000}, {C_TOK + T_HEADING, 0x0F4A85},
+  {C_TOK + T_WS, 0x7F7F7F}
+};
+
+/* their outlines: contrastBorder, contrastActiveBorder, editor.selectionForeground, the diff's borders */
+static const struct {
+  uint32_t border, active, sel_fg, line, add, del;
+} hc_color[2] = {
+  {0x6FC3DF, 0xF38518, 0x000000, 0xF38518, 0x33FF2E, 0xFF008F},
+  {0x0F4A85, 0x006BBD, 0xFFFFFF, 0x0F4A85, 0x374E06, 0xAD0707}
+};
+
 static const struct {
   const char *name;
   const Color *over;
   size_t n;
+  int hc;	/* 1 dark high contrast, 2 light */
 } themes[] = {
-  {"Dark Modern", dark_modern, sizeof(dark_modern) / sizeof(Color)},
-  {"Dark+", NULL, 0},
-  {"Light+", light_plus, sizeof(light_plus) / sizeof(Color)},
-  {"Monokai", monokai, sizeof(monokai) / sizeof(Color)},
-  {"Solarized Dark", solarized, sizeof(solarized) / sizeof(Color)}
+  {"Dark Modern", dark_modern, sizeof(dark_modern) / sizeof(Color), 0},
+  {"Dark+", NULL, 0, 0},
+  {"Light+", light_plus, sizeof(light_plus) / sizeof(Color), 0},
+  {"Monokai", monokai, sizeof(monokai) / sizeof(Color), 0},
+  {"Solarized Dark", solarized, sizeof(solarized) / sizeof(Color), 0},
+  {"Dark High Contrast", hc_dark, sizeof(hc_dark) / sizeof(Color), 1},
+  {"Light High Contrast", hc_light, sizeof(hc_light) / sizeof(Color), 2}
 };
 
 #define NTHEME	((int)(sizeof(themes) / sizeof(themes[0])))
@@ -291,32 +392,137 @@ static void make_sgr (char *out, size_t n, const char *attr, uint32_t fg, uint32
 }
 
 
+/* VS Code's ids of its themes ("Default High Contrast"), the names in an imported settings.json, are these */
+static const char *theme_alias (const char *name) {
+  static const char *const alias[][2] = {
+    {"Default High Contrast", "Dark High Contrast"}, {"High Contrast", "Dark High Contrast"},
+    {"Default High Contrast Light", "Light High Contrast"}, {"High Contrast Light", "Light High Contrast"},
+    {"Default Dark Modern", "Dark Modern"}, {"Default Dark+", "Dark+"}, {"Default Light+", "Light+"}
+  };
+  size_t i;
+  for (i = 0; name && i < sizeof(alias) / sizeof(alias[0]); i++)
+    if (m_stricmp(name, alias[i][0]) == 0) return alias[i][1];
+  return name;
+}
+
+
+static unsigned char g_hc;	/* the theme now is a high contrast one: 1 dark, 2 light */
+static uint16_t g_outl[S_N + T_N * B_N];	/* the outlines (1 << OL_*) each style's cells are inside */
+
+
+/* which outlines the styles have in a high contrast theme */
+static void outlines_make (void) {
+  static const struct {
+    unsigned char st, ol;
+  } by_style[] = {
+    {S_SIDE_SEL, OL_FOCUS}, {S_BOX_SEL, OL_FOCUS}, {S_BOX_HIT_SEL, OL_FOCUS}, {S_MENU_SEL, OL_FOCUS},
+    {S_MENU_KEY_SEL, OL_FOCUS}, {S_TAB_ON, OL_FOCUS}, {S_MENUBAR_ON, OL_FOCUS}, {S_SIDE_CUR, OL_CUR},
+    {S_BOX, OL_WIDGET}, {S_BOX_TITLE, OL_WIDGET}, {S_BOX_SEL, OL_WIDGET}, {S_BOX_DIM, OL_WIDGET},
+    {S_BOX_HIT, OL_WIDGET}, {S_BOX_HIT_SEL, OL_WIDGET}, {S_MENU, OL_WIDGET}, {S_MENU_SEL, OL_WIDGET},
+    {S_MENU_KEY, OL_WIDGET}, {S_MENU_KEY_SEL, OL_WIDGET}, {S_MENU_LINE, OL_WIDGET}, {S_TOAST, OL_WIDGET},
+    {S_TOAST_WARN, OL_WIDGET},
+    {S_INPUT, OL_INPUT}, {S_INPUT_ON, OL_INPUT}, {S_INPUT_HINT, OL_INPUT}, {S_TOGGLE_ON, OL_INPUT},
+    {S_TOGGLE_ON, OL_TOGGLE}, {S_MATCH, OL_MATCH}, {S_SIDE_HIT, OL_MATCH}, {S_LINE, OL_LINE},
+    {S_DIFF_ADD, OL_ADD}, {S_DIFF_ADD_HI, OL_ADD}, {S_DIFF_DEL, OL_DEL}, {S_DIFF_DEL_HI, OL_DEL}
+  };
+  static const unsigned char by_bg[B_N] = {
+    [B_LINE] = OL_LINE + 1, [B_MATCH] = OL_MATCH + 1, [B_ADD] = OL_ADD + 1, [B_ADD_HI] = OL_ADD + 1,
+    [B_DEL] = OL_DEL + 1, [B_DEL_HI] = OL_DEL + 1
+  };
+  size_t i;
+  memset(g_outl, 0, sizeof(g_outl));
+  if (!g_hc) return;
+  for (i = 0; i < sizeof(by_style) / sizeof(by_style[0]); i++) g_outl[by_style[i].st] |= (uint16_t)(1u << by_style[i].ol);
+  for (i = 0; i < T_N * B_N; i++)
+    if (by_bg[i % B_N]) g_outl[S_N + i] = (uint16_t)(1u << (by_bg[i % B_N] - 1));
+}
+
+
 /* the theme by its name (or the first one); the screen is sent again */
 int theme_set (const char *name) {
-  int t, i;
+  int t, i, hc = 0;
+  name = theme_alias(name);
   for (t = 0; t < NTHEME + g_nadded; t++)
     if (name && m_stricmp(theme_name(t), name) == 0) break;
   if (t == NTHEME + g_nadded) t = 0;
   memcpy(g_color, dark_plus, sizeof(g_color));
-  if (t < NTHEME)
+  if (t < NTHEME) {
     for (i = 0; i < (int)themes[t].n; i++) g_color[themes[t].over[i].slot] = themes[t].over[i].rgb;
-  else {	/* an extension's: over Dark+ or Light+ */
+    hc = themes[t].hc;
+  }
+  else {	/* an extension's: over Dark+, Light+ or a high contrast one (uiTheme) */
     const Added *a = &g_added[t - NTHEME];
-    if (a->light)
-      for (i = 0; i < (int)(sizeof(light_plus) / sizeof(Color)); i++) g_color[light_plus[i].slot] = light_plus[i].rgb;
+    const Color *base = a->light == 1 ? light_plus : a->light == 2 ? hc_dark : a->light == 3 ? hc_light : NULL;
+    size_t nbase = a->light == 1 ? sizeof(light_plus) / sizeof(Color) : a->light == 2 ? sizeof(hc_dark) / sizeof(Color) :
+                   a->light == 3 ? sizeof(hc_light) / sizeof(Color) : 0;
+    for (i = 0; i < (int)nbase; i++) g_color[base[i].slot] = base[i].rgb;
+    hc = a->light >= 2 ? a->light - 1 : 0;
     a->load(a->arg, g_color);
   }
   theme_customize(g_color, theme_name(t));	/* workbench.colorCustomizations has the last word */
   tm_theme_again();	/* and editor.tokenColorCustomizations, over the grammar's rules */
   snprintf(g_curname, sizeof(g_curname), "%s", theme_name(t));
+  g_hc = (unsigned char)hc;
+  outlines_make();
   for (i = 0; i < S_N; i++)
-    make_sgr(g_sgr[i], sizeof(g_sgr[i]), style[i].attr, g_color[style[i].fg], g_color[style[i].bg]);
-  for (i = 0; i < T_N * B_N; i++)
+    make_sgr(g_sgr[i], sizeof(g_sgr[i]), style[i].attr,
+             hc && i == S_SEL ? hc_color[hc - 1].sel_fg : g_color[style[i].fg], g_color[style[i].bg]);
+  for (i = 0; i < T_N * B_N; i++)	/* a selection's text in editor.selectionForeground, when the theme has one */
     make_sgr(g_tok[i], sizeof(g_tok[i]), i / B_N == T_HEADING ? "1;" : "",
-             g_color[C_TOK + i / B_N], g_color[tok_bg[i % B_N]]);
+             hc && i % B_N == B_SEL ? hc_color[hc - 1].sel_fg : g_color[C_TOK + i / B_N], g_color[tok_bg[i % B_N]]);
   g_cur = t;
   scr_redraw();
   return t;
+}
+
+
+/* 1: a dark high contrast theme is on, 2: a light one; 0 not */
+int theme_hc (void) {
+  if (g_cur < 0) theme_set(NULL);
+  return g_hc;
+}
+
+
+/* the outlines (1 << OL_*) the cells of style st are inside: only a high contrast theme has them */
+unsigned theme_outline (int st) {
+  return st >= 0 && st < S_N + T_N * B_N ? g_outl[st] : 0;
+}
+
+
+/* outline ol's color; bit 24: dashed (list.inactiveFocusOutline) */
+uint32_t theme_outline_color (int ol) {
+  int k = g_hc ? g_hc - 1 : 0;
+  switch (ol) {
+    case OL_FOCUS: case OL_MATCH: return hc_color[k].active;
+    case OL_CUR: return hc_color[k].active | 0x1000000u;
+    case OL_LINE: return hc_color[k].line;
+    case OL_ADD: return hc_color[k].add;
+    case OL_DEL: return hc_color[k].del;
+    default: return g_color[C_BORDER];	/* contrastBorder */
+  }
+}
+
+
+/*
+** window.autoDetectHighContrast: while Windows' own high contrast is on,
+** workbench.preferredHighContrastColorTheme (its light one when Windows'
+** colors are light) instead of workbench.colorTheme
+*/
+const char *theme_auto (const char *name) {
+#ifdef _WIN32
+  HIGHCONTRASTW h;
+  memset(&h, 0, sizeof(h));
+  h.cbSize = sizeof(h);
+  if (json_bool(settings_get("window\\.autoDetectHighContrast"), 1) &&
+      SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(h), &h, 0) && (h.dwFlags & HCF_HIGHCONTRASTON)) {
+    DWORD c = GetSysColor(COLOR_WINDOW);
+    int light = (GetRValue(c) + GetGValue(c) + GetBValue(c)) > 3 * 128;
+    return json_str(settings_get(light ? "workbench\\.preferredHighContrastLightColorTheme" :
+                                 "workbench\\.preferredHighContrastColorTheme"),
+                    light ? "Light High Contrast" : "Dark High Contrast");
+  }
+#endif
+  return name;
 }
 
 

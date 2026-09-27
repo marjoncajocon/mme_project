@@ -835,6 +835,98 @@ static void window_round (void) {
 /* }================================================================== */
 
 
+/*
+** {==================================================================
+** A high contrast theme's outlines (etheme.c's theme_outline): VS Code's
+** contrastBorder round a popup, a box to type in; contrastActiveBorder
+** round the focused item of a list, the active tab, a match. A line of
+** its color along each side of a cell where the next cell is not inside
+** the same outline: the cells of a style make one rectangle.
+** ===================================================================
+*/
+
+static unsigned outline_at (const ECell *grid, int cols, int rows, int x, int y) {
+  const ECell *c;
+  if (x < 0 || y < 0 || x >= cols || y >= rows) return 0;
+  c = &grid[(size_t)y * (size_t)cols + (size_t)x];
+  if (c->st == S_RGB)	/* the current line's code in its grammar's colors: on the line's own background */
+    return c->ch != ZONE_HOLE && c->bg == ui_color(C_LINE_BG) && c->bg != ui_color(C_EDITOR_BG) ? 1u << OL_LINE : 0;
+  return c->ch == ZONE_HOLE ? 0 : theme_outline(c->st);
+}
+
+
+static void outline_line (int x, int y, int w, int h, uint32_t color) {
+  int i, j, dash = (int)(2.0f * W.scale + 0.5f);
+  if (!(color >> 24)) {
+    fill(&W.fr, x, y, w, h, color);
+    return;
+  }
+  if (dash < 2) dash = 2;
+  for (j = 0; j < h; j++)	/* dashed: every other stretch of its pixels, counted from the window's corner */
+    for (i = 0; i < w; i++)
+      if ((((w > h ? x + i : y + j) / dash) & 1) == 0) fill(&W.fr, x + i, y + j, 1, 1, color & 0xFFFFFF);
+}
+
+
+/*
+** The outlines of each cell of row r into m (cols of them; 0 outside the
+** grid). A cell with colors of its own (S_RGB: a name in its git color,
+** code in its grammar's) has none: it is inside the ones of the cells on
+** both sides of its run - or, for the line's outline, of the cell after
+** it (the code of the current line, from the gutter on).
+*/
+static void outline_row (const ECell *grid, int cols, int rows, int r, unsigned *m) {
+  int x, e;
+  for (x = 0; x < cols; x++) m[x] = outline_at(grid, cols, rows, x, r);
+  if (r < 0 || r >= rows) return;
+  for (x = 0; x < cols; x = e) {
+    unsigned in;
+    e = x + 1;
+    if (grid[(size_t)r * (size_t)cols + (size_t)x].st != S_RGB) continue;
+    while (e < cols && grid[(size_t)r * (size_t)cols + (size_t)e].st == S_RGB) e++;
+    if (e >= cols) continue;
+    in = m[e] & ((x > 0 ? m[x - 1] : 0) | (1u << OL_LINE));
+    if (x > 0 && grid[(size_t)r * (size_t)cols + (size_t)(x - 1)].ch == ZONE_HOLE) in = 0;
+    for (; x < e; x++) m[x] |= in;
+  }
+}
+
+
+/* the outlines' lines in row r of a grid of cols by rows cells of cw by ch pixels, its cell 0 at px0, py */
+static void paint_outlines (const ECell *grid, int cols, int rows, int r, int px0, int py, int cw, int ch) {
+  static unsigned *mb;
+  static int nmb;
+  unsigned *up, *m, *dn;
+  int x, k, t = (int)(W.scale + 0.5f);
+  if (t < 1) t = 1;
+  if (nmb < 3 * cols) {
+    nmb = 3 * cols;
+    mb = (unsigned *)xrealloc(mb, (size_t)nmb * sizeof(unsigned));
+  }
+  up = mb;
+  m = mb + cols;
+  dn = mb + 2 * cols;
+  outline_row(grid, cols, rows, r - 1, up);
+  outline_row(grid, cols, rows, r, m);
+  outline_row(grid, cols, rows, r + 1, dn);
+  for (x = 0; x < cols; x++) {
+    int px = px0 + x * cw;
+    for (k = 0; m[x] && k < OL_N; k++) {
+      unsigned bit = 1u << k;
+      uint32_t color;
+      if (!(m[x] & bit)) continue;
+      color = theme_outline_color(k);
+      if (x == 0 || !(m[x - 1] & bit)) outline_line(px, py, t, ch, color);
+      if (x + 1 >= cols || !(m[x + 1] & bit)) outline_line(px + cw - t, py, t, ch, color);
+      if (!(up[x] & bit)) outline_line(px, py, cw, t, color);
+      if (!(dn[x] & bit)) outline_line(px, py + ch - t, cw, t, color);
+    }
+  }
+}
+
+/* }================================================================== */
+
+
 /* row y of a grid (S.back, or S.front: what is shown) into the picture: every background, then the characters */
 /*
 ** A text zone's rows in the window's row y (they may start in the row
@@ -868,6 +960,7 @@ static void paint_zone_band (const Zone *z, int y, int front) {
       }
     cell_colors(&c[z->cols - 1], &fg, &bg, &at, &ul);	/* not a whole number of its cells: the rest in its row's color */
     fill(&W.fr, x0 + z->cols * FE.cw, py, x1 - x0 - z->cols * FE.cw, FE.ch, bg);
+    if (theme_hc()) paint_outlines(grid, z->cols, z->rows, r, x0, py, FE.cw, FE.ch);
   }
   clip_x0 = clip_y0 = 0;
   clip_x1 = clip_y1 = CLIP_ALL;
@@ -928,6 +1021,7 @@ static void paint_row (int y, const ECell *grid) {
       }
     }
   }
+  if (theme_hc()) paint_outlines(grid, S.cols, S.rows, y, 0, y * W.ch, W.cw, W.ch);
   paint_round(y, grid);
   if (y == 0 && W.borderless) tb_paint(b);	/* the title bar's buttons, over its right end */
   if (W.car_on && W.car_py < (y + 1) * W.ch && W.car_py + W.car_ph > y * W.ch) W.car_on = 0;	/* painted over */
@@ -1499,6 +1593,12 @@ static int tb_mouse (int x, int y, int type) {
 static unsigned char *g_zrow;
 static int g_nzrow;
 
+static int row_changed (int y) {
+  size_t row = (size_t)S.cols * sizeof(ECell);
+  return y >= 0 && y < S.rows && memcmp(&S.back[(size_t)y * (size_t)S.cols], &S.front[(size_t)y * (size_t)S.cols], row) != 0;
+}
+
+
 static void zones_changed (void) {
   int k, r, y;
   if (g_nzrow < S.rows) {
@@ -1517,8 +1617,8 @@ static void zones_changed (void) {
     }
     for (r = 0; r < z->rows; r++)
       if (memcmp(&z->back[(size_t)r * (size_t)z->cols], &z->front[(size_t)r * (size_t)z->cols], rb) != 0) {
-        int py = z->y * W.ch + r * FE.ch;
-        for (y = py / W.ch; y <= (py + FE.ch - 1) / W.ch; y++)
+        int py = z->y * W.ch + r * FE.ch, hc = theme_hc() ? FE.ch : 0;	/* and the rows beside it: their outlines */
+        for (y = (py - hc < 0 ? 0 : py - hc) / W.ch; y <= (py + FE.ch + hc - 1) / W.ch; y++)
           if (y >= z->y && y < z->y + z->h && y < S.rows) g_zrow[y] = 1;
       }
   }
@@ -1546,8 +1646,8 @@ void scr_flush (void) {
   if (W.up0 > S.rows) W.up0 = S.rows;
   zones_changed();
   for (y = 0; y < S.rows; y++) {
-    ECell *b = &S.back[(size_t)y * (size_t)S.cols];
-    if (!S.full && !g_zrow[y] && memcmp(b, &S.front[(size_t)y * (size_t)S.cols], row) == 0) continue;
+    if (!S.full && !g_zrow[y] && !row_changed(y) && !(theme_hc() && (row_changed(y - 1) || row_changed(y + 1))))
+      continue;	/* (an outline's sides in a row depend on the rows beside it) */
     paint_row(y, S.back);
     if (W.car_py < (y + 1) * W.ch && W.car_py + W.car_ph > y * W.ch) caret_row = 1;
     if (y < painted0) painted0 = y;

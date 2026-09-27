@@ -27,6 +27,14 @@
 ** a forwarded port's localhost URL is opened. A URL with a localhost port
 ** printed in the host's terminal is forwarded by itself
 ** (remote.autoForwardPorts, on by default), as VS Code does.
+**
+** WSL and Dev Containers' windows (eremote.c) are asked the same, and
+** forward otherwise: WSL's localhost is this computer's already (the port
+** is answered as it is), and a container's port gets a listening socket
+** here whose every connection is relayed by `docker exec -i <container>
+** mme --port-relay=3000` (the mme copied there: its stdin and stdout are
+** that connection). devcontainer.json's forwardPorts come to the remote
+** mme as MME_FORWARD_PORTS and are asked for at its start.
 */
 
 #include "mme.h"
@@ -45,6 +53,8 @@ typedef SOCKET Sock;
 #else
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -57,11 +67,7 @@ typedef int Sock;
 #define MAX_PORTS	32
 
 
-/* something listens on 127.0.0.1:port here */
-static int listening (int port) {
-  struct sockaddr_in a;
-  Sock s;
-  int ok;
+static int net_init (void) {	/* Windows' sockets started; 0: they cannot be */
 #ifdef _WIN32
   static int wsa = 0;
   if (!wsa) {
@@ -70,6 +76,16 @@ static int listening (int port) {
     wsa = 1;
   }
 #endif
+  return 1;
+}
+
+
+/* something listens on 127.0.0.1:port here */
+static int listening (int port) {
+  struct sockaddr_in a;
+  Sock s;
+  int ok;
+  if (!net_init()) return 0;
   s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (s == NO_SOCK) return 0;
   memset(&a, 0, sizeof(a));
@@ -177,6 +193,7 @@ void ports_reply (const char *text) {
     R[i].state = P_ON;
     R[i].local = colon ? port_of(colon + 1) : port;
     if (R[i].local == 0) R[i].local = port;
+    if (R[i].autof == 2) return;	/* devcontainer.json's: no notification, as VS Code */
     if (R[i].local == port) snprintf(msg, sizeof(msg), "Your application running on port %d is available.", port);
     else snprintf(msg, sizeof(msg), "Your application running on port %d is available here on port %d.", port, R[i].local);
     toast_ask(0, "Ports", msg, act, 1, open_ask, (void *)(intptr_t)port);
@@ -237,7 +254,7 @@ static void ports_view (void) {
   for (i = 0; i < nR; i++) {
     snprintf(label, sizeof(label), "%d  \xE2\x86\x92  localhost:%d", R[i].port, R[i].local ? R[i].local : R[i].port);
     snprintf(detail, sizeof(detail), "%s%s", R[i].state == P_ON ? "forwarded" : R[i].state == P_ASKED ? "forwarding..." :
-             "failed", R[i].autof ? " (from the terminal)" : " (by you)");
+             "failed", R[i].autof == 2 ? " (devcontainer.json)" : R[i].autof ? " (from the terminal)" : " (by you)");
     pick_add(&p, label, detail, 0);
   }
   pick_add(&p, "Forward a Port...", "", 0);
@@ -270,11 +287,25 @@ static void ports_view (void) {
 
 void ports_command (int cmd) {
   if (!ports_remote()) {
-    toast(1, "Ports are forwarded in a Remote-SSH window (Remote-SSH: Connect to Host...).");
+    toast(1, "Ports are forwarded in a Remote-SSH window (Remote-SSH: Connect to Host...).");	/* (WSL and Dev Containers windows too) */
     return;
   }
   if (cmd == CMD_PORT_FORWARD) ask_port();
   else ports_view();
+}
+
+
+/* the remote mme's start: devcontainer.json's forwardPorts (MME_FORWARD_PORTS=3000,8080) */
+void ports_init (void) {
+  char *e, *p;
+  if (!ports_remote() || (e = os_getenv("MME_FORWARD_PORTS")) == NULL) return;
+  for (p = e; *p;) {
+    int port = port_of(p);
+    if (port && find_r(port) < 0) forward(port, 2);
+    while (*p && *p != ',') p++;
+    if (*p) p++;
+  }
+  free(e);
 }
 
 /* }================================================================== */
@@ -282,7 +313,7 @@ void ports_command (int cmd) {
 
 /*
 ** {==================================================================
-** The mme here, in the Remote-SSH window: ssh -L for each
+** The mme here, in the remote window: ssh -L, WSL's own, a container's relay
 ** ===================================================================
 */
 
@@ -292,13 +323,28 @@ static struct {
   long pid;
   int err;	/* ssh's stderr (why it failed) */
   long long t0;
+  int direct;	/* WSL: nothing runs for it */
+  Sock lsock;	/* a container: the socket listening here, else NO_SOCK */
 } L[MAX_PORTS];
 static int nL;
-static char g_host[256];
+static int g_kind;	/* PT_SSH, PT_WSL, PT_DOCKER */
+static char g_host[256];	/* the ssh host, the container */
+
+#define MAX_CONN	64
+
+static struct {	/* a connection to a container's port: its socket, and the docker exec relaying it */
+  int port;
+  Sock s;
+  OsProc proc;
+  long pid;
+  int in, out;	/* the relay's stdin, stdout */
+} C[MAX_CONN];
+static int nC;
 
 
-void ports_host (const char *host) {	/* eremote.c: the window's host */
-  snprintf(g_host, sizeof(g_host), "%s", host);
+void ports_target (int kind, const char *name) {	/* eremote.c: the window's way to its remote */
+  g_kind = kind;
+  snprintf(g_host, sizeof(g_host), "%s", name);
 }
 
 
@@ -312,27 +358,94 @@ static void answer (int port, int local, const char *why) {
 }
 
 
+static void conn_close (int c) {
+  sock_close(C[c].s);
+  if (C[c].in >= 0) os_close(C[c].in);
+  if (C[c].out >= 0) os_close(C[c].out);
+  os_kill(C[c].pid, 15);
+  os_wait(C[c].proc);
+  memmove(&C[c], &C[c + 1], (size_t)(nC - c - 1) * sizeof(C[0]));
+  nC--;
+}
+
+
 static void local_stop (int i) {
-  os_kill(L[i].pid, 15);
-  os_wait(L[i].proc);
-  if (L[i].err >= 0) os_close(L[i].err);
+  int c;
+  if (L[i].lsock != NO_SOCK) {
+    sock_close(L[i].lsock);
+    for (c = nC - 1; c >= 0; c--)
+      if (C[c].port == L[i].port) conn_close(c);
+  }
+  else if (!L[i].direct) {
+    os_kill(L[i].pid, 15);
+    os_wait(L[i].proc);
+    if (L[i].err >= 0) os_close(L[i].err);
+  }
   memmove(&L[i], &L[i + 1], (size_t)(nL - i - 1) * sizeof(L[0]));
   nL--;
 }
 
 
+/* a socket listening on 127.0.0.1:port here; NO_SOCK: it cannot */
+static Sock listen_on (int port) {
+  struct sockaddr_in a;
+  Sock s;
+  if (!net_init() || (s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == NO_SOCK) return NO_SOCK;
+  memset(&a, 0, sizeof(a));
+  a.sin_family = AF_INET;
+  a.sin_port = htons((unsigned short)port);
+  a.sin_addr.s_addr = htonl(0x7F000001);
+  if (bind(s, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(s, 16) != 0) {
+    sock_close(s);
+    return NO_SOCK;
+  }
+  return s;
+}
+
+
+/* a WSL window's port: WSL's localhost is this one's; a container's: a socket here, relayed */
+static void other_forward (int port, int local) {
+  memset(&L[nL], 0, sizeof(L[0]));
+  L[nL].err = -1;
+  L[nL].lsock = NO_SOCK;
+  L[nL].port = port;
+  if (g_kind == PT_WSL) {
+    L[nL].direct = 1;
+    local = port;
+  }
+  else {
+    while (local < 65535 && local < port + 50 && (L[nL].lsock = listen_on(local)) == NO_SOCK) local++;
+    if (L[nL].lsock == NO_SOCK) {
+      answer(port, 0, "no port free here to listen on");
+      return;
+    }
+  }
+  L[nL].local = local;
+  L[nL].ok = 1;
+  L[nL].t0 = os_now_us();
+  nL++;
+  answer(port, local, NULL);
+}
+
+
 static void local_forward (int port) {
-  char *ssh = find_program("ssh"), spec[80], *argv[16];
+  char *ssh, spec[80], *argv[16];
   int i, local = port, fds[2], io[3], a = 0;
   for (i = 0; i < nL; i++)
     if (L[i].port == port) {	/* again: the same answer */
       if (L[i].ok) answer(port, L[i].local, NULL);
-      free(ssh);
       return;
     }
-  if (ssh == NULL || nL == MAX_PORTS || !g_host[0]) {
-    answer(port, 0, ssh == NULL ? "ssh was not found here" : "too many ports");
-    free(ssh);
+  if (nL == MAX_PORTS || !g_host[0]) {
+    answer(port, 0, "too many ports");
+    return;
+  }
+  if (g_kind != PT_SSH) {
+    other_forward(port, local);
+    return;
+  }
+  if ((ssh = find_program("ssh")) == NULL) {
+    answer(port, 0, "ssh was not found here");
     return;
   }
   while (local < 65535 && local < port + 50 && listening(local)) local++;	/* taken here: the next one free */
@@ -353,6 +466,7 @@ static void local_forward (int port) {
   argv[a] = NULL;
   memset(&L[nL], 0, sizeof(L[0]));
   L[nL].err = -1;
+  L[nL].lsock = NO_SOCK;
   io[0] = -1;
   io[1] = -1;
   io[2] = -1;
@@ -378,11 +492,11 @@ static void local_forward (int port) {
 }
 
 
-/* the OSC 7717 of the host's mme (epanel.c, in a Remote-SSH window only) */
+/* the OSC 7717 of the host's mme (epanel.c, in a remote window only) */
 void ports_osc (const char *text) {
   const char *eq = strchr(text, '=');
   int port = eq ? port_of(eq + 1) : 0, i;
-  if (!remote_mode || port == 0) return;
+  if (!remote_mode || remote_osc(text) || port == 0) return;	/* Reopen Folder Locally ... (eremote.c) */
   if (strncmp(text, "forward=", 8) == 0) local_forward(port);
   else if (strncmp(text, "unforward=", 10) == 0) {
     for (i = 0; i < nL; i++)
@@ -402,10 +516,124 @@ void ports_osc (const char *text) {
 }
 
 
-/* the Remote-SSH window's loop: each ssh listening yet (forwarded), or ended (failed) */
+/* a connection to a container's forwarded port: docker exec -i relays it (the mme there, --port-relay) */
+static void conn_open (int i) {
+  char *docker = find_program("docker"), sh[200], *argv[8];
+  int in[2], out[2], io[3], null;
+  Sock s = accept(L[i].lsock, NULL, NULL);
+  if (s == NO_SOCK) {
+    free(docker);
+    return;
+  }
+  if (docker == NULL || nC == MAX_CONN || os_pipe(in) != 0) {
+    sock_close(s);
+    free(docker);
+    return;
+  }
+  if (os_pipe(out) != 0) {
+    os_close(in[0]);
+    os_close(in[1]);
+    sock_close(s);
+    free(docker);
+    return;
+  }
+  snprintf(sh, sizeof(sh), "M=/tmp/mme-server; [ -x $M ] || M=$HOME/.mme-server/mme; exec $M --port-relay=%d", L[i].port);
+  argv[0] = docker;
+  argv[1] = (char *)"exec";
+  argv[2] = (char *)"-i";
+  argv[3] = g_host;
+  argv[4] = (char *)"/bin/sh";
+  argv[5] = (char *)"-c";
+  argv[6] = sh;
+  argv[7] = NULL;
+#ifdef _WIN32
+  null = os_open("NUL", OS_WRITE);
+#else
+  null = os_open("/dev/null", OS_WRITE);
+#endif
+  io[0] = in[0];
+  io[1] = out[1];
+  io[2] = null;
+  memset(&C[nC], 0, sizeof(C[0]));
+  if (os_spawn(docker, argv, NULL, io, 3, &C[nC].proc, &C[nC].pid) != 0) {
+    os_close(in[1]);
+    os_close(out[0]);
+    sock_close(s);
+    C[nC].pid = 0;
+  }
+  else {
+    C[nC].port = L[i].port;
+    C[nC].s = s;
+    C[nC].in = in[1];
+    C[nC].out = out[0];
+    nC++;
+  }
+  os_close(in[0]);
+  os_close(out[1]);
+  if (null >= 0) os_close(null);
+  free(docker);
+}
+
+
+/* a container's forwards: new connections, and what came either way (1: something moved) */
+static int relay_poll (void) {
+  fd_set rd;
+  struct timeval tv;
+  Sock top = 0;
+  int i, moved = 0, any = 0;
+  char buf[16384];
+  FD_ZERO(&rd);
+  for (i = 0; i < nL; i++)
+    if (L[i].lsock != NO_SOCK) {
+      FD_SET(L[i].lsock, &rd);
+      if (L[i].lsock > top) top = L[i].lsock;
+      any = 1;
+    }
+  for (i = 0; i < nC; i++) {
+    FD_SET(C[i].s, &rd);
+    if (C[i].s > top) top = C[i].s;
+    any = 1;
+  }
+  if (!any) return 0;
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  if (select((int)top + 1, &rd, NULL, NULL, &tv) > 0) {
+    for (i = 0; i < nL; i++)
+      if (L[i].lsock != NO_SOCK && FD_ISSET(L[i].lsock, &rd)) conn_open(i);
+    for (i = 0; i < nC; i++)
+      if (FD_ISSET(C[i].s, &rd)) {	/* the browser's: to the relay */
+        int n = (int)recv(C[i].s, buf, sizeof(buf), 0);
+        if (n <= 0 || os_write(C[i].in, buf, (size_t)n) != n) {
+          conn_close(i--);
+          continue;
+        }
+        moved = 1;
+      }
+  }
+  for (i = 0; i < nC; i++)
+    if (os_wait_readable(C[i].out, 0) == 1) {	/* the relay's: to the browser */
+      long n = os_read(C[i].out, buf, sizeof(buf)), k = 0;
+      while (n > 0 && k < n) {
+        int w = (int)send(C[i].s, buf + k, (int)(n - k), 0);
+        if (w <= 0) break;
+        k += w;
+      }
+      if (n <= 0 || k < n) {
+        conn_close(i--);
+        continue;
+      }
+      moved = 1;
+    }
+  return moved;
+}
+
+
+/* the remote window's loop: each ssh listening yet (forwarded), or ended (failed); the relays */
 void ports_poll (void) {
-  int i, st;
+  int i, st, rounds;
+  for (rounds = 0; rounds < 16 && relay_poll(); rounds++) ;	/* while it moves, a while */
   for (i = 0; i < nL; i++) {
+    if (L[i].direct || L[i].lsock != NO_SOCK) continue;
     if (!L[i].ok && listening(L[i].local)) {
       L[i].ok = 1;
       answer(L[i].port, L[i].local, NULL);
@@ -430,8 +658,77 @@ void ports_poll (void) {
 }
 
 
-void ports_stop_all (void) {	/* the window closes: its ssh go too */
+void ports_stop_all (void) {	/* the window closes: its ssh and relays go too */
   while (nL > 0) local_stop(nL - 1);
+  while (nC > 0) conn_close(nC - 1);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** mme --port-relay=3000: in the container, one connection to its port
+** ===================================================================
+*/
+
+int ports_relay_main (const char *spec) {
+  struct sockaddr_in a;
+  Sock s;
+  int port = port_of(spec), in_open = 1;
+  char buf[16384];
+  if (port == 0 || !net_init() || (s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == NO_SOCK) return 1;
+  memset(&a, 0, sizeof(a));
+  a.sin_family = AF_INET;
+  a.sin_port = htons((unsigned short)port);
+  a.sin_addr.s_addr = htonl(0x7F000001);
+  if (connect(s, (struct sockaddr *)&a, sizeof(a)) != 0) {
+    fd_printf(2, MME_NAME ": nothing listens on port %d\n", port);
+    sock_close(s);
+    return 1;
+  }
+  for (;;) {
+    fd_set rd;
+    struct timeval tv;
+    int r;
+    FD_ZERO(&rd);
+    FD_SET(s, &rd);
+#ifndef _WIN32
+    if (in_open) FD_SET(0, &rd);
+#endif
+    tv.tv_sec = 0;
+    tv.tv_usec = 10000;
+    r = select((int)s + 1, &rd, NULL, NULL, &tv);
+    if (r < 0) break;
+    if (FD_ISSET(s, &rd)) {	/* the port's: out */
+      int n = (int)recv(s, buf, sizeof(buf), 0);
+      if (n <= 0 || os_write(1, buf, (size_t)n) != n) break;
+    }
+#ifdef _WIN32
+    if (in_open && os_wait_readable(0, 0) == 1) {
+#else
+    if (in_open && FD_ISSET(0, &rd)) {
+#endif
+      long n = os_read(0, buf, sizeof(buf)), k = 0;	/* the window's: in */
+      if (n <= 0) {	/* its side closed: the port's may still answer */
+        in_open = 0;
+#ifdef _WIN32
+        shutdown(s, SD_SEND);
+#else
+        shutdown(s, SHUT_WR);
+#endif
+        continue;
+      }
+      while (k < n) {
+        int w = (int)send(s, buf + k, (int)(n - k), 0);
+        if (w <= 0) break;
+        k += w;
+      }
+      if (k < n) break;
+    }
+  }
+  sock_close(s);
+  return 0;
 }
 
 /* }================================================================== */

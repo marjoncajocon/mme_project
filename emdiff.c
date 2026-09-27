@@ -11,6 +11,13 @@
 ** drawn. A click or Enter on a header folds the file; Enter or a double
 ** click on a line opens the file there, on a fold opens the fold. The tab
 ** follows the repository: when git's status is read again, so are the diffs.
+**
+** Compare Folders (the Explorer's Select for Compare / Compare with
+** Selected on two folders, or "Compare Folders...") uses the same page:
+** a row for each file that is only in the left folder, only in the right
+** one, or in both and not the same (by size, then by content). Enter or a
+** double click opens the pair in the diff editor (a file on one side
+** only: the file); F5 compares them again.
 */
 
 #include "mme.h"
@@ -27,7 +34,8 @@
 typedef struct MFile {
   char *path;	/* native */
   char *rel;	/* from the repository's top, shown */
-  char letter;	/* M A D U R ... */
+  char letter;	/* M A D U R ...; folders: D only left, A only right, M different */
+  char *lpath;	/* folders: the left one's (NULL: only in the right) */
   void *diff;	/* its diff, set aside (diff_take); NULL: none could be made */
   int open;	/* not folded */
   size_t add, del;	/* the lines that came and went */
@@ -44,6 +52,9 @@ typedef struct MDiff {
   int x, y, w, h;	/* where it was drawn: for the mouse, and the keys' pages */
   long long click_at;	/* the last click: a second one soon on the same row opens */
   size_t click_row;
+  char *left, *right;	/* Compare Folders: the folders; NULL: git's changes */
+  char title[300];
+  size_t same;	/* the files in both that are the same */
 } MDiff;
 
 
@@ -52,6 +63,7 @@ static void files_free (MDiff *m) {
   for (i = 0; i < m->n; i++) {
     free(m->f[i].path);
     free(m->f[i].rel);
+    free(m->f[i].lpath);
     if (m->f[i].diff) diff_drop(m->f[i].diff);
   }
   free(m->f);
@@ -117,14 +129,183 @@ void mdiff_close (void *page) {
   MDiff *m = (MDiff *)page;
   if (m == NULL) return;
   files_free(m);
+  free(m->left);
+  free(m->right);
   free(m);
 }
 
 
 const char *mdiff_title (void *page) {
   MDiff *m = (MDiff *)page;
+  if (m && m->left) return m->title;
   return m && m->staged ? "Git: Staged Changes" : "Git: Changes";
 }
+
+
+/*
+** {==================================================================
+** Compare Folders
+** ===================================================================
+*/
+
+#define MAX_WALK	50000	/* a folder's files looked at, at most */
+
+
+/* every file under dir, from it with '/' ("src/a.c"); .git's not */
+static void walk (const char *dir, const char *rel, Vec *out) {
+  Vec v;
+  size_t i;
+  vec_init(&v);
+  if (os_listdir(dir, &v) == 0)
+    for (i = 0; i < v.n && out->n < MAX_WALK; i++) {
+      char *p = path_join(dir, v.v[i]), *r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
+      OsStat st;
+      if (os_stat(p, &st) == 0 && st.is_dir) {
+        if (strcmp(v.v[i], ".git") != 0) walk(p, r, out);
+        free(r);
+      }
+      else vec_push(out, r);
+      free(p);
+    }
+  vec_free(&v);
+}
+
+
+/* rel under dir, native */
+static char *native_of (const char *dir, const char *rel) {
+  char *p = path_join(dir, rel);
+#ifdef _WIN32
+  char *c;
+  for (c = p; *c; c++)
+    if (*c == '/') *c = '\\';
+#endif
+  return p;
+}
+
+
+/* the two files hold the same bytes */
+static int same_files (const char *a, const char *b) {
+  OsStat sa, sb;
+  int fa, fb, same = 1;
+  static char ba[65536], bb[65536];
+  if (os_stat(a, &sa) != 0 || os_stat(b, &sb) != 0 || sa.size != sb.size) return 0;
+  if ((fa = os_open(a, OS_READ)) < 0) return 0;
+  if ((fb = os_open(b, OS_READ)) < 0) {
+    os_close(fa);
+    return 0;
+  }
+  for (;;) {
+    long na = os_read(fa, ba, sizeof(ba)), nb = na > 0 ? os_read(fb, bb, (size_t)na) : 0;
+    if (na <= 0) break;
+    if (nb != na || memcmp(ba, bb, (size_t)na) != 0) {
+      same = 0;
+      break;
+    }
+  }
+  os_close(fa);
+  os_close(fb);
+  return same;
+}
+
+
+static void folder_add (MDiff *m, const char *rel, char letter, size_t *cap) {
+  MFile *f;
+  if (m->n == *cap) m->f = (MFile *)xrealloc(m->f, (*cap = *cap ? *cap * 2 : 64) * sizeof(MFile));
+  f = &m->f[m->n++];
+  memset(f, 0, sizeof(*f));
+  f->rel = xstrdup(rel);
+  f->letter = letter;
+  f->path = native_of(letter == 'D' ? m->left : m->right, rel);
+  if (letter != 'A') f->lpath = native_of(m->left, rel);
+}
+
+
+/* the two folders walked side by side: what is only in one, what differs */
+static void folders_read (MDiff *m) {
+  Vec l, r;
+  size_t i = 0, j = 0, cap = 0;
+  files_free(m);
+  m->same = 0;
+  vec_init(&l);
+  vec_init(&r);
+  walk(m->left, "", &l);
+  walk(m->right, "", &r);
+  vec_sort(&l);
+  vec_sort(&r);
+  while (i < l.n || j < r.n) {
+    int c = i == l.n ? 1 : j == r.n ? -1 : m_stricmp(l.v[i], r.v[j]);	/* vec_sort's order */
+    if (c == 0 && i < l.n && j < r.n) c = strcmp(l.v[i], r.v[j]);
+    if (c < 0) folder_add(m, l.v[i++], 'D', &cap);
+    else if (c > 0) folder_add(m, r.v[j++], 'A', &cap);
+    else {
+      char *a = native_of(m->left, l.v[i]), *b = native_of(m->right, r.v[j]);
+      if (same_files(a, b)) m->same++;
+      else folder_add(m, l.v[i], 'M', &cap);
+      free(a);
+      free(b);
+      i++;
+      j++;
+    }
+  }
+  vec_free(&l);
+  vec_free(&r);
+  m->sel = m->top = 0;
+}
+
+
+/* how a file of the comparison stands: "only in a", "different" */
+static const char *side_of (const MDiff *m, const MFile *f) {
+  static char s[300];
+  if (f->letter == 'M') return "different";
+  snprintf(s, sizeof(s), "only in %s", path_basename(f->letter == 'D' ? m->left : m->right));
+  return s;
+}
+
+
+/* Enter on a file of the comparison: the diff editor for a pair, else the file itself */
+static void folder_open (MDiff *m, MFile *f, SideAct *act) {
+  char title[600];
+  if (f->letter != 'M') {
+    act->what = SA_GO;
+    act->path = f->path;
+    return;
+  }
+  snprintf(title, sizeof(title), "%s (%s) \xE2\x86\x94 %s (%s)", path_basename(f->path), path_basename(m->left),
+           path_basename(f->path), path_basename(m->right));	/* ↔ */
+  if (diff_open_files(f->path, f->lpath, f->path, title) == 0) {
+    act->what = SA_SHOW_DIFF;
+    act->go = 1;
+  }
+}
+
+
+/* Compare Folders: a page for left against right; NULL (and a toast) when they cannot be */
+void *mdiff_folders (const char *left, const char *right) {
+  MDiff *m;
+  OsStat st;
+  size_t k, nl = 0, nr = 0;
+  if (os_stat(left, &st) != 0 || !st.is_dir || os_stat(right, &st) != 0 || !st.is_dir) {
+    toast(1, "Compare Folders: '%s' is not a folder", path_basename(os_stat(left, &st) != 0 || !st.is_dir ? left : right));
+    return NULL;
+  }
+  if ((m = (MDiff *)calloc(1, sizeof(MDiff))) == NULL) return NULL;
+  m->left = os_realpath(left);
+  m->right = os_realpath(right);
+  if (m->left == NULL) m->left = xstrdup(left);
+  if (m->right == NULL) m->right = xstrdup(right);
+  snprintf(m->title, sizeof(m->title), "%s \xE2\x86\x94 %s", path_basename(m->left), path_basename(m->right));
+  folders_read(m);
+  for (k = 0; k < m->n; k++) {
+    nl += m->f[k].letter == 'D';
+    nr += m->f[k].letter == 'A';
+  }
+  toast(0, "Compare Folders: %lu different, %lu only in %s, %lu only in %s, %lu the same",
+        (unsigned long)(m->n - nl - nr), (unsigned long)nl, path_basename(m->left), (unsigned long)nr,
+        path_basename(m->right), (unsigned long)m->same);
+  return m;
+}
+
+/* }================================================================== */
 
 
 /* the rows of file i: its header, and its diff when it is open */
@@ -200,12 +381,13 @@ static void draw_header (const MDiff *m, size_t i, int x, int y, int w, int on) 
   uint32_t icon;
   base = base ? base + 1 : f->rel;
   scr_fill(x, y, w, st);
-  scr_put(cx, y, f->open ? 0xEAB4 : 0xEAB6, st);	/* chevron-down / chevron-right */
+  if (!m->left) scr_put(cx, y, f->open ? 0xEAB4 : 0xEAB6, st);	/* chevron-down / chevron-right (a folder comparison has no diffs to fold) */
   cx += 2;
   icon = file_icon(base, &ist);
   scr_put(cx, y, icon, on ? st : ist);
   cx += 2;
   if (f->diff) snprintf(t, sizeof(t), " +%lu -%lu  %c ", (unsigned long)f->add, (unsigned long)f->del, f->letter);
+  else if (m->left) snprintf(t, sizeof(t), " %s  %c ", side_of(m, f), f->letter);
   else snprintf(t, sizeof(t), " %c ", f->letter);
   rw = (int)strlen(t);
   cx += scr_putsw(cx, y, x + w - rw - cx, base, st == S_SIDE ? S_SIDE_TITLE : st);
@@ -225,6 +407,11 @@ static void draw_header (const MDiff *m, size_t i, int x, int y, int w, int on) 
       rx += scr_puts(rx, y, d, st == S_SIDE ? S_GIT_D : st);
       rx += scr_puts(rx, y, "  ", st);
     }
+    else if (m->left) {	/* only in which, or different */
+      rx += scr_puts(rx, y, " ", st);
+      rx += scr_puts(rx, y, side_of(m, f), st == S_SIDE ? S_SIDE_DIM : st);
+      rx += scr_puts(rx, y, "  ", st);
+    }
     else rx += scr_puts(rx, y, " ", st);
     scr_put(rx, y, (uint32_t)f->letter, st == S_SIDE ? git_letter_style(f->letter) : st);
   }
@@ -235,7 +422,7 @@ void mdiff_draw (void *page, int x, int y, int w, int h, int focus) {
   MDiff *m = (MDiff *)page;
   size_t r, i, row0 = 0;
   if (m == NULL) return;
-  if (m->gen != git_status_gen()) read_all(m);	/* git's status was read again: so are the diffs */
+  if (!m->left && m->gen != git_status_gen()) read_all(m);	/* git's status was read again: so are the diffs */
   m->x = x;
   m->y = y;
   m->w = w;
@@ -243,6 +430,12 @@ void mdiff_draw (void *page, int x, int y, int w, int h, int focus) {
   measure(m, w);
   clamp_rows(m);
   scr_box(x, y, w, h, S_TEXT);
+  if (m->n == 0 && m->left) {
+    char t[160];
+    snprintf(t, sizeof(t), "The folders have the same files (%lu).", (unsigned long)m->same);
+    scr_putsw(x + 2, y + 1, w - 3, t, S_SIDE_DIM);
+    return;
+  }
   if (m->n == 0) {
     const char *t = git_root() ? (m->staged ? "No staged changes." : "No changes.") : "The folder is not a git repository.";
     scr_putsw(x + 2, y + 1, w - 3, t, S_SIDE_DIM);
@@ -285,6 +478,10 @@ static void activate (MDiff *m, size_t r, SideAct *act) {
   MFile *f;
   if (!row_of(m, r, &fi, &sub)) return;
   f = &m->f[fi];
+  if (sub < 0 && m->left) {	/* Compare Folders: the pair in the diff editor, or the file */
+    folder_open(m, f, act);
+    return;
+  }
   if (sub < 0) {
     f->open = !f->open;
     return;
@@ -317,6 +514,9 @@ void mdiff_key (void *page, int k, SideAct *act) {
     case K_HOME: m->sel = 0; break;
     case K_END: m->sel = n ? n - 1 : 0; break;
     case K_ENTER: case ' ': activate(m, m->sel, act); break;
+    case K_F5:	/* Compare Folders: again */
+      if (m->left) folders_read(m);
+      break;
     case K_LEFT:	/* to the file's header; on it: folded */
       if (row_of(m, m->sel, &fi, &sub)) {
         if (sub >= 0) m->sel = file_start(m, fi);
@@ -348,7 +548,7 @@ void mdiff_mouse (void *page, const Mouse *m, SideAct *act) {
   r = d->top + (size_t)(m->y - d->y);
   if (!row_of(d, r, &fi, &sub)) return;
   d->sel = r;
-  if (sub < 0) {	/* a header folds */
+  if (sub < 0 && !d->left) {	/* a header folds */
     d->f[fi].open = !d->f[fi].open;
     clamp_rows(d);
     d->click_at = 0;

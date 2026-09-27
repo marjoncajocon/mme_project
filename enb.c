@@ -100,6 +100,8 @@ typedef struct Nb {
   char title[300];
   char xctl[128];	/* an extension's kernel (createNotebookController) runs its cells: its id; "": mme's own */
   char xtype[128];	/* an extension's notebook format (its serializer reads and writes the file); "": .ipynb */
+  Json *vars;	/* the Variables view's: the kernel's variables after the last cell ran; NULL not asked */
+  unsigned vars_req;
 } Nb;
 
 typedef struct XCtl {	/* an extension's notebook controller, as the host said */
@@ -114,6 +116,7 @@ enum { RP_NONE, RP_TOOL, RP_SRC, RP_OUT, RP_ADD, RP_GAP };
 #define MAX_NB	32
 static Nb *g_nb[MAX_NB];
 static unsigned g_serial;
+static Nb *g_vnb;	/* the notebook the Variables view shows: the one last in front */
 
 
 static const char *S_ (const Cell *c) {	/* a cell's text */
@@ -743,6 +746,8 @@ static void k_stop (Nb *nb) {
   os_wait(nb->proc);
   k_close(nb);
   nb->ks = KS_OFF;
+  json_free(nb->vars);	/* its variables went with it */
+  nb->vars = NULL;
 }
 
 
@@ -984,6 +989,18 @@ static void comp_take (Nb *nb) {	/* the one selected replaces what was typed of 
 }
 
 
+/* the kernel's variables asked for (mme's kernel only: an extension's has its own view) */
+static void vars_ask (Nb *nb) {
+  Buf b;
+  if (nb->xctl[0] || nb->ks != KS_IDLE) return;
+  nb->vars_req++;
+  buf_init(&b);
+  buf_printf(&b, "{\"op\":\"vars\",\"req\":%u}\n", nb->vars_req);
+  k_send(nb, b.s, b.len);
+  buf_free(&b);
+}
+
+
 /* a line from the kernel */
 static void k_message (Nb *nb, const Json *m) {
   const char *t = json_str(json_get(m, "type"), "");
@@ -1011,6 +1028,16 @@ static void k_message (Nb *nb, const Json *m) {
   }
   if (strcmp(t, "complete") == 0) {
     comp_answer(nb, m);
+    return;
+  }
+  if (strcmp(t, "vars") == 0) {	/* the Variables view's list */
+    Buf b;
+    if ((unsigned)json_num(json_get(m, "req"), 0) != nb->vars_req) return;
+    buf_init(&b);
+    jw(&b, json_get(m, "vars"), 0);
+    json_free(nb->vars);
+    nb->vars = json_parse(b.s ? b.s : "[]", b.len);
+    buf_free(&b);
     return;
   }
   if (strcmp(t, "input") == 0) {	/* input(): asked once this line is read (not in the middle of reading) */
@@ -1065,6 +1092,7 @@ static void k_message (Nb *nb, const Json *m) {
     nb->ks = KS_IDLE;
     nb->int_at = 0;
     k_next(nb);
+    if (nb->ks == KS_IDLE) vars_ask(nb);	/* the last one queued ran: the Variables view again */
   }
   dirty(nb);
 }
@@ -1398,6 +1426,8 @@ void nb_close (void *page) {
   free(nb->ask);
   for (k = 0; k < MAX_NB; k++)
     if (g_nb[k] == nb) g_nb[k] = NULL;
+  if (g_vnb == nb) g_vnb = NULL;
+  json_free(nb->vars);
   for (i = 0; i < nb->n; i++) cell_free(nb->cell[i]);
   free(nb->cell);
   free(nb->queue);
@@ -2041,6 +2071,7 @@ void nb_draw (void *page, int x, int y, int w, int h, int focus) {
   size_t i;
   char tool[256];
   if (nb == NULL) return;
+  if (focus || g_vnb == NULL) g_vnb = nb;	/* the Variables view shows this one's */
   nb->x = x;
   nb->y = y;
   nb->w = w;
@@ -2684,6 +2715,115 @@ void nb_mouse (void *page, const Mouse *m) {
     return;
   }
   select_cell(nb, (size_t)cell, 0);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** The Variables view (VS Code's Jupyter: Variables, in the panel): the
+** variables of the kernel of the notebook in front - their name, type,
+** size and value - asked of it again each time its cells are done
+** ===================================================================
+*/
+
+static struct {
+  size_t sel, top;
+} VV;
+
+
+/* the variables shown now: their list, NULL none (no notebook, or its kernel not asked yet) */
+static const Json *vars_now (void) {
+  const Json *v = g_vnb ? g_vnb->vars : NULL;
+  return v && v->type == J_ARR ? v : NULL;
+}
+
+
+int nb_vars_known (void) {
+  int k;
+  for (k = 0; k < MAX_NB; k++)
+    if (g_nb[k] && g_nb[k]->vars) return 1;
+  return 0;
+}
+
+
+/* a column's text, cut to w columns (an ellipsis when it does not fit) */
+static void vars_cell (int x, int y, int w, const char *s, int st) {
+  if (w <= 0) return;
+  if ((int)str_cols(s) <= w) scr_putsw(x, y, w, s, st);
+  else {
+    scr_putsw(x, y, w - 1, s, st);
+    scr_put(x + w - 1, y, 0x2026, st);
+  }
+}
+
+
+void nb_vars_draw (int x, int y, int w, int h, int focus) {
+  const Json *v = vars_now();
+  int cw[4], r, k, cx;
+  static const char *const head[] = {"Name", "Type", "Size", "Value"};
+  static const char *const key[] = {"name", "type", "size", "value"};
+  scr_box(x, y, w, h, S_PANEL);
+  if (h < 2 || w < 20) return;
+  if (v == NULL || v->n == 0) {
+    const char *msg = g_vnb == NULL ? "Open a notebook and run a cell: its kernel's variables show here." :
+                      g_vnb->ks == KS_OFF ? "No kernel is running for the active notebook." : "No variables defined";
+    scr_putsw(x + 2, y + 1, w - 4, msg, S_SIDE_DIM);
+    return;
+  }
+  cw[0] = w / 5;	/* Name, Type, Size: as wide as they need, at most a fifth; Value the rest */
+  cw[1] = w / 8;
+  cw[2] = w / 8;
+  for (k = 0; k < 3; k++) {
+    size_t i, most = strlen(head[k]);
+    for (i = 0; i < v->n; i++) {
+      size_t c = str_cols(json_str(json_get(v->kid[i], key[k]), ""));
+      if (c > most) most = c;
+    }
+    if ((int)most + 2 < cw[k]) cw[k] = (int)most + 2;
+  }
+  cw[3] = w - 2 - cw[0] - cw[1] - cw[2];
+  for (cx = x + 1, k = 0; k < 4; cx += cw[k], k++) vars_cell(cx, y, cw[k] - 1, head[k], S_SIDE_TITLE);
+  if (VV.sel >= v->n) VV.sel = v->n - 1;
+  if (VV.sel < VV.top) VV.top = VV.sel;
+  if (VV.sel >= VV.top + (size_t)(h - 1)) VV.top = VV.sel - (size_t)(h - 2);
+  for (r = 0; r < h - 1 && VV.top + (size_t)r < v->n; r++) {
+    const Json *e = v->kid[VV.top + (size_t)r];
+    int st = focus && VV.top + (size_t)r == VV.sel ? S_SIDE_SEL : S_PANEL;
+    scr_fill(x, y + 1 + r, w, st);
+    for (cx = x + 1, k = 0; k < 4; cx += cw[k], k++)
+      vars_cell(cx, y + 1 + r, cw[k] - 1, json_str(json_get(e, key[k]), ""), k == 0 && st == S_PANEL ? S_TEXT : st);
+    if (st == S_PANEL) scr_set_fg(x + 1, y + 1 + r, tok_color(T_VAR));
+  }
+  side_bar(x, y + 1, w, h - 1, v->n, VV.top, (size_t)(h - 1));
+}
+
+
+/* Up, Down, Home, End, PgUp, PgDn in the list; 1 used */
+int nb_vars_key (int k) {
+  const Json *v = vars_now();
+  size_t n = v ? v->n : 0;
+  switch (KEY_CODE(k)) {
+    case K_UP: if (VV.sel > 0) VV.sel--; return 1;
+    case K_DOWN: if (VV.sel + 1 < n) VV.sel++; return 1;
+    case K_HOME: VV.sel = 0; return 1;
+    case K_END: VV.sel = n ? n - 1 : 0; return 1;
+    case K_PGUP: VV.sel = VV.sel > 10 ? VV.sel - 10 : 0; return 1;
+    case K_PGDN: VV.sel = VV.sel + 10 < n ? VV.sel + 10 : (n ? n - 1 : 0); return 1;
+  }
+  return 0;
+}
+
+
+void nb_vars_wheel (int d) {
+  const Json *v = vars_now();
+  size_t n = v ? v->n : 0;
+  long t = (long)VV.top + d * 3;
+  if (t < 0 || n == 0) t = 0;
+  if ((size_t)t >= n) t = (long)n - 1;
+  VV.top = (size_t)t;
+  if (VV.sel < VV.top) VV.sel = VV.top;
 }
 
 /* }================================================================== */

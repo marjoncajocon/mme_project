@@ -4102,6 +4102,35 @@ function bridge (impl) {
   });
 }
 
+// a debug adapter on a named pipe or a Unix socket (DebugAdapterNamedPipeServer): a port on 127.0.0.1 too, its
+// connection joined to one to the pipe - mme talks TCP to it as to an inline adapter's
+function pipeBridge (pipePath) {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer((sock) => {
+      const pipe = net.connect(pipePath);
+      let done = false;
+      const end = () => {
+        if (done) return;
+        done = true;
+        sock.destroy();
+        pipe.destroy();
+        srv.close();
+      };
+      sock.pipe(pipe);
+      pipe.pipe(sock);
+      pipe.on('error', (e) => {
+        log("[error] the debug adapter's pipe " + pipePath + ': ' + (e && e.message ? e.message : e));
+        end();
+      });
+      sock.on('error', end);
+      sock.on('close', end);
+      pipe.on('close', end);
+    });
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => resolve({srv, port: srv.address().port}));
+  });
+}
+
 async function resolveDebug (p) {	// mme/debugResolve {seq, config}: mme/debugResolved {seq, config, adapter}
   const seq = p.seq;
   const answer = (x) => notify('mme/debugResolved', Object.assign({seq}, x));
@@ -4133,9 +4162,9 @@ async function resolveDebug (p) {	// mme/debugResolve {seq, config}: mme/debugRe
     else if (d instanceof DebugAdapterInlineImplementation || (d && d.implementation)) {
       debugBridge = await bridge(d.implementation);
       adapter = {kind: 'server', port: debugBridge.port, host: '127.0.0.1'};
-    } else if (d instanceof DebugAdapterNamedPipeServer) {
-      answer({error: 'a debug adapter on a named pipe is not supported yet'});
-      return;
+    } else if (d instanceof DebugAdapterNamedPipeServer || (d && typeof d.path === 'string' && d.path)) {
+      debugBridge = await pipeBridge(d.path);
+      adapter = {kind: 'server', port: debugBridge.port, host: '127.0.0.1'};
     } else {
       answer({error: 'the extension gives no debug adapter for type "' + config.type + '"'});
       return;

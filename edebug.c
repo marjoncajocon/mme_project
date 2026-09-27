@@ -8,6 +8,12 @@
 ** .vscode/launch.json says what to debug, in VS Code's words. The Run and
 ** Debug view shows the variables, the watches, the call stack and the
 ** breakpoints; the panel's DEBUG CONSOLE the program's output and a REPL.
+** A configuration's preLaunchTask runs first (etask.c), its postDebugTask
+** after; a compound starts several sessions at once, each with an adapter
+** of its own (the focused one is the one the views show and the keys
+** drive). An adapter's runInTerminal runs the program in a terminal of the
+** panel; the Disassembly and a variable's memory (the hex viewer) are the
+** adapter's disassemble and readMemory.
 */
 
 #include "mme.h"
@@ -45,7 +51,8 @@ typedef int Sock;
 
 enum { RQ_INIT, RQ_LAUNCH, RQ_SETBP, RQ_CONFDONE, RQ_THREADS, RQ_STACK, RQ_SCOPES,
        RQ_VARS, RQ_WATCH, RQ_REPL, RQ_HOVER, RQ_STEP, RQ_DISCONNECT, RQ_SETVAR, RQ_GOTOT, RQ_GOTO,
-       RQ_EXCINFO, RQ_DBINFO, RQ_SETDBP, RQ_CUSTOM, RQ_OTHER };	/* RQ_CUSTOM: an extension's customRequest */
+       RQ_EXCINFO, RQ_DBINFO, RQ_SETDBP, RQ_CUSTOM, RQ_COMPL, RQ_DISASM, RQ_READMEM,
+       RQ_OTHER };	/* RQ_CUSTOM: an extension's customRequest */
 
 typedef struct Req {
   int seq, kind;
@@ -77,6 +84,7 @@ typedef struct ExcFilter {	/* the adapter's exception breakpoints: "Uncaught Exc
 
 typedef struct Var {	/* a row of VARIABLES: a scope, or a value in it (or of WATCH: an expression) */
   char *name, *value, *path;	/* path: "Locals/p/x", to open it again after a step */
+  char *mem;	/* its memoryReference (View Binary Data), NULL none */
   long ref;	/* its children, 0 none */
   int depth, open;
 } Var;
@@ -90,6 +98,7 @@ typedef struct Frame {
   long id;
   char *name, *path;
   size_t line;	/* from 1 */
+  char *ip;	/* its instructionPointerReference (the Disassembly), NULL none */
 } Frame;
 
 typedef struct Thread {
@@ -104,7 +113,7 @@ typedef struct CLine {	/* a line of the DEBUG CONSOLE */
 
 enum { CC_OUT, CC_ERR, CC_INFO, CC_IN, CC_RESULT };
 
-static struct {
+typedef struct Ses {	/* a debug session: one adapter */
   int on;	/* a session */
   int ready;	/* talking: initialize went */
   int stopped;
@@ -138,7 +147,20 @@ static struct {
   int ext;	/* an extension's debugger: the host is told when it ends */
   int track;	/* the host wants the messages (its trackers, its custom events) */
   int noproc;	/* connected to a port only: no adapter process of mme's */
-} D;
+  int cap_compl, cap_disasm, cap_mem, cap_gran;	/* completions, disassemble, readMemory, steppingGranularity */
+  char trig[32];	/* completionTriggerCharacters */
+  char *cfg;	/* its configuration, variables put in (Restart starts it again) */
+  char *post;	/* its postDebugTask, NULL none */
+  int compound, stop_all;	/* started by a compound (its number): stopAll ends the others with it */
+} Ses;
+
+#define MAX_SES	8
+
+static Ses g_ses[MAX_SES];
+static int g_foc;	/* the session the views show and the keys drive */
+static Ses *g_d = g_ses;	/* the session talked to: the focused one, but while its messages are read */
+#define D	(*g_d)
+#define FOC	(g_d == &g_ses[g_foc])	/* the views are this session's */
 
 static VarList g_vars;	/* VARIABLES: the scopes and their values */
 static VarList g_wvars;	/* WATCH: a row for each expression (depth 0) and their values */
@@ -159,7 +181,18 @@ static int g_log = -2;	/* $MME_DAPLOG: every message */
 
 /* the launch configurations of .vscode/launch.json */
 static Json *g_launch;
-static int g_cfg;	/* the one chosen */
+static int g_cfg;	/* the one chosen (past the configurations: a compound) */
+
+static char *g_dis_path;	/* the Disassembly's text (mme-data/debug/Disassembly) */
+static long g_dis_line;	/* its line of the instruction the program is at, -1 none */
+
+
+static void var_free (Var *v) {
+  free(v->name);
+  free(v->value);
+  free(v->path);
+  free(v->mem);
+}
 
 
 /* an adapter's number in range, else def: casting -1 or 1e300 to size_t, int or long is undefined in C */
@@ -569,15 +602,97 @@ static int request (const char *command, const char *args, int kind, long arg, c
 }
 
 
-/* the answer to a request of the adapter's (runInTerminal ...): not done */
-static void refuse (const Json *msg) {
+/* the answer to a request of the adapter's (startDebugging ...): not done */
+static void refuse (const Json *msg, const char *why) {
   Buf b;
   buf_init(&b);
   buf_printf(&b, "{\"seq\":%d,\"type\":\"response\",\"request_seq\":%d,\"success\":false,\"command\":\"%s\","
-                 "\"message\":\"not supported by mme\"}",
-             ++D.seq, inum(json_get(msg, "seq"), 0), json_str(json_get(msg, "command"), ""));
+                 "\"message\":", ++D.seq, inum(json_get(msg, "seq"), 0), json_str(json_get(msg, "command"), ""));
+  json_put_str(&b, why, strlen(why));
+  buf_putc(&b, '}');
   send_msg(&b);
   buf_free(&b);
+}
+
+
+/*
+** runInTerminal: the adapter's program (debugpy's launcher, lldb's ...)
+** in a terminal of the panel, VS Code's integrated one ("external" too),
+** so that it can read what is typed. mme's terminals do not say a
+** process id: the answer has none, which the protocol allows.
+*/
+static void run_in_terminal (const Json *msg) {
+  const Json *a = json_get(msg, "arguments"), *args = json_get(a, "args");
+  size_t n = args && args->type == J_ARR ? args->n : 0, i;
+  char **argv, title[160];
+  int r;
+  Buf b;
+  if (n == 0) {
+    refuse(msg, "runInTerminal: no program");
+    return;
+  }
+  argv = (char **)xmalloc((n + 4) * sizeof(char *));
+  if (json_bool(json_get(a, "argsCanBeInterpretedByShell"), 0)) {	/* one line, for the shell */
+    Buf line;
+    int k = 0;
+    buf_init(&line);
+    for (i = 0; i < n; i++) {
+      if (i) buf_putc(&line, ' ');
+      buf_puts(&line, json_str(args->kid[i], ""));
+    }
+    buf_putc(&line, '\0');
+#ifdef _WIN32
+    argv[k] = os_getenv("ComSpec");
+    if (argv[k] == NULL) argv[k] = xstrdup("C:\\Windows\\System32\\cmd.exe");
+    k++;
+    argv[k++] = xstrdup("/d");
+    argv[k++] = xstrdup("/c");
+#else
+    argv[k++] = xstrdup("/bin/sh");
+    argv[k++] = xstrdup("-c");
+#endif
+    argv[k++] = buf_take(&line);
+    argv[k] = NULL;
+  }
+  else {
+    for (i = 0; i < n; i++) argv[i] = xstrdup(json_str(args->kid[i], ""));
+    argv[n] = NULL;
+    if (!strchr(argv[0], '/') && !strchr(argv[0], '\\')) {	/* "python" (or "python.exe"): where it is */
+      size_t l = strlen(argv[0]);
+      char *full;
+      if (l > 4 && m_fncmp(argv[0] + l - 4, ".exe") == 0) argv[0][l - 4] = '\0';
+      full = find_program(argv[0]);
+      if (full == NULL && l > 4 && argv[0][l - 4] == '\0') argv[0][l - 4] = '.';
+      if (full) {
+        free(argv[0]);
+        argv[0] = full;
+      }
+    }
+  }
+  snprintf(title, sizeof(title), "%s", json_str(json_get(a, "title"), D.name[0] ? D.name : "Debug"));
+  r = task_run_in_terminal(title, argv, json_str(json_get(a, "cwd"), NULL), json_get(a, "env"));
+  for (i = 0; argv[i]; i++) free(argv[i]);
+  free(argv);
+  if (r != 0) {
+    refuse(msg, "The program could not start in a terminal");
+    return;
+  }
+  buf_init(&b);
+  buf_printf(&b, "{\"seq\":%d,\"type\":\"response\",\"request_seq\":%d,\"success\":true,\"command\":\"runInTerminal\","
+                 "\"body\":{}}", ++D.seq, inum(json_get(msg, "seq"), 0));
+  send_msg(&b);
+  buf_free(&b);
+}
+
+
+/* initialize's arguments: what mme can (runInTerminal, memory references ...) */
+static void initialize (const char *adapter_id) {
+  char a[512];
+  snprintf(a, sizeof(a), "{\"clientID\":\"mme\",\"clientName\":\"mme\",\"adapterID\":\"%s\",\"pathFormat\":\"path\","
+                         "\"linesStartAt1\":true,\"columnsStartAt1\":true,\"supportsVariableType\":true,"
+                         "\"supportsRunInTerminalRequest\":true,\"supportsArgsCanBeInterpretedByShell\":true,"
+                         "\"supportsMemoryReferences\":true,\"locale\":\"en\"}", adapter_id);
+  request("initialize", a, RQ_INIT, 0, NULL);
 }
 
 /* }================================================================== */
@@ -601,6 +716,8 @@ int dbg_mark (const char *path, size_t line) {
       if (!g_bp[i].enabled) m |= DM_DISABLED;
       else if (D.on && D.ready && !D.nodebug && !g_bp[i].verified) m |= DM_UNVERIFIED;
     }
+  if (D.stopped && g_dis_path && g_dis_line >= 0 && (size_t)g_dis_line == line && same_path(path, g_dis_path))
+    m |= DM_TOP;	/* the Disassembly: the instruction it is at */
   if (D.stopped && D.nfr > 0) {
     for (i = 0; i < D.nfr; i++)
       if (D.fr[i].path && D.fr[i].line == line + 1 && same_path(D.fr[i].path, path)) {
@@ -613,7 +730,7 @@ int dbg_mark (const char *path, size_t line) {
 
 
 /* the adapter is told the breakpoints of a file (all of them, the enabled ones) */
-static void send_bps (const char *path) {
+static void send_bps1 (const char *path) {
   Buf b;
   int i, first = 1;
   if (!D.on || !D.ready || D.nodebug) return;
@@ -638,6 +755,19 @@ static void send_bps (const char *path) {
 }
 
 
+/* every session's adapter is told */
+static void send_bps (const char *path) {
+  Ses *keep = g_d;
+  int s;
+  for (s = 0; s < MAX_SES; s++)
+    if (g_ses[s].on) {
+      g_d = &g_ses[s];
+      send_bps1(path);
+    }
+  g_d = keep;
+}
+
+
 static void send_dbps (void);
 static void dbp_session_end (void);
 static void got_dbinfo (const Req *r, int ok, const Json *msg, const Json *body);
@@ -648,7 +778,7 @@ static void send_all_bps (void) {
   for (i = 0; i < g_nbp; i++) {
     for (j = 0; j < i; j++)
       if (same_path(g_bp[j].path, g_bp[i].path)) break;
-    if (j == i) send_bps(g_bp[i].path);
+    if (j == i) send_bps1(g_bp[i].path);
   }
 }
 
@@ -821,7 +951,7 @@ static void drop_temp (int tell) {
 
 
 /* the exception filters that are on, to the adapter */
-static void send_exc (void) {
+static void send_exc1 (void) {
   Buf b;
   int i, first = 1;
   if (!D.on || !D.ready || D.nodebug) return;
@@ -839,6 +969,18 @@ static void send_exc (void) {
 }
 
 
+static void send_exc (void) {
+  Ses *keep = g_d;
+  int s;
+  for (s = 0; s < MAX_SES; s++)
+    if (g_ses[s].on) {
+      g_d = &g_ses[s];
+      send_exc1();
+    }
+  g_d = keep;
+}
+
+
 /* initialize's answer: what the adapter can, and its exception filters (on as they were) */
 static void got_caps (const Json *c) {
   const Json *l = json_get(c, "exceptionBreakpointFilters");
@@ -851,6 +993,20 @@ static void got_caps (const Json *c) {
   D.cap_goto = json_bool(json_get(c, "supportsGotoTargetsRequest"), 0);
   D.cap_excinfo = json_bool(json_get(c, "supportsExceptionInfoRequest"), 0);
   D.cap_data = json_bool(json_get(c, "supportsDataBreakpoints"), 0);
+  D.cap_compl = json_bool(json_get(c, "supportsCompletionsRequest"), 0);
+  D.cap_disasm = json_bool(json_get(c, "supportsDisassembleRequest"), 0);
+  D.cap_mem = json_bool(json_get(c, "supportsReadMemoryRequest"), 0);
+  D.cap_gran = json_bool(json_get(c, "supportsSteppingGranularity"), 0);
+  {	/* what typed asks for completions besides a word: ".", "->" ... */
+    const Json *t = json_get(c, "completionTriggerCharacters");
+    size_t i, k = 0;
+    for (i = 0; t && t->type == J_ARR && i < t->n && k + 1 < sizeof(D.trig); i++) {
+      const char *s = json_str(t->kid[i], "");
+      if (s[0] && !strchr(D.trig, s[0])) D.trig[k++] = s[0];
+    }
+    D.trig[k] = '\0';
+    if (t == NULL) snprintf(D.trig, sizeof(D.trig), ".");
+  }
   if (l == NULL || l->type != J_ARR) return;
   D.cap_exc = 1;
   nf = (ExcFilter *)xmalloc((l->n + 1) * sizeof(ExcFilter));
@@ -1119,39 +1275,39 @@ static char **split_cmd (const char *cmd) {
 ** ===================================================================
 */
 
+/* VARIABLES and WATCH as they are before the program stops */
+static void views_reset (void) {
+  int i;
+  for (i = 0; i < g_vars.n; i++) var_free(&g_vars.v[i]);
+  free(g_vars.v);
+  g_vars.v = NULL;
+  g_vars.n = 0;
+  wrows_reset();
+}
+
+
 static void clear_stop (void) {
   int i;
   for (i = 0; i < D.nfr; i++) {
     free(D.fr[i].name);
     free(D.fr[i].path);
+    free(D.fr[i].ip);
   }
   free(D.fr);
   D.fr = NULL;
   D.nfr = D.cur = 0;
-  for (i = 0; i < g_vars.n; i++) {
-    free(g_vars.v[i].name);
-    free(g_vars.v[i].value);
-    free(g_vars.v[i].path);
-  }
-  free(g_vars.v);
-  g_vars.v = NULL;
-  g_vars.n = 0;
   D.stopped = 0;
   free(D.exc_title);
   free(D.exc_desc);
   D.exc_title = D.exc_desc = NULL;
-  wrows_reset();
+  if (FOC) views_reset();	/* another session's stop is not what the views show */
 }
 
 
 /* WATCH's rows: one for each expression, its value not known */
 static void wrows_reset (void) {
   int i;
-  for (i = 0; i < g_wvars.n; i++) {
-    free(g_wvars.v[i].name);
-    free(g_wvars.v[i].value);
-    free(g_wvars.v[i].path);
-  }
+  for (i = 0; i < g_wvars.n; i++) var_free(&g_wvars.v[i]);
   g_wvars.v = (Var *)xrealloc(g_wvars.v, (size_t)(g_nwatch + 1) * sizeof(Var));
   g_wvars.n = g_nwatch;
   for (i = 0; i < g_nwatch; i++) {
@@ -1159,6 +1315,7 @@ static void wrows_reset (void) {
     v->name = xstrdup(g_watch[i]);
     v->value = NULL;
     v->path = xstrcat3("#w/", g_watch[i], "");
+    v->mem = NULL;
     v->ref = 0;
     v->depth = 0;
     v->open = 0;
@@ -1184,11 +1341,32 @@ static void clear_threads (void) {
 }
 
 
-static int dbg_start (int nodebug);
-
 static void end_session (void);
 
+static void stop_session (void);
+
 static void step (const char *command);
+
+static void select_frame (int i);
+
+static int disasm_open (void);
+
+static int disasm_front (void);
+
+static void ask_disasm (int show);
+
+static void got_disasm (int ok, const Json *msg, const Json *body, int show);
+
+static void got_memory (int ok, const Json *msg, const Json *body);
+
+static void got_completions (int ok, const Json *body, const char *text);
+
+static void compl_close (void);
+
+static int launch (Json *cfg, int nodebug, int compound, int stop_all);
+
+static Vec g_post;	/* the postDebugTasks to run (dbg_poll runs them) */
+static int g_quitting;	/* dbg_shutdown: no postDebugTask, no Restart */
 
 /* the adapter went away by itself */
 static void adapter_gone (void) {
@@ -1200,9 +1378,33 @@ static void adapter_gone (void) {
 }
 
 
+static int ses_count (void) {
+  int s, n = 0;
+  for (s = 0; s < MAX_SES; s++) n += g_ses[s].on;
+  return n;
+}
+
+
+/*
+** Session s is the one the views show and the keys drive (VS Code's
+** focused session): its variables are asked for again, its place shown.
+*/
+static void focus_ses (int s) {
+  if (s < 0 || s >= MAX_SES) return;
+  g_foc = s;
+  g_d = &g_ses[s];
+  views_reset();
+  if (D.on && D.stopped && D.cur < D.nfr) select_frame(D.cur);
+  else on_debug(DE_CONT, NULL, 0);
+}
+
+
 static void end_session (void) {
-  int i, again = D.restart, nd = D.nodebug;
+  int i, s, again = D.restart && !g_quitting, nd = D.nodebug, comp = D.compound, all = D.stop_all;
+  char *cfg = NULL;
+  Ses *me = g_d;
   if (!D.on) return;
+  if (again && D.cfg) cfg = xstrdup(D.cfg);
   if (D.sock != NO_SOCK) sock_close(D.sock);
   if (D.to >= 0) os_close(D.to);
   if (D.from >= 0) os_close(D.from);
@@ -1222,13 +1424,36 @@ static void end_session (void) {
   free(D.request);
   drop_temp(0);
   if (D.ext) lsp_ext_notify("mme/debugEnded", "{}");	/* onDidTerminateDebugSession */
+  if (D.post && !again && !g_quitting) vec_push(&g_post, xstrdup(D.post));
+  free(D.cfg);
+  free(D.post);
   memset(&D, 0, sizeof(D));
   D.sock = NO_SOCK;
   D.to = D.from = D.out = -1;
-  for (i = 0; i < g_nbp; i++) g_bp[i].verified = 0;
-  dbp_session_end();
-  on_debug(DE_END, NULL, 0);
-  if (again) dbg_start(nd);
+  if (ses_count() == 0) {
+    for (i = 0; i < g_nbp; i++) g_bp[i].verified = 0;
+    dbp_session_end();
+    on_debug(DE_END, NULL, 0);
+  }
+  else if (me == &g_ses[g_foc])	/* another session is the one looked at now */
+    for (s = 0; s < MAX_SES; s++)
+      if (g_ses[s].on) {
+        focus_ses(s);
+        break;
+      }
+  if (comp && all && !again)	/* a compound's stopAll: the others end with it */
+    for (s = 0; s < MAX_SES; s++)
+      if (g_ses[s].on && g_ses[s].compound == comp) {
+        g_d = &g_ses[s];
+        D.restart = 0;
+        stop_session();
+      }
+  g_d = &g_ses[g_foc];
+  if (cfg) {	/* Restart: the same configuration again (its preLaunchTask too) */
+    Json *j = json_parse(cfg, strlen(cfg));
+    free(cfg);
+    if (j) launch(j, nd, comp, all);
+  }
 }
 
 
@@ -1271,12 +1496,6 @@ static void set_args (const Json *cfg, int nodebug) {
   free(D.args);
   D.args = buf_take(&b);
 }
-
-
-static const char initialize_args[] =
-  "{\"clientID\":\"mme\",\"clientName\":\"mme\",\"adapterID\":\"mme\",\"pathFormat\":\"path\","
-  "\"linesStartAt1\":true,\"columnsStartAt1\":true,\"supportsVariableType\":true,"
-  "\"supportsRunInTerminalRequest\":false,\"locale\":\"en\"}";
 
 
 /*
@@ -1338,7 +1557,7 @@ static int ext_adapter (Json **cfg, int nodebug, char ***argv, char **cwd) {
     D.ready = 1;
     con_print(CC_INFO, "%s", nodebug ? "Running..." : "Starting the debugger...");
     on_debug(DE_START, NULL, 0);
-    request("initialize", initialize_args, RQ_INIT, 0, NULL);
+    initialize("mme");
     return 0;
   }
   if (strcmp(kind, "exec") == 0) {	/* a program: its stdin and stdout */
@@ -1388,23 +1607,14 @@ void dbg_ext_request (const Json *p) {
 }
 
 
-static int dbg_start (int nodebug) {
+/* the adapter of configuration cfg (its variables put in) started, as session D (a new one); it frees cfg */
+static int start_one (Json *cfg, int nodebug) {
   char *xcwd = NULL;
   int ext = 0;
-  D.track = 0;
-  if (!trust_require(nodebug ? "Running" : "Debugging")) return -1;	/* Restricted Mode */
-  Json *cfg, *m;
+  Json *m;
   char *cmd, **argv, *root;
   int to[2], from[2], io[3], null, i, tcp, r;
-  bp_sync();
-  cfg = pick_config();
-  if (cfg == NULL) {
-    int n;
-    configs(&n);
-    toast(0, "No launch configuration for this file: Run > Add Configuration makes one");
-    return -1;
-  }
-  subst_tree(cfg);
+  D.track = 0;
   snprintf(D.type, sizeof(D.type), "%s", json_str(json_get(cfg, "type"), ""));
   snprintf(D.name, sizeof(D.name), "%s", json_str(json_get(cfg, "name"), D.type));
   D.request = xstrdup(json_str(json_get(cfg, "request"), "launch"));
@@ -1413,12 +1623,6 @@ static int dbg_start (int nodebug) {
     size_t pl = strlen(prog);
     free(m->str);
     m->str = xstrdup(pl > 8 && strcmp(prog + pl - 8, "_test.go") == 0 ? "test" : "debug");
-    m->len = strlen(m->str);
-  }
-  if ((strcmp(D.type, "debugpy") == 0 || strcmp(D.type, "python") == 0) && (m = member(cfg, "console")) != NULL &&
-      m->type == J_STR) {	/* no terminal to run it in: its output comes to the console */
-    free(m->str);
-    m->str = xstrdup("internalConsole");
     m->len = strlen(m->str);
   }
   cmd = NULL;
@@ -1515,11 +1719,276 @@ static int dbg_start (int nodebug) {
   on_debug(DE_START, NULL, 0);
   if (!tcp) {
     D.ready = 1;
-    request("initialize", "{\"clientID\":\"mme\",\"clientName\":\"mme\",\"adapterID\":\"mme\",\"pathFormat\":\"path\","
-                          "\"linesStartAt1\":true,\"columnsStartAt1\":true,\"supportsVariableType\":true,"
-                          "\"supportsRunInTerminalRequest\":false,\"locale\":\"en\"}", RQ_INIT, 0, NULL);
+    initialize("mme");
   }
   return 0;
+}
+
+
+/* a new session (a slot of g_ses) for cfg; it is the focused one when it starts. It frees cfg */
+static int start_session (Json *cfg, int nodebug, int compound, int stop_all) {
+  int s, r, prev = g_foc;
+  for (s = 0; s < MAX_SES && g_ses[s].on; s++) ;
+  if (s == MAX_SES) {
+    toast(1, "There are %d debug sessions already", MAX_SES);
+    json_free(cfg);
+    return -1;
+  }
+  g_d = &g_ses[s];
+  memset(&D, 0, sizeof(D));
+  D.sock = NO_SOCK;
+  D.to = D.from = D.out = -1;
+  D.compound = compound;
+  D.stop_all = stop_all;
+  D.post = opt_str(cfg, "postDebugTask");
+  {
+    Buf b;
+    buf_init(&b);
+    json_write(&b, cfg);
+    buf_putc(&b, '\0');
+    D.cfg = buf_take(&b);
+  }
+  r = start_one(cfg, nodebug);
+  if (r == 0 && D.on) {
+    if (s != prev) {	/* the views are the new one's */
+      g_foc = s;
+      views_reset();
+    }
+    return 0;
+  }
+  free(D.cfg);
+  free(D.post);
+  free(D.request);
+  free(D.args);
+  memset(&D, 0, sizeof(D));
+  D.sock = NO_SOCK;
+  D.to = D.from = D.out = -1;
+  g_d = &g_ses[g_foc];
+  return -1;
+}
+
+
+/* preLaunchTask, compounds */
+
+typedef struct Pend {	/* a start that waits for its preLaunchTask */
+  char *cfg;	/* the configuration (or the compound) as JSON */
+  char label[256];	/* the task */
+  int nodebug, compound, stop_all;
+  int is_compound;	/* cfg is a compound's: its configurations start */
+} Pend;
+
+static int g_ncompound;	/* the compounds started: each session of one has its number */
+
+
+static void pend_free (Pend *p) {
+  free(p->cfg);
+  free(p);
+}
+
+
+static const Json *compounds (int *n) {
+  const Json *c = json_get(g_launch, "compounds");
+  *n = (c && c->type == J_ARR) ? (int)c->n : 0;
+  return c;
+}
+
+
+/* the picker's item i: launch.json's configurations, then its compounds */
+static const char *cfg_label (int i) {
+  int n, nc;
+  const Json *c;
+  configs(&n);
+  if (i < n) return config_name(i);
+  c = compounds(&nc);
+  if (i - n < nc) return json_str(json_get(c->kid[i - n], "name"), "Compound");
+  return NULL;
+}
+
+
+/* every configuration a compound names, started together */
+static void compound_go (const char *text, int nodebug) {
+  Json *c = json_parse(text, strlen(text));
+  const Json *l = json_get(c, "configurations"), *cs;
+  int id = ++g_ncompound, all = json_bool(json_get(c, "stopAll"), 0), n, i;
+  size_t k;
+  load_launch();
+  cs = configs(&n);
+  for (k = 0; l && l->type == J_ARR && k < l->n; k++) {
+    const char *name = l->kid[k]->type == J_OBJ ? json_str(json_get(l->kid[k], "name"), "") : json_str(l->kid[k], "");
+    for (i = 0; i < n && strcmp(config_name(i), name) != 0; i++) ;
+    if (i == n) {
+      toast(1, "Could not find launch configuration '%s' in the workspace.", name);
+      continue;
+    }
+    {
+      Buf b;
+      Json *j;
+      buf_init(&b);
+      json_write(&b, cs->kid[i]);
+      j = json_parse(b.s, b.len);
+      buf_free(&b);
+      if (j) launch(j, nodebug, id, all);
+      cs = configs(&n);	/* launch may have read launch.json again */
+    }
+  }
+  json_free(c);
+}
+
+
+/* the preLaunchTask went well (or Debug Anyway): the start goes on */
+static void pend_go (Pend *p) {
+  if (p->is_compound) compound_go(p->cfg, p->nodebug);
+  else {
+    Json *j = json_parse(p->cfg, strlen(p->cfg));
+    if (j) start_session(j, p->nodebug, p->compound, p->stop_all);
+  }
+  pend_free(p);
+}
+
+
+/* Show Errors: the Problems, else the task's terminal */
+static void show_errors (int errors) {
+  if (errors > 0) mme_command(CMD_PROBLEMS);
+  else on_task_run("", NULL, NULL, NULL, 0, 0);
+}
+
+
+/* the preLaunchTask ended (a background one: it is ready) */
+static void pre_done (void *ud, int ok, int code, int errors) {
+  static const char *const bt[] = {"Debug Anyway", "Show Errors", "Abort"};
+  Pend *p = (Pend *)ud;
+  const char *how = json_str(settings_value("debug.onTaskErrors"), "prompt");
+  char msg[400];
+  int c;
+  if ((ok && errors == 0) || strcmp(how, "debugAnyway") == 0) {
+    pend_go(p);
+    return;
+  }
+  if (strcmp(how, "showErrors") == 0) show_errors(errors);
+  if (strcmp(how, "showErrors") == 0 || strcmp(how, "abort") == 0) {
+    pend_free(p);
+    return;
+  }
+  if (errors > 1) snprintf(msg, sizeof(msg), "Errors exist after running preLaunchTask '%s'.", p->label);
+  else if (errors == 1) snprintf(msg, sizeof(msg), "Error exists after running preLaunchTask '%s'.", p->label);
+  else snprintf(msg, sizeof(msg), "The preLaunchTask '%s' terminated with exit code %d.", p->label, code);
+  c = dialog(msg, NULL, bt, 3);
+  if (c == 0) {
+    pend_go(p);
+    return;
+  }
+  if (c == 1) show_errors(errors);
+  pend_free(p);
+}
+
+
+/* the task runs; the start waits for it. 0 it waits (or went on), -1 not */
+static int pre_run (Pend *p) {
+  static const char *const bt[] = {"Debug Anyway", "Configure Task", "Cancel"};
+  char msg[400];
+  int r = task_run_label(p->label, pre_done, p), c;
+  if (r == 0) return 0;
+  if (r == -1) {	/* no such task */
+    snprintf(msg, sizeof(msg), "Could not find the task '%s'.", p->label);
+    c = dialog(msg, NULL, bt, 3);
+    if (c == 0) {
+      pend_go(p);
+      return 0;
+    }
+    if (c == 1) task_command(CMD_TASK_CONFIGURE);
+  }
+  pend_free(p);
+  return -1;
+}
+
+
+static Pend *pend_new (const Json *cfg, const char *label, int nodebug, int compound, int stop_all, int is_compound) {
+  Pend *p = (Pend *)xmalloc(sizeof(Pend));
+  Buf b;
+  buf_init(&b);
+  json_write(&b, cfg);
+  buf_putc(&b, '\0');
+  p->cfg = buf_take(&b);
+  snprintf(p->label, sizeof(p->label), "%s", label);
+  p->nodebug = nodebug;
+  p->compound = compound;
+  p->stop_all = stop_all;
+  p->is_compound = is_compound;
+  return p;
+}
+
+
+/* a configuration started: its variables put in (inputs asked), its preLaunchTask first. It frees cfg */
+static int launch (Json *cfg, int nodebug, int compound, int stop_all) {
+  const char *pre;
+  Json *in = NULL;
+  int cancelled;
+  if (json_get(g_launch, "inputs")) {	/* a copy: the view reads launch.json again while an input is asked */
+    Buf b;
+    buf_init(&b);
+    json_write(&b, json_get(g_launch, "inputs"));
+    in = json_parse(b.s, b.len);
+    buf_free(&b);
+  }
+  vs_inputs(in);
+  subst_tree(cfg);
+  cancelled = vs_cancelled();
+  vs_inputs(NULL);
+  json_free(in);
+  if (cancelled) {
+    json_free(cfg);
+    return -1;
+  }
+  pre = json_str(member(cfg, "preLaunchTask"), NULL);
+  if (pre && *pre) {
+    Pend *p = pend_new(cfg, pre, nodebug, compound, stop_all, 0);
+    json_free(cfg);
+    return pre_run(p);
+  }
+  return start_session(cfg, nodebug, compound, stop_all);
+}
+
+
+/* a compound of launch.json: its preLaunchTask, then its configurations */
+static int start_compound (int k, int nodebug) {
+  int nc;
+  const Json *c = compounds(&nc);
+  const char *pre;
+  Buf b;
+  int r;
+  if (k < 0 || k >= nc) return -1;
+  c = c->kid[k];
+  pre = json_str(json_get(c, "preLaunchTask"), NULL);
+  if (pre && *pre) return pre_run(pend_new(c, pre, nodebug, 0, 0, 1));
+  buf_init(&b);
+  json_write(&b, c);
+  buf_putc(&b, '\0');
+  compound_go(b.s, nodebug);
+  r = ses_count() > 0 ? 0 : -1;
+  buf_free(&b);
+  return r;
+}
+
+
+/* F5: the configuration chosen (or the compound), else one for the file in front */
+static int dbg_start (int nodebug) {
+  Json *cfg;
+  if (!trust_require(nodebug ? "Running" : "Debugging")) return -1;	/* Restricted Mode */
+  bp_sync();
+  if (g_override == NULL) {
+    int n, nc;
+    load_launch();
+    configs(&n);
+    compounds(&nc);
+    if (g_cfg >= n + nc) g_cfg = 0;
+    if (g_cfg >= n) return start_compound(g_cfg - n, nodebug);
+  }
+  cfg = pick_config();
+  if (cfg == NULL) {
+    toast(0, "No launch configuration for this file: Run > Add Configuration makes one");
+    return -1;
+  }
+  return launch(cfg, nodebug, 0, 0);
 }
 
 
@@ -1562,9 +2031,7 @@ static void ask_scopes (void) {
   char a[64];
   int i;
   for (i = 0; i < g_vars.n; i++) {
-    free(g_vars.v[i].name);
-    free(g_vars.v[i].value);
-    free(g_vars.v[i].path);
+    var_free(&g_vars.v[i]);
   }
   g_vars.n = 0;
   if (D.cur >= D.nfr) return;
@@ -1591,9 +2058,14 @@ static void eval_watches (void) {
 
 /* the frame looked at: its file, its variables, the watches in it */
 static void select_frame (int i) {
+  int front;
   if (i < 0 || i >= D.nfr) return;
   D.cur = i;
-  if (D.fr[i].path) on_debug(DE_STOP, D.fr[i].path, D.fr[i].line);
+  if (!FOC) return;	/* another session's: shown when it is focused */
+  front = disasm_front();
+  if (D.fr[i].path && !front) on_debug(DE_STOP, D.fr[i].path, D.fr[i].line);
+  if (D.fr[i].ip && D.cap_disasm && (D.fr[i].path == NULL || front || disasm_open()))	/* no source: its instructions */
+    ask_disasm(D.fr[i].path == NULL || front);
   ask_scopes();
   eval_watches();
 }
@@ -1628,9 +2100,7 @@ static void var_collapse (VarList *l, int i) {
   size_t k;
   if (i < 0 || i >= l->n || !l->v[i].open) return;
   while (j < l->n && l->v[j].depth > l->v[i].depth) {
-    free(l->v[j].name);
-    free(l->v[j].value);
-    free(l->v[j].path);
+    var_free(&l->v[j]);
     j++;
   }
   memmove(l->v + i + 1, l->v + j, (size_t)(l->n - j) * sizeof(Var));
@@ -1677,6 +2147,7 @@ static void got_vars (VarList *l, long ref, const Json *list, int scopes) {
     y->name = xstrdup(name);
     y->value = scopes ? NULL : xstrdup(json_str(json_get(x, "value"), ""));
     y->ref = lnum(json_get(x, "variablesReference"), 0);
+    y->mem = opt_str(x, "memoryReference");
     y->depth = depth;
     y->open = 0;
     y->path = xstrcat3(parent, "/", name);
@@ -1712,6 +2183,7 @@ static void got_stack (const Json *body) {
     y->name = xstrdup(json_str(json_get(f, "name"), "?"));
     y->path = p ? native_path(p) : NULL;
     y->line = unum(json_get(f, "line"), 0);
+    y->ip = opt_str(f, "instructionPointerReference");
   }
   D.cur = 0;	/* the first frame with a file of its own (the program's, not the runtime's) */
   for (i = 0; i < D.nfr; i++)
@@ -1735,6 +2207,7 @@ static void got_event (const Json *msg) {
     request("configurationDone", "{}", RQ_CONFDONE, 0, NULL);
   }
   else if (strcmp(ev, "stopped") == 0) {
+    if (!FOC) focus_ses((int)(g_d - g_ses));	/* the session that stopped is the one shown */
     D.thread = lnum(json_get(body, "threadId"), (double)D.thread);
     snprintf(D.reason, sizeof(D.reason), "%s", json_str(json_get(body, "reason"), "pause"));
     drop_temp(1);
@@ -1756,7 +2229,7 @@ static void got_event (const Json *msg) {
   }
   else if (strcmp(ev, "continued") == 0) {
     clear_stop();
-    on_debug(DE_CONT, NULL, 0);
+    if (FOC) on_debug(DE_CONT, NULL, 0);
   }
   else if (strcmp(ev, "output") == 0) {
     const char *cat = json_str(json_get(body, "category"), "console"), *s = json_str(json_get(body, "output"), "");
@@ -1864,18 +2337,23 @@ static void got_response (const Json *msg) {
       if (ok) got_stack(body);
       break;
     case RQ_SCOPES:
-      if (ok && D.cur < D.nfr && D.fr[D.cur].id == r.arg) got_vars(&g_vars, 0, json_get(body, "scopes"), 1);
+      if (ok && FOC && D.cur < D.nfr && D.fr[D.cur].id == r.arg) got_vars(&g_vars, 0, json_get(body, "scopes"), 1);
       break;
     case RQ_VARS:
-      if (ok) got_vars(r.list ? &g_wvars : &g_vars, r.arg, json_get(body, "variables"), 0);
+      if (ok && FOC) got_vars(r.list ? &g_wvars : &g_vars, r.arg, json_get(body, "variables"), 0);
       break;
+    case RQ_COMPL: got_completions(ok, body, r.path); break;
+    case RQ_DISASM: got_disasm(ok, msg, body, (int)r.arg); break;
+    case RQ_READMEM: got_memory(ok, msg, body); break;
     case RQ_WATCH: {
-      int w = wrow_of((int)r.arg);
+      int w = FOC ? wrow_of((int)r.arg) : -1;
       if (w < 0) break;
       free(g_wvars.v[w].value);
       g_wvars.v[w].value = xstrdup(ok ? json_str(json_get(body, "result"), "")
                                       : json_str(json_get(msg, "message"), "not available"));
       g_wvars.v[w].ref = ok ? lnum(json_get(body, "variablesReference"), 0) : 0;
+      free(g_wvars.v[w].mem);
+      g_wvars.v[w].mem = ok ? opt_str(body, "memoryReference") : NULL;
       if (g_wvars.v[w].ref > 0 && was_open(g_wvars.v[w].path)) var_expand(&g_wvars, w);
       break;
     }
@@ -1916,7 +2394,7 @@ static void got_response (const Json *msg) {
       else con_print(CC_ERR, "%s", json_str(json_get(msg, "body.error.format"), json_str(json_get(msg, "message"), "error")));
       break;
     case RQ_HOVER:
-      if (ok && D.stopped) {
+      if (ok && D.stopped && FOC) {
         Buf b;
         buf_init(&b);
         buf_puts(&b, "```\n");
@@ -1950,7 +2428,10 @@ static void got_message (const Json *msg) {
   }
   if (strcmp(type, "event") == 0) got_event(msg);
   else if (strcmp(type, "response") == 0) got_response(msg);
-  else if (strcmp(type, "request") == 0) refuse(msg);
+  else if (strcmp(type, "request") == 0) {	/* the adapter's own requests */
+    if (strcmp(json_str(json_get(msg, "command"), ""), "runInTerminal") == 0) run_in_terminal(msg);
+    else refuse(msg, "not supported by mme");
+  }
 }
 
 
@@ -1970,11 +2451,12 @@ static size_t hdr_len (const char *s) {
 /* the whole messages that came in D.in */
 static int messages (void) {
   int got = 0;
+  Ses *me = g_d;
   for (;;) {
     char *hdr_end, *cl;
     size_t body, hlen;
     Json *j;
-    if (!D.on || D.in.len == 0) break;
+    if (g_d != me || !D.on || D.in.len == 0) break;	/* it ended (another may be talked to now) */
     D.in.s[D.in.len] = '\0';
     hdr_end = strstr(D.in.s, "\r\n\r\n");
     if (hdr_end == NULL) break;
@@ -2021,9 +2503,7 @@ static void adapter_output (const char *s, size_t n) {
       int port = c ? atoi(c + 1) : 0;
       if (port > 0 && (D.sock = tcp_connect(port)) != NO_SOCK) {
         D.ready = 1;
-        request("initialize", "{\"clientID\":\"mme\",\"clientName\":\"mme\",\"adapterID\":\"go\",\"pathFormat\":\"path\","
-                              "\"linesStartAt1\":true,\"columnsStartAt1\":true,\"supportsVariableType\":true,"
-                              "\"supportsRunInTerminalRequest\":false,\"locale\":\"en\"}", RQ_INIT, 0, NULL);
+        initialize("go");
       }
     }
     else if (D.outline.len > 0) {
@@ -2035,12 +2515,11 @@ static void adapter_output (const char *s, size_t n) {
 }
 
 
-int dbg_poll (void) {
+/* session D's adapter: what it said */
+static int poll_one (void) {
   char chunk[65536];
   int got = 0, status;
   long n;
-  if (g_bp_dirty) bp_save();	/* the breakpoints are kept for the next session */
-  if (!D.on) return 0;
   if (D.out >= 0)
     while (D.on && os_wait_readable(D.out, 0) == 1) {
       n = os_read(D.out, chunk, sizeof(chunk));
@@ -2098,8 +2577,28 @@ int dbg_poll (void) {
 }
 
 
+int dbg_poll (void) {
+  int s, got = 0;
+  if (g_bp_dirty) bp_save();	/* the breakpoints are kept for the next session */
+  while (g_post.n > 0) {	/* a session's postDebugTask, now that it ended */
+    char *t = g_post.v[0];
+    memmove(g_post.v, g_post.v + 1, (g_post.n - 1) * sizeof(char *));
+    g_post.n--;
+    if (task_run_label(t, NULL, NULL) == -1) toast(1, "Could not find the task '%s'.", t);
+    free(t);
+  }
+  for (s = 0; s < MAX_SES; s++)
+    if (g_ses[s].on) {
+      g_d = &g_ses[s];
+      got |= poll_one();
+    }
+  g_d = &g_ses[g_foc];
+  return got;
+}
+
+
 int dbg_active (void) {
-  return D.on;
+  return ses_count() > 0;
 }
 
 
@@ -2109,9 +2608,16 @@ int dbg_stopped (void) {
 
 
 void dbg_shutdown (void) {
-  if (D.on && D.ready) request("disconnect", "{\"terminateDebuggee\":true}", RQ_OTHER, 0, NULL);
-  D.restart = 0;	/* quitting during a Restart must not start the adapter again */
-  end_session();
+  int s;
+  g_quitting = 1;	/* quitting during a Restart must not start the adapter again */
+  for (s = 0; s < MAX_SES; s++)
+    if (g_ses[s].on) {
+      g_d = &g_ses[s];
+      if (D.ready) request("disconnect", "{\"terminateDebuggee\":true}", RQ_OTHER, 0, NULL);
+      D.restart = 0;
+      end_session();
+    }
+  g_d = &g_ses[g_foc];
   if (g_bp_dirty) bp_save();
 }
 
@@ -2223,10 +2729,205 @@ void dbg_hover (const char *expr) {
 }
 
 
+/*
+** The Disassembly (VS Code's Disassembly View): the instructions around
+** where the program is, as a read-only text of mme-data/debug; the
+** current one is marked in its gutter, and with the Disassembly in front
+** the steps are an instruction each (steppingGranularity).
+*/
+static long g_dis_line = -1;
+
+
+static const char *dis_path (void) {
+  if (g_dis_path == NULL) {
+    char *d = data_path("debug");
+    mkdir_p(d);
+    g_dis_path = path_join(d, "Disassembly");
+    free(d);
+  }
+  return g_dis_path;
+}
+
+
+static int disasm_open (void) {
+  Vec v;
+  size_t i;
+  int r = 0;
+  open_docs_list(&v);
+  for (i = 0; i < v.n && !r; i++) r = same_path(v.v[i], dis_path());
+  vec_free(&v);
+  return r;
+}
+
+
+static int disasm_front (void) {
+  const char *f = editor_file();
+  return f != NULL && same_path(f, dis_path());
+}
+
+
+/* disassemble: 64 instructions, a third of them before the frame's; show: the Disassembly comes to the front */
+static void ask_disasm (int show) {
+  Buf b;
+  if (D.cur >= D.nfr || D.fr[D.cur].ip == NULL) return;
+  buf_init(&b);
+  buf_puts(&b, "{\"memoryReference\":");
+  json_put_str(&b, D.fr[D.cur].ip, strlen(D.fr[D.cur].ip));
+  buf_puts(&b, ",\"offset\":0,\"instructionOffset\":-20,\"instructionCount\":64,\"resolveSymbols\":true}");
+  request("disassemble", b.s, RQ_DISASM, show, NULL);
+  buf_free(&b);
+}
+
+
+/* line ln (from 1) of a source file, the last file read kept */
+static const char *source_line (const char *path, size_t ln, size_t *len) {
+  static char *last, *text;
+  static size_t tlen;
+  const char *p, *e;
+  if (last == NULL || strcmp(last, path) != 0) {
+    free(last);
+    free(text);
+    last = xstrdup(path);
+    text = read_file(path, &tlen);
+  }
+  if (text == NULL || ln == 0) return NULL;
+  for (p = text; --ln > 0 && (p = memchr(p, '\n', tlen - (size_t)(p - text))) != NULL; p++) ;
+  if (p == NULL) return NULL;
+  e = memchr(p, '\n', tlen - (size_t)(p - text));
+  *len = e ? (size_t)(e - p) : tlen - (size_t)(p - text);
+  if (*len > 0 && p[*len - 1] == '\r') (*len)--;
+  return p;
+}
+
+
+static void got_disasm (int ok, const Json *msg, const Json *body, int show) {
+  const Json *l = json_get(body, "instructions");
+  unsigned long long ip = 0;
+  const char *lsym = "", *lpath = "";
+  size_t lln = 0, i;
+  long line = 0, at = -1;
+  Buf b;
+  int fd;
+  if (!ok || l == NULL || l->type != J_ARR) {
+    if (show) toast(1, "%s", json_str(json_get(msg, "message"), "Disassembly not available"));
+    return;
+  }
+  if (!FOC || D.cur >= D.nfr) return;
+  if (D.fr[D.cur].ip) ip = strtoull(D.fr[D.cur].ip, NULL, 0);
+  buf_init(&b);
+  for (i = 0; i < l->n; i++) {
+    const Json *x = l->kid[i];
+    const char *addr = json_str(json_get(x, "address"), "?"), *sym = json_str(json_get(x, "symbol"), NULL);
+    const char *src = json_str(json_get(x, "location.path"), NULL);
+    size_t ln = unum(json_get(x, "line"), 0);
+    if (sym && *sym && strcmp(sym, lsym) != 0) {	/* a function's first: its name */
+      buf_printf(&b, "%s:\n", sym);
+      lsym = sym;
+      line++;
+    }
+    if (src && ln && (ln != lln || strcmp(src, lpath) != 0)) {	/* the source line these are of */
+      size_t n = 0;
+      const char *s = source_line(src, ln, &n);
+      buf_printf(&b, "; %s:%lu  ", path_basename(src), (unsigned long)ln);
+      while (s && n > 0 && (*s == ' ' || *s == '\t')) s++, n--;
+      if (s) buf_putn(&b, s, n);
+      buf_putc(&b, '\n');
+      lpath = src;
+      lln = ln;
+      line++;
+    }
+    if (ip && strtoull(addr, NULL, 0) == ip) at = line;
+    buf_printf(&b, "%-18s  %-24s  %s\n", addr, json_str(json_get(x, "instructionBytes"), ""),
+               json_str(json_get(x, "instruction"), ""));
+    line++;
+  }
+  if ((fd = os_open(dis_path(), OS_WRITE)) >= 0) {
+    os_write(fd, b.s, b.len);
+    os_close(fd);
+  }
+  buf_free(&b);
+  g_dis_line = at;
+  on_debug(DE_RELOAD, dis_path(), 0);
+  if (show || disasm_front()) on_debug(DE_OPEN, dis_path(), at >= 0 ? (size_t)at + 1 : 0);
+}
+
+
+/* base64 (readMemory's data): the bytes; how many */
+static size_t b64_decode (const char *s, unsigned char *out) {
+  unsigned v = 0;
+  int bits = 0;
+  size_t n = 0;
+  for (; *s; s++) {
+    int c = (unsigned char)*s, d = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26 :
+                                   c >= '0' && c <= '9' ? c - '0' + 52 : c == '+' || c == '-' ? 62 :
+                                   c == '/' || c == '_' ? 63 : -1;
+    if (d < 0) continue;
+    v = (v << 6) | (unsigned)d;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[n++] = (unsigned char)((v >> bits) & 0xFF);
+    }
+  }
+  return n;
+}
+
+
+/* View Binary Data: a variable's memory (readMemory), in the hex viewer */
+static void view_memory (const Var *v) {
+  Buf b;
+  if (v->mem == NULL) return;
+  if (!D.cap_mem) {
+    toast(0, "The debug adapter does not support reading memory");
+    return;
+  }
+  buf_init(&b);
+  buf_puts(&b, "{\"memoryReference\":");
+  json_put_str(&b, v->mem, strlen(v->mem));
+  buf_puts(&b, ",\"offset\":0,\"count\":1024}");
+  request("readMemory", b.s, RQ_READMEM, 0, v->name);
+  buf_free(&b);
+}
+
+
+static void got_memory (int ok, const Json *msg, const Json *body) {
+  const char *addr = json_str(json_get(body, "address"), "0"), *data = json_str(json_get(body, "data"), "");
+  unsigned char *bytes;
+  size_t n;
+  char name[96], *d, *f;
+  int fd;
+  if (!ok) {
+    toast(1, "%s", json_str(json_get(msg, "message"), "The memory could not be read"));
+    return;
+  }
+  bytes = (unsigned char *)xmalloc(strlen(data) + 1);
+  n = b64_decode(data, bytes);
+  if (n == 0) {
+    toast(0, "No memory could be read at %s", addr);
+    free(bytes);
+    return;
+  }
+  d = data_path("debug");
+  mkdir_p(d);
+  snprintf(name, sizeof(name), "memory-%.64s.bin", addr);
+  f = path_join(d, name);
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, bytes, n);
+    os_close(fd);
+    on_debug(DE_MEMORY, f, (size_t)strtoull(addr, NULL, 0));
+  }
+  free(bytes);
+  free(f);
+  free(d);
+}
+
+
 static void step (const char *command) {
-  char a[64];
+  char a[96];
   if (!D.on || !D.ready) return;
-  snprintf(a, sizeof(a), "{\"threadId\":%ld}", D.thread ? D.thread : 1);
+  if (D.cap_gran && strcmp(command, "pause") != 0 && strcmp(command, "continue") != 0 && disasm_front())
+    snprintf(a, sizeof(a), "{\"threadId\":%ld,\"granularity\":\"instruction\"}", D.thread ? D.thread : 1);
+  else snprintf(a, sizeof(a), "{\"threadId\":%ld}", D.thread ? D.thread : 1);
   request(command, a, RQ_STEP, 0, NULL);
   if (strcmp(command, "pause") != 0) {	/* it runs: nothing to show until it stops */
     clear_stop();
@@ -2238,19 +2939,38 @@ static void step (const char *command) {
 /* Start Debugging... the configurations, and Add Configuration */
 static void choose_config (void) {
   Pick p;
-  int n, i, r;
+  int n, nc, i, r;
   load_launch();
   configs(&n);
+  compounds(&nc);
   pick_init(&p, "Select a launch configuration");
-  for (i = 0; i < n; i++) pick_add(&p, config_name(i), i == g_cfg ? "current" : NULL, 0xEB91);
+  for (i = 0; i < n + nc; i++) pick_add(&p, cfg_label(i), i == g_cfg ? "current" : i >= n ? "compound" : NULL, 0xEB91);
   pick_add(&p, "Add Configuration...", NULL, 0xEA60);
   p.keep_order = 1;
-  p.start = g_cfg < n ? g_cfg : 0;
+  p.start = g_cfg < n + nc ? g_cfg : 0;
   r = pick_run(&p);
   pick_free(&p);
   if (r < 0) return;
-  if (r == n) create_launch();
+  if (r == n + nc) create_launch();
   else g_cfg = r;
+}
+
+
+/* Open Disassembly View: the instructions where the program is paused */
+static void open_disasm (void) {
+  if (!D.on || !D.stopped) {
+    toast(0, "Disassembly is available while the program is paused");
+    return;
+  }
+  if (!D.cap_disasm) {
+    toast(0, "The debug adapter does not support disassembly");
+    return;
+  }
+  if (D.cur >= D.nfr || D.fr[D.cur].ip == NULL) {
+    toast(0, "The stack frame has no instruction pointer to disassemble at");
+    return;
+  }
+  ask_disasm(1);
 }
 
 
@@ -2280,6 +3000,7 @@ void dbg_command (int cmd) {
     case CMD_DEBUG_PAUSE: if (D.on && !D.stopped) step("pause"); break;
     case CMD_DEBUG_CONFIG: create_launch(); break;
     case CMD_DEBUG_SELECT: choose_config(); break;
+    case CMD_DEBUG_DISASM: open_disasm(); break;
     case CMD_BP_REMOVE_ALL:
       bp_sync();
       while (g_nbp > 0) bp_remove(g_nbp - 1);
@@ -2309,7 +3030,7 @@ void dbg_command (int cmd) {
 */
 
 enum { SEC_VARS, SEC_WATCH, SEC_STACK, SEC_BPS, SEC_N };
-enum { R_HEAD, R_VAR, R_WATCH, R_WADD, R_THREAD, R_FRAME, R_BP, R_NOTE, R_EXC, R_DBP };
+enum { R_HEAD, R_VAR, R_WATCH, R_WADD, R_THREAD, R_FRAME, R_BP, R_NOTE, R_EXC, R_DBP, R_SES };
 
 typedef struct VRow {
   int kind, i;
@@ -2335,6 +3056,18 @@ static void add_row (int kind, int i) {
 }
 
 
+/* CALL STACK's rows of the focused session: its threads, the stopped one's frames */
+static void stack_rows (void) {
+  int i, j;
+  if (D.nth == 0) add_row(R_NOTE, D.stopped ? 1 : 2);
+  for (i = 0; i < D.nth; i++) {
+    add_row(R_THREAD, i);
+    if (D.stopped && D.th[i].id == D.thread)
+      for (j = 0; j < D.nfr; j++) add_row(R_FRAME, j);
+  }
+}
+
+
 static void build_rows (void) {
   int s, i;
   g_nrow = 0;
@@ -2350,14 +3083,14 @@ static void build_rows (void) {
         add_row(R_WADD, 0);
         break;
       case SEC_STACK:
-        if (!D.on) break;
-        if (D.nth == 0) add_row(R_NOTE, D.stopped ? 1 : 2);
-        for (i = 0; i < D.nth; i++) {
-          int j;
-          add_row(R_THREAD, i);
-          if (D.stopped && D.th[i].id == D.thread)
-            for (j = 0; j < D.nfr; j++) add_row(R_FRAME, j);
+        if (ses_count() > 1) {	/* several sessions (a compound): each, the focused one's threads under it */
+          for (i = 0; i < MAX_SES; i++)
+            if (g_ses[i].on) {
+              add_row(R_SES, i);
+              if (i == g_foc) stack_rows();
+            }
         }
+        else if (D.on) stack_rows();
         break;
       case SEC_BPS:
         for (i = 0; i < g_nexf; i++) add_row(R_EXC, i);
@@ -2523,25 +3256,27 @@ void debug_menu (int row, int x, int y, SideAct *act) {
   if (g_sel < 0 || g_sel >= g_nrow) return;
   r = &g_row[g_sel];
   if (r->kind == R_VAR || r->kind == R_WATCH) {
-    static const char *const label[] = {"Set Value", "Copy Value", "Add to Watch", "", "Break on Value Change",
-                                        "Break on Value Read", "Break on Value Access"};
+    static const char *const label[] = {"Set Value", "Copy Value", "Add to Watch", "View Binary Data", "",
+                                        "Break on Value Change", "Break on Value Read", "Break on Value Access"};
     VarList *l = r->kind == R_VAR ? &g_vars : &g_wvars;
     const Var *v = &l->v[r->i];
-    int flags[7] = {0, 0, 0, MF_LINE, 0, 0, 0}, c, k;
+    int flags[8] = {0, 0, 0, 0, MF_LINE, 0, 0, 0}, c, k;
     int leaf = v->depth > 0 && v->value != NULL;
     if (!leaf || !D.stopped || !D.cap_setvar) flags[0] = MF_OFF;
     if (v->value == NULL) flags[1] = MF_OFF;
     if (r->kind != R_VAR || !leaf) flags[2] = MF_OFF;
-    for (k = 4; k < 7; k++)
+    if (v->mem == NULL || !D.stopped || !D.cap_mem) flags[3] = MF_OFF;	/* readMemory: the memory view */
+    for (k = 5; k < 8; k++)
       if (!leaf || !D.stopped || !D.cap_data) flags[k] = MF_OFF;
-    c = popup_list(x, y, label, flags, 7);
+    c = popup_list(x, y, label, flags, 8);
     if (c == 0) set_value(l, r->i);
     else if (c == 1 && v->value) {
       act->what = SA_CLIP;
       act->path = v->value;
     }
     else if (c == 2) dbg_add_watch(v->name);
-    else if (c >= 4) data_break(l, r->i, c - 4);
+    else if (c == 3) view_memory(v);
+    else if (c >= 5) data_break(l, r->i, c - 5);
   }
   else if (r->kind == R_BP || r->kind == R_DBP) {
     static const char *const label[] = {"Enable Breakpoint", "Remove Breakpoint"};
@@ -2573,7 +3308,10 @@ void debug_draw (int x, int y, int w, int h, int focus) {
   load_launch();
   configs(&n);
   {	/* the start button and the configuration, like VS Code's */
-    const char *nm = D.on ? D.name : (n ? config_name(g_cfg < n ? g_cfg : 0) : NULL);
+    int nc;
+    const char *nm;
+    compounds(&nc);
+    nm = D.on ? D.name : (n + nc ? cfg_label(g_cfg < n + nc ? g_cfg : 0) : NULL);
     scr_put_rgb(x + 2, y + 1, D.on ? 0xEACF : 0xEB2C, 0x89D185, ui_color(C_SIDE_BG), 0);	/* play, green */
     if (nm) {
       snprintf(t, sizeof(t), "%s", nm);
@@ -2701,6 +3439,15 @@ void debug_draw (int x, int y, int w, int h, int focus) {
       case R_NOTE:
         scr_putsw(cx + 3, sy, w - 5, r->i == 1 ? "Paused" : "Running", st == S_SIDE ? S_SIDE_DIM : st);
         break;
+      case R_SES: {	/* a session: its name, and whether it is paused */
+        const Ses *z = &g_ses[r->i];
+        const char *state = z->stopped ? "PAUSED" : "RUNNING";
+        scr_put(cx, sy, r->i == g_foc ? 0xEAB4 : 0xEAB6, st);
+        scr_put(cx + 2, sy, 0xEAD8, st);	/* debug */
+        scr_putsw(cx + 4, sy, w - (int)str_cols(state) - 7, z->name, st);
+        scr_puts(x + w - (int)str_cols(state) - 1, sy, state, st == S_SIDE ? S_SIDE_DIM : st);
+        break;
+      }
     }
   }
   side_bar(x, y + VHEAD, w, g_h, (size_t)g_nrow, (size_t)g_top, (size_t)g_h);
@@ -2805,6 +3552,7 @@ static void row_act (int k, SideAct *act) {
       break;
     case R_EXC: exc_toggle(r->i); break;
     case R_WADD: add_watch(); break;
+    case R_SES: focus_ses(r->i); break;
     case R_FRAME:
       if (D.fr[r->i].path) {
         D.cur = r->i;
@@ -2954,6 +3702,147 @@ void debug_wheel (int d) {
 ** ===================================================================
 */
 
+/*
+** Its suggestions, like the editor's: the adapter's completions for what
+** is typed (supportsCompletionsRequest), asked as a word is typed (or a
+** trigger character, or Ctrl+Space); Tab or Enter takes one.
+*/
+typedef struct Compl {
+  char *label, *text;	/* text: what goes in (NULL: the label) */
+  int start, len;	/* what of the input it replaces (start from 1, -1: the word typed) */
+} Compl;
+
+static Compl *g_cp;
+static int g_ncp, g_cpsel, g_cpon;
+
+
+static void compl_close (void) {
+  int i;
+  for (i = 0; i < g_ncp; i++) {
+    free(g_cp[i].label);
+    free(g_cp[i].text);
+  }
+  free(g_cp);
+  g_cp = NULL;
+  g_ncp = g_cpsel = g_cpon = 0;
+}
+
+
+/* where the word being typed starts in the input */
+static size_t word_at_end (void) {
+  size_t n = strlen(CN.in);
+  while (n > 0 && is_idc((unsigned char)CN.in[n - 1])) n--;
+  return n;
+}
+
+
+/* the suggestions that match the word typed: their indexes into idx; how many */
+static int compl_shown (int *idx, int max) {
+  size_t w = word_at_end(), wl = strlen(CN.in) - w;
+  int i, n = 0;
+  for (i = 0; i < g_ncp && n < max; i++) {
+    const char *l = g_cp[i].label;
+    size_t k;
+    for (k = 0; k < wl && l[k] && ((l[k] | 32) == (CN.in[w + k] | 32)); k++) ;
+    if (k == wl && !(l[k] == '\0' && wl > 0 && g_ncp == 1)) idx[n++] = i;	/* the word itself, alone: nothing to offer */
+  }
+  return n;
+}
+
+
+static void ask_completions (void) {
+  Buf b;
+  if (!D.on || !D.ready || !D.cap_compl) return;
+  buf_init(&b);
+  buf_puts(&b, "{\"text\":");
+  json_put_str(&b, CN.in, strlen(CN.in));
+  buf_printf(&b, ",\"column\":%lu", (unsigned long)strlen(CN.in) + 1);
+  if (D.stopped && D.cur < D.nfr) buf_printf(&b, ",\"frameId\":%ld", D.fr[D.cur].id);
+  buf_putc(&b, '}');
+  request("completions", b.s, RQ_COMPL, 0, CN.in);
+  buf_free(&b);
+}
+
+
+/* completions' answer, for the input as it was (text): the list, when the input is still that */
+static void got_completions (int ok, const Json *body, const char *text) {
+  const Json *t = json_get(body, "targets");
+  size_t i;
+  int idx[1];
+  compl_close();
+  if (!ok || !FOC || text == NULL || strcmp(text, CN.in) != 0 || t == NULL || t->type != J_ARR) return;
+  g_cp = (Compl *)xmalloc((t->n + 1) * sizeof(Compl));
+  for (i = 0; i < t->n; i++) {
+    const Json *x = t->kid[i];
+    const char *l = json_str(json_get(x, "label"), NULL);
+    if (l == NULL || *l == '\0') continue;
+    g_cp[g_ncp].label = xstrdup(l);
+    g_cp[g_ncp].text = json_get(x, "text") ? xstrdup(json_str(json_get(x, "text"), l)) : NULL;
+    g_cp[g_ncp].start = json_get(x, "start") ? inum(json_get(x, "start"), 1) : -1;
+    g_cp[g_ncp].len = inum(json_get(x, "length"), 0);
+    g_ncp++;
+  }
+  g_cpon = compl_shown(idx, 1) > 0;
+}
+
+
+/* the suggestion selected, into the input */
+static void compl_accept (void) {
+  int idx[512], n = compl_shown(idx, 512);
+  const Compl *c;
+  const char *ins;
+  size_t a, b, len = strlen(CN.in);
+  char out[sizeof(CN.in)];
+  if (n == 0) {
+    compl_close();
+    return;
+  }
+  c = &g_cp[idx[g_cpsel < n ? g_cpsel : 0]];
+  ins = c->text ? c->text : c->label;
+  if (c->start >= 1) {	/* what the adapter said it replaces */
+    a = (size_t)c->start - 1 < len ? (size_t)c->start - 1 : len;
+    b = a + (size_t)(c->len > 0 ? c->len : 0) < len ? a + (size_t)(c->len > 0 ? c->len : 0) : len;
+  }
+  else {
+    a = word_at_end();
+    b = len;
+  }
+  snprintf(out, sizeof(out), "%.*s%s%s", (int)a, CN.in, ins, CN.in + b);
+  snprintf(CN.in, sizeof(CN.in), "%s", out);
+  compl_close();
+}
+
+
+/* the list over the input line at iy, where the word starts */
+static void compl_draw (int x, int iy, int w, int h) {
+  int idx[512], n, i, rows, top, lw = 0, cx;
+  if (!g_cpon || (n = compl_shown(idx, 512)) == 0) return;
+  if (g_cpsel >= n) g_cpsel = n - 1;
+  rows = n < 8 ? n : 8;
+  if (rows > h - 1) rows = h - 1;
+  if (rows <= 0) return;
+  top = g_cpsel >= rows ? g_cpsel - rows + 1 : 0;
+  for (i = 0; i < n; i++)
+    if ((int)str_cols(g_cp[idx[i]].label) > lw) lw = (int)str_cols(g_cp[idx[i]].label);
+  lw += 4;
+  if (lw > w - 4) lw = w - 4;
+  if (lw < 12) lw = 12;
+  {
+    char pre[sizeof(CN.in)];
+    snprintf(pre, sizeof(pre), "%.*s", (int)word_at_end(), CN.in);
+    cx = x + 3 + (int)str_cols(pre);
+  }
+  if (cx + lw > x + w - 1) cx = x + w - 1 - lw;
+  if (cx < x) cx = x;
+  for (i = 0; i < rows; i++) {
+    int k = top + i, st = k == g_cpsel ? S_BOX_SEL : S_BOX, sy = iy - rows + i;
+    scr_fill(cx, sy, lw, st);
+    scr_put(cx + 1, sy, 0xEB5F, st);	/* symbol-variable */
+    scr_putsw(cx + 3, sy, lw - 4, g_cp[idx[k]].label, st);
+  }
+}
+
+
 void console_draw (int x, int y, int w, int h, int focus) {
   int rows = h - 1, i, first;
   scr_box(x, y, w, h, S_PANEL);
@@ -2985,6 +3874,7 @@ void console_draw (int x, int y, int w, int h, int focus) {
       cx = x + 3;
     }
     if (focus) scr_cursor(cx, iy);
+    if (focus) compl_draw(x, iy, w, h);
   }
 }
 
@@ -3016,12 +3906,36 @@ static void repl (void) {
 
 
 int console_key (int k) {
-  int code = KEY_CODE(k);
+  int code = KEY_CODE(k), idx[512];
   size_t len = strlen(CN.in);
-  if (code == K_ENTER) repl();
+  if (g_cpon && compl_shown(idx, 512) > 0) {	/* the suggestions have these */
+    int n = compl_shown(idx, 512);
+    if (code == K_TAB || code == K_ENTER) {
+      compl_accept();
+      return 1;
+    }
+    if (code == K_ESC) {
+      compl_close();
+      return 1;
+    }
+    if (code == K_UP || code == K_DOWN) {
+      g_cpsel = (g_cpsel + (code == K_UP ? n - 1 : 1)) % n;
+      return 1;
+    }
+  }
+  if (k == (' ' | KM_CTRL)) {	/* Ctrl+Space: the suggestions */
+    ask_completions();
+    return 1;
+  }
+  if (code == K_ENTER) {
+    compl_close();
+    repl();
+  }
   else if (code == K_BS) {
     while (len > 0 && ((unsigned char)CN.in[len - 1] & 0xC0) == 0x80) len--;
     if (len > 0) CN.in[len - 1] = '\0';
+    if (g_cpon && word_at_end() < strlen(CN.in)) ask_completions();
+    else compl_close();
   }
   else if (code == K_UP || code == K_DOWN) {	/* the history */
     CN.at += code == K_UP ? -1 : 1;
@@ -3042,6 +3956,8 @@ int console_key (int k) {
   else if (IS_TEXT(k) && len + 4 < sizeof(CN.in)) {
     len += (size_t)utf8_encode((uint32_t)k, CN.in + len);
     CN.in[len] = '\0';
+    if (k < 128 && (is_idc(k) || (k != ' ' && strchr(D.trig, k)))) ask_completions();	/* a word, a '.' */
+    else compl_close();
   }
   else return 0;
   return 1;

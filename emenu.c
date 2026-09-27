@@ -158,7 +158,21 @@ static const char *const names[CMD_N] = {
   "Ports: Forward a Port", "Ports: Focus on Ports View",
   "View: Move Editor into New Window", "View: Copy Editor into New Window",
   "Open Accessible View", "Help: Accessibility Help",
-  "Preferences: File Icon Theme", "Notebook: Open Output in Browser"
+  "Preferences: File Icon Theme", "Notebook: Open Output in Browser",
+  "Remote: Show Remote Menu", "Remote: Close Remote Connection", "View: Show Remote Explorer",
+  "WSL: Connect to WSL", "WSL: Connect to WSL using Distro...", "WSL: Open Folder in WSL...",
+  "WSL: Reopen Folder in WSL", "WSL: Reopen Folder in Windows",
+  "Dev Containers: Reopen in Container", "Dev Containers: Open Folder in Container...",
+  "Dev Containers: Attach to Running Container...", "Dev Containers: Rebuild Container",
+  "Dev Containers: Rebuild and Reopen in Container", "Dev Containers: Reopen Folder Locally",
+  "Git: Rebase Branch...", "Git: Abort Rebase", "Git: Cherry Pick...", "Git: Create Tag", "Git: Delete Tag",
+  "Git: Push Tags", "Git: Add Remote...", "Git: Remove Remote", "Git: Select Repository...",
+  "Compare Folders...", "Settings Sync: Configure...",
+  "Refactor...", "Emmet: Wrap with Abbreviation", "Emmet: Balance (outward)", "Emmet: Balance (inward)",
+  "Emmet: Update Tag", "Emmet: Remove Tag", "Emmet: Go to Matching Pair",
+  "View: Move View", "View: Move Focused View", "View: Reset View Locations",
+  "Jupyter: Open Variables View",
+  "Tasks: Terminate Task", "Open Disassembly View"
 };
 
 static const char *const keys[CMD_N] = {
@@ -234,6 +248,13 @@ static const char *const keys[CMD_N] = {
   "", "",
   "", "",
   "Alt+F2", "Alt+F1",
+  "", "",
+  "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+  "", "", "", "", "", "", "", "", "",
+  "", "",
+  "Ctrl+Shift+R", "", "", "", "", "", "",
+  "", "", "",
+  "",
   "", ""
 };
 
@@ -408,7 +429,22 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "remote.tunnel.forwardCommandPalette", "~remote.forwardedPorts.focus",
   "workbench.action.moveEditorToNewWindow", "workbench.action.copyEditorToNewWindow",
   "editor.action.accessibleView", "editor.action.accessibilityHelp",
-  "workbench.action.selectIconTheme", "mme.notebook.openOutputInBrowser"
+  "workbench.action.selectIconTheme", "mme.notebook.openOutputInBrowser",
+  "workbench.action.remote.showMenu", "workbench.action.remote.close", "workbench.view.remote",
+  "remote-wsl.newWindow", "remote-wsl.newWindowForDistro", "remote-wsl.openFolder",
+  "remote-wsl.reopenInWSL", "remote-wsl.reopenInWindows",
+  "remote-containers.reopenInContainer", "remote-containers.openFolder",
+  "remote-containers.attachToRunningContainer", "remote-containers.rebuildContainer",
+  "remote-containers.rebuildAndReopenInContainer", "remote-containers.reopenLocally",
+  "git.rebase", "git.rebaseAbort", "git.cherryPick", "git.createTag", "git.deleteTag", "git.pushTags",
+  "git.addRemote", "git.removeRemote", "scm.setActiveRepository",
+  "mme.compareFolders", "workbench.userDataSync.actions.configure",
+  "editor.action.refactor", "editor.emmet.action.wrapWithAbbreviation", "editor.emmet.action.balanceOut",
+  "editor.emmet.action.balanceIn", "editor.emmet.action.updateTag", "editor.emmet.action.removeTag",
+  "editor.emmet.action.matchTag",
+  "workbench.action.moveView", "workbench.action.moveFocusedView", "workbench.action.resetViewLocations",
+  "jupyter.openVariableView",
+  "workbench.action.tasks.terminate", "debug.action.openDisassemblyView"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -465,7 +501,7 @@ static const int m_file[] = {CMD_NEW, CMD_NEW_WINDOW, 0, CMD_OPEN_FILE, CMD_OPEN
                              0, CMD_ADD_FOLDER, CMD_SAVE_WORKSPACE, 0, CMD_SAVE, CMD_SAVE_AS, CMD_SAVE_ALL, 0, CMD_AUTO_SAVE, CMD_REVERT, 0, CMD_SETTINGS, CMD_SETTINGS_JSON, CMD_KEYS, CMD_SNIPPETS, CMD_IMPORT_VSCODE, 0, CMD_CLOSE, CMD_CLOSE_WORKSPACE, CMD_CLOSE_WINDOW, 0, CMD_QUIT, -1};
 static const int m_edit[] = {CMD_UNDO, CMD_REDO, 0, CMD_CUT, CMD_COPY, CMD_PASTE,
                              0, CMD_FIND, CMD_REPLACE, CMD_FIND_FILES, 0, CMD_COMMENT, CMD_BLOCK_COMMENT, 0, CMD_UPPER, CMD_LOWER, CMD_SORT_ASC, CMD_JOIN, CMD_TRIM,
-                             0, CMD_FORMAT, CMD_FORMAT_SEL, CMD_ORGANIZE_IMPORTS, CMD_SOURCE_ACTION, CMD_INSERT_SNIPPET, 0, CMD_SUGGEST, CMD_QUICKFIX, CMD_RENAME, -1};
+                             0, CMD_FORMAT, CMD_FORMAT_SEL, CMD_ORGANIZE_IMPORTS, CMD_SOURCE_ACTION, CMD_REFACTOR, CMD_INSERT_SNIPPET, 0, CMD_SUGGEST, CMD_QUICKFIX, CMD_RENAME, -1};
 static const int m_sel[] = {CMD_SELECT_ALL, CMD_SELECT_LINE, CMD_SELECT_BRACKET, CMD_EXPAND_SEL, CMD_SHRINK_SEL, CMD_CURSORS_LINE_ENDS, 0, CMD_DUP_SEL, CMD_COPY_UP, CMD_COPY_DOWN, CMD_LINE_UP,
                             CMD_LINE_DOWN, CMD_DELETE_LINE, 0,
                             CMD_CURSOR_UP, CMD_CURSOR_DOWN, CMD_NEXT_MATCH, CMD_ALL_MATCHES, 0, CMD_COLUMN_SELECT, -1};
@@ -481,7 +517,7 @@ static const int m_run[] = {CMD_DEBUG_START, CMD_DEBUG_RUN, CMD_DEBUG_STOP, CMD_
                             CMD_BP_CONDITIONAL, CMD_BP_LOG, CMD_BP_ENABLE_ALL, CMD_BP_DISABLE_ALL, CMD_BP_REMOVE_ALL, 0,
                             CMD_DEBUG_VIEW, CMD_DEBUG_CONSOLE, -1};
 static const int m_term[] = {CMD_TERMINAL_NEW, CMD_TERMINAL_SPLIT, CMD_TERMINAL_NEW_PROFILE, 0, CMD_TASK_RUN,
-                             CMD_TASK_BUILD, CMD_TERM_RUN_FILE, CMD_TERM_RUN_SEL, 0, CMD_TERMINAL, CMD_TERM_RECENT,
+                             CMD_TASK_BUILD, CMD_TERM_RUN_FILE, CMD_TERM_RUN_SEL, CMD_TASK_TERMINATE, 0, CMD_TERMINAL, CMD_TERM_RECENT,
                              CMD_TERMINAL_FIND, CMD_TERMINAL_CLEAR, CMD_TERMINAL_RENAME, CMD_TERMINAL_KILL, 0,
                              CMD_TERMINAL_PROFILE, CMD_TASK_CONFIGURE, -1};
 static const int m_help[] = {CMD_WELCOME, CMD_HELP_COMMANDS, 0, CMD_HELP_KEYS, CMD_HELP_TIPS, 0, CMD_NOTIFICATIONS, 0, CMD_ABOUT, -1};
@@ -1339,7 +1375,7 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
     sc = p->text[0] ? item_score(p, it, hit, hit + n + 1) : 0;
     if (sc == FZ_NONE) memset(hit, 0, n + dn + 2);
     {	/* its group's name, at the right of the group's first item: "recently opened" */
-      const char *gl = it->group >= 0 && it->group < 2 ? p->group_label[it->group] : NULL;
+      const char *gl = it->group >= 0 && it->group < 8 ? p->group_label[it->group] : NULL;
       if (gl && (k == 0 || p->item[vis->v[k - 1]].group != it->group)) {
         int gw = (int)str_cols(gl);
         if (gw + 20 < g_box.w) {
@@ -1436,6 +1472,7 @@ int pick_run (Pick *p) {
     if (code == K_ENTER) {
       r = vis.n ? (int)vis.v[sel] : PICK_TEXT;
       p->side = (k & KM_CTRL) != 0;	/* Ctrl+Enter: to the side, where the caller can */
+      p->shift = (k & KM_SHIFT) != 0;
       break;
     }
     if (code == K_UP || (code == K_TAB && (k & KM_CTRL) && (k & KM_SHIFT)))

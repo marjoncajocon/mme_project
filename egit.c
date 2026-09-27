@@ -126,8 +126,10 @@ static int have_git (void) {
 }
 
 
-/* git -C <top> with the arguments of args (NULL ends them); err: stderr into out too */
-int git_exec (Buf *out, int err, const char *const *args) {
+static const char *repo_dir (void);
+
+/* git -C dir with the arguments of args (NULL ends them); err: stderr into out too */
+static int git_exec_in (const char *dir, Buf *out, int err, const char *const *args) {
   char *argv[64];
   int n = 0, rc, i;
   size_t from = out->len;
@@ -136,7 +138,7 @@ int git_exec (Buf *out, int err, const char *const *args) {
   if (!have_git()) return -1;
   argv[n++] = g_git;
   argv[n++] = (char *)"-C";
-  argv[n++] = (char *)(g_top ? g_top : side_root());
+  argv[n++] = (char *)dir;
   argv[n++] = (char *)"--literal-pathspecs";	/* a file named "[ab].txt" or "*.c" is only that file */
   while (*args && n < 63) argv[n++] = (char *)*args++;
   argv[n] = NULL;
@@ -148,6 +150,12 @@ int git_exec (Buf *out, int err, const char *const *args) {
   if (rc != 0 && out->len > from) out_append("Git", out->s + from, out->len - from < 4096 ? out->len - from : 4096);
   buf_free(&cmd);
   return rc;
+}
+
+
+/* git -C <top> (before git_refresh found it: the repository selected, or the folder) */
+int git_exec (Buf *out, int err, const char *const *args) {
+  return git_exec_in(g_top ? g_top : repo_dir(), out, err, args);
 }
 
 
@@ -286,6 +294,203 @@ int git_index_put (const char *rel, const char *s, size_t n) {
 
 /*
 ** {==================================================================
+** Repositories: the workspace's folders' own, the ones a level under
+** them (git.repositoryScanMaxDepth 1, node_modules skipped) and their
+** submodules (git.detectSubmodulesLimit 10), as VS Code finds them. With
+** more than one, the view shows SOURCE CONTROL REPOSITORIES over the
+** changes; the one selected is the one the view, the status bar and the
+** Git: commands work on (VS Code's scm.repositories.selectionMode single).
+** ===================================================================
+*/
+
+typedef struct Repo {
+  char *top;	/* native */
+  int sub;	/* a submodule */
+  char branch[128];
+  int changes;
+} Repo;
+
+static Repo *g_repo;
+static int g_nrepo;
+static int g_root_repo = -1;	/* the first folder's own, -1: it is in none */
+static char *g_repo_key;	/* the workspace's folders the list was made for */
+static char *g_repo_want;	/* the repository selected (its top); NULL: the folder's own */
+static int g_rescan = 1;	/* looked for again at the next refresh */
+static int g_rfocus = -1;	/* a row of SOURCE CONTROL REPOSITORIES has the keys; -1: none */
+static int g_repos_open = 1;	/* the section is not collapsed */
+
+#define MAX_SUBMODULES	10
+
+
+static void repos_free (void) {
+  int i;
+  for (i = 0; i < g_nrepo; i++) free(g_repo[i].top);
+  free(g_repo);
+  g_repo = NULL;
+  g_nrepo = 0;
+  g_root_repo = -1;
+}
+
+
+/* the top of the repository dir is in, native; NULL: none */
+static char *toplevel_of (const char *dir) {
+  Buf b;
+  const char *a[] = {"rev-parse", "--show-toplevel", NULL};
+  buf_init(&b);
+  if (git_exec_in(dir, &b, 0, a) != 0 || b.len == 0) {
+    buf_free(&b);
+    return NULL;
+  }
+  chomp(b.s);
+  to_native(b.s);
+  return buf_take(&b);
+}
+
+
+static int repo_add (const char *top, int sub) {
+  int i;
+  for (i = 0; i < g_nrepo; i++)
+    if (m_fncmp(g_repo[i].top, top) == 0) return i;
+  g_repo = (Repo *)xrealloc(g_repo, (size_t)(g_nrepo + 1) * sizeof(Repo));
+  memset(&g_repo[g_nrepo], 0, sizeof(Repo));
+  g_repo[g_nrepo].top = xstrdup(top);
+  g_repo[g_nrepo].sub = sub;
+  return g_nrepo++;
+}
+
+
+/* dir holds a .git (a folder, or a submodule's file): its repository joins the list */
+static void repo_try (const char *dir, int sub) {
+  char *dotgit = path_join(dir, ".git"), *t;
+  OsStat st;
+  if (os_stat(dotgit, &st) == 0 && st.exists && (t = toplevel_of(dir)) != NULL) {
+    if (m_fncmp(t, dir) == 0) repo_add(t, sub);	/* its own top, not a folder of the one around it */
+    free(t);
+  }
+  free(dotgit);
+}
+
+
+/* the submodules of repository i that are checked out (.gitmodules' paths) */
+static void submodules (int i, int *left) {
+  char *gm = path_join(g_repo[i].top, ".gitmodules");
+  OsStat st;
+  Buf b;
+  const char *a[] = {"config", "-f", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$", NULL};
+  const char *p;
+  int ok = os_stat(gm, &st) == 0 && st.exists;
+  free(gm);
+  if (!ok || *left <= 0) return;
+  buf_init(&b);
+  if (git_exec_in(g_repo[i].top, &b, 0, a) == 0)
+    for (p = b.s ? b.s : ""; *p && *left > 0;) {	/* "submodule.name.path sub/dir" */
+      const char *e = strchr(p, '\n'), *sp;
+      size_t len = e ? (size_t)(e - p) : strlen(p);
+      if ((sp = memchr(p, ' ', len)) != NULL) {
+        char *rel = xstrndup(sp + 1, (size_t)(p + len - sp - 1)), *dir;
+        chomp(rel);
+        to_native(rel);
+        dir = path_join(g_repo[i].top, rel);
+        repo_try(dir, 1);
+        (*left)--;
+        free(dir);
+        free(rel);
+      }
+      p += len + (e ? 1 : 0);
+    }
+  buf_free(&b);
+}
+
+
+/* the repositories of the workspace, looked for again when its folders changed (or F5, Git: Refresh) */
+static void repos_scan (void) {
+  Buf key;
+  int f, i, left = MAX_SUBMODULES;
+  buf_init(&key);
+  for (f = 0; f < ws_count(); f++) buf_printf(&key, "%s\n", ws_folder(f) ? ws_folder(f) : "");
+  buf_putc(&key, '\0');
+  if (!g_rescan && g_repo_key && strcmp(g_repo_key, key.s) == 0) {
+    buf_free(&key);
+    return;
+  }
+  g_rescan = 0;
+  free(g_repo_key);
+  g_repo_key = buf_take(&key);
+  repos_free();
+  if (!have_git()) return;
+  for (f = 0; f < ws_count(); f++) {
+    const char *dir = ws_folder(f);
+    char *top;
+    Vec v;
+    size_t k;
+    if (dir == NULL || !*dir) continue;
+    if ((top = toplevel_of(dir)) != NULL) {
+      i = repo_add(top, 0);
+      if (f == 0) g_root_repo = i;
+      free(top);
+    }
+    vec_init(&v);
+    if (os_listdir(dir, &v) == 0) {
+      vec_sort(&v);
+      for (k = 0; k < v.n; k++) {
+        char *sub;
+        OsStat st;
+        if (v.v[k][0] == '.' || strcmp(v.v[k], "node_modules") == 0) continue;
+        sub = path_join(dir, v.v[k]);
+        if (os_stat(sub, &st) == 0 && st.is_dir) repo_try(sub, 0);
+        free(sub);
+      }
+    }
+    vec_free(&v);
+  }
+  for (i = 0; i < g_nrepo; i++) submodules(i, &left);	/* the list grows: a submodule's own ones too */
+  if (g_nrepo == 0) g_rescan = 1;	/* none: looked for at each refresh, as a git init may come */
+}
+
+
+/* where git runs before the top is known: the repository selected, the folder's own, the first found */
+static const char *repo_dir (void) {
+  int i;
+  if (g_repo_want)
+    for (i = 0; i < g_nrepo; i++)
+      if (m_fncmp(g_repo[i].top, g_repo_want) == 0) return g_repo[i].top;
+  if (g_root_repo < 0 && g_nrepo > 0) return g_repo[0].top;
+  return side_root();
+}
+
+
+/* the branch and the changes of a repository not selected: git status -b */
+static void repo_status (Repo *r) {
+  Buf b;
+  const char *a[] = {"status", "--porcelain=v1", "-b", "-z", NULL};
+  size_t i;
+  r->branch[0] = '\0';
+  r->changes = 0;
+  buf_init(&b);
+  if (git_exec_in(r->top, &b, 0, a) == 0)
+    for (i = 0; i < b.len;) {	/* "## main...origin/main\0", "XY path\0" (renames: and "old\0") */
+      const char *e = b.s + i;
+      size_t len = strlen(e);
+      if (strncmp(e, "## ", 3) == 0) {
+        const char *s = e + 3, *dots = strstr(s, "...");
+        size_t n = dots ? (size_t)(dots - s) : strcspn(s, " ");
+        if (strncmp(s, "No commits yet on ", 18) == 0) s += 18, n = strlen(s);
+        snprintf(r->branch, sizeof(r->branch), "%.*s", (int)n, s);
+      }
+      else {
+        r->changes++;
+        if (e[0] == 'R' || e[0] == 'C') i += len + 1, len = strlen(b.s + i);
+      }
+      i += len + 1;
+    }
+  buf_free(&b);
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
 ** Status
 ** ===================================================================
 */
@@ -304,7 +509,8 @@ static size_t g_nch, g_capch;
 ** others; then the GRAPH: its commits, an open commit's files, "Load More"
 */
 enum { R_MSG, R_STAGED_HEAD, R_STAGED, R_HEAD, R_CHANGE, R_GRAPH, R_COMMIT, R_CFILE, R_MORE,
-       R_MERGE_HEAD, R_MERGE, R_BUTTON };	/* Merge Changes; the Publish / Sync button */
+       R_MERGE_HEAD, R_MERGE, R_BUTTON,	/* Merge Changes; the Publish / Sync / Continue button */
+       R_ABORT };	/* rebasing: the Abort button under Continue */
 
 typedef struct GRow {
   int kind;
@@ -320,7 +526,22 @@ static size_t g_sel, g_top_row;
 static int g_h = 1;
 static char g_msg[512];	/* the commit message */
 
-#define HEAD	3	/* "SOURCE CONTROL", the branch, the message */
+enum { GS_NONE, GS_REBASING, GS_CHERRY_PICKING, GS_MERGING };	/* what git is in the middle of */
+static int g_state;
+static char g_head_name[128];	/* GS_REBASING: the branch being rebased */
+static int g_vx, g_vy;	/* where the view was drawn: its menus open there */
+
+
+/* the rows of SOURCE CONTROL REPOSITORIES: its title and the repositories; 0 with one */
+static int repo_rows (void) {
+  return g_nrepo > 1 ? 1 + (g_repos_open ? g_nrepo : 0) : 0;
+}
+
+
+/* the rows over the list: "SOURCE CONTROL", the repositories, the branch, the message */
+static int head_rows (void) {
+  return 3 + repo_rows();
+}
 
 
 static void changes_free (void) {
@@ -371,6 +592,7 @@ int git_conflicted (const char *path) {
 
 /* the button under the message box: nothing to commit and the branch not in step with its remote */
 static int button_kind (void) {
+  if (g_top && g_state == GS_REBASING) return 3;	/* Continue (and Abort) */
   if (g_top == NULL || g_nch > 0 || g_branch[0] == '\0') return 0;
   if (!git_has_upstream()) return 1;	/* Publish Branch */
   if (git_sync_text()[0]) return 2;	/* Sync Changes 1↓ 2↑ */
@@ -382,6 +604,7 @@ static void build_rows (void) {
   size_t i, ns = 0, nc = 0, nm = 0;
   g_nrow = 0;
   if (button_kind()) add_row(R_BUTTON, 0);
+  if (button_kind() == 3) add_row(R_ABORT, 0);
   for (i = 0; i < g_nch; i++) {
     ns += is_staged(&g_ch[i]);
     nc += is_changed(&g_ch[i]);
@@ -425,26 +648,103 @@ static int cmp_change (const void *a, const void *b) {
 static unsigned g_status_gen;	/* counts git_refresh: the multi-diff editor reads the changes again */
 
 
+static int is_there (const char *dir, const char *name) {
+  char *p = path_join(dir, name);
+  OsStat st;
+  int r = os_stat(p, &st) == 0 && st.exists;
+  free(p);
+  return r;
+}
+
+
+/*
+** A rebase, a cherry-pick or a merge stopped by a conflict (the git folder
+** gd says which). The branch a rebase is for is in its head-name; a
+** cherry-pick's or a merge's message waits in MERGE_MSG, and fills the
+** empty message box, as VS Code's does.
+*/
+static void read_state (const char *gd) {
+  int was = g_state;
+  g_head_name[0] = '\0';
+  if (is_there(gd, "rebase-merge") || is_there(gd, "rebase-apply")) {
+    char *f = path_join(gd, is_there(gd, "rebase-merge") ? "rebase-merge" : "rebase-apply"), *h, *s;
+    size_t n;
+    g_state = GS_REBASING;
+    h = path_join(f, "head-name");
+    if ((s = read_file(h, &n)) != NULL) {
+      chomp(s);
+      snprintf(g_head_name, sizeof(g_head_name), "%s", strncmp(s, "refs/heads/", 11) == 0 ? s + 11 : s);
+      free(s);
+    }
+    free(h);
+    free(f);
+  }
+  else if (is_there(gd, "CHERRY_PICK_HEAD")) g_state = GS_CHERRY_PICKING;
+  else if (is_there(gd, "MERGE_HEAD")) g_state = GS_MERGING;
+  else g_state = GS_NONE;
+  if (g_state != was && (g_state == GS_CHERRY_PICKING || g_state == GS_MERGING) && g_msg[0] == '\0') {
+    char *f = path_join(gd, "MERGE_MSG"), *s, *p;
+    size_t n, len = 0;
+    if ((s = read_file(f, &n)) != NULL) {
+      for (p = s; *p;) {	/* its lines, not git's "# Conflicts:" notes */
+        char *e = strchr(p, '\n');
+        size_t k = e ? (size_t)(e - p) : strlen(p);
+        if (k && p[k - 1] == '\r') k--;
+        if (*p != '#' && len + k + 2 < sizeof(g_msg)) {
+          memcpy(g_msg + len, p, k);
+          len += k;
+          g_msg[len++] = '\n';
+        }
+        p = e ? e + 1 : p + strlen(p);
+      }
+      while (len > 0 && (g_msg[len - 1] == '\n' || g_msg[len - 1] == ' ')) len--;
+      g_msg[len] = '\0';
+      free(s);
+    }
+    free(f);
+  }
+}
+
+
 void git_refresh (void) {
   Buf b;
   size_t i;
+  lsp_watch_nudge();	/* a checkout, a pull, a stash: the servers watching files hear of them soon */
   blame_clear();	/* read again when it is asked for */
   quick_clear();
   changes_free();
   free(g_top);
   g_top = NULL;
   g_branch[0] = '\0';
+  repos_scan();
   buf_init(&b);
-  if (git(&b, "rev-parse", "--show-toplevel", NULL, NULL, NULL, NULL) != 0 || b.len == 0) {
+  if (g_nrepo == 0 || git(&b, "rev-parse", "--show-toplevel", "--git-dir", NULL, NULL, NULL) != 0 || b.len == 0) {
     buf_free(&b);
+    g_state = GS_NONE;
     graph_load();
     build_rows();
     g_status_gen++;
     return;
   }
-  chomp(b.s);
-  to_native(b.s);
-  g_top = buf_take(&b);
+  {	/* the top, and the git folder: what git is in the middle of */
+    char *nl = strchr(b.s, '\n'), *gd;
+    const char *dir = repo_dir();
+    if (nl) *nl++ = '\0';
+    chomp(b.s);
+    to_native(b.s);
+    g_top = xstrdup(b.s);
+    gd = xstrdup(nl ? nl : ".git");
+    chomp(gd);
+    to_native(gd);
+    if (!path_is_sep(gd[0]) && !(gd[0] && gd[1] == ':')) {	/* relative to where git ran */
+      char *a = path_join(dir, gd);
+      free(gd);
+      gd = a;
+    }
+    read_state(gd);
+    free(gd);
+  }
+  buf_free(&b);
   buf_init(&b);
   if (git(&b, "branch", "--show-current", NULL, NULL, NULL, NULL) == 0) {
     chomp(b.s);
@@ -473,6 +773,14 @@ void git_refresh (void) {
     qsort(g_ch, g_nch, sizeof(Change), cmp_change);
   }
   buf_free(&b);
+  for (i = 0; g_nrepo > 1 && i < (size_t)g_nrepo; i++) {	/* SOURCE CONTROL REPOSITORIES: each one's branch and changes */
+    Repo *r = &g_repo[i];
+    if (m_fncmp(r->top, g_top) != 0) repo_status(r);
+    else {
+      snprintf(r->branch, sizeof(r->branch), "%s", git_branch_label());
+      r->changes = (int)g_nch;
+    }
+  }
   graph_load();
   build_rows();
   g_status_gen++;
@@ -481,6 +789,67 @@ void git_refresh (void) {
 
 const char *git_branch (void) {
   return g_top ? (g_branch[0] ? g_branch : "HEAD") : "";
+}
+
+
+/* the branch as VS Code shows it: "main (Rebasing)" while a rebase waits */
+const char *git_branch_label (void) {
+  static char s[200];
+  if (g_top == NULL || g_state != GS_REBASING) return git_branch();
+  snprintf(s, sizeof(s), "%s (Rebasing)", g_head_name[0] ? g_head_name : git_branch());
+  return s;
+}
+
+
+int git_rebasing (void) {
+  return g_top && g_state == GS_REBASING;
+}
+
+
+/* the conflicts not resolved yet (Merge Changes) */
+int git_conflicts (void) {
+  size_t i;
+  int n = 0;
+  for (i = 0; i < g_nch; i++) n += is_merge(&g_ch[i]);
+  return n;
+}
+
+
+/* Git: Select Repository...: the repository the view and the commands work on */
+void git_select_repo (int i) {
+  if (i < 0) {	/* asked: VS Code's list of them */
+    Pick p;
+    int k;
+    if (g_nrepo < 2) {
+      toast(0, g_nrepo ? "There is only one repository in the workspace." : "No git repositories were found in the workspace.");
+      return;
+    }
+    pick_init(&p, "Select a repository");
+    for (k = 0; k < g_nrepo; k++) {
+      char d[600];
+      snprintf(d, sizeof(d), "%s%s%s  %s", g_repo[k].branch, g_repo[k].changes ? "*" : "",
+               g_repo[k].sub ? "  submodule" : "", g_repo[k].top);
+      pick_add(&p, path_basename(g_repo[k].top), d, 0xEA62);	/* codicon repo */
+      if (g_top && m_fncmp(g_repo[k].top, g_top) == 0) p.start = k;
+    }
+    p.keep_order = 1;
+    i = pick_run(&p);
+    pick_free(&p);
+    if (i < 0) return;
+    g_rfocus = -1;
+  }
+  if (i >= g_nrepo) return;
+  free(g_repo_want);
+  g_repo_want = xstrdup(g_repo[i].top);
+  g_sel = g_top_row = 0;
+  git_refresh();
+}
+
+
+/* Git: Refresh, F5: the workspace's repositories are looked for again too */
+void git_rescan (void) {
+  g_rescan = 1;
+  git_refresh();
 }
 
 
@@ -542,7 +911,7 @@ int git_letter_style (int l) {
 void git_draw (int x, int y, int w, int h, int focus) {
   int row;
   scr_box(x, y, w, h, S_SIDE);
-  if (h <= HEAD) return;
+  if (h <= 3) return;
   scr_puts(x + 2, y, "SOURCE CONTROL", S_SIDE_HEAD);
   if (g_top && w > 24) {	/* VS Code's title actions: Commit, Refresh, More Actions */
     scr_put(x + w - 9, y, 0xEAE1, S_SIDE_HEAD);	/* diff: View All Changes */
@@ -569,22 +938,49 @@ void git_draw (int x, int y, int w, int h, int focus) {
     }
     return;
   }
+  g_vx = x;
+  g_vy = y;
+  if (g_rfocus >= g_nrepo || !g_repos_open) g_rfocus = -1;
+  if (repo_rows() > 0 && h > repo_rows() + 3) {	/* SOURCE CONTROL REPOSITORIES */
+    int i;
+    scr_put(x + 1, y + 1, g_repos_open ? 0xEAB4 : 0xEAB6, S_SIDE_HEAD);
+    scr_putsw(x + 3, y + 1, w - 4, "SOURCE CONTROL REPOSITORIES", S_SIDE_HEAD);
+    for (i = 0; g_repos_open && i < g_nrepo; i++) {
+      const Repo *r = &g_repo[i];
+      int ry = y + 2 + i, on = g_top && m_fncmp(r->top, g_top) == 0, cx = x + 3;
+      int st = (focus && g_rfocus == i) ? S_SIDE_SEL : on ? S_SIDE_CUR : S_SIDE;
+      char right[180];
+      scr_fill(x, ry, w, st);
+      scr_put(x + 1, ry, on ? 0xEAB2 : ' ', st);	/* check: the one selected */
+      scr_put(cx, ry, 0xEA62, st);	/* codicon repo */
+      cx += 2;
+      cx += scr_putsw(cx, ry, x + w - cx - 2, path_basename(r->top), st);
+      snprintf(right, sizeof(right), "\xEE\xA9\xA8 %s%s", r->branch[0] ? r->branch : "HEAD", r->changes ? "*" : "");	/* git-branch */
+      if (cx + 2 < x + w - 2) {
+        int rw = (int)str_cols(right);
+        int rx = x + w - rw - 1 > cx + 1 ? x + w - rw - 1 : cx + 1;
+        scr_putsw(rx, ry, x + w - rx - 1, right, st == S_SIDE ? S_SIDE_DIM : st);
+      }
+    }
+    y += repo_rows();
+    h -= repo_rows();
+  }
   scr_put(x + 2, y + 1, 0xE725, S_SIDE_DIM);	/* git-branch */
-  scr_putsw(x + 4, y + 1, w - 5, g_branch[0] ? g_branch : "HEAD", S_SIDE_DIM);
+  scr_putsw(x + 4, y + 1, w - 5, git_branch_label(), S_SIDE_DIM);
   /* the message box: row 0 of the list */
   scr_fill(x + 1, y + 2, w - 2, S_INPUT);
   if (g_msg[0]) scr_putsw(x + 2, y + 2, w - 4, g_msg, S_INPUT_ON);
   else {
-    char hint[160];
-    snprintf(hint, sizeof(hint), "Message (Ctrl+Enter to commit on '%s')",
-             g_branch[0] ? g_branch : "HEAD");
+    char hint[200];
+    if (g_state == GS_REBASING) snprintf(hint, sizeof(hint), "Message (Ctrl+Enter to continue rebasing '%s')", git_branch_label());
+    else snprintf(hint, sizeof(hint), "Message (Ctrl+Enter to commit on '%s')", g_branch[0] ? g_branch : "HEAD");
     scr_putsw(x + 2, y + 2, w - 4, hint, S_INPUT_HINT);
   }
-  if (focus && g_sel == 0) {
+  if (focus && g_sel == 0 && g_rfocus < 0) {
     int cx = x + 2 + (int)str_cols(g_msg);
     scr_cursor(cx < x + w - 2 ? cx : x + w - 2, y + 2);
   }
-  g_h = h - HEAD;
+  g_h = h - 3;
   if (g_sel > 0) {	/* rows of the list are g_sel - 1 */
     size_t k = g_sel - 1;
     if (k < g_top_row) g_top_row = k;
@@ -593,7 +989,7 @@ void git_draw (int x, int y, int w, int h, int focus) {
   for (row = 0; row < g_h; row++) {
     size_t k = g_top_row + (size_t)row;
     const GRow *r;
-    int sy = y + HEAD + row, st;
+    int sy = y + 3 + row, st;
     if (k >= g_nrow) break;
     r = &g_row[k];
     st = (k + 1 == g_sel && focus) ? S_SIDE_SEL : (k + 1 == g_sel ? S_SIDE_CUR : S_SIDE);
@@ -615,10 +1011,12 @@ void git_draw (int x, int y, int w, int h, int focus) {
       scr_putsw(x + 3, sy, w - 4, "Load More...", st == S_SIDE ? S_SIDE_DIM : st);
       continue;
     }
-    if (r->kind == R_BUTTON) {	/* VS Code's big button: Publish Branch / Sync Changes */
+    if (r->kind == R_BUTTON || r->kind == R_ABORT) {	/* VS Code's big button: Publish Branch / Sync Changes / Continue */
       char t[96];
       int bst = (k + 1 == g_sel && focus) ? S_BUTTON_ON : S_BUTTON, bw = w - 2, tw;
-      if (button_kind() == 1) snprintf(t, sizeof(t), "\xEE\xAB\x83 Publish Branch");	/* codicon cloud-upload */
+      if (r->kind == R_ABORT) snprintf(t, sizeof(t), "\xEE\xA9\xB6 Abort Rebase");	/* codicon close */
+      else if (button_kind() == 3) snprintf(t, sizeof(t), "\xEE\xAA\xB2 Continue");	/* codicon check */
+      else if (button_kind() == 1) snprintf(t, sizeof(t), "\xEE\xAB\x83 Publish Branch");	/* codicon cloud-upload */
       else snprintf(t, sizeof(t), "\xEE\xA9\xB7 Sync Changes %s", git_sync_text());	/* codicon sync */
       scr_fill(x, sy, w, S_SIDE);
       scr_fill(x + 1, sy, bw, bst);
@@ -652,7 +1050,7 @@ void git_draw (int x, int y, int w, int h, int focus) {
       scr_put(x + w - 2, sy, (uint32_t)l, st == S_SIDE ? git_letter_style(l) : st);
     }
   }
-  side_bar(x, y + HEAD, w, g_h, g_nrow, g_top_row, (size_t)g_h);
+  side_bar(x, y + 3, w, g_h, g_nrow, g_top_row, (size_t)g_h);
 }
 
 
@@ -663,6 +1061,10 @@ int git_commit (int amend) {
   Buf b;
   int r;
   if (!amend) {
+    if (g_state == GS_REBASING) {	/* VS Code: Commit is Continue while a rebase waits */
+      git_rebase_continue();
+      return 1;
+    }
     if (g_msg[0] == '\0') {
       g_sel = 0;	/* type the message first */
       toast(0, "Please provide a commit message (Ctrl+Enter commits)");
@@ -695,6 +1097,10 @@ static void commit (void) {
   Buf b;
   size_t i, staged = 0;
   int r;
+  if (g_state == GS_REBASING) {
+    git_rebase_continue();
+    return;
+  }
   for (i = 0; i < g_nch; i++) staged += is_staged(&g_ch[i]);
   if (g_msg[0] == '\0') {
     toast(1, "Please provide a commit message.");
@@ -782,9 +1188,13 @@ static int graph_row (size_t k, int go, SideAct *act) {
 static void open_row (size_t k, int go, SideAct *act) {
   const GRow *r = &g_row[k];
   if (graph_row(k, go, act)) return;
-  if (r->kind == R_BUTTON) {
+  if (r->kind == R_BUTTON && button_kind() == 3) {	/* Continue: the rebase goes on */
+    git_rebase_continue();
+    return;
+  }
+  if (r->kind == R_BUTTON || r->kind == R_ABORT) {
     act->what = SA_CMD;
-    act->cmd = button_kind() == 1 ? CMD_GIT_PUBLISH : CMD_GIT_SYNC;
+    act->cmd = r->kind == R_ABORT ? CMD_GIT_REBASE_ABORT : button_kind() == 1 ? CMD_GIT_PUBLISH : CMD_GIT_SYNC;
     return;
   }
   if (r->kind == R_MERGE) {	/* a conflicted file: the file itself, with its markers */
@@ -800,11 +1210,30 @@ static void open_row (size_t k, int go, SideAct *act) {
 }
 
 
+static void git_menu_at (size_t k, int x, int y, SideAct *act);
+
 int git_key (int k, SideAct *act) {
   int code = KEY_CODE(k);
   size_t len = strlen(g_msg);
   if (code == K_F5) {
-    git_refresh();
+    git_rescan();
+    return 1;
+  }
+  if (g_rfocus >= 0) {	/* SOURCE CONTROL REPOSITORIES: Enter selects one */
+    if (code == K_UP && g_rfocus > 0) g_rfocus--;
+    else if (code == K_DOWN) {
+      if (g_rfocus + 1 < g_nrepo) g_rfocus++;
+      else g_rfocus = -1, g_sel = 0;
+    }
+    else if (code == K_ENTER || code == ' ') git_select_repo(g_rfocus);
+    else if (code != K_UP) return 0;
+    return 1;
+  }
+  if (code == K_UP && g_sel == 0 && repo_rows() > 1) {	/* over the message box: the repositories */
+    int i;
+    g_rfocus = g_nrepo - 1;
+    for (i = 0; g_top && i < g_nrepo; i++)
+      if (m_fncmp(g_repo[i].top, g_top) == 0) g_rfocus = i;
     return 1;
   }
   if (g_top == NULL && !g_nogit) {	/* the two buttons */
@@ -880,6 +1309,13 @@ int git_key (int k, SideAct *act) {
       case 'u': case '-':	/* and its - button */
         if (c && r->kind == R_STAGED) stage(c, 0);
         return 1;
+      case K_F10:	/* Shift+F10: the row's menu (a commit's: VS Code's graph menu) */
+        if (k & KM_SHIFT) {
+          int y = g_vy + head_rows() + (int)(g_sel - 1 - g_top_row);
+          git_menu_at(g_sel - 1, g_vx + 4, y + 1, act);
+          return 1;
+        }
+        return 0;
       case 'o':	/* Open File */
         if (c && c->y != 'D') {
           act->what = SA_GO;
@@ -912,22 +1348,61 @@ void git_click (int row, int col, SideAct *act) {
       act->what = SA_CMD;
       act->cmd = CMD_GIT_COMMIT;
     }
-    else if (col == w - 5) git_refresh();
+    else if (col == w - 5) git_rescan();
     else if (col == w - 3) {
       act->what = SA_CMD;
       act->cmd = CMD_GIT_MORE;
     }
     return;
   }
-  if (row == 2) {
+  if (repo_rows() > 0 && row == 1) {	/* SOURCE CONTROL REPOSITORIES: its title folds it */
+    g_repos_open = !g_repos_open;
+    return;
+  }
+  if (repo_rows() > 1 && row >= 2 && row < 1 + repo_rows()) {	/* a repository: selected */
+    g_rfocus = row - 2;
+    git_select_repo(row - 2);
+    return;
+  }
+  g_rfocus = -1;
+  if (row == head_rows() - 1) {
     g_sel = 0;
     return;
   }
-  if (row < HEAD) return;
-  k = g_top_row + (size_t)(row - HEAD);
+  if (row < head_rows()) return;
+  k = g_top_row + (size_t)(row - head_rows());
   if (k >= g_nrow) return;
   g_sel = k + 1;
   open_row(k, 0, act);
+}
+
+
+/*
+** A row's menu at x, y (the right button, or Shift+F10): a commit of the
+** GRAPH gets VS Code's Source Control Graph menu
+*/
+static void git_menu_at (size_t k, int x, int y, SideAct *act) {
+  static const char *const label[] = {"Checkout (Detached)", NULL, "Create Branch...", "Create Tag...",
+                                      "Cherry Pick", NULL, "Copy Commit ID", "Copy Commit Message"};
+  static const int what[] = {GA_CHECKOUT, -1, GA_BRANCH, GA_TAG, GA_CHERRY_PICK, -1, GA_COPY_ID, GA_COPY_MESSAGE};
+  int flags[8], i, r;
+  if (k >= g_nrow || g_row[k].kind != R_COMMIT) return;
+  for (i = 0; i < 8; i++) flags[i] = label[i] ? 0 : MF_LINE;
+  r = popup_list(x, y, label, flags, 8);
+  if (r >= 0 && what[r] >= 0) git_graph_action(what[r], g_row[k].ch, act);
+}
+
+
+/* the right button on row of the view (the screen's x, y for the menu) */
+void git_menu (int row, int x, int y, SideAct *act) {
+  size_t k;
+  act->what = SA_NONE;
+  if (g_top == NULL || row < head_rows()) return;
+  k = g_top_row + (size_t)(row - head_rows());
+  if (k >= g_nrow) return;
+  g_rfocus = -1;
+  g_sel = k + 1;
+  git_menu_at(k, x, y, act);
 }
 
 

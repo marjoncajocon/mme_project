@@ -34,13 +34,23 @@ static const uint32_t act_icon[VIEW_N] = {
 };
 
 
+/* the activity bar's place of view v (Search moved into the panel has none: the ones under it go up); -1 none */
+static int act_slot (int v) {
+  int k, slot = 0;
+  for (k = 0; k < v; k++)
+    if (!(k == VIEW_SEARCH && view_in_panel(MV_SEARCH))) slot++;
+  if ((v == VIEW_TREE && tree_count() == 0) || (v == VIEW_SEARCH && view_in_panel(MV_SEARCH))) return -1;
+  return slot;
+}
+
+
 void act_draw (int x, int y, int h, int view, int shown) {
   int v, i;
   for (i = 0; i < h; i++) scr_fill(x, y + i, ACT_W, S_ACT);
   for (v = 0; v < VIEW_N; v++) {
-    int row = y + 1 + v * 2, on = shown && v == view;
+    int row = y + 1 + act_slot(v) * 2, on = shown && v == view;
+    if (act_slot(v) < 0) continue;
     if (row >= y + h) break;
-    if (v == VIEW_TREE && tree_count() == 0) continue;
     if (on) scr_put(opt.side_right ? x + ACT_W - 1 : x, row, 0x258E, S_ACT_BAR);	/* the bar on the side of the editor */
     scr_put(x + 1, row, act_icon[v], on ? S_ACT_ON : S_ACT);
     if (row + 1 < y + h) {	/* VS Code's badge: a number at the icon's foot, white on blue */
@@ -68,9 +78,11 @@ int act_manage_row (int y, int h) {
 
 
 int act_hit (int y) {
-  int v = (y - 1) / 2;
-  if (y < 1 || v >= VIEW_N || (v == VIEW_TREE && tree_count() == 0)) return -1;
-  return v;
+  int v;
+  if (y < 1) return -1;
+  for (v = 0; v < VIEW_N; v++)
+    if (act_slot(v) >= 0 && act_slot(v) == (y - 1) / 2) return v;
+  return -1;
 }
 
 /* }================================================================== */
@@ -1980,8 +1992,10 @@ void files_menu (int row, int x, int y, SideAct *act) {
   if (g_nvis) {
     ITEM(M_DUP, "Duplicate", "");
     LINE();
-    if (!g_vis[g_sel]->dir) {	/* VS Code's compare, for files */
-      if (compare_selected()) ITEM(M_CMP_SEL, "Compare with Selected", "");
+    {	/* VS Code's compare, for files; two folders: Compare Folders */
+      const char *cs = compare_selected();
+      OsStat st;
+      if (cs && os_stat(cs, &st) == 0 && !st.is_dir == !g_vis[g_sel]->dir) ITEM(M_CMP_SEL, "Compare with Selected", "");
       ITEM(M_SEL_CMP, "Select for Compare", "");
       LINE();
     }
@@ -2031,6 +2045,82 @@ void files_wheel (int d) {
     g_top += st;
     if (g_top > g_nvis - h) g_top = g_nvis - h;
   }
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
+** Where the views are (View: Move View, Move To Panel, Reset Location):
+** Search, Outline and Timeline go into the panel as tabs of their own
+** and back; mme-data/view-locations.json remembers it, by VS Code's ids
+** ("workbench.view.search": "panel")
+** ===================================================================
+*/
+
+static const char *const mv_id[MV_N] = {"workbench.view.search", "outline", "timeline"};
+static const char *const mv_title[MV_N] = {"SEARCH", "OUTLINE", "TIMELINE"};
+static int g_mv[MV_N];	/* 1: in the panel */
+static int g_mv_read;
+
+
+static void mv_read (void) {
+  char *f = data_path("view-locations.json"), *s;
+  size_t n = 0;
+  int v;
+  g_mv_read = 1;
+  s = read_file(f, &n);
+  free(f);
+  if (s) {
+    Json *j = json_parse(s, n);
+    for (v = 0; j && v < MV_N; v++) {
+      const Json *e = NULL;
+      size_t i;
+      for (i = 0; j->type == J_OBJ && i < j->n; i++)
+        if (j->kid[i]->key && strcmp(j->kid[i]->key, mv_id[v]) == 0) e = j->kid[i];
+      g_mv[v] = e && e->type == J_STR && strcmp(e->str, "panel") == 0;
+    }
+    json_free(j);
+    free(s);
+  }
+}
+
+
+int view_in_panel (int v) {
+  if (!g_mv_read) mv_read();
+  return v >= 0 && v < MV_N && g_mv[v];
+}
+
+
+const char *view_title (int v) {
+  return v >= 0 && v < MV_N ? mv_title[v] : "";
+}
+
+
+/* view v into the panel (1) or back where it was (0), remembered */
+void view_set_panel (int v, int panel) {
+  char *f;
+  Buf b;
+  int k, fd, any = 0;
+  if (!g_mv_read) mv_read();
+  if (v < 0 || v >= MV_N) return;
+  g_mv[v] = panel != 0;
+  buf_init(&b);
+  buf_puts(&b, "{");
+  for (k = 0; k < MV_N; k++)
+    if (g_mv[k]) {
+      buf_printf(&b, "%s\n  \"%s\": \"panel\"", any ? "," : "", mv_id[k]);
+      any = 1;
+    }
+  buf_puts(&b, any ? "\n}\n" : "}\n");
+  f = data_path("view-locations.json");
+  if ((fd = os_open(f, OS_WRITE)) >= 0) {
+    os_write(fd, b.s, b.len);
+    os_close(fd);
+  }
+  free(f);
+  buf_free(&b);
 }
 
 /* }================================================================== */

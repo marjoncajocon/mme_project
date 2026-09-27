@@ -14,6 +14,16 @@
 **
 ** It syncs when turned on, at start, a moment after one of the files is
 ** saved (or a setting changed in the Settings editor), and on Sync Now.
+**
+** Three of the gist's files are not files here but made from mme's state,
+** as VS Code's: extensions.json (the extensions installed, each one's
+** disabled and run: mme.extensions.disabled, mme.extensions.run; one only
+** on another machine is kept in the list, mme installing from a .vsix
+** only), globalState.json (the UI state: the Command Palette's recently
+** used commands) and profiles.json (the profiles' names). Taken from
+** GitHub, they are applied. "Settings Sync: Configure..." ticks what is
+** synced (mme-data/sync/disabled lists what is not); an older mme leaves
+** the files it does not know alone.
 */
 
 #include "mme.h"
@@ -32,6 +42,7 @@ typedef struct {
   char *l, *r, *bl, *br;	/* here, on GitHub, and their bases; NULL: not there */
   size_t ll, rl, bll, brl;
   int act;	/* A_* */
+  int off;	/* its kind is not synced (Configure...) */
 } Item;
 
 enum { A_NONE, A_PULL, A_PUSH, A_SKIP };
@@ -44,7 +55,7 @@ static struct {
   char gist[64];
   Item *it;
   int n;
-  int pulled;	/* what was written here: 1 settings, 2 keybindings, 4 snippets */
+  int pulled;	/* what was written here: 1 settings, 2 keybindings, 4 snippets, 8 state to apply */
   int npull, npush;	/* files taken from GitHub, sent to it */
   int conflicts;	/* left for Sync Now */
 } S;
@@ -158,6 +169,402 @@ static int is_snippets (const char *f) {
 
 /*
 ** {==================================================================
+** What is synced: VS Code's kinds of data, and the ones made from state
+** ===================================================================
+*/
+
+static const struct {
+  const char *id, *label;	/* VS Code's SyncResource, and its name in Configure... */
+} res[] = {
+  {"settings", "Settings"}, {"keybindings", "Keyboard Shortcuts"}, {"snippets", "Snippets"},
+  {"extensions", "Extensions"}, {"globalState", "UI State"}, {"profiles", "Profiles"}
+};
+#define NRES	6
+enum { R_SETTINGS, R_KEYS, R_SNIPPETS, R_EXT, R_STATE, R_PROFILES };
+
+#define MRU	"commandPalette.recentlyUsed"	/* globalState.json's key of the recently used commands */
+
+
+/* the kind a gist's file is, -1: none mme syncs */
+static int res_of (const char *name) {
+  static const char *const made[] = {"extensions.json", "globalState.json", "profiles.json"};
+  int i;
+  if (strcmp(name, "settings.json") == 0) return R_SETTINGS;
+  if (strcmp(name, "keybindings.json") == 0) return R_KEYS;
+  if (strncmp(name, "snippets.", 9) == 0) return R_SNIPPETS;
+  for (i = 0; i < 3; i++)
+    if (strcmp(name, made[i]) == 0) return R_EXT + i;
+  return -1;
+}
+
+
+/* mme-data/sync/disabled: the kinds not synced, one a line */
+static int res_on (int r) {
+  char *f = state_path("disabled", 0), *s, *p;
+  size_t n, k;
+  int on = 1;
+  if (r < 0) return 0;
+  if ((s = read_file(f, &n)) != NULL) {
+    k = strlen(res[r].id);
+    for (p = s; *p;) {
+      size_t len = strcspn(p, "\r\n");
+      if (len == k && strncmp(p, res[r].id, k) == 0) on = 0;
+      p += len;
+      while (*p == '\r' || *p == '\n') p++;
+    }
+    free(s);
+  }
+  free(f);
+  return on;
+}
+
+
+/* a gist's file this mme syncs (made from state, or a file here) */
+static int known (const char *name) {
+  char *f;
+  if (res_of(name) >= R_EXT) return 1;
+  if ((f = local_path(name)) == NULL) return 0;
+  free(f);
+  return 1;
+}
+
+
+static int in_vec (const Vec *v, const char *s) {
+  size_t i;
+  for (i = 0; i < v->n; i++)
+    if (m_stricmp(v->v[i], s) == 0) return 1;
+  return 0;
+}
+
+
+/* a list of settings.json (the user's own, "mme.extensions.run"): its ids, lower case */
+static void id_list (const char *key, Vec *v) {
+  const Json *l = settings_value(key);
+  size_t i;
+  vec_init(v);
+  for (i = 0; l && l->type == J_ARR && i < l->n; i++) {
+    char *s = xstrdup(json_str(l->kid[i], "")), *c;
+    for (c = s; *c; c++)
+      if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
+    if (*s && !in_vec(v, s)) vec_push(v, s);
+    else free(s);
+  }
+}
+
+
+static int installed (const char *id) {
+  size_t i;
+  for (i = 0; i < ext_count(); i++)
+    if (m_stricmp(ext_id_at(i), id) == 0) return 1;
+  return 0;
+}
+
+
+static const char *ext_id_of (const Json *e) {
+  return json_str(json_get(json_get(e, "identifier"), "id"), "");
+}
+
+
+/*
+** extensions.json, VS Code's list: each extension installed, and each one
+** the lists name, with its disabled and run; one only on another machine
+** (in the last list synced, not here) stays as it was there
+*/
+static char *make_extensions (size_t *n) {
+  Vec ids, run, off;
+  char *bf, *bs;
+  size_t i, bn;
+  Json *base = NULL;
+  Buf b;
+  vec_init(&ids);
+  id_list("mme.extensions.run", &run);
+  id_list("mme.extensions.disabled", &off);
+  for (i = 0; i < ext_count(); i++)
+    if (!in_vec(&ids, ext_id_at(i))) vec_push(&ids, xstrdup(ext_id_at(i)));
+  for (i = 0; i < run.n; i++)
+    if (!in_vec(&ids, run.v[i])) vec_push(&ids, xstrdup(run.v[i]));
+  for (i = 0; i < off.n; i++)
+    if (!in_vec(&ids, off.v[i])) vec_push(&ids, xstrdup(off.v[i]));
+  bf = state_path("extensions.json.l", 1);
+  if ((bs = get_file(bf, &bn)) != NULL) base = json_parse(bs, bn);
+  for (i = 0; base && base->type == J_ARR && i < base->n; i++)
+    if (*ext_id_of(base->kid[i]) && !in_vec(&ids, ext_id_of(base->kid[i]))) vec_push(&ids, xstrdup(ext_id_of(base->kid[i])));
+  vec_sort(&ids);
+  buf_init(&b);
+  buf_puts(&b, "[\n");
+  for (i = 0; i < ids.n; i++) {	/* none: no file (an empty list is not sent) */
+    int dis = in_vec(&off, ids.v[i]), rn = in_vec(&run, ids.v[i]);
+    if (!installed(ids.v[i]) && !dis && !rn) {	/* another machine's: as it was */
+      size_t k;
+      for (k = 0; base && base->type == J_ARR && k < base->n; k++)
+        if (m_stricmp(ext_id_of(base->kid[k]), ids.v[i]) == 0) {
+          dis = json_bool(json_get(base->kid[k], "disabled"), 0);
+          rn = json_bool(json_get(base->kid[k], "run"), 0);
+        }
+    }
+    buf_puts(&b, "  {\"identifier\": {\"id\": ");
+    json_put_str(&b, ids.v[i], strlen(ids.v[i]));
+    buf_printf(&b, "}, \"disabled\": %s, \"run\": %s}%s\n", dis ? "true" : "false", rn ? "true" : "false",
+               i + 1 < ids.n ? "," : "");
+  }
+  buf_puts(&b, "]\n");
+  json_free(base);
+  free(bs);
+  free(bf);
+  vec_free(&run);
+  vec_free(&off);
+  *n = b.len;
+  buf_putc(&b, '\0');
+  if (ids.n == 0) {
+    buf_free(&b);
+    vec_free(&ids);
+    return NULL;
+  }
+  vec_free(&ids);
+  return b.s;
+}
+
+
+/* key set to the ids (sorted) when it does not hold the same ones; 1 when it changed */
+static int put_ids (const char *key, Vec *want) {
+  Vec now;
+  size_t i;
+  int same;
+  Buf b;
+  id_list(key, &now);
+  same = now.n == want->n;
+  for (i = 0; same && i < want->n; i++) same = in_vec(&now, want->v[i]);
+  vec_free(&now);
+  if (same) return 0;
+  vec_sort(want);
+  buf_init(&b);
+  buf_putc(&b, '[');
+  for (i = 0; i < want->n; i++) {
+    buf_puts(&b, i ? ", " : "");
+    json_put_str(&b, want->v[i], strlen(want->v[i]));
+  }
+  buf_puts(&b, "]");
+  buf_putc(&b, '\0');
+  settings_put_json(key, b.s);
+  buf_free(&b);
+  return 1;
+}
+
+
+/* extensions.json from GitHub: the lists as it says; the extensions not here said */
+static void apply_extensions (const char *s, size_t n) {
+  Json *j = json_parse(s, n);
+  Vec run, off, miss;
+  size_t i;
+  if (j == NULL || j->type != J_ARR) {
+    json_free(j);
+    return;
+  }
+  vec_init(&run);
+  vec_init(&off);
+  vec_init(&miss);
+  for (i = 0; i < j->n; i++) {
+    const char *id = ext_id_of(j->kid[i]);
+    if (!*id) continue;
+    if (json_bool(json_get(j->kid[i], "run"), 0)) vec_push(&run, xstrdup(id));
+    if (json_bool(json_get(j->kid[i], "disabled"), 0)) vec_push(&off, xstrdup(id));
+    if (!installed(id)) vec_push(&miss, xstrdup(id));
+  }
+  if (put_ids("mme.extensions.run", &run) | put_ids("mme.extensions.disabled", &off)) mme_settings_changed();
+  if (miss.n) {
+    Buf b;
+    buf_init(&b);
+    for (i = 0; i < miss.n; i++) buf_printf(&b, "%s%s", i ? ", " : "", miss.v[i]);
+    buf_putc(&b, '\0');
+    out_log("Settings Sync", "extensions installed on another machine, not here: %s", b.s);
+    toast(0, "Settings Sync: %d extension%s of another machine %s not installed here (Install from VSIX...): %.200s",
+          (int)miss.n, miss.n == 1 ? "" : "s", miss.n == 1 ? "is" : "are", b.s);
+    buf_free(&b);
+  }
+  vec_free(&run);
+  vec_free(&off);
+  vec_free(&miss);
+  json_free(j);
+}
+
+
+/* the recently used commands (mme-data/commands, the last first) */
+static void mru_read (Vec *v) {
+  char *f = data_path("commands"), *s, *p;
+  size_t n;
+  vec_init(v);
+  if ((s = read_file(f, &n)) != NULL) {
+    for (p = s; *p;) {
+      size_t len = strcspn(p, "\r\n");
+      if (len) vec_push(v, xstrndup(p, len));
+      p += len;
+      while (*p == '\r' || *p == '\n') p++;
+    }
+    free(s);
+  }
+  free(f);
+}
+
+
+/* globalState.json: VS Code's UI state; mme's is the Command Palette's recently used */
+static char *state_text (const Vec *v, size_t *n) {
+  Buf b;
+  size_t i;
+  buf_init(&b);
+  buf_puts(&b, "{\n  \"storage\": {\n    \"" MRU "\": [");
+  for (i = 0; i < v->n; i++) {
+    buf_puts(&b, i ? ", " : "");
+    json_put_str(&b, v->v[i], strlen(v->v[i]));
+  }
+  buf_puts(&b, "]\n  }\n}\n");
+  *n = b.len;
+  buf_putc(&b, '\0');
+  return b.s;
+}
+
+
+static char *make_state (size_t *n) {
+  Vec v;
+  char *s = NULL;
+  mru_read(&v);
+  if (v.n) s = state_text(&v, n);
+  vec_free(&v);
+  return s;
+}
+
+
+/* the ids of a globalState.json */
+static void state_ids (const char *s, size_t n, Vec *v) {
+  Json *j = s ? json_parse(s, n) : NULL;
+  const Json *l = json_get(j, "storage");
+  size_t i;
+  vec_init(v);
+  if (l) {
+    size_t k;
+    for (k = 0; k < l->n; k++)	/* the key has a dot: not a path json_get takes */
+      if (l->kid[k]->key && strcmp(l->kid[k]->key, MRU) == 0) break;
+    l = k < l->n ? l->kid[k] : NULL;
+  }
+  for (i = 0; l && l->type == J_ARR && i < l->n; i++)
+    if (*json_str(l->kid[i], "") && !in_vec(v, json_str(l->kid[i], ""))) vec_push(v, xstrdup(json_str(l->kid[i], "")));
+  json_free(j);
+}
+
+
+static void apply_state (const char *s, size_t n) {
+  Vec v;
+  Buf b;
+  size_t i;
+  char *f = data_path("commands");
+  state_ids(s, n, &v);
+  buf_init(&b);
+  for (i = 0; i < v.n; i++) buf_printf(&b, "%s\n", v.v[i]);
+  put_file(f, b.s ? b.s : "", b.len);
+  buf_free(&b);
+  free(f);
+  vec_free(&v);
+  palette_used_reload();
+}
+
+
+/* both machines used the palette: the lists merged (this one's first), not a conflict */
+static void merge_state (Item *it) {
+  Vec a, b;
+  size_t i;
+  state_ids(it->l, it->ll, &a);
+  state_ids(it->r, it->rl, &b);
+  for (i = 0; i < b.n && a.n < 50; i++)
+    if (!in_vec(&a, b.v[i])) vec_push(&a, xstrdup(b.v[i]));
+  free(it->l);
+  it->l = state_text(&a, &it->ll);
+  apply_state(it->l, it->ll);
+  vec_free(&a);
+  vec_free(&b);
+}
+
+
+/* profiles.json: the profiles' names (Default is not one) */
+static char *make_profiles (size_t *n) {
+  const Vec *p = profiles();
+  Vec v;
+  Buf b;
+  size_t i;
+  vec_init(&v);
+  for (i = 0; i < p->n; i++) vec_push(&v, xstrdup(p->v[i]));
+  vec_sort(&v);
+  buf_init(&b);
+  buf_puts(&b, "[\n");
+  for (i = 0; i < v.n; i++) {
+    buf_puts(&b, "  {\"name\": ");
+    json_put_str(&b, v.v[i], strlen(v.v[i]));
+    buf_printf(&b, "}%s\n", i + 1 < v.n ? "," : "");
+  }
+  buf_puts(&b, "]\n");
+  *n = b.len;
+  buf_putc(&b, '\0');
+  if (v.n == 0) buf_free(&b);
+  vec_free(&v);
+  return b.s;
+}
+
+
+/* the profiles as GitHub has them: the new ones made (empty), the ones deleted there deleted (not the one in use) */
+static void apply_profiles (const char *s, size_t n) {
+  Json *j = json_parse(s, n);
+  Vec want, have;
+  size_t i;
+  if (j == NULL || j->type != J_ARR) {
+    json_free(j);
+    return;
+  }
+  vec_init(&want);
+  for (i = 0; i < j->n; i++)
+    if (*json_str(json_get(j->kid[i], "name"), "")) vec_push(&want, xstrdup(json_str(json_get(j->kid[i], "name"), "")));
+  json_free(j);
+  vec_init(&have);
+  for (i = 0; i < profiles()->n; i++) vec_push(&have, xstrdup(profiles()->v[i]));
+  for (i = 0; i < want.n; i++)
+    if (!in_vec(&have, want.v[i]) && profile_create(want.v[i], 0) == 0)
+      out_log("Settings Sync", "profile '%s' made (from another machine)", want.v[i]);
+  for (i = 0; i < have.n; i++)
+    if (!in_vec(&want, have.v[i]) && strcmp(have.v[i], profile_name()) != 0 && profile_delete(have.v[i]) == 0)
+      out_log("Settings Sync", "profile '%s' deleted (as on another machine)", have.v[i]);
+  vec_free(&want);
+  vec_free(&have);
+}
+
+
+/* a gist's file as it is here: the file, or made from the state */
+static char *local_get (const char *name, size_t *n) {
+  char *f, *s;
+  switch (res_of(name)) {
+    case R_EXT: return make_extensions(n);
+    case R_STATE: return make_state(n);
+    case R_PROFILES: return make_profiles(n);
+  }
+  if ((f = local_path(name)) == NULL) return NULL;
+  s = get_file(f, n);
+  free(f);
+  return s;
+}
+
+
+/* one made from the state, taken from GitHub: applied */
+static void apply (const Item *it) {
+  const char *r = it->r ? it->r : "[]";	/* gone from GitHub: none there */
+  size_t rl = it->r ? it->rl : 2;
+  switch (res_of(it->name)) {
+    case R_EXT: apply_extensions(r, rl); break;
+    case R_STATE: if (it->r) apply_state(r, rl); break;
+    case R_PROFILES: apply_profiles(r, rl); break;
+  }
+}
+
+/* }================================================================== */
+
+
+/*
+** {==================================================================
 ** Merging
 ** ===================================================================
 */
@@ -196,12 +603,13 @@ static int same (const char *a, size_t an, const char *b, size_t bn) {
 
 /* every file: here (the synced ones there are), on GitHub (files: the gist's, or NULL), and the bases */
 static void gather (const Json *files) {
-  static const char *const fixed[] = {"settings.json", "keybindings.json"};
+  static const char *const fixed[] = {"settings.json", "keybindings.json", "extensions.json", "globalState.json",
+                                      "profiles.json"};
   char *d, *f;
   Vec v;
   size_t i;
   items_free();
-  for (i = 0; i < 2; i++) item(fixed[i]);
+  for (i = 0; i < 5; i++) item(fixed[i]);
   if ((d = snip_dir()) != NULL) {
     vec_init(&v);
     if (os_listdir(d, &v) == 0) {
@@ -218,9 +626,7 @@ static void gather (const Json *files) {
   }
   for (i = 0; files && i < files->n; i++) {
     const Json *k = files->kid[i];
-    char *lp = local_path(k->key);
-    if (lp == NULL) continue;	/* not a file mme syncs */
-    free(lp);
+    if (!known(k->key)) continue;	/* not a file mme syncs */
     item(k->key)->r = NULL;
   }
   d = state_path("", 1);
@@ -231,10 +637,7 @@ static void gather (const Json *files) {
       if (n > 2 && strcmp(v.v[i] + n - 2, ".l") == 0) {
         char name[300];
         snprintf(name, sizeof(name), "%.*s", (int)(n - 2), v.v[i]);
-        if ((f = local_path(name)) != NULL) {
-          free(f);
-          item(name);
-        }
+        if (known(name)) item(name);
       }
     }
   }
@@ -243,9 +646,10 @@ static void gather (const Json *files) {
   for (i = 0; i < (size_t)S.n; i++) {
     Item *it = &S.it[i];
     char b[320];
-    if ((f = local_path(it->name)) != NULL) {
-      it->l = get_file(f, &it->ll);
-      free(f);
+    if (!res_on(res_of(it->name))) {	/* not synced: left as it is, here and there */
+      it->off = 1;
+      it->act = A_SKIP;
+      continue;
     }
     snprintf(b, sizeof(b), "%s.l", it->name);
     f = state_path(b, 1);
@@ -255,6 +659,7 @@ static void gather (const Json *files) {
     f = state_path(b, 1);
     it->br = get_file(f, &it->brl);
     free(f);
+    it->l = local_get(it->name, &it->ll);	/* after its base: extensions.json keeps another machine's from it */
     if (files) {
       size_t j;
       for (j = 0; j < files->n; j++) {
@@ -294,8 +699,14 @@ static void keep_base (Item *it, const char *l, size_t ll, const char *r, size_t
 
 /* GitHub's copy written here (NULL: the file goes; settings.json and keybindings.json never do) */
 static void pull (Item *it) {
-  char *f = local_path(it->name);
-  if (f == NULL) return;
+  char *f;
+  if (res_of(it->name) >= R_EXT) {	/* made from the state: applied once the files are in */
+    out_log("Settings Sync", "%s: updated from GitHub", it->name);
+    S.pulled |= 8;
+    S.npull += res_of(it->name) != R_STATE;	/* the UI state is not a file said to be applied */
+    return;
+  }
+  if ((f = local_path(it->name)) == NULL) return;
   if (it->r) put_file(f, it->r, it->rl);
   else if (strncmp(it->name, "snippets.", 9) == 0) os_unlink(f);
   free(f);
@@ -324,13 +735,21 @@ static int resolve (Item *it) {
 }
 
 
+/* both sides changed: the UI state is merged (as VS Code does, not asked about), the others resolved */
+static int conflict (Item *it) {
+  if (res_of(it->name) != R_STATE) return resolve(it);
+  merge_state(it);
+  return A_PUSH;
+}
+
+
 /*
 ** What each file needs, the pulls done; the pushes as the body of the
 ** request that makes (or updates) the gist, or NULL: nothing to send
 */
 static char *merge (void) {
   Buf b;
-  int i, pushes = 0;
+  int i, pushes = 0, nstate = 0;
   S.pulled = S.conflicts = S.npull = S.npush = 0;
   buf_init(&b);
   buf_puts(&b, "{\"description\": \"" DESC "\"");
@@ -342,12 +761,12 @@ static char *merge (void) {
     if (it->act == A_SKIP) continue;
     if (it->l == NULL && it->r == NULL) it->act = A_NONE;
     else if (it->bl == NULL && it->br == NULL)	/* never synced: the side that has it, or a question */
-      it->act = it->r == NULL ? A_PUSH : it->l == NULL ? A_PULL : same(it->l, it->ll, it->r, it->rl) ? A_NONE : resolve(it);
-    else if (lchg && rchg) it->act = same(it->l, it->ll, it->r, it->rl) ? A_NONE : resolve(it);
+      it->act = it->r == NULL ? A_PUSH : it->l == NULL ? A_PULL : same(it->l, it->ll, it->r, it->rl) ? A_NONE : conflict(it);
+    else if (lchg && rchg) it->act = same(it->l, it->ll, it->r, it->rl) ? A_NONE : conflict(it);
     else if (lchg) it->act = A_PUSH;
     else if (rchg) it->act = A_PULL;
     else it->act = A_NONE;
-    if (it->act == A_PULL && it->r == NULL && strncmp(it->name, "snippets.", 9) != 0)
+    if (it->act == A_PULL && it->r == NULL && strncmp(it->name, "snippets.", 9) != 0 && res_of(it->name) < R_EXT)
       it->act = it->l ? A_PUSH : A_NONE;	/* settings.json is not deleted here: GitHub gets it back */
     if (it->act == A_PULL) pull(it);
     if (it->act == A_PUSH) {
@@ -356,6 +775,7 @@ static char *merge (void) {
         continue;
       }
       buf_puts(&b, pushes++ ? ", " : "");
+      if (res_of(it->name) == R_STATE) nstate++;
       json_put_str(&b, it->name, strlen(it->name));
       if (it->l) {
         buf_puts(&b, ": {\"content\": ");
@@ -367,8 +787,10 @@ static char *merge (void) {
     }
   }
   buf_puts(&b, "}}");
-  S.npush = pushes;
-  if (S.pulled) user_files_changed(S.pulled & 1, S.pulled & 2, S.pulled & 4);
+  S.npush = pushes - nstate;	/* the files said to be sent: the UI state goes along unsaid */
+  if (S.pulled & 7) user_files_changed(S.pulled & 1, S.pulled & 2, S.pulled & 4);
+  for (i = 0; (S.pulled & 8) && i < S.n; i++)	/* after settings.json: extensions.json's lists go into it */
+    if (S.it[i].act == A_PULL && res_of(S.it[i].name) >= R_EXT) apply(&S.it[i]);
   if (pushes == 0) {
     buf_free(&b);
     return NULL;
@@ -398,6 +820,12 @@ static void commit (const Json *files) {
         rl = c->len;
       }
       keep_base(it, it->l, it->ll, it->l ? r : NULL, it->l ? rl : 0);
+    }
+    else if (it->act == A_PULL && res_of(it->name) >= R_EXT) {	/* applied: its base is what is made here now */
+      size_t n = 0;
+      char *l = local_get(it->name, &n);
+      keep_base(it, l, n, r, rl);
+      free(l);
     }
     else if (it->act == A_PULL) keep_base(it, r, rl, r, rl);
     else keep_base(it, it->l, it->ll, r, rl);
@@ -635,8 +1063,9 @@ static void show (void) {
     Item *it = &S.it[i];
     int lchg = !same(it->l, it->ll, it->bl, it->bll), rchg = !same(it->r, it->rl, it->br, it->brl);
     const char *state;
-    if (it->l == NULL && it->r == NULL) continue;
-    if (it->act == A_SKIP) state = "too big to sync";
+    if (it->l == NULL && it->r == NULL && !it->off) continue;
+    if (it->off) state = "not synced (Settings Sync: Configure...)";
+    else if (it->act == A_SKIP) state = "too big to sync";
     else if (same(it->l, it->ll, it->r, it->rl) || ((it->bl || it->br) && !lchg && !rchg)) state = "in sync";
     else if (it->r == NULL) state = "not on GitHub yet";
     else if (it->l == NULL) state = "not here yet";
@@ -646,11 +1075,52 @@ static void show (void) {
     else buf_printf(&md, "| %s | - | %s |\n", it->name, state);
   }
   items_free();
-  buf_puts(&md, "\nSynced: settings.json, keybindings.json and the snippets (of the profile in use).\n");
+  buf_puts(&md, "\nSynced:");
+  for (i = 0; i < NRES; i++)
+    if (res_on((int)i)) buf_printf(&md, " %s,", res[i].label);
+  if (md.s[md.len - 1] == ',') md.len--;
+  else buf_puts(&md, " nothing");
+  buf_puts(&md, " (settings, keyboard shortcuts and snippets: of the profile in use). "
+           "**Settings Sync: Configure...** chooses what.\n");
   md_page("sync", "Settings Sync.md", md.s);
   json_free(j);
   buf_free(&out);
   buf_free(&md);
+}
+
+
+/* Settings Sync: Configure...: VS Code's list of what to sync, each ticked or not ("Done" keeps them) */
+static void configure (void) {
+  int on[NRES], i, r, start = 0;
+  char *f;
+  Buf b;
+  for (i = 0; i < NRES; i++) on[i] = res_on(i);
+  for (;;) {
+    Pick p;
+    pick_init(&p, "Choose what to sync");
+    pick_add(&p, "Done", "sync the checked ones", 0xEAB2);	/* check */
+    for (i = 0; i < NRES; i++) pick_add(&p, res[i].label, NULL, on[i] ? 0xEAB2 : ' ');
+    p.keep_order = 1;
+    p.start = start;
+    r = pick_run(&p);
+    pick_free(&p);
+    if (r <= 0) break;
+    on[r - 1] = !on[r - 1];
+    start = r;
+  }
+  if (r < 0) return;
+  buf_init(&b);
+  for (i = 0; i < NRES; i++)
+    if (!on[i]) buf_printf(&b, "%s\n", res[i].id);
+  f = state_path("disabled", 0);
+  if (b.len) put_file(f, b.s, b.len);
+  else os_unlink(f);
+  free(f);
+  buf_free(&b);
+  out_log("Settings Sync", "configured: %s%s%s%s%s%s", on[0] ? "settings " : "", on[1] ? "keybindings " : "",
+          on[2] ? "snippets " : "", on[3] ? "extensions " : "", on[4] ? "globalState " : "", on[5] ? "profiles" : "");
+  toast(0, "Settings Sync: what is synced is saved.");
+  sync_changed();	/* synced a moment later, when it is on */
 }
 
 
@@ -732,6 +1202,7 @@ void sync_command (int cmd) {
       sync_wait(1);
       break;
     case CMD_SYNC_SHOW: show(); break;
+    case CMD_SYNC_CONFIGURE: configure(); break;
   }
 }
 

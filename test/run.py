@@ -122,7 +122,9 @@ class Scen(object):
     def __init__(self, name, target, steps, guards, settings=None, subs=None,
                  perf=False, private=False, stub_lsp=(), watch=(),
                  inline_lsp=None, fake_browser=False, stub_claude=None, stub_github=None, env=None,
-                 speech=False, exts=(), play_browser=False):
+                 speech=False, exts=(), play_browser=False, remote_indicator=False):
+        self.remote_indicator = remote_indicator  # the status bar's remote indicator (><) shown; the
+                                    # others hide it (mme-data/state/statusbar-hidden), their goldens predate it
         self.play_browser = play_browser  # the URLs mme opens (fake_browser's log) are loaded here as a
                                     # browser would: an extension's webview page, its script, and a message
                                     # posted back by its bridge ({"ready": true})
@@ -239,7 +241,28 @@ COLOUR_ROWS = crows(3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
 SE_NEW = ["w:1500", "k:" + CTRL_SHIFT_P, "w:400", "k:New Search Editor", "w:500", "k:|", "w:600"]
 CTRL_O = csiu("o", ctrl=True)
 CTRL_PGUP = "`[5;5~"
+
+
+def PALETTE(title):
+    """a command run from the Command Palette by its title"""
+    return ["k:" + CTRL_SHIFT_P, "w:400", "k:" + title, "w:500", "k:|", "w:500"]
+
+
+# stubdap.py as the debug adapter of launch.json's type "stub" (the debug-* scenarios)
+DBG_SETTINGS = {"mme.debugAdapters": {"stub": "python " + os.path.join(HERE, "stubdap.py").replace("\\", "/")}}
 F12 = "`[24~"
+
+# stublsp.py --f3 as the C server; a file of fix/lsp/f3 opened with Go to File; a command from the palette
+F3_LSP = {"mme.languageServers": {"*": "", "c": stub_cmd("--f3")}}
+
+
+def F3_OPEN(name):
+    return ["w:1500", "k:" + CTRL_P, "w:500", "k:" + name, "w:500", "k:|", "w:2000"]
+
+
+def F3_CMD(title):
+    return ["k:" + CTRL_SHIFT_P, "w:400", "k:" + title, "w:400", "k:|", "w:500"]
+
 
 SCENARIOS = [
     # ---------------------------------------------------------- plain editing
@@ -801,6 +824,75 @@ SCENARIOS = [
          settings={"mme.languageServers": {"*": "", "c": stub_cmd("--rename")}},
          private=True, watch=("renamer/util.h", "renamer/helper.h", "renamer/main.c")),
 
+    # ---- watched files, inlay hints with word wrap and inlayHint/resolve,
+    # Refactor..., the Refactor Preview, Emmet's commands (stublsp.py --f3)
+    Scen("lsp-watched-files", "lsp/f3",
+         F3_OPEN("util.h") + ["w:1500", "k:x", "k:" + CTRL_S, "w:2500", "d"] +
+         F3_OPEN("notes.txt") + ["k:y", "k:" + CTRL_S, "w:2500", "d"],
+         "a server that registered file watchers (client/registerCapability: **/*.h,\n"
+         "         and **/*.txt as a RelativePattern of the folder) is told of a file saved\n"
+         "         (workspace/didChangeWatchedFiles, type 2: changed), each echoed",
+         settings=F3_LSP, private=True),
+    Scen("lsp-inlay-hints-word-wrap", "lsp/f3/main.c",
+         ["w:3000", "k:" + ALT_Z, "w:1500", "d", "k:" + DOWN + DOWN + END, "w:500", "d"],
+         "with word wrap on the inlay hints are still drawn, and the rows are cut\n"
+         "         with their widths counted: the second row of the long line starts\n"
+         "         where it must, and End puts the cursor after its last character",
+         settings=F3_LSP, private=True),
+    Scen("lsp-inlay-hint-resolve", "lsp/f3/main.c",
+         ["w:3000", "k:`[<35;35;6M", "w:1500", "d",
+          "k:`[<0;35;6M`[<0;35;6m`[<0;35;6M`[<0;35;6m", "w:1500", "d"],
+         "the mouse resting on a parameter hint shows its tooltip, asked of the\n"
+         "         server (inlayHint/resolve); a double-click puts its textEdits in",
+         settings=F3_LSP, private=True),
+    Scen("lsp-refactor-menu", "lsp/f3",
+         F3_OPEN("main.c") + ["w:1500", "k:" + csiu("r", ctrl=True, shift=True), "w:1000", "d",
+                              "k:Extract to method", "k:|", "w:700", "d"],
+         "Refactor... (Ctrl+Shift+R) lists the server's refactor.* code actions grouped\n"
+         "         as VS Code does (Extract, Inline, Rewrite, Move), a disabled one with its\n"
+         "         reason; picking that one only says the reason",
+         settings=F3_LSP, private=True),
+    Scen("lsp-refactor-preview-rename", "lsp/f3",
+         F3_OPEN("main.c") + ["w:1500", "k:" + DOWN + DOWN + RIGHT * 12, "k:`OQ", "w:700",
+                              "k:count_all", "k:|", "w:1500", "d",
+                              "k:" + DOWN, "k:" + csiu(" "), "w:300", "d", "k:" + CTRL_ENTER, "w:1500", "d"],
+         "a rename that edits three files shows the Refactor Preview first: each file,\n"
+         "         its edits with what goes and what comes; Space unchecks one and Ctrl+Enter\n"
+         "         applies the rest - the unchecked occurrence stays count_items",
+         settings=F3_LSP, private=True),
+    Scen("lsp-refactor-preview-action", "lsp/f3",
+         F3_OPEN("main.c") + ["w:1500", "k:" + csiu("r", ctrl=True, shift=True), "w:1000",
+                              "k:Move to util", "k:|", "w:1000", "d", "k:" + ESC, "w:500", "d"],
+         "a code action whose edit touches two files (Move to util.c) is previewed;\n"
+         "         Esc discards it and nothing changes",
+         settings=F3_LSP, private=True),
+    Scen("editor-context-menu", "lsp/f3/main.c",
+         ["w:2500", "k:" + DOWN, "k:`[21;2~", "w:600", "d"],
+         "Shift+F10 in the text opens the editor's context menu, with Refactor... and\n"
+         "         Source Action... as in VS Code",
+         settings=F3_LSP, private=True),
+    Scen("emmet-wrap-lines", "lsp/f3",
+         F3_OPEN("page.html") + ["k:" + csiu("g", ctrl=True), "w:300", "k:8", "k:|", "w:300",
+                                 "k:" + SH_DOWN * 3] + F3_CMD("Emmet: Wrap with Abbreviation") +
+         ["k:ul>li*", "k:|", "w:1000", "d"],
+         "Emmet: Wrap with Abbreviation with ul>li* puts each selected line in an li of\n"
+         "         its own inside the ul, the newline after the selection kept",
+         private=True),
+    Scen("emmet-balance-and-tags", "lsp/f3",
+         F3_OPEN("page.html") + ["k:" + csiu("g", ctrl=True), "w:300", "k:5", "k:|", "w:300",
+                                 "k:" + END + LEFT * 11] +
+         F3_CMD("Emmet: Balance (outward)") + F3_CMD("Emmet: Balance (outward)") + ["d"] +
+         F3_CMD("Emmet: Balance (inward)") + ["d"] +
+         F3_CMD("Emmet: Update Tag") + ["k:strong", "k:|", "w:500", "d",
+                                        "k:" + csiu("g", ctrl=True), "w:300", "k:4", "k:|", "w:300",
+                                        "k:" + END + LEFT] +
+         F3_CMD("Emmet: Go to Matching Pair") + ["d"] + F3_CMD("Emmet: Remove Tag") + ["d"],
+         "Emmet: Balance (outward) grows the selection to the tag's content, then the\n"
+         "         element; (inward) shrinks it back; Update Tag renames both tags; Go to\n"
+         "         Matching Pair goes from <div> to </div>; Remove Tag takes the div's\n"
+         "         tags and their lines out and dedents what was in it",
+         private=True),
+
     # ------------------------------------------------------------------ panel
     Scen("lsp-inline-ghost", "lang/edit.c",
          ["w:3000", "k:" + DOWN * 11, "w:1500", "d"] + arows(14),
@@ -1253,6 +1345,23 @@ SCENARIOS = [
          ["w:1500", "k:" + CTRL_SHIFT_P, "k:ports: forward a port", "w:400", "k:\r", "w:800", "d"],
          "outside a Remote-SSH window, Forward a Port says where ports are forwarded"),
 
+    # ------------------------------------------------------------------ remotes: WSL, Dev Containers (eremote.c)
+    Scen("remote-indicator-menu", "lang/edit.c",
+         ["w:1500", "d", "k:" + CTRL_SHIFT_P, "k:remote: show remote menu", "w:400", "k:\r", "w:800", "d"],
+         "the status bar's remote indicator (><) at its left; Show Remote Menu lists Remote-SSH's, WSL's and "
+         "Dev Containers' ways to a remote window (no Remote Tunnels)",
+         remote_indicator=True),
+    Scen("remote-indicator-wsl", "lang/edit.c",
+         ["w:1500", "d", "k:" + CTRL_SHIFT_P, "k:remote: show remote menu", "w:400", "k:\r", "w:800", "d"],
+         "in a WSL window (MME_REMOTE=wsl+Ubuntu) the indicator says WSL: Ubuntu; its menu has Reopen Folder "
+         "in Windows and Close Remote Connection, not what opens windows here",
+         remote_indicator=True, env={"MME_REMOTE": "wsl+Ubuntu"}),
+    Scen("remote-devcontainer-palette", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_P, "k:dev containers", "w:400", "d"],
+         "in a dev container's window the palette has Rebuild Container and Reopen Folder Locally, not "
+         "Reopen in Container; the indicator says Dev Container: <name>",
+         remote_indicator=True, env={"MME_REMOTE": "dev-container+Proj C"}),
+
     # ------------------------------------------------------------------ settings sync
     # stubgithub.py plays GitHub's gists; it keeps a file without its last
     # line end, as GitHub may keep one other than it was sent
@@ -1409,6 +1518,73 @@ SCENARIOS = [
          ["w:1200", "c:29", "k:" + CTRL_SHIFT_P, "w:300", "k:Vim: Toggle Vim Mode",
           "w:400", "k:|", "w:400", "c:29", "k:dd", "w:300", "d"],
          "Vim is off by default; Vim: Toggle Vim Mode turns it on and dd deletes"),
+
+    # ------------------------------------------ high contrast, math, moving views
+    Scen("theme-high-contrast", "lang/edit.c",
+         ["w:2500", "d", "k:" + CTRL_SHIFT_P, "w:300", "k:Color Theme", "w:500", "d"],
+         "Dark High Contrast: black, white text, VS Code's hc-black colors; the\n"
+         "         outlines (contrastActiveBorder round the focused item of a list, the\n"
+         "         active tab) are an underline in their color in a terminal",
+         settings={"workbench.colorTheme": "Dark High Contrast"}),
+    Scen("theme-high-contrast-light", "lang/edit.c",
+         ["w:2500", "d"],
+         "Light High Contrast (VS Code's id Default High Contrast Light is taken too):\n"
+         "         white, dark text, hc-light's colors",
+         settings={"workbench.colorTheme": "Default High Contrast Light"}),
+    Scen("view-md-math-mermaid", "mdmath/math.md",
+         ["w:1000", "k:" + CTRL_SHIFT_V, "w:1500", "d", "k:" + PGDN, "w:600", "d"],
+         "the Markdown preview sets $math$ as text (x², aᵢ, α ≤ β, (a+b)/c, √), a\n"
+         "         $$ block centred, a mermaid flowchart (TD and LR) as boxes and arrows,\n"
+         "         the edge back up in words, and another diagram's code marked mermaid"),
+    Scen("view-move-search-panel", "proj",
+         ["w:1800", "k:" + CTRL_SHIFT_P, "w:300", "k:View: Move View", "w:400", "k:|", "w:400",
+          "k:Search", "w:300", "k:|", "w:400", "k:|", "w:800", "k:main", "w:1500", "d",
+          "k:" + CTRL_SHIFT_P, "w:300", "k:View: Reset View Locations", "w:400", "k:|", "w:600",
+          "k:" + CTRL_SHIFT_F, "w:800", "d"],
+         "View: Move View puts Search in the panel (a tab of its own, its icon gone\n"
+         "         from the activity bar, Ctrl+Shift+F and the search there); View: Reset\n"
+         "         View Locations puts it back in the side bar"),
+    # ------------------------------------------------ tasks.json and launch.json (fix/dbg, test/stubdap.py)
+    Scen("task-depends-inputs", "dbg",
+         ["w:1500"] + PALETTE("Run Task") + ["k:build", "w:400", "k:|", "w:700", "d", "k:|", "w:600", "d",
+                                              "k:" + BKSP * 5 + "Suite|", "w:4000", "d"],
+         "tasks.json's inputs are asked before the task runs (pickString with its default marked, promptString "
+         "with its default), its dependsOn run first one after the other, and its own problemMatcher (a regexp "
+         "and its groups) puts the warning it printed in PROBLEMS",
+         settings=DBG_SETTINGS),
+    Scen("debug-prelaunch-fails", "dbg",
+         ["w:1500"] + PALETTE("Select and Start Debugging") + ["k:fails", "k:|", "w:400"] +
+         PALETTE("Start Debugging") + ["w:4000", "d", "k:|", "w:3500", "d"],
+         "a preLaunchTask that exits 3 asks VS Code's question (Debug Anyway / Show Errors / Abort) before the "
+         "adapter starts; Debug Anyway starts the session, which stops on entry",
+         settings=DBG_SETTINGS),
+    Scen("debug-console-completions", "dbg",
+         ["w:1500"] + PALETTE("Start Debugging") + ["w:3500"] + PALETTE("Debug Console") +
+         ["k:cou", "w:1200", "d", "k:" + DOWN, "k:" + TAB, "w:400", "d", "k:|", "w:800", "d"],
+         "the DEBUG CONSOLE's suggestions are the adapter's completions for what is typed: a list over the input "
+         "(count, counter), Down and Tab take one, Enter evaluates it",
+         settings=DBG_SETTINGS),
+    Scen("debug-disassembly-memory", "dbg",
+         ["w:1500"] + PALETTE("Start Debugging") + ["w:3500"] + PALETTE("Open Disassembly View") +
+         ["w:1500", "d", "k:`[21~", "w:1500", "d"] + PALETTE("Run and Debug") +
+         ["k:" + DOWN * 3, "w:300", "k:`[21;2~", "w:600", "d", "k:" + DOWN * 3 + "|", "w:1500", "d"],
+         "Open Disassembly View shows the adapter's instructions around the paused one (marked, its source lines "
+         "between them); F10 there steps one instruction; a variable's View Binary Data is its memory "
+         "(readMemory) in the hex viewer, the offsets its addresses",
+         settings=DBG_SETTINGS,
+         subs=[(re.compile(r"\b[A-Za-z]: \S+ .*"), "<CRUMBS of mme-data/debug/Disassembly>")]),
+    Scen("debug-compound", "dbg",
+         ["w:1500"] + PALETTE("Select and Start Debugging") + ["w:300", "d", "k:Both", "k:|", "w:400"] +
+         PALETTE("Start Debugging") + ["w:4500", "d"] + PALETTE("Stop Debugging") + ["w:3000", "d"],
+         "launch.json's compounds are in the configuration picker; Both starts its two configurations at "
+         "once (CALL STACK shows each session), and its stopAll ends both when one is stopped; the second's "
+         "runInTerminal program runs in the terminal panel",
+         settings=DBG_SETTINGS),
+    Scen("ext-host-debug-named-pipe", "lang/plain.txt",
+         ["w:5000", "k:" + CTRL_SHIFT_P, "k:acme pipe: debug", "w:700", "k:" + ENTER, "w:4000", "d"],
+         "an extension's debug adapter on a named pipe (DebugAdapterNamedPipeServer) is joined to a port by the "
+         "host and mme talks to it as to its other adapters: its output is in the DEBUG CONSOLE",
+         exts=[("acme.pipe", "acme.pipe")]),
 ]
 
 
@@ -1507,6 +1683,10 @@ def prepare(scen, exe_src, extra=None):
     wipe(os.path.join(d, "mme-data"))
     wipe(os.path.join(d, "target"))
     os.makedirs(os.path.join(d, "mme-data"))
+    if not scen.remote_indicator:
+        os.makedirs(os.path.join(d, "mme-data", "state"))
+        io.open(os.path.join(d, "mme-data", "state", "statusbar-hidden"), "w", encoding="utf-8",
+                newline="\n").write("status.host\n")
     src = os.stat(exe_src)
     if not os.path.isfile(exe) or os.stat(exe).st_size != src.st_size             or os.stat(exe).st_mtime < src.st_mtime:
         wipe(exe)

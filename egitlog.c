@@ -860,6 +860,220 @@ static void merge_branch (void) {
 }
 
 
+/* a merge, a rebase, a cherry-pick that git stopped: its conflicts are in Merge Changes */
+static int conflicted (int r, Buf *b, const char *what) {
+  if (r == 0) return 0;
+  changed();
+  if (git_conflicts() == 0 && !git_rebasing()) return 0;
+  toast(1, "Git: There are merge conflicts. Resolve them before %s.", what);
+  buf_free(b);
+  return 1;
+}
+
+
+/* Git: Rebase Branch...: the branch rebased onto the one picked; a conflict leaves it Rebasing */
+static void rebase_branch (void) {
+  char *name = pick_ref("Select a branch to rebase onto", 3, git_branch()), msg[300];
+  Buf b;
+  int r;
+  if (name == NULL) return;
+  buf_init(&b);
+  snprintf(msg, sizeof(msg), "Rebased '%s' onto '%s'", git_branch(), name);
+  r = gitv(&b, 1, "-c", "core.editor=true", "rebase", name, NULL);
+  if (!conflicted(r, &b, "continuing the rebase")) report(r, &b, "Rebase failed", msg);
+  free(name);
+}
+
+
+/* the view's Continue (Git: Commit too, while rebasing): git rebase --continue, the commit's own message */
+void git_rebase_continue (void) {
+  Buf b;
+  int r;
+  if (!git_rebasing()) {
+    toast(0, "No rebase in progress.");
+    return;
+  }
+  if (git_conflicts()) {
+    toast(1, "Git: There are merge conflicts. Resolve them before continuing the rebase.");
+    return;
+  }
+  buf_init(&b);
+  r = gitv(&b, 1, "-c", "core.editor=true", "rebase", "--continue", NULL);
+  if (!conflicted(r, &b, "continuing the rebase")) report(r, &b, "Could not continue the rebase", "Rebase finished");
+}
+
+
+static void rebase_abort (void) {
+  Buf b;
+  if (!git_rebasing()) {
+    toast(0, "No rebase in progress.");
+    return;
+  }
+  buf_init(&b);
+  report(gitv(&b, 1, "rebase", "--abort", NULL), &b, "Could not abort the rebase", "Rebase aborted");
+}
+
+
+/* Git: Cherry Pick...: the commit (its hash typed, or the graph's) applied onto HEAD */
+static void cherry_pick (const char *hash) {
+  char *h = hash ? xstrdup(hash) : ask_text("Commit Hash", ""), msg[120];
+  Buf b;
+  int r;
+  if (h == NULL || h[0] == '\0') {
+    free(h);
+    return;
+  }
+  buf_init(&b);
+  snprintf(msg, sizeof(msg), "Cherry-picked %.7s", h);
+  r = gitv(&b, 1, "cherry-pick", h, NULL);
+  if (!conflicted(r, &b, "committing")) report(r, &b, "Cherry pick failed", msg);
+  free(h);
+}
+
+
+/* Git: Create Tag: its name, then a message (an annotated tag; none: a lightweight one); at: a commit, NULL HEAD */
+static void create_tag (const char *at) {
+  char *name = ask_branch("Please provide a tag name (Press 'Enter' to confirm or 'Escape' to cancel)", ""), *m, msg[300];
+  Buf b;
+  int r;
+  if (name == NULL) return;
+  m = ask_text("Please provide a message to annotate the tag (Press 'Enter' to confirm or 'Escape' to cancel)", "");
+  if (m == NULL) {
+    free(name);
+    return;
+  }
+  buf_init(&b);
+  if (m[0]) r = gitv(&b, 1, "tag", "-a", name, "-m", m, at, NULL);
+  else r = gitv(&b, 1, "tag", name, at, NULL);
+  snprintf(msg, sizeof(msg), "Created tag '%s'", name);
+  report(r, &b, "Could not create the tag", msg);
+  free(m);
+  free(name);
+}
+
+
+static void delete_tag (void) {
+  char *name = pick_ref("Select a tag to delete", 4, NULL), msg[300];
+  Buf b;
+  if (name == NULL) return;
+  buf_init(&b);
+  snprintf(msg, sizeof(msg), "Deleted tag '%s'", name);
+  report(gitv(&b, 1, "tag", "-d", name, NULL), &b, "Could not delete the tag", msg);
+  free(name);
+}
+
+
+/* the remotes' names; 0: none */
+static size_t remotes (Vec *v) {
+  Buf b;
+  const char *p;
+  vec_init(v);
+  buf_init(&b);
+  if (gitv(&b, 0, "remote", NULL) == 0)
+    for (p = b.s ? b.s : ""; *p;) {
+      size_t n = strcspn(p, "\r\n");
+      if (n) vec_push(v, xstrndup(p, n));
+      p += n;
+      while (*p == '\r' || *p == '\n') p++;
+    }
+  buf_free(&b);
+  return v->n;
+}
+
+
+/* Git: Add Remote...: its URL, then its name */
+static void add_remote (void) {
+  char *url = ask_text("Provide repository URL (Press 'Enter' to confirm or 'Escape' to cancel)", ""), *name, msg[300];
+  Vec v;
+  size_t i;
+  Buf b;
+  if (url == NULL || url[0] == '\0') {
+    free(url);
+    return;
+  }
+  name = ask_branch("Please provide a remote name (Press 'Enter' to confirm or 'Escape' to cancel)", "");
+  if (name == NULL) {
+    free(url);
+    return;
+  }
+  remotes(&v);
+  for (i = 0; i < v.n; i++)
+    if (strcmp(v.v[i], name) == 0) break;
+  if (i < v.n) toast(1, "Remote '%s' already exists.", name);
+  else {
+    buf_init(&b);
+    snprintf(msg, sizeof(msg), "Added remote '%s'", name);
+    report(gitv(&b, 1, "remote", "add", name, url, NULL), &b, "Could not add the remote", msg);
+  }
+  vec_free(&v);
+  free(name);
+  free(url);
+}
+
+
+static void remove_remote (void) {
+  Vec v;
+  Pick p;
+  size_t i;
+  int r;
+  Buf b;
+  char msg[300];
+  if (remotes(&v) == 0) {
+    toast(0, "Your repository has no remotes.");
+    vec_free(&v);
+    return;
+  }
+  pick_init(&p, "Pick a remote to remove");
+  for (i = 0; i < v.n; i++) pick_add(&p, v.v[i], NULL, 0xEBAA);	/* cloud */
+  r = pick_run(&p);
+  pick_free(&p);
+  if (r >= 0 && (size_t)r < v.n) {
+    buf_init(&b);
+    snprintf(msg, sizeof(msg), "Removed remote '%s'", v.v[r]);
+    report(gitv(&b, 1, "remote", "remove", v.v[r], NULL), &b, "Could not remove the remote", msg);
+  }
+  vec_free(&v);
+}
+
+
+/* the Source Control Graph's menu on commit i */
+void git_graph_action (int what, size_t i, SideAct *act) {
+  static char clip[600];
+  Buf b;
+  char msg[120];
+  if (i >= g_ncm) return;
+  switch (what) {
+    case GA_CHECKOUT:
+      buf_init(&b);
+      snprintf(msg, sizeof(msg), "HEAD is now at %.7s", g_cm[i].hash);
+      report(gitv(&b, 1, "checkout", "-q", "--detach", g_cm[i].hash, NULL), &b, "Checkout failed", msg);
+      break;
+    case GA_BRANCH: {
+      char *name = ask_branch("Please provide a new branch name (Press 'Enter' to confirm or 'Escape' to cancel)", "");
+      if (name == NULL) break;
+      buf_init(&b);
+      snprintf(msg, sizeof(msg), "Switched to a new branch '%.80s'", name);
+      report(gitv(&b, 1, "checkout", "-q", "-b", name, g_cm[i].hash, NULL), &b, "Could not create the branch", msg);
+      free(name);
+      break;
+    }
+    case GA_TAG: create_tag(g_cm[i].hash); break;
+    case GA_CHERRY_PICK: {
+      char h[41];
+      memcpy(h, g_cm[i].hash, sizeof(h));	/* the graph is read again under it */
+      cherry_pick(h);
+      break;
+    }
+    case GA_COPY_ID:
+    case GA_COPY_MESSAGE:
+      snprintf(clip, sizeof(clip), "%s", what == GA_COPY_ID ? g_cm[i].hash : g_cm[i].subject);
+      act->what = SA_CLIP;
+      act->path = clip;
+      break;
+  }
+}
+
+
 /* a long git command: its notice shows at once, the screen waits for it */
 static int slow (Buf *b, const char *what, const char *a0, const char *a1, const char *a2, const char *a3) {
   toast(0, "%s", what);
@@ -1269,8 +1483,9 @@ static void more_actions (SideAct *act) {
   static const int cmds[] = {
     CMD_GIT_PULL, CMD_GIT_PUSH, CMD_GIT_SYNC, CMD_GIT_FETCH, CMD_GIT_COMMIT, CMD_GIT_AMEND,
     CMD_GIT_UNDO_COMMIT, CMD_GIT_CHECKOUT, CMD_GIT_BRANCH, CMD_GIT_BRANCH_FROM, CMD_GIT_RENAME_BRANCH,
-    CMD_GIT_DELETE_BRANCH, CMD_GIT_MERGE, CMD_GIT_STASH, CMD_GIT_STASH_POP, CMD_GIT_STASH_APPLY,
-    CMD_GIT_WT_CREATE, CMD_GIT_WT_OPEN, CMD_GIT_WT_DELETE,
+    CMD_GIT_DELETE_BRANCH, CMD_GIT_MERGE, CMD_GIT_REBASE, CMD_GIT_REBASE_ABORT, CMD_GIT_CHERRY_PICK,
+    CMD_GIT_REMOTE_ADD, CMD_GIT_REMOTE_REMOVE, CMD_GIT_STASH, CMD_GIT_STASH_POP, CMD_GIT_STASH_APPLY,
+    CMD_GIT_TAG_CREATE, CMD_GIT_TAG_DELETE, CMD_GIT_TAG_PUSH, CMD_GIT_SELECT_REPO, CMD_GIT_WT_CREATE, CMD_GIT_WT_OPEN, CMD_GIT_WT_DELETE,
     CMD_GIT_FILE_HISTORY, CMD_GIT_BLAME, CMD_GIT_REFRESH, CMD_GIT_PUBLISH, CMD_GIT_CLONE,
     CMD_STAGE_RANGES, CMD_UNSTAGE_RANGES, CMD_REVERT_RANGES
   };
@@ -1387,7 +1602,12 @@ void git_command (int cmd, const char *path, SideAct *act) {
     return;
   }
   if (cmd == CMD_GIT_REFRESH) {
-    changed();
+    git_rescan();
+    on_disk_changed();
+    return;
+  }
+  if (cmd == CMD_GIT_SELECT_REPO) {
+    git_select_repo(-1);
     return;
   }
   if (git_root() == NULL) {
@@ -1454,6 +1674,14 @@ void git_command (int cmd, const char *path, SideAct *act) {
       break;
     }
     case CMD_GIT_WT_DELETE: wt_delete(); break;
+    case CMD_GIT_REBASE: rebase_branch(); break;
+    case CMD_GIT_REBASE_ABORT: rebase_abort(); break;
+    case CMD_GIT_CHERRY_PICK: cherry_pick(NULL); break;
+    case CMD_GIT_TAG_CREATE: create_tag(NULL); break;
+    case CMD_GIT_TAG_DELETE: delete_tag(); break;
+    case CMD_GIT_TAG_PUSH: report(slow(&b, "Pushing tags...", "push", "--tags", NULL, NULL), &b, "Push failed", "Pushed the tags"); return;
+    case CMD_GIT_REMOTE_ADD: add_remote(); break;
+    case CMD_GIT_REMOTE_REMOVE: remove_remote(); break;
   }
   buf_free(&b);
 }

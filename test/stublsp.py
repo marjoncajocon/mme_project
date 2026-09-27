@@ -57,6 +57,16 @@ scenario sees exactly what it always saw:
     --rename    workspace.fileOperations willRename/didRename for **/*.h: the
                 rename of a header edits the #include on line 2 of main.c
                 beside it, and didRenameFiles is said back as a message
+    --f3        fix/lsp/f3's surfaces, from the text the editor sent: the
+                parameters of every count_items( call as inlay hints with
+                resolveProvider (inlayHint/resolve gives a tooltip and a
+                textEdit), a rename of a name in main.c, util.c and util.h
+                (the files beside the one open), code actions of every kind
+                (refactor.extract / inline / rewrite / move, a disabled one,
+                a quick fix and "Move to util.c" editing two files), and
+                file watchers registered after initialized (client/
+                registerCapability: **/*.h, and *.txt under the root as a
+                RelativePattern); each didChangeWatchedFiles is said back
 
 
 signIn always answers with the device flow, and the command it names
@@ -85,6 +95,9 @@ PULL = "--pull" in sys.argv[1:]
 COLORS = "--colors" in sys.argv[1:]
 LINKS = "--links" in sys.argv[1:]
 RENAME = "--rename" in sys.argv[1:]
+F3 = "--f3" in sys.argv[1:]
+TEXTS = {}                       # --f3: uri -> the text as the editor sent it
+ROOT = [""]                      # --f3: the rootUri, for the RelativePattern
 
 USER = "stubuser"
 DEVICE_CODE = "ABCD-1234"
@@ -313,6 +326,132 @@ def color_pres(mid, params):
         for lab in (hexa, rgb)]})
 
 
+def f3_text(uri):
+    """the text of uri: the editor's when it sent it, else the file's"""
+    if uri in TEXTS:
+        return TEXTS[uri]
+    path = uri[len("file:///"):] if os.name == "nt" else uri[len("file://"):]
+    try:
+        with open(path.replace("%20", " "), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def f3_word(text, line, ch):
+    lines = text.split("\n")
+    if line >= len(lines):
+        return ""
+    ln = lines[line]
+    a = b = ch
+    while a > 0 and (ln[a - 1].isalnum() or ln[a - 1] == "_"):
+        a -= 1
+    while b < len(ln) and (ln[b].isalnum() or ln[b] == "_"):
+        b += 1
+    return ln[a:b]
+
+
+def f3_find(text, word):
+    """every whole-word place of word in text: (line, start, end)"""
+    out = []
+    for i, ln in enumerate(text.split("\n")):
+        k = ln.find(word)
+        while k >= 0:
+            e = k + len(word)
+            if (k == 0 or not (ln[k - 1].isalnum() or ln[k - 1] == "_")) and \
+                    (e == len(ln) or not (ln[e].isalnum() or ln[e] == "_")):
+                out.append((i, k, e))
+            k = ln.find(word, e)
+    return out
+
+
+def f3_hints(uri):
+    """count_items(a, b, s, f): a hint before each argument"""
+    names = ["a:", "b:", "s:", "f:"]
+    hints = []
+    for i, ln in enumerate(f3_text(uri).split("\n")):
+        k = ln.find("count_items(")
+        while k >= 0:
+            j = k + len("count_items(")
+            arg, depth, quote = 0, 0, False
+            start = j
+            while j < len(ln):
+                c = ln[j]
+                if c == '"':
+                    quote = not quote
+                elif not quote and c == "(":
+                    depth += 1
+                elif not quote and c == ")" and depth == 0:
+                    break
+                elif not quote and c == ")":
+                    depth -= 1
+                if not quote and depth == 0 and (c == "," or j == start):
+                    at = j + 1 if c == "," else j
+                    while at < len(ln) and ln[at] == " ":
+                        at += 1
+                    if arg < len(names):
+                        hints.append({"position": {"line": i, "character": at},
+                                      "label": names[arg], "kind": 2, "paddingRight": True,
+                                      "data": {"uri": uri, "name": names[arg][:-1]}})
+                    arg += 1
+                j += 1
+            k = ln.find("count_items(", j)
+    return hints
+
+
+def f3_actions(params):
+    uri = params["textDocument"]["uri"]
+    only = params["context"].get("only") or []
+    util = sibling(uri, "util.c")
+
+    def act(title, kind, edits=None, disabled=None):
+        a = {"title": title, "kind": kind}
+        if edits is not None:
+            a["edit"] = {"changes": edits}
+        if disabled:
+            a["disabled"] = {"reason": disabled}
+        return a
+    top = rng(0, 0, 0, 0)
+    acts = [
+        act("Add missing #include <stdio.h>", "quickfix",
+            {uri: [{"range": top, "newText": "#include <stdio.h>\n"}]}),
+        act("Extract to function in module scope", "refactor.extract.function",
+            {uri: [{"range": top, "newText": "/* extracted function */\n"}]}),
+        act("Extract to constant in enclosing scope", "refactor.extract.constant",
+            {uri: [{"range": top, "newText": "/* extracted constant */\n"}]}),
+        act("Extract to method in class", "refactor.extract.method",
+            disabled="Cannot extract to a method outside a class"),
+        act("Inline variable", "refactor.inline",
+            {uri: [{"range": top, "newText": "/* inlined */\n"}]}),
+        act("Convert to named parameters", "refactor.rewrite",
+            {uri: [{"range": top, "newText": "/* rewritten */\n"}]}),
+        act("Move to util.c", "refactor.move",
+            {uri: [{"range": top, "newText": "/* moved away */\n"}],
+             util: [{"range": top, "newText": "/* moved here */\n"},
+                    {"range": rng(2, 1, 2, 7), "newText": "return"}]}),
+        act("Organize Imports", "source.organizeImports",
+            {uri: [{"range": top, "newText": "/* organized */\n"}]}),
+    ]
+    if only:
+        acts = [a for a in acts if any(a["kind"] == o or a["kind"].startswith(o + ".") for o in only)]
+    return acts
+
+
+def f3_rename(params):
+    uri = params["textDocument"]["uri"]
+    pos = params["position"]
+    word = f3_word(f3_text(uri), pos["line"], pos["character"])
+    changes = {}
+    if word:
+        for name in ("main.c", "util.c", "util.h"):
+            u = sibling(uri, name)
+            places = f3_find(f3_text(u), word)
+            if places:
+                changes[u] = [{"range": rng(l, a, l, b), "newText": params["newName"]}
+                              for l, a, b in places]
+    return {"changes": changes}
+
+
 def main():
     while True:
         msg = read()
@@ -335,6 +474,11 @@ def main():
                 ops = {"filters": [{"scheme": "file",
                                     "pattern": {"glob": "**/*.{h,hpp}", "matches": "file"}}]}
                 caps["workspace"] = {"fileOperations": {"willRename": ops, "didRename": ops}}
+            if F3:
+                caps["inlayHintProvider"] = {"resolveProvider": True}
+                caps["codeActionProvider"] = {"codeActionKinds": ["quickfix", "refactor", "source"]}
+                caps["renameProvider"] = True
+                ROOT[0] = msg["params"].get("rootUri") or ""
             send({"jsonrpc": "2.0", "id": mid,
                   "result": {"capabilities": caps,
                              "serverInfo": {"name": "stub-lsp", "version": "1"}}})
@@ -401,6 +545,39 @@ def main():
             send({"jsonrpc": "2.0", "id": mid, "result": None})
         elif method == "exit":
             return 0
+        elif method == "initialized" and F3:
+            # the watchers, the way gopls and tsserver register theirs
+            send({"jsonrpc": "2.0", "id": "watch-1", "method": "client/registerCapability",
+                  "params": {"registrations": [{
+                      "id": "stub-watch", "method": "workspace/didChangeWatchedFiles",
+                      "registerOptions": {"watchers": [
+                          {"globPattern": "**/*.h"},
+                          {"globPattern": {"baseUri": ROOT[0], "pattern": "**/*.txt"},
+                           "kind": 7}]}}]}})
+        elif method == "workspace/didChangeWatchedFiles":
+            say("didChangeWatchedFiles " + " ".join(
+                "%s:%d" % (c["uri"].rsplit("/", 1)[1], c["type"])
+                for c in msg["params"]["changes"]))
+        elif F3 and method in ("textDocument/didOpen", "textDocument/didChange"):
+            p = msg["params"]
+            TEXTS[p["textDocument"]["uri"]] = p["contentChanges"][-1]["text"] \
+                if method == "textDocument/didChange" else p["textDocument"]["text"]
+            publish(p["textDocument"]["uri"])
+        elif F3 and method == "textDocument/inlayHint":
+            send({"jsonrpc": "2.0", "id": mid, "result": f3_hints(msg["params"]["textDocument"]["uri"])})
+        elif F3 and method == "inlayHint/resolve":
+            h = dict(msg["params"])
+            name = h["data"]["name"]
+            h["tooltip"] = {"kind": "markdown",
+                            "value": "Parameter `%s` of **count_items**" % name}
+            h["textEdits"] = [{"range": rng(h["position"]["line"], h["position"]["character"],
+                                            h["position"]["line"], h["position"]["character"]),
+                               "newText": "/* %s */ " % name}]
+            send({"jsonrpc": "2.0", "id": mid, "result": h})
+        elif F3 and method == "textDocument/codeAction":
+            send({"jsonrpc": "2.0", "id": mid, "result": f3_actions(msg["params"])})
+        elif F3 and method == "textDocument/rename":
+            send({"jsonrpc": "2.0", "id": mid, "result": f3_rename(msg["params"])})
         elif method in ("textDocument/didOpen", "textDocument/didChange"):
             uri = msg["params"]["textDocument"]["uri"]
             if not PULL:         # --pull: only when asked
@@ -509,4 +686,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
+        if os.environ.get("STUB_TRACE"):
+            import traceback
+            with open(os.environ["STUB_TRACE"], "a") as f:
+                traceback.print_exc(file=f)
         sys.exit(1)

@@ -54,19 +54,20 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `echat.c` | Chat and Inline Chat: Claude, Anthropic's API, through curl, the answer streamed |
 | `ehex.c` | the hex viewer for binary files (read-only) |
 | `eimage.c` | the picture preview: PNG, BMP, GIF and ICO read here, drawn as sixel |
-| `egit.c` | the Source Control view (stage, unstage, commit) and the diff editor |
-| `egitlog.c` | the Source Control Graph, branches, pull / push / sync, stash, blame |
+| `egit.c` | the Source Control view (stage, unstage, commit, the repositories, a rebase's Continue / Abort) and the diff editor |
+| `egitlog.c` | the Source Control Graph, branches, pull / push / sync, rebase, cherry-pick, tags, remotes, stash, blame |
 | `equick.c` | quick diff (the gutter's changes against the index) and merge conflicts |
 | `emerge.c` | the merge editor: Incoming and Current over the Result, three panes |
 | `enb.c` | Jupyter notebooks (.ipynb): the notebook editor, its cells and outputs, a kernel (`enb_kernel.h`: mme-kernel.py) |
 | `ewindows.c` | the windows know each other: Exit closes them all, a folder open in one comes to the front there |
 | `egithub.c` | GitHub pull requests and issues (REST API through curl): lists, descriptions, checkout, comments, create |
-| `eremote.c` | Remote-SSH: a window whose mme runs on another machine over ssh (installed there when needed) |
-| `eports.c` | Remote-SSH's forwarded ports: the Ports view, ssh -L for each, a localhost URL in the terminal forwarded by itself |
-| `esync.c` | Settings Sync: settings.json, keybindings.json and the snippets through a secret GitHub Gist |
+| `eremote.c` | Remote-SSH, WSL, Dev Containers: a window whose mme runs on another machine, a distro or a container (installed there when needed); the remote indicator and its menu |
+| `eports.c` | A remote window's forwarded ports: the Ports view, ssh -L for each (a container's: a relay through docker exec), a localhost URL in the terminal forwarded by itself |
+| `esync.c` | Settings Sync: settings.json, keybindings.json, the snippets, the extensions, the UI state and the profiles through a secret GitHub Gist |
 | `eaccess.c` | accessibility: mme's own voice (SAPI, spd-say, say) and VS Code's accessibility signals |
 | `esyntax.c` | syntax highlighting in VS Code's Dark+ colors, for about sixty languages, with VS Code's language ids |
-| `eemmet.c` | Emmet: HTML and CSS abbreviations, as VS Code expands them |
+| `eemmet.c` | Emmet: HTML and CSS abbreviations, as VS Code expands them, and its commands (Wrap with Abbreviation, Balance, Update Tag ...) |
+| `erefactor.c` | the code actions' menu grouped by kind (Quick Fix, Refactor..., Source Action...) and the Refactor Preview |
 | `epanel.c` | the panel: the integrated terminals, split, links, find, profiles |
 | `eout.c` | the OUTPUT view: a channel each for Git, the language servers, Extensions |
 | `elsp.c` | IntelliSense: a Language Server Protocol client (completion, definition, problems) |
@@ -91,7 +92,7 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `esettings.c` | the Settings editor: every setting, its description and control |
 | `ewelcome.c` | the Welcome page |
 | `efiles.c` | the Explorer's file operations: rename, copy, delete to the Recycle Bin / Trash, reveal |
-| `etheme.c` | the color themes: Dark Modern, Dark+, Light+, Monokai, Solarized Dark |
+| `etheme.c` | the color themes: Dark Modern, Dark+, Light+, Monokai, Solarized Dark, Dark / Light High Contrast |
 | `mme.rc`, `mme.ico` | Windows only: the program's icon and version details |
 | `ethread.c` | the worker threads Search and Go to File walk a folder on, and the lock between them |
 | `mmc.h`, `mutil.c` `mos.c` `mpath.c` | copied from [mmc](https://github.com/marjoncajocon/mmc-shell) as they are |
@@ -153,7 +154,10 @@ With no file open the editor shows the keys to start with.
   three minutes mme says so and stops, as VS Code does.
 - **Inlay hints** — the server's hints in the text, dim and in italics:
   parameter names (`add(a: 1, b: 2)`), the types of `:=` variables ...
-  (editor.inlayHints.enabled; gopls gets them turned on). Not with word wrap.
+  (editor.inlayHints.enabled; gopls gets them turned on). With word wrap too:
+  the rows are cut with the hints' widths counted. The mouse resting on a hint
+  shows its tooltip and a double-click puts its edits in (inlayHint/resolve,
+  when the server fills them in only then).
 - **Color decorators** — a ■ in its color before each color the server finds
   (CSS, a theme's JSON ...), drawn like an inlay hint. A click on it, or Show
   or Focus Standalone Color Picker at a color, lists the server's ways to
@@ -187,14 +191,37 @@ With no file open the editor shows the keys to start with.
 - **Signature help** — typing a call, its parameters show over the line,
   the one the cursor is in brighter.
 - **Rename** — F2 renames the name under the cursor everywhere the server
-  finds it; files that were not open open, with the changes.
+  finds it; files that were not open open, with the changes. Several files:
+  the Refactor Preview first; Shift+Enter in the box: always.
 - **Update imports on rename** — renaming or moving a file or folder in the
   Explorer asks the servers that want it first (workspace/willRenameFiles, as
   VS Code does, waited for up to 5 seconds): their edits (the imports that
   name it) are made, the files that were not open open with them, then the
   file moves and the servers are told (didRenameFiles).
 - **Quick Fix** — Ctrl+. (or the lightbulb in the gutter on a line with a
-  problem) lists the server's code actions.
+  problem) lists the server's code actions, grouped by their kind as VS Code
+  does: Quick Fix, Extract, Inline, Rewrite, Move, Surround With, Source
+  Action, More Actions; a disabled one shows why.
+- **Refactor...** — Ctrl+Shift+R (or the editor's context menu) lists only the
+  refactorings (code actions of kind refactor.*) of the selection or the
+  cursor, grouped the same way; Source Action... lists the source ones.
+- **Refactor Preview** — a rename, or a code action, whose edit touches several
+  files shows them first (Shift+Enter in the rename box: always): each file
+  with its edits - the line as it will be, what goes in red, what comes in
+  green - each with a check box (Space; a file's takes all of its edits),
+  then Apply (Ctrl+Enter) or Discard (Esc). Only what stays checked is made.
+- **Watched files** — a server that registers file watchers
+  (workspace/didChangeWatchedFiles: gopls for go.mod, TypeScript for its
+  configs, rust-analyzer for Cargo.toml ...) is told which of those files were
+  created, changed or deleted: by mme's saves, by other programs, by a git
+  checkout, pull or stash. There is no system watcher: the folder is looked
+  at every few seconds on a worker thread (only while a server watches, .git
+  and node_modules left out; a big folder less often), and soon after a save
+  or a git command.
+- **Context menu** — the right button in the text (or Shift+F10): Go to
+  Definition, Go to References, Peek Definition, Rename Symbol, Change All
+  Occurrences, Format Document, Refactor..., Source Action..., Cut, Copy,
+  Paste, Command Palette.
 - **Problems** — the panel's PROBLEMS tab (Ctrl+Shift+M, or a click on the
   counts in the status bar): every file's problems; Enter goes there, a file's
   row folds (Left / Right, or a click), Ctrl+C copies the message. The filter
@@ -208,6 +235,17 @@ With no file open the editor shows the keys to start with.
 - **Themes** — Ctrl+K Ctrl+T: Dark Modern (the default, like VS Code's),
   Dark+, Light+, Monokai, Solarized Dark, each shown while it is selected.
   Kept in settings.json (workbench.colorTheme).
+- **High contrast** — Dark High Contrast and Light High Contrast are VS Code's
+  hc-black and hc-light (its ids "Default High Contrast" and "Default High
+  Contrast Light" are taken too): black (white) with the text, and outlines
+  instead of colors - contrastBorder round the quick input, menus, the boxes to
+  type in, notifications; contrastActiveBorder round the focused item of a
+  list, the active tab, a find match, the current line (dashed round a
+  selection that has not the focus); a selection yellow (dark blue) with its
+  text black (white). mme-sdl draws the outlines; in a terminal they are an
+  underline in their color. window.autoDetectHighContrast (on): while Windows'
+  own high contrast is on, workbench.preferredHighContrastColorTheme (or
+  ...LightColorTheme when Windows' colors are light) is shown instead.
 - **Zen Mode** — Ctrl+K Z: the text alone; Esc Esc brings the rest back.
 - **Editor groups** — up to 8, in a grid like VS Code's: Ctrl+\\ splits
   right, Ctrl+K Ctrl+\\ down (and left / up from the palette); Ctrl+1 .. 4 and
@@ -412,6 +450,34 @@ With no file open the editor shows the keys to start with.
   WATCH values open like VARIABLES, F2 on a variable sets its value, Ctrl+C
   copies it. Breakpoints, watches and the filters are kept per folder in
   `mme-data/state`.
+- **preLaunchTask, postDebugTask, compounds** — a configuration's
+  `preLaunchTask` runs first (a task of tasks.json, see Tasks) and the
+  adapter starts when it ends well, or when it is ready if it is a
+  background task (one already running and ready is not run again). When
+  it fails VS Code's question comes: "The preLaunchTask 'build' terminated
+  with exit code 2." (or "Errors exist after running preLaunchTask...")
+  with Debug Anyway, Show Errors (the Problems, else its terminal) and Abort;
+  `debug.onTaskErrors` answers it for good (debugAnyway, showErrors, abort).
+  `postDebugTask` runs when the session ends. launch.json's `compounds` are
+  in the configuration picker ("compound" after the name): their
+  configurations start together, each a session of its own with its own
+  adapter; CALL STACK then shows each session (Enter makes it the one the
+  views and the keys are for; a session that stops becomes it), and
+  `stopAll` ends them all when one ends. Restart runs the preLaunchTask again.
+- **Debug adapters' extras** — an adapter's `runInTerminal` request runs the
+  program in a terminal of the panel (VS Code's integrated terminal, for
+  "external" too), so one that reads what is typed can be debugged
+  (debugpy's `"console": "integratedTerminal"`). The DEBUG CONSOLE suggests
+  as it is typed when the adapter has completions (supportsCompletionsRequest):
+  the list over the input, Up / Down, Tab or Enter takes one, Esc closes it,
+  Ctrl+Space asks. **Open Disassembly View** (supportsDisassembleRequest)
+  shows the instructions around the one the program is at, the function
+  names and the source lines between them, the current one marked like the
+  paused line; it follows each stop, it opens by itself when the frame has
+  no source, and with it in front F10 / F11 / Shift+F11 step one instruction
+  (supportsSteppingGranularity). A variable's **View Binary Data** (its menu,
+  when the adapter reads memory) shows 1 KB of its memory (readMemory) in the
+  hex viewer, the offsets its addresses; it is read-only.
 - **Data breakpoints** — the right button on a variable (or Shift+F10 on the
   one selected) gives VS Code's menu: Set Value, Copy Value, Add to Watch, and
   Break on Value Change / Read / Access, when the adapter can
@@ -426,6 +492,24 @@ With no file open the editor shows the keys to start with.
   build and test, package.json's scripts, Cargo's. A task runs in a terminal
   of its own named after it; `$gcc`, `$go`, `$tsc` and `$msCompile` put its
   errors in the Problems panel. Terminal > Configure Tasks makes tasks.json.
+  tasks.json is read as VS Code reads it: `"type": "shell"` (options.shell's
+  executable and args, else the system's shell) or `"process"` (the program
+  itself), `options.cwd` and `options.env`, the `windows` / `linux` / `osx`
+  parts over the rest, the file's own options, `dependsOn` (run in parallel,
+  or one after the other with `"dependsOrder": "sequence"`; a task that
+  fails stops the ones that need it), `isBackground` (a watcher: it is ready
+  when its problem matcher's `background.endsPattern` is printed, and what
+  waits for it goes on while it runs), `presentation` (reveal always /
+  silent / never, focus, echo, panel shared / dedicated / new), `hide` and
+  `detail`. A problemMatcher can be one of its own: an owner, a pattern with
+  its regexp and which group is the file, line, column, severity, message
+  (or `location`), several patterns for a problem told over several lines
+  (the last with `loop`), fileLocation (relative, absolute, autoDetect, or
+  relative to a folder of its own), `$tsc-watch`. Variables: `${input:id}`
+  asks the file's `inputs` (promptString, pickString; each once a run),
+  `${env:X}`, `${config:editor.tabSize}`, `${userHome}`, `${lineNumber}`
+  besides VS Code's file and folder ones. Tasks: Terminate Task ends one
+  that runs.
 - **Auto Save** — File > Auto Save (files.autoSave): afterDelay saves a file
   files.autoSaveDelay ms after the last change (no format on save, the
   cursor's line keeps its spaces), onFocusChange when the editor or the tab
@@ -446,6 +530,14 @@ With no file open the editor shows the keys to start with.
   Clipboard (Ctrl+K C), With... (a file of the folder), and the Explorer's
   Select for Compare / Compare with Selected, side by side in the diff
   editor. File: Revert File reads the file again.
+- **Compare Folders** — Select for Compare on a folder in the Explorer, then
+  Compare with Selected on another (or "Compare Folders...", which asks for
+  the two): a tab `a ↔ b` lists every file only in the left folder (D), only
+  in the right one (A), or in both and different (M: by size, then by
+  content; `.git` is skipped), with a notice counting them and the ones the
+  same. Enter or a double click opens a different pair in the diff editor,
+  side by side, and a file on one side only in its editor; F5 compares
+  again.
 - **Command Palette** — the recently used commands first.
 - **Cursor and side bar** — editor.cursorStyle (line, block, underline) and
   editor.cursorBlinking; workbench.sideBar.location "right" (View: Toggle
@@ -540,6 +632,14 @@ With no file open the editor shows the keys to start with.
   the suggestion "Emmet Abbreviation"; Tab then goes through the empty
   attributes and contents. In CSS: `m10` → `margin: 10px;`, `p10-20`,
   `w100p` → `width: 100%;`, `df`, `posa`, `c#f` → `color: #fff;`, `fz1.5r`.
+  VS Code's Emmet commands too, from the Command Palette: **Emmet: Wrap with
+  Abbreviation** (the selection, or the line, goes into the innermost last
+  element of the abbreviation; `ul>li*` puts each line in an li of its own),
+  **Emmet: Balance (outward)** / **(inward)** (the selection grows to the
+  tag's content, then the element, and shrinks back), **Emmet: Update Tag**
+  (both tags renamed; nothing removes them), **Emmet: Remove Tag** (the tags
+  and their lines go, what was in them is dedented) and **Emmet: Go to
+  Matching Pair**.
 - **Closing tags** — typing the `>` of `<div class="x">` puts `</div>` after
   the cursor, and `</` gets the name of the tag still open (html.autoClosingTags).
 - **Mouse** — a double click selects a word, a triple click the line (dragging
@@ -596,6 +696,13 @@ With no file open the editor shows the keys to start with.
   Ctrl+Alt+R runs a recent command again, Ctrl+G goes to a recent folder
   (mme-data keeps both lists). terminal.integrated.shellIntegration.enabled
   turns it off. mmc-shell only says its folder (OSC 7).
+- **Terminal suggestions** — terminal.integrated.suggest.enabled (off, as in
+  VS Code): while a command line is typed after a prompt shell integration
+  marked, a list under the cursor has the files and folders of the shell's
+  folder (or of the folder the word names, `src\ma`), the commands on the PATH
+  and the command lines run before that go on from the word; Up / Down pick,
+  Tab or Enter sends the rest of it (a folder: its names next), Esc closes it,
+  Ctrl+Space asks for it.
 - **Run in the terminal** — Terminal: Run Selected Text In Active Terminal
   (the cursor's line when nothing is selected) and Run Active File In Active
   Terminal (quoted as the shell wants it). Terminal: Change Color... and
@@ -761,8 +868,10 @@ With no file open the editor shows the keys to start with.
   adapters** (`contributes.debuggers`): a launch configuration of such a type
   is resolved by the extension (`resolveDebugConfiguration`) and its adapter
   factory says where the adapter is - a program mme starts, a port, or one
-  written in JavaScript that the host puts on a port; mme's debugger is the
-  client, as for its own adapters, and `debug.startDebugging` starts it.
+  written in JavaScript that the host puts on a port, or one on a named pipe
+  (`DebugAdapterNamedPipeServer`) that the host joins to a port; mme's
+  debugger is the client, as for its own adapters, and
+  `debug.startDebugging` starts it.
 
   An extension's **debug adapter trackers** see the session's messages, and
   its `customRequest`s go to the adapter through mme's connection (its custom
@@ -788,8 +897,8 @@ With no file open the editor shows the keys to start with.
   as they are.
 
   Not there yet (Output > Extension Host lists every `[missing]` API an
-  extension asked for; an extension's page lists its own): debug adapters on
-  named pipes, and renderers drawn inside the notebook itself. Microsoft's own extensions (Pylance, C/C++, Python,
+  extension asked for; an extension's page lists its own): renderers drawn
+  inside the notebook itself. Microsoft's own extensions (Pylance, C/C++, Python,
   debugpy, C# Dev Kit) are licensed for Microsoft's VS Code only: mme runs them
   if named, but their licence does not allow it.
 - **Explorer** — the folder tree, with a scrollbar at its right edge (every
@@ -877,6 +986,18 @@ With no file open the editor shows the keys to start with.
   and Sync Now asks which to keep (a sync of its own only says so, with a
   Sync Now button). "Show Synced Data" lists the files and their state;
   "Turn Off" can delete the gist too. The profile in use is synced.
+  As VS Code's, it also syncs the **extensions** (extensions.json: each one
+  installed with its disabled and run, mme.extensions.disabled and
+  mme.extensions.run; one installed only on another machine stays in the
+  list and is named in a notice, mme installing from .vsix files only), the
+  **UI state** (globalState.json: the Command Palette's recently used
+  commands, merged when both machines changed them) and the **profiles**
+  (profiles.json: one made on another machine is made here, empty; one
+  deleted there is deleted here, never the one in use). "Settings Sync:
+  Configure..." ticks what is synced: Settings, Keyboard Shortcuts,
+  Snippets, Extensions, UI State, Profiles (Enter on one ticks it, Done
+  keeps them). The gist stays readable by an older mme, which leaves the
+  new files alone.
 - **Ports (Remote-SSH)** — in a Remote-SSH window, "Ports: Forward a Port"
   makes a port of the host a port here (its localhost): the window runs
   `ssh -N -L` for it (the same port, or the next one free here) and says
@@ -888,6 +1009,44 @@ With no file open the editor shows the keys to start with.
   with an OSC of its own and is answered on its input; the forward's ssh
   asks for no password, so it needs a key (Linux and macOS share the
   window's own connection, ControlMaster, and need none).
+- **Remote indicator** — the `><` at the left end of the status bar ("Remote:
+  Show Remote Menu"): "Open a Remote Window" lists Remote-SSH's, WSL's and Dev
+  Containers' ways in; in a remote window it says where it is ("SSH: host",
+  "WSL: Ubuntu", "Dev Container: name", "Container: name") and offers Reopen
+  Folder in Windows / Locally, Rebuild Container, Close Remote Connection.
+  "View: Show Remote Explorer" lists the targets: the SSH hosts, the WSL
+  distros, the containers (docker ps -a). Remote Tunnels are not here (they
+  need Microsoft's tunnel service).
+- **WSL** (Windows) — "WSL: Connect to WSL" (the default distro), "Connect to
+  WSL using Distro..." (wsl.exe -l), "Open Folder in WSL..." and "Reopen
+  Folder in WSL" (C:\x is /mnt/c/x; \\\\wsl$\\Distro\\x is that distro's /x)
+  open a window whose mme runs in the distro, as a Remote-SSH one: files,
+  search, git, language servers and terminal are Linux's. `wsl.exe -d
+  <distro>` runs mme-data/remote/wsl-connect.sh there, which copies the Linux
+  build (`build cross`) to ~/.mme-server/mme (again when it changed) and runs
+  it. "WSL: Reopen Folder in Windows" opens the folder here again. WSL's
+  localhost is this computer's: a forwarded port is the same port.
+- **Dev Containers** — "Dev Containers: Reopen in Container", "Open Folder in
+  Container...", "Rebuild Container" / "Rebuild and Reopen in Container" read
+  the folder's .devcontainer/devcontainer.json (or .devcontainer.json, or
+  .devcontainer/<name>/, picked; comments allowed): image, or build
+  (dockerfile, context, args, target), workspaceFolder, workspaceMount,
+  mounts, containerEnv, remoteEnv, remoteUser / containerUser, runArgs,
+  appPort, overrideCommand, onCreateCommand / postCreateCommand /
+  postStartCommand, forwardPorts, with ${localWorkspaceFolder},
+  ${containerWorkspaceFolder}, ${localEnv:NAME} .... The window's terminal
+  shows each docker step: build, run (the folder mounted at
+  /workspaces/<name>, labeled devcontainer.local_folder as VS Code's), the
+  Linux build `docker cp`'d into the user's ~/.mme-server, then `docker exec
+  -it` runs it on workspaceFolder. The container is mme-<folder>-<hash>, kept
+  and started again next time; Rebuild removes and recreates it. When a step
+  fails the window says why and a key reopens the folder locally.
+  "Attach to Running Container..." (docker ps) opens a folder in any running
+  container. forwardPorts are forwarded at the start, and any port through
+  the Ports view: a socket here whose connections go through `docker exec -i
+  <container> mme --port-relay=PORT`. Docker Compose configurations are not
+  supported. No devcontainer.json: "Add Dev Container Configuration Files..."
+  writes a plain one (mcr.microsoft.com/devcontainers/base:ubuntu).
 - **Editor windows** — "View: Move Editor into New Window" and "Copy Editor
   into New Window" open the file in a window of its own (a file's window:
   no sidebar), at its line; unsaved changes are saved first. In mme-sdl a
@@ -932,6 +1091,10 @@ With no file open the editor shows the keys to start with.
   itself (completions from jedi when it is there, else rlcompleter),
   matplotlib's figures sent after each cell as Jupyter's inline backend does.
   Ctrl+S writes nbformat 4 as Jupyter does, metadata and outputs kept.
+  Jupyter: Open Variables View shows the Variables in the panel (its JUPYTER
+  tab): the kernel's variables of the notebook in front - Name, Type, Size
+  (a len(), a shape), Value - asked of the kernel again (silently, as
+  `%whos` would list them) each time its cells are done.
 - **Search Editor** — "Search Editor: New Search Editor" (the selection is its
   query), or "Open in editor" under the Search view's count (Alt+Enter there,
   or the new-file icon in its title), opens a tab "Search: query": the query
@@ -992,7 +1155,18 @@ With no file open the editor shows the keys to start with.
   quotes with a bar for each `>` deep, code blocks in their language's
   colors, tables in boxes with their `:---:` alignment, **bold**, *italic*,
   ~~struck~~, footnotes, HTML shown as the words it says rather than its
-  tags, and pictures as `🖼 alt (120x80 png, 12 KB)`. Links are underlined
+  tags. A picture on a line of its own (`![alt](pictures/x.png)`, a
+  `data:image/png;base64,...` URI, or `<img src=...>`) is drawn as the picture
+  preview draws it (PNG, GIF, BMP, ICO), as wide as the page at most; other
+  pictures (on the web, JPEG) are `🖼 alt (120x80 png, 12 KB)`. Math as
+  VS Code's KaTeX sets it, in text: `$x^2$` inline and `$$ ... $$` blocks
+  centred, Greek letters, operators and arrows as their characters, x² and aᵢ
+  raised and lowered, `\frac{a}{b}` as a/b, `\sqrt{x}` as √x, `\text{...}`
+  upright (`$5 and $10` stay money). A ```mermaid block's flowchart (graph /
+  flowchart TD or LR: boxes, round boxes, decisions, `-->|label|` and `-- label -->`,
+  chains, `A & B`) is drawn in boxes and arrows, laid out in layers; an edge
+  back up is said under it; other diagrams show their code marked "mermaid".
+  Links are underlined
   and Ctrl+click follows them: `#a-heading` jumps down the page, `http` and
   `https` open the browser, and a file next to the document opens in its own
   editor. Side by side with the file the two scroll together
@@ -1024,6 +1198,32 @@ With no file open the editor shows the keys to start with.
   box on top commits with Ctrl+Enter. The title's buttons commit, refresh and
   open More Actions (pull, push, sync, fetch, branches, stash, undo last
   commit, amend ...).
+- **Repositories** — the workspace's repositories are found as VS Code finds
+  them: each folder's own (or the one around it), the ones a folder down
+  (git.repositoryScanMaxDepth 1, not node_modules) and their submodules (up
+  to 10). With more than one, **SOURCE CONTROL REPOSITORIES** is over the
+  changes: each repository with its branch (`*` when it has changes), the
+  selected one checked; Up from the message box goes to it, Enter (or a
+  click) selects one, a click on its title folds it. The view, the status
+  bar's branch and every Git: command work on the one selected; **Git:
+  Select Repository...** picks it from a list. F5 and Git: Refresh look for
+  repositories again.
+- **Rebase, cherry-pick, tags, remotes** — **Git: Rebase Branch...** rebases
+  the branch onto the one picked. A conflict stops it: the view shows the
+  branch as `feature (Rebasing)` (the status bar too), the conflicts in
+  Merge Changes (resolved as a merge's are: the file's markers, Merge
+  Conflict: Accept ..., the merge editor; `+` marks one resolved), and a
+  **Continue** button with **Abort Rebase** under it; Git: Commit
+  (Ctrl+Enter) continues too, **Git: Abort Rebase** gives up. **Git: Cherry
+  Pick...** applies a commit (its hash typed); a conflict leaves it in Merge
+  Changes with the commit's message in the message box. **Git: Create Tag**
+  asks for the name, then a message (an annotated tag; none: a lightweight
+  one); **Git: Delete Tag** picks one; **Git: Push Tags** pushes them. **Git:
+  Add Remote...** asks for the URL, then the name; **Git: Remove Remote**
+  picks one. All are in Source Control's "..." too. On a commit of the
+  graph the right button (or Shift+F10) opens VS Code's graph menu:
+  Checkout (Detached), Create Branch..., Create Tag..., Cherry Pick, Copy
+  Commit ID, Copy Commit Message.
 - **Graph** — under the changes, VS Code's Source Control Graph: the commits
   of every branch (`git log --all`) with their lanes in color, merges joining
   them, the branches, remote branches and tags as badges, the subject, the
@@ -1166,6 +1366,14 @@ With no file open the editor shows the keys to start with.
   "left" (View: Move Panel Right ..., or the panel's "..."); at a side it is as
   high as the editors and its edge drags. workbench.panel.alignment "justify"
   puts a bottom panel across the whole width, under the sidebar too.
+- **Moving views** — View: Move View (a view, then Panel or Primary Side Bar)
+  and View: Move Focused View move Search, Outline and Timeline into the panel,
+  each a tab of its own (Search's icon leaves the activity bar and
+  Ctrl+Shift+F searches there), and back; the Outline's "..." has Move To
+  Panel, the panel's "..." Move To Primary Side Bar and Reset Location while
+  one shows, View: Reset View Locations puts all of them back. mme-data/
+  view-locations.json remembers where they are. The other views stay where
+  they are.
 
 ## Keys
 
@@ -1212,6 +1420,7 @@ With no file open the editor shows the keys to start with.
 | Ctrl+Shift+T, Ctrl+K M | Reopen Closed Editor, Change Language Mode |
 | Shift+Alt+F, Ctrl+Shift+I | Format Document |
 | Ctrl+K Ctrl+F, Shift+Alt+O | Format Selection, Organize Imports |
+| Ctrl+Shift+R, Shift+F10 | Refactor..., the editor's context menu |
 | Shift+Alt+Right / Left | Expand / Shrink Selection |
 | Shift+Alt+H | Show Call Hierarchy |
 | Shift+Alt+Up / Down | Copy Line Up / Down |
@@ -1253,4 +1462,5 @@ Alt+1 and Ctrl+PgDn there.
 An extension's JavaScript cannot run here: mme reads what an extension
 *describes* (its color themes, snippets, languages and TextMate grammars) and
 uses the language servers and debug adapters it ships. Remote development is
-Remote-SSH's only (not Dev Containers, WSL or Codespaces).
+Remote-SSH, WSL and Dev Containers (not Remote Tunnels, which need
+Microsoft's tunnel service, nor Codespaces).

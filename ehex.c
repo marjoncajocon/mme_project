@@ -5,6 +5,8 @@
 ** The keys move a cursor through the bytes (arrows, PgUp / PgDn, Home /
 ** End, Ctrl+G to an offset, Ctrl+F for bytes or text); the byte under it
 ** is told in the status line. It only reads: mme does not write binaries.
+** A debugger's memory (readMemory) shows the same way, its offsets the
+** addresses the bytes are at.
 */
 
 #include "mme.h"
@@ -25,6 +27,8 @@ typedef struct Hex {
   int x, y, w, h;	/* where it was drawn, for the mouse */
   char find[64];	/* what was looked for last */
   size_t flen;
+  unsigned long long base;	/* the address of byte 0 (the memory view), shown for the offsets */
+  int ow;	/* the offsets' columns */
 } Hex;
 
 #define MAX_HEX	(64 << 20)	/* a file bigger than this is not read whole */
@@ -46,7 +50,16 @@ void *hex_open (const char *path) {
   h->path = xstrdup(path);
   h->b = (unsigned char *)s;
   h->n = len;
+  h->ow = 8;
   return h;
+}
+
+
+void hex_set_base (void *page, unsigned long long base) {
+  Hex *h = (Hex *)page;
+  if (h == NULL) return;
+  h->base = base;
+  h->ow = base + h->n > 0xFFFFFFFFULL ? 16 : 8;
 }
 
 
@@ -84,6 +97,8 @@ const char *hex_status (void *page) {
   Hex *h = (Hex *)page;
   if (h == NULL) return "";
   if (h->n == 0) snprintf(s, sizeof(s), "empty");
+  else if (h->base) snprintf(s, sizeof(s), "0x%0*llX   0x%02X (%u)", h->ow, h->base + h->at, h->b[h->at],
+                             (unsigned)h->b[h->at]);
   else snprintf(s, sizeof(s), "0x%08lX of 0x%lX   0x%02X (%u)", (unsigned long)h->at,
                 (unsigned long)h->n, h->b[h->at], (unsigned)h->b[h->at]);
   return s;
@@ -105,9 +120,9 @@ static void scroll_to (Hex *h) {
 */
 
 /* the row of offsets and columns over the bytes, like VS Code's */
-static void head_row (int x, int y, int w) {
+static void head_row (int x, int y, int w, int ow, int addr) {
   char s[160];
-  int c, n = snprintf(s, sizeof(s), "%-10s", "Offset");
+  int c, n = snprintf(s, sizeof(s), "%-*s", ow + 2, addr ? "Address" : "Offset");
   for (c = 0; c < COLS && n + 4 < (int)sizeof(s); c++)
     n += snprintf(s + n, sizeof(s) - (size_t)n, "%02X ", c);
   snprintf(s + n, sizeof(s) - (size_t)n, " Decoded text");
@@ -128,13 +143,13 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
   hx->h = h;
   for (r = 0; r < h; r++) scr_fill(x, y + r, w, S_TEXT);
   if (h < 2 || w < 20) return;
-  head_row(x, y, w);
+  head_row(x, y, w, hx->ow, hx->base != 0);
   rows = h - 2;
   for (r = 0, row = hx->top; r < rows; r++, row++) {
     int cx = x + 1, c;
     size_t off = row * COLS;
     if (off >= hx->n && !(hx->n == 0 && row == 0)) break;
-    snprintf(s, sizeof(s), "%08lX", (unsigned long)off);
+    snprintf(s, sizeof(s), "%0*llX", hx->ow, hx->base + off);
     cx += scr_puts(cx, y + 1 + r, s, S_LINE) + 2;
     for (c = 0; c < COLS; c++) {	/* the bytes */
       size_t at = off + (size_t)c;
@@ -163,7 +178,7 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
   }
   {	/* the line under it: the file, where the cursor is, what the byte is */
     char line[200];
-    snprintf(line, sizeof(line), " %s   %lu bytes   %s   read-only", path_basename(hx->path),
+    snprintf(line, sizeof(line), " %s   %lu bytes   %s   read-only", hx->base ? "Memory" : path_basename(hx->path),
              (unsigned long)hx->n, hex_status(page));
     scr_fill(x, y + h - 1, w, S_STATUS);
     scr_putsw(x, y + h - 1, w, line, S_STATUS);
@@ -171,7 +186,7 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
   if (focus) {	/* the cursor sits on the byte */
     size_t r2 = hx->at / COLS;
     if (r2 >= hx->top && r2 < hx->top + (size_t)rows)
-      scr_cursor(x + 1 + 10 + (int)(hx->at % COLS) * 3, y + 1 + (int)(r2 - hx->top));
+      scr_cursor(x + 1 + hx->ow + 2 + (int)(hx->at % COLS) * 3, y + 1 + (int)(r2 - hx->top));
   }
 }
 
@@ -301,8 +316,8 @@ int hex_click (void *page, int mx, int my) {
   size_t at;
   if (h == NULL || mx < h->x || mx >= h->x + h->w || my < h->y + 1 || my >= h->y + h->h - 1) return 0;
   r = my - h->y - 1;
-  c = (mx - h->x - 12) / 3;	/* the bytes' columns */
-  if (mx - h->x >= 12 + COLS * 3) c = mx - h->x - 12 - COLS * 3 - 1;	/* the letters */
+  c = (mx - h->x - h->ow - 4) / 3;	/* the bytes' columns */
+  if (mx - h->x >= h->ow + 4 + COLS * 3) c = mx - h->x - h->ow - 4 - COLS * 3 - 1;	/* the letters */
   if (c < 0) c = 0;
   if (c >= COLS) c = COLS - 1;
   at = (h->top + (size_t)r) * COLS + (size_t)c;

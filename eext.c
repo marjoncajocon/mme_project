@@ -31,7 +31,7 @@
 
 typedef struct ETheme {
   char *label, *path;
-  int light;	/* uiTheme "vs" or "hc-light" */
+  int light;	/* uiTheme: 0 "vs-dark", 1 "vs", 2 "hc-black", 3 "hc-light" */
 } ETheme;
 
 typedef struct EIcon {	/* a file icon theme: workbench.iconTheme names its id (eicons.c) */
@@ -202,7 +202,7 @@ static int ext_read (Ext *e, const char *dir, int vscode) {
       e->theme[e->ntheme].label = xstrdup(nls(nl, json_str(json_get(a->kid[i], "label"),
                                                            json_str(json_get(a->kid[i], "id"), e->display))));
       e->theme[e->ntheme].path = ext_file(dir, p);
-      e->theme[e->ntheme].light = strcmp(ui, "vs") == 0 || strcmp(ui, "hc-light") == 0;
+      e->theme[e->ntheme].light = strcmp(ui, "vs") == 0 ? 1 : strcmp(ui, "hc-black") == 0 ? 2 : strcmp(ui, "hc-light") == 0 ? 3 : 0;
       e->ntheme++;
     }
   }
@@ -2047,7 +2047,7 @@ static void pick_ext_theme (const Ext *e) {
   char was[64];
   snprintf(was, sizeof(was), "%s", opt.theme);
   pick_init(&p, "Set Color Theme");
-  for (i = 0; i < e->ntheme; i++) pick_add(&p, e->theme[i].label, e->theme[i].light ? "light" : "dark", 0xEB5C);
+  for (i = 0; i < e->ntheme; i++) pick_add(&p, e->theme[i].label, e->theme[i].light == 1 ? "light" : e->theme[i].light == 2 ? "high contrast" : e->theme[i].light == 3 ? "high contrast light" : "dark", 0xEB5C);
   g_themed = e;
   p.keep_order = 1;
   p.on_move = theme_preview;

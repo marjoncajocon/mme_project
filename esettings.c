@@ -335,7 +335,15 @@ static const Setting set[] = {
   {"vim.gdefault", C_VIM, ST_BOOL, 0, "false", NULL,
    "When on, the :substitute flag g is default on. This means that all matches in a line are substituted instead of one. When a g flag is given to a :substitute command, this will toggle the substitution of all or one match."},
   {"vim.startInInsertMode", C_VIM, ST_BOOL, 0, "false", NULL,
-   "Start in Insert mode instead of Normal mode."}
+   "Start in Insert mode instead of Normal mode."},
+  {"window.autoDetectHighContrast", C_LOOK, ST_BOOL, 0, "true", NULL,
+   "If enabled, will automatically change to high contrast theme if the OS is using a high contrast theme. The high contrast theme to use is specified by `#workbench.preferredHighContrastColorTheme#` and `#workbench.preferredHighContrastLightColorTheme#`."},
+  {"workbench.preferredHighContrastColorTheme", C_LOOK, ST_STR, 0, "\"Default High Contrast\"", NULL,
+   "Specifies the preferred color theme used in high contrast dark mode when `#window.autoDetectHighContrast#` is enabled."},
+  {"workbench.preferredHighContrastLightColorTheme", C_LOOK, ST_STR, 0, "\"Default High Contrast Light\"", NULL,
+   "Specifies the preferred color theme used in high contrast light mode when `#window.autoDetectHighContrast#` is enabled."},
+  {"terminal.integrated.suggest.enabled", C_TERMINAL, ST_BOOL, 0, "false", NULL,
+   "Enables terminal intellisense suggestions (files and folders of the current directory, commands on the PATH, the history) as you type a command line, when shell integration is on. Tab or Enter accepts one."}
 };
 
 #define NSET	((int)(sizeof(set) / sizeof(set[0])))
@@ -448,6 +456,13 @@ static const Setting *find_set (const char *key) {
 /* a setting mme has (for Import VS Code Settings, and settings.json's problems) */
 int settings_known (const char *key) {
   return find_set(key) != NULL;
+}
+
+
+/* its default as JSON ("4", "\"auto\""), for ${config:...}; NULL: not one of mme's */
+const char *settings_default (const char *key) {
+  const Setting *s = find_set(key);
+  return s ? s->def : NULL;
 }
 
 
