@@ -37,6 +37,7 @@ static const char *const host_lines[] = {	/* mme-exthost.js, a line each (C's st
 typedef struct HExt {
   char *id, *dir;
   char *state;	/* "running", "error", or NULL: not started yet */
+  int ms, busy;	/* how long it took to start, and how long of that the host could do nothing else; -1: not yet */
 } HExt;
 
 static HExt *g_run;
@@ -50,6 +51,7 @@ static char *g_dirs;	/* the folders that run, joined: another set starts the hos
 static char *g_cmdline;
 static int g_restart;	/* another set to run while the host runs: it starts again (ehost_idle) */
 static int g_opened;	/* the open files were given to the host since it had something to run */
+static Vec g_nbtypes;	/* the running extensions' notebook formats: "type\npattern" (contributes.notebooks) */
 
 static void forget (void);
 
@@ -114,6 +116,17 @@ static int read_pkg (const char *dir) {
       const char *id = json_str(json_get(ls->kid[i], "id"), NULL);
       if (id) add_lang(id);
     }
+    ls = json_get(j, "contributes.notebooks");
+    for (i = 0; ls && ls->type == J_ARR && i < ls->n; i++) {	/* Jupyter's own: mme reads .ipynb itself */
+      const char *type = json_str(json_get(ls->kid[i], "type"), "");
+      const Json *sel = json_get(ls->kid[i], "selector");
+      size_t k;
+      if (!*type || strcmp(type, "jupyter-notebook") == 0 || strcmp(type, "interactive") == 0) continue;
+      for (k = 0; sel && sel->type == J_ARR && k < sel->n; k++) {
+        const char *pat = json_str(json_get(sel->kid[k], "filenamePattern"), NULL);
+        if (pat && *pat) vec_push(&g_nbtypes, xstrcat3(type, "\n", pat));
+      }
+    }
   }
   json_free(j);
   return code;
@@ -170,6 +183,7 @@ static void work_out (void) {
     g_run[g_nrun].id = xstrdup(id);
     g_run[g_nrun].dir = xstrdup(dir);
     g_run[g_nrun].state = NULL;
+    g_run[g_nrun].ms = g_run[g_nrun].busy = -1;
     g_nrun++;
   }
   for (i = 0; i < g_nrun; i++) {	/* what they depend on runs too, as in VS Code (Expo: YAML, js-debug), and theirs */
@@ -186,6 +200,7 @@ static void work_out (void) {
         g_run[g_nrun].id = xstrdup(id);
         g_run[g_nrun].dir = dir;
         g_run[g_nrun].state = NULL;
+        g_run[g_nrun].ms = g_run[g_nrun].busy = -1;
         g_nrun++;
       }
       else free(dir);
@@ -275,12 +290,126 @@ int ehost_inline (const char *lang) {
 }
 
 
+/* the notebook type of an extension's that opens this file ("*.sample"); NULL: none (.ipynb is mme's) */
+const char *ehost_nb_type (const char *path) {
+  static char type[128];
+  const char *base;
+  size_t i;
+  if (path == NULL) return NULL;
+  work_out();
+  base = path_basename(path);
+  for (i = 0; i < g_nbtypes.n; i++) {
+    const char *nl = strchr(g_nbtypes.v[i], '\n'), *pat = nl + 1;
+    while (strncmp(pat, "**/", 3) == 0) pat += 3;	/* by the name: the folder does not matter */
+    if (search_globs(pat, base)) {
+      snprintf(type, sizeof(type), "%.*s", (int)(nl - g_nbtypes.v[i]), g_nbtypes.v[i]);
+      return type;
+    }
+  }
+  return NULL;
+}
+
+
+/* a notebook of an extension's format read (as .ipynb JSON) or written through its serializer */
+static Json *g_nbans;
+static int g_nbseq, g_nbgot;
+
+static int nb_got (void) {
+  return g_nbgot;
+}
+
+static Json *nb_round (const char *method, const char *type, const char *path, const char *text) {
+  Buf b;
+  Json *r;
+  if (!lsp_ext_ready(15000)) return NULL;
+  g_nbgot = 0;
+  json_free(g_nbans);
+  g_nbans = NULL;
+  buf_init(&b);
+  buf_printf(&b, "{\"seq\":%d,\"type\":", ++g_nbseq);
+  json_put_str(&b, type, strlen(type));
+  buf_puts(&b, ",\"path\":");
+  json_put_str(&b, path, strlen(path));
+  if (text) {
+    buf_puts(&b, ",\"text\":");
+    json_put_str(&b, text, strlen(text));
+  }
+  buf_putc(&b, '}');
+  buf_putc(&b, '\0');
+  lsp_ext_notify(method, b.s);
+  buf_free(&b);
+  lsp_ext_wait(30000, nb_got);	/* the extension may start first */
+  r = g_nbans;
+  g_nbans = NULL;
+  return g_nbgot ? r : NULL;
+}
+
+/* the file as .ipynb JSON (the caller frees it); NULL: it could not be read (said) */
+char *ehost_nb_load (const char *type, const char *path) {
+  Json *r = nb_round("mme/nbDeserialize", type, path, NULL);
+  char *s = NULL;
+  if (r == NULL) toast(1, "The extension of %s notebooks did not answer", type);
+  else if (json_str(json_get(r, "error"), NULL)) toast(1, "%s: %s", path_basename(path), json_str(json_get(r, "error"), ""));
+  else s = xstrdup(json_str(json_get(r, "text"), ""));
+  json_free(r);
+  return s;
+}
+
+/* text (.ipynb JSON) written to path by the extension's serializer; 0: written */
+int ehost_nb_save (const char *type, const char *path, const char *text) {
+  Json *r = nb_round("mme/nbSerialize", type, path, text);
+  int ok = r && json_str(json_get(r, "error"), NULL) == NULL;
+  if (r == NULL) toast(1, "The extension of %s notebooks did not answer", type);
+  else if (!ok) toast(1, "Failed to save '%s': %s", path_basename(path), json_str(json_get(r, "error"), ""));
+  json_free(r);
+  return ok ? 0 : -1;
+}
+
+
 const char *ehost_state (const char *id) {
   size_t i;
   work_out();
   for (i = 0; i < g_nrun; i++)
     if (m_stricmp(g_run[i].id, id) == 0) return g_run[i].state ? g_run[i].state : "starting";
   return NULL;
+}
+
+
+/* how long it took to start in ms (-1: not started), *busy: how long of that the host did nothing else */
+int ehost_start_ms (const char *id, int *busy) {
+  size_t i;
+  *busy = -1;
+  for (i = 0; i < g_nrun; i++)
+    if (m_stricmp(g_run[i].id, id) == 0 && g_run[i].state) {
+      *busy = g_run[i].busy;
+      return g_run[i].ms;
+    }
+  return -1;
+}
+
+
+/* what the host knows of it while it runs (mme/extInfo: its activation, missing APIs, log lines); NULL: the host
+** does not run, or did not answer; the caller frees it */
+static Json *g_info;
+static int g_info_seq, g_info_got;
+
+static int info_got (void) {
+  return g_info_got;
+}
+
+Json *ehost_ext_info (const char *id) {
+  char p[300];
+  Json *r;
+  if (!lsp_running(EXT_LANG)) return NULL;
+  g_info_got = 0;
+  json_free(g_info);
+  g_info = NULL;
+  snprintf(p, sizeof(p), "{\"id\":\"%.200s\",\"seq\":%d}", id, ++g_info_seq);
+  lsp_ext_notify("mme/extInfo", p);
+  lsp_ext_wait(1500, info_got);
+  r = g_info;
+  g_info = NULL;
+  return r;
 }
 
 
@@ -296,6 +425,7 @@ static void forget (void) {
   g_run = NULL;
   g_nrun = 0;
   vec_free(&g_langs);
+  vec_free(&g_nbtypes);
   vec_free(&g_ghost);
   g_ghost_all = 0;
   g_ready = 0;
@@ -364,7 +494,7 @@ static HCmd *g_cmd;
 static size_t g_ncmd;
 
 typedef struct HKey {
-  char *key, *when;
+  char *key, *when, *ext;
   int cmd;
 } HKey;
 
@@ -526,12 +656,15 @@ void ehost_status (void) {
 ** ===================================================================
 */
 
+static void key_audit (const char *ext, Buf *b);
+
 static void contributions (const Json *p) {
   const Json *cs = json_get(p, "commands"), *ks = json_get(p, "keybindings"), *cf = json_get(p, "configuration");
   size_t i;
   for (i = 0; i < g_nkey; i++) {	/* a restarted host says them all again */
     free(g_key[i].key);
     free(g_key[i].when);
+    free(g_key[i].ext);
   }
   g_nkey = 0;
   settings_ext_clear();
@@ -552,10 +685,62 @@ static void contributions (const Json *p) {
     g_key = (HKey *)xrealloc(g_key, (g_nkey + 1) * sizeof(HKey));
     g_key[g_nkey].key = xstrdup(json_str(json_get(k, "key"), ""));
     g_key[g_nkey].when = xstrdup(json_str(json_get(k, "when"), ""));
+    g_key[g_nkey].ext = xstrdup(json_str(json_get(k, "ext"), ""));
     g_key[g_nkey].cmd = c;
     g_nkey++;
   }
   if (g_nkey) keys_load();	/* the new keys join the user's */
+  key_audit(NULL, NULL);
+}
+
+
+/*
+** The extensions' keys that take one of mme's own (Supermaven's Ctrl+I was
+** Tab once): an extension's key wins over mme's while its when holds, as in
+** VS Code. Said in Output > Extensions once for each (key, command) when
+** ext is NULL, else the lines of ext's written to b (its page).
+*/
+static void key_audit (const char *ext, Buf *b) {
+  static Vec said;
+  size_t i;
+  for (i = 0; i < g_nkey; i++) {
+    const HKey *k = &g_key[i];
+    int k1, k2 = 0, c, mine;
+    char name[64], line[512];
+    if (ext && m_stricmp(k->ext, ext) != 0) continue;
+    if ((k1 = key_parse(k->key, &k2)) == 0) continue;
+    mine = keys_mme_cmd(k1, k2);
+    key_name(k1, 1, name, sizeof(name));
+    if (k2) {
+      size_t n = strlen(name);
+      name[n++] = ' ';
+      key_name(k2, 1, name + n, sizeof(name) - n);
+    }
+    c = k->cmd - CMD_N;
+    if (b) {
+      buf_printf(b, "- `%s`: %s%s%s%s", name, c >= 0 && (size_t)c < g_ncmd ? g_cmd[c].id : "?", k->when[0] ? " (when " : "",
+                 k->when, k->when[0] ? ")" : "");
+      if (mine != CMD_NONE) buf_printf(b, " **takes mme's %s**", cmd_name(mine));
+      buf_putc(b, '\n');
+      continue;
+    }
+    if (mine == CMD_NONE) continue;
+    snprintf(line, sizeof(line), "%s|%s", k->key, c >= 0 && (size_t)c < g_ncmd ? g_cmd[c].id : "");
+    {
+      size_t j;
+      for (j = 0; j < said.n && strcmp(said.v[j], line) != 0; j++) {}
+      if (j < said.n) continue;
+      vec_push(&said, xstrdup(line));
+    }
+    out_log("Extensions", "[warning] %s's %s (%s%s%s) takes mme's %s while that holds; keybindings.json can give it back", k->ext,
+            name, c >= 0 && (size_t)c < g_ncmd ? g_cmd[c].id : "?", k->when[0] ? ", when " : "", k->when, cmd_name(mine));
+  }
+}
+
+
+/* an extension's keys, for its page (key_audit) */
+void ehost_key_report (const char *ext, Buf *b) {
+  key_audit(ext, b);
 }
 
 
@@ -683,9 +868,25 @@ int ehost_message (const char *method, const Json *p) {
       if (m_stricmp(g_run[i].id, id) == 0) {
         free(g_run[i].state);
         g_run[i].state = xstrdup(json_str(json_get(p, "state"), "running"));
+        g_run[i].ms = (int)json_num(json_get(p, "ms"), -1);
+        g_run[i].busy = (int)json_num(json_get(p, "busyMs"), -1);
       }
     if (strcmp(json_str(json_get(p, "state"), ""), "error") == 0)
       toast(1, "Extension %s failed to start: %s", id, json_str(json_get(p, "message"), ""));
+  }
+  else if (strcmp(method, "mme/nbDeserialized") == 0 || strcmp(method, "mme/nbSerialized") == 0) {	/* nb_round's */
+    if ((int)json_num(json_get(p, "seq"), 0) == g_nbseq) {
+      json_free(g_nbans);
+      g_nbans = json_copy(p);
+      g_nbgot = 1;
+    }
+  }
+  else if (strcmp(method, "mme/extInfoIs") == 0) {	/* ehost_ext_info's answer */
+    if ((int)json_num(json_get(p, "seq"), 0) == g_info_seq) {
+      json_free(g_info);
+      g_info = json_copy(p);
+      g_info_got = 1;
+    }
   }
   else if (strcmp(method, "mme/terminalEnv") == 0) {	/* environmentVariableCollection: for the terminals to come */
     const Json *v = json_get(p, "vars");

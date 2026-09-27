@@ -509,6 +509,27 @@ static void fill_row (Frame *f, int x, int y, int w, int h, uint32_t color, int 
 }
 
 
+/* an icon theme's icon (eicons.c) at the cell px, py: a square about as high as the row, over this cell and
+** the space after it (where mme's own icons stand), in its middle */
+static void paint_icon (uint32_t cp, int px, int py, int cw, int ch) {
+  Frame *f = &W.fr;
+  int s = ch * 3 / 4, x, y, x0, y0;
+  const uint32_t *pic;
+  if (s > cw * 2 - cw / 3) s = cw * 2 - cw / 3;	/* a gap before the name, as VS Code has */
+  if (s < 8) s = ch < 8 ? ch : 8;
+  if ((pic = icons_pixels(cp, s)) == NULL) return;
+  x0 = px + (cw * 2 - s) / 4;
+  y0 = py + (ch - s) / 2;
+  for (y = 0; y < s; y++)
+    for (x = 0; x < s; x++) {
+      uint32_t c = pic[y * s + x], a = c >> 24, *o;
+      if (a == 0 || clipped(x0 + x, y0 + y) || x0 + x < 0 || y0 + y < 0 || x0 + x >= f->w || y0 + y >= f->h) continue;
+      o = &f->px[(size_t)(y0 + y) * (size_t)f->w + (size_t)(x0 + x)];
+      *o = a == 255 ? (c & 0xFFFFFFu) | (*o & 0xFF000000u) : mix(*o, c & 0xFFFFFFu, (int)a);
+    }
+}
+
+
 /* the cell at pixels px, py in font m */
 static void paint_fg (const Fm *m, const ECell *c, int px, int py, int wide, uint32_t fg, uint32_t bg, uint32_t at,
                       uint32_t ul, int over) {
@@ -518,7 +539,11 @@ static void paint_fg (const Fm *m, const ECell *c, int px, int py, int wide, uin
   if (line < 1) line = 1;
   if (ch > ' ' && ch != ZONE_HOLE) {
     int drawn = 0;
-    if (ch >= 0x2500 && ch <= 0x257F) drawn = draw_box(f, ch, px, py, w, m->ch, fg);
+    if (ch >= ICON_CP && ch < ICON_CP_END) {
+      paint_icon(ch, px, py, m->cw, m->ch);
+      drawn = 1;
+    }
+    else if (ch >= 0x2500 && ch <= 0x257F) drawn = draw_box(f, ch, px, py, w, m->ch, fg);
     else if (ch >= 0x2580 && ch <= 0x259F) drawn = draw_block(f, ch, px, py, w, m->ch, fg);
     else if (ch >= 0xE0B0 && ch <= 0xE0BF) drawn = draw_powerline(f, ch, px, py, w, m->ch, fg);
     if (!drawn)
@@ -1994,6 +2019,7 @@ int term_open (void) {
   float ddpi = 96.0f, hdpi = 96.0f, vdpi = 96.0f;
   int w, h, wx, wy;
   SDL_SetMainReady();
+  icons_pictures(1);	/* an icon theme's icons are drawn here */
   SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");	/* sharp on a high DPI screen */
   SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
   SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");	/* the click that activates the window does its work too (a button, the caret) */

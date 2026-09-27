@@ -74,6 +74,8 @@ sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
 | `econfig.c` | settings.json: VS Code's settings, by VS Code's names |
 | `eext.c` | extensions: the Extensions view, Install from VSIX, VS Code's; their themes, snippets, languages |
 | `ehost.c` | the extension host: extensions' code run by node (`mme-exthost.js`, as C strings in `ehost_js.h`), spoken to as a language server |
+| `eicons.c` | file icon themes (`workbench.iconTheme`): an extension's icons for files and folders, drawn in mme-sdl |
+| `esvg.c` | SVG pictures: a small rasterizer for the icon themes' icons |
 | `eregex.c` | regular expressions for Find, Replace and Search (`.*`) |
 | `etm.c` | TextMate grammars: VS Code's own highlighting, from VS Code and its extensions |
 | `eonig.c` | regular expressions as the grammars write them (Oniguruma's: lookbehind, `\G`, `(?x)` ...) |
@@ -654,6 +656,33 @@ With no file open the editor shows the keys to start with.
   **languages** (file extensions, the comments Ctrl+/ uses) and its TextMate
   grammars.
 
+  **File icon themes** (vscode-icons, Material Icon Theme): Preferences: File
+  Icon Theme lists them (Up / Down shows each at once), or name one in
+  `workbench.iconTheme` (`"vscode-icons"`; `"vs-seti"` is mme's own). Files
+  get the theme's icons by their name, their extensions (the longest first:
+  `d.ts` before `ts`) and their language, folders by their name, open or
+  closed, as in VS Code - in the explorer, tabs, breadcrumbs, Go to File and
+  every list. The icons are SVG: mme-sdl draws them (`esvg.c`: paths, shapes,
+  gradients, clip paths, CSS classes; text, images and blur filters are left
+  out). In a terminal, and for a theme drawn with a font (Seti) or PNG files,
+  mme's own icons stay.
+
+  An extension's **page** (a click on its row, or Enter: Show Details) says
+  how it runs: what started it (`onLanguage:go`), how long it took to start
+  and how long of that the extension host was busy (loading its code and
+  running `activate()`), about how much memory it took, the VS Code APIs it
+  asked for that mme does not have, and the host's log lines of its own (its
+  `console.log`s, found by the call stack, and its errors); then its
+  activation events, what it depends on, its commands, keybindings and
+  settings. An extension that holds the host busy for half a second or more
+  says so in its row ("running 1.2s", yellow from a second on). Extensions
+  start side by side, as in VS Code: one waiting on the network (a sign-in, a
+  download) does not keep the others from starting. An extension's key that
+  takes one of mme's own (Supermaven's Ctrl+I: Inline Chat) wins while its
+  `when` holds, as in VS Code; Output > Extensions says so once for each, and
+  its page marks it ("takes mme's Undo") - binding the key to mme's command
+  in keybindings.json gives it back (the user's keys win over the extensions').
+
   **Its code runs too** - in mme's **extension host**, as in VS Code: an
   extension is JavaScript written against the `vscode` API, so mme runs
   `mme-exthost.js` with **node** (Node 18 or later: `mme.extensions.nodePath`,
@@ -675,7 +704,7 @@ With no file open the editor shows the keys to start with.
   once (its status bar items go with it; its themes and snippets stay), Enable
   starts it again. What an extension started (Dart's analysis server,
   Flutter's daemon, an AI agent) stops with it: the host ends them, and mme
-  ends the host's whole process tree, so nothing is left running. One that
+  ends the host's whole process tree (Windows, Linux, macOS), so nothing is left running. One that
   depends on an extension that does not run says so ("needs dart-code").
   Disable takes the extension's languages with it: mme's own server of each
   (`mme.languageServers`, e.g. `"dart": "dart language-server"`) is set to
@@ -748,10 +777,19 @@ With no file open the editor shows the keys to start with.
   extension, their outputs (stdout, stderr, errors, text, images) in the
   notebook.
 
+  An extension's **notebook format** (`registerNotebookSerializer`,
+  `contributes.notebooks`: a file pattern such as `*.sample`) opens in the
+  notebook editor: the extension reads the file and writes it back on Save,
+  and its kernel for that type is picked at once. **Notebook renderers**
+  (`contributes.notebookRenderer`) are web code: an output only a renderer
+  can draw says so in the cell, and **Notebook: Open Output in Browser**
+  puts the selected cell's outputs on a page (served like a webview) where
+  the renderer draws them - HTML outputs (a plot, a styled table) show there
+  as they are.
+
   Not there yet (Output > Extension Host lists every `[missing]` API an
-  extension asked for): notebook serializers for other formats than .ipynb,
-  notebook renderers (they are webviews inside cells), and debug adapters on
-  named pipes. Microsoft's own extensions (Pylance, C/C++, Python,
+  extension asked for; an extension's page lists its own): debug adapters on
+  named pipes, and renderers drawn inside the notebook itself. Microsoft's own extensions (Pylance, C/C++, Python,
   debugpy, C# Dev Kit) are licensed for Microsoft's VS Code only: mme runs them
   if named, but their licence does not allow it.
 - **Explorer** — the folder tree, with a scrollbar at its right edge (every

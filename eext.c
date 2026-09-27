@@ -34,6 +34,10 @@ typedef struct ETheme {
   int light;	/* uiTheme "vs" or "hc-light" */
 } ETheme;
 
+typedef struct EIcon {	/* a file icon theme: workbench.iconTheme names its id (eicons.c) */
+  char *id, *label, *path;
+} EIcon;
+
 typedef struct ESnip {
   char *lang;	/* NULL: a .code-snippets for every language */
   char *path;
@@ -58,6 +62,7 @@ typedef struct Ext {
   ELang *lang;
   size_t nlang;
   int ngrammar, ncommand, nkey, ndebug, nicon, nconfig;	/* what mme does not use */
+  EIcon *icons;	/* nicon of them */
   int code;	/* it has code (package.json's main): it can be turned on and off */
   Vec onlang;	/* the languages its activationEvents name (onLanguage:go): what it serves, with lang's */
 } Ext;
@@ -81,6 +86,12 @@ static void ext_free (Ext *e) {
     free(e->theme[i].path);
   }
   free(e->theme);
+  for (i = 0; i < (size_t)e->nicon; i++) {
+    free(e->icons[i].id);
+    free(e->icons[i].label);
+    free(e->icons[i].path);
+  }
+  free(e->icons);
   for (i = 0; i < e->nsnip; i++) {
     free(e->snip[i].lang);
     free(e->snip[i].path);
@@ -235,7 +246,18 @@ static int ext_read (Ext *e, const char *dir, int vscode) {
   e->ncommand = (int)count(json_get(c, "commands"));
   e->nkey = (int)count(json_get(c, "keybindings"));
   e->ndebug = (int)count(json_get(c, "debuggers"));
-  e->nicon = (int)count(json_get(c, "iconThemes"));
+  a = json_get(c, "iconThemes");
+  if (count(a)) {
+    e->icons = (EIcon *)xmalloc(a->n * sizeof(EIcon));
+    for (i = 0; i < a->n; i++) {
+      const char *id = json_str(json_get(a->kid[i], "id"), NULL), *p = json_str(json_get(a->kid[i], "path"), NULL);
+      if (id == NULL || p == NULL) continue;
+      e->icons[e->nicon].id = xstrdup(id);
+      e->icons[e->nicon].label = xstrdup(nls(nl, json_str(json_get(a->kid[i], "label"), id)));
+      e->icons[e->nicon].path = ext_file(dir, p);
+      e->nicon++;
+    }
+  }
   e->nconfig = json_get(c, "configuration") != NULL;
   e->code = json_get(pk, "main") != NULL || json_get(pk, "browser") != NULL;
   vec_init(&e->onlang);
@@ -448,6 +470,42 @@ const char *ext_lang_label (const char *path) {
 
 /* its comments, from its language-configuration.json; 0: none known */
 /* the file of an extension's color theme, by its name; NULL: not one */
+/* the installed extensions' file icon themes (eicons.c): i of ext_icon_theme_count */
+static const EIcon *icon_theme (int i) {
+  size_t k;
+  for (k = 0; k < g_next; k++) {
+    if (i < g_ext[k].nicon) return &g_ext[k].icons[i];
+    i -= g_ext[k].nicon;
+  }
+  return NULL;
+}
+
+int ext_icon_theme_count (void) {
+  size_t k;
+  int n = 0;
+  for (k = 0; k < g_next; k++) n += g_ext[k].nicon;
+  return n;
+}
+
+const char *ext_icon_theme_id (int i) {
+  const EIcon *t = icon_theme(i);
+  return t ? t->id : "";
+}
+
+const char *ext_icon_theme_label (int i) {
+  const EIcon *t = icon_theme(i);
+  return t ? t->label : "";
+}
+
+/* the theme file of the icon theme with that id; NULL: none installed */
+const char *ext_icon_theme_path (const char *id) {
+  int i, n = ext_icon_theme_count();
+  for (i = 0; i < n; i++)
+    if (strcmp(icon_theme(i)->id, id) == 0) return icon_theme(i)->path;
+  return NULL;
+}
+
+
 const char *ext_theme_path (const char *label) {
   size_t i, k;
   for (i = 0; label && i < g_next; i++)
@@ -1313,6 +1371,184 @@ static char *page_path (const char *id) {
 }
 
 
+/* a JSON value, short, for a setting's default */
+static void short_json (Buf *b, const Json *v) {
+  Buf t;
+  buf_init(&t);
+  if (v) json_write(&t, v);
+  else buf_puts(&t, "(none)");
+  if (t.len > 60) buf_printf(b, "%.57s...", t.s);
+  else buf_putn(b, t.s, t.len);
+  buf_free(&t);
+}
+
+
+/* one line of text for a list: its first line, no more than n bytes */
+static void one_line (Buf *b, const char *s, size_t n) {
+  size_t k = strcspn(s, "\r\n");
+  if (k > n) k = n;
+  buf_putn(b, s, k);
+  if (s[k] && k == n) buf_puts(b, "...");
+}
+
+
+/* while it runs: what the host knows (its activation, its log, the APIs it asked for that mme lacks) */
+static void page_runtime (Buf *b, const Ext *e) {
+  Json *in;
+  const Json *a;
+  const char *hs = ehost_state(e->id);
+  size_t i;
+  buf_puts(b, "\n## Status\n\n");
+  if (!e->code) {
+    buf_puts(b, "- no code of its own: mme reads what it contributes, nothing runs\n");
+    return;
+  }
+  if (ehost_disabled(e->id)) buf_puts(b, "- disabled (mme.extensions.disabled): its code does not run, its languages are off\n");
+  else if (e->vscode && !ehost_in_run(e->id) && hs == NULL)
+    buf_puts(b, "- not enabled: VS Code's extensions run when named in mme.extensions.run (the Enable button)\n");
+  else if (hs == NULL || strcmp(hs, "starting") == 0) buf_puts(b, "- enabled: it starts when one of its activation events comes\n");
+  else buf_printf(b, "- %s\n", strcmp(hs, "error") == 0 ? "failed to start" : hs);
+  in = hs ? ehost_ext_info(e->id) : NULL;
+  if (in == NULL || !json_bool(json_get(in, "known"), 0)) {
+    if (hs) buf_puts(b, "- the extension host did not answer (Output > Extension Host has its log)\n");
+    json_free(in);
+    return;
+  }
+  if (json_str(json_get(in, "error"), "")[0]) buf_printf(b, "- error: %s\n", json_str(json_get(in, "error"), ""));
+  if (json_str(json_get(in, "event"), "")[0]) buf_printf(b, "- started on `%s`\n", json_str(json_get(in, "event"), ""));
+  if (json_get(in, "activateMs")) {
+    buf_printf(b, "- activation: %.0f ms", json_num(json_get(in, "activateMs"), 0));
+    if (json_get(in, "busyMs")) buf_printf(b, ", of which the host was busy %.0f ms (loading its code, running activate())",
+                                           json_num(json_get(in, "busyMs"), 0));
+    if (json_get(in, "heapMB")) buf_printf(b, "; about %.0f MB of memory then", json_num(json_get(in, "heapMB"), 0));
+    buf_putc(b, '\n');
+  }
+  a = json_get(in, "needs");
+  for (i = 0; a && a->type == J_ARR && i < a->n; i++)
+    buf_printf(b, "- needs the extension %s, which is not installed\n", json_str(a->kid[i], ""));
+  a = json_get(in, "missing");
+  if (count(a)) {
+    buf_puts(b, "\n### VS Code APIs it asked for that mme does not have\n\n");
+    for (i = 0; i < a->n; i++) buf_printf(b, "- `%s`\n", json_str(a->kid[i], ""));
+  }
+  a = json_get(in, "lines");
+  if (count(a)) {
+    buf_puts(b, "\n### Its log (the extension host's lines about it)\n\n```\n");
+    for (i = 0; i < a->n; i++) {
+      one_line(b, json_str(a->kid[i], ""), 300);
+      buf_putc(b, '\n');
+    }
+    buf_puts(b, "```\n");
+  }
+  a = json_get(in, "events");
+  if (count(a) || json_num(json_get(in, "implied"), 0) > 0) {
+    buf_puts(b, "\n### When it starts (activation events)\n\n");
+    for (i = 0; i < count(a) && i < 40; i++) buf_printf(b, "%s`%s`", i ? ", " : "", json_str(a->kid[i], ""));
+    if (count(a) > 40) buf_printf(b, " and %lu more", (unsigned long)(a->n - 40));
+    if (json_num(json_get(in, "implied"), 0) > 0)
+      buf_printf(b, "%s%.0f implied by what it contributes (its commands, languages, views)", count(a) ? "; and " : "",
+                 json_num(json_get(in, "implied"), 0));
+    buf_putc(b, '\n');
+  }
+  json_free(in);
+}
+
+
+/* what its package.json contributes: commands, keys, settings, what it depends on */
+static void page_contributes (Buf *b, const Ext *e) {
+  char *f = path_join(e->dir, "package.json");
+  Json *pk = read_json(f), *nl;
+  const Json *c, *a;
+  size_t i;
+  free(f);
+  if (pk == NULL) return;
+  f = path_join(e->dir, "package.nls.json");
+  nl = read_json(f);
+  free(f);
+  c = json_get(pk, "contributes");
+  a = json_get(pk, "extensionDependencies");
+  if (count(a)) {
+    buf_puts(b, "\n## Depends on\n\n");
+    for (i = 0; i < a->n; i++) {
+      const char *d = json_str(a->kid[i], "");
+      char *dir = strncmp(d, "vscode.", 7) == 0 ? NULL : vscode_find_ext(d);
+      buf_printf(b, "- %s%s\n", d, strncmp(d, "vscode.", 7) == 0 ? " (VS Code's own)" : dir ? "" : " **not installed**");
+      free(dir);
+    }
+  }
+  a = json_get(pk, "extensionPack");
+  if (count(a)) {
+    buf_puts(b, "\n## Extension pack\n\n");
+    for (i = 0; i < a->n; i++) buf_printf(b, "- %s\n", json_str(a->kid[i], ""));
+  }
+  a = json_get(c, "commands");
+  if (count(a)) {
+    buf_printf(b, "\n## Commands (%lu)\n\n", (unsigned long)a->n);
+    for (i = 0; i < a->n; i++) {
+      const Json *t = json_get(a->kid[i], "title"), *cat = json_get(a->kid[i], "category");
+      const char *title = t && t->type == J_OBJ ? json_str(json_get(t, "value"), "") : nls(nl, json_str(t, ""));
+      const char *ct = cat && cat->type == J_OBJ ? json_str(json_get(cat, "value"), "") : nls(nl, json_str(cat, ""));
+      buf_printf(b, "- %s%s%s  `%s`\n", ct && *ct ? ct : "", ct && *ct ? ": " : "", title ? title : "",
+                 json_str(json_get(a->kid[i], "command"), ""));
+    }
+  }
+  if (count(json_get(c, "keybindings"))) {
+    Buf k;
+    buf_init(&k);
+    ehost_key_report(e->id, &k);	/* the running host's: the keys worked out for this OS, mme's taken marked */
+    buf_printf(b, "\n## Keybindings (%lu)\n\n", (unsigned long)json_get(c, "keybindings")->n);
+    if (k.len) buf_putn(b, k.s, k.len);
+    else {
+      a = json_get(c, "keybindings");
+      for (i = 0; i < a->n; i++) {
+        const Json *x = a->kid[i];
+#ifdef _WIN32
+        const char *key = json_str(json_get(x, "win"), json_str(json_get(x, "key"), ""));
+#elif defined(__APPLE__)
+        const char *key = json_str(json_get(x, "mac"), json_str(json_get(x, "key"), ""));
+#else
+        const char *key = json_str(json_get(x, "linux"), json_str(json_get(x, "key"), ""));
+#endif
+        buf_printf(b, "- `%s`: %s\n", key, json_str(json_get(x, "command"), ""));
+      }
+      buf_puts(b, "\n(while it runs, a key that takes one of mme's is marked here)\n");
+    }
+    buf_free(&k);
+  }
+  {
+    const Json *cf = json_get(c, "configuration");
+    size_t n = 0, j;
+    for (j = 0; cf && j < (cf->type == J_ARR ? cf->n : 1); j++) n += json_get(cf->type == J_ARR ? cf->kid[j] : cf, "properties") ?
+                                                                      json_get(cf->type == J_ARR ? cf->kid[j] : cf, "properties")->n : 0;
+    if (n) {
+      buf_printf(b, "\n## Settings (%lu, in the Settings editor: Ctrl+,)\n\n", (unsigned long)n);
+      for (j = 0; cf && j < (cf->type == J_ARR ? cf->n : 1); j++) {
+        const Json *ps = json_get(cf->type == J_ARR ? cf->kid[j] : cf, "properties");
+        for (i = 0; ps && ps->type == J_OBJ && i < ps->n; i++) {
+          const Json *p = ps->kid[i];
+          const char *d = nls(nl, json_str(json_get(p, "markdownDescription"), json_str(json_get(p, "description"), "")));
+          buf_printf(b, "- `%s` = ", p->key ? p->key : "");
+          short_json(b, json_get(p, "default"));
+          if (d && *d) {
+            buf_puts(b, ": ");
+            one_line(b, d, 140);
+          }
+          buf_putc(b, '\n');
+        }
+      }
+    }
+  }
+  a = json_get(c, "debuggers");
+  if (count(a)) {
+    buf_puts(b, "\n## Debuggers\n\n");
+    for (i = 0; i < a->n; i++)
+      buf_printf(b, "- %s (`%s`)\n", nls(nl, json_str(json_get(a->kid[i], "label"), "")), json_str(json_get(a->kid[i], "type"), ""));
+  }
+  json_free(nl);
+  json_free(pk);
+}
+
+
 static void page_write (const Item *it, const Ext *e, const char *readme, size_t rlen) {
   Buf b;
   char *f = page_path(it->id);
@@ -1323,8 +1559,9 @@ static void page_write (const Item *it, const Ext *e, const char *readme, size_t
   buf_printf(&b, "%s  |  %s  |  v%s", it->publisher, it->id, it->version);
   buf_printf(&b, "\n\n%s\n\n", it->desc);
   if (e) {
-    buf_printf(&b, "Installed in %s%s\n\n", e->dir, e->vscode ? " (VS Code's, read only)" : "");
-    buf_puts(&b, "## What mme uses\n\n");
+    buf_printf(&b, "Installed in %s%s\n", e->dir, e->vscode ? " (VS Code's, read only)" : "");
+    page_runtime(&b, e);
+    if (e->ntheme + e->nsnip + e->nlang + e->ngrammar + e->nicon) buf_puts(&b, "\n## What mme reads from it\n\n");
     for (i = 0; i < e->ntheme; i++) buf_printf(&b, "- Color theme: %s (Ctrl+K Ctrl+T)\n", e->theme[i].label);
     for (i = 0; i < e->nsnip; i++) buf_printf(&b, "- Snippets: %s\n", e->snip[i].lang ? e->snip[i].lang : "every language");
     for (i = 0; i < e->nlang; i++) {
@@ -1333,16 +1570,11 @@ static void page_write (const Item *it, const Ext *e, const char *readme, size_t
       for (k = 0; k < e->lang[i].exts.n; k++) buf_printf(&b, "%s%s", k ? " " : " (", e->lang[i].exts.v[k]);
       buf_puts(&b, e->lang[i].exts.n ? ")\n" : "\n");
     }
-    if (e->ntheme + e->nsnip + e->nlang == 0) buf_puts(&b, "- nothing: mme cannot run what it does\n");
-    if (e->ngrammar || e->ncommand || e->nkey || e->ndebug || e->nicon || e->nconfig) {
-      buf_puts(&b, "\n## What needs VS Code (its code runs in VS Code's extension host)\n\n");
-      if (e->ngrammar) buf_printf(&b, "- %d grammar(s): mme highlights with its own\n", e->ngrammar);
-      if (e->ncommand) buf_printf(&b, "- %d command(s)\n", e->ncommand);
-      if (e->nkey) buf_printf(&b, "- %d keybinding(s)\n", e->nkey);
-      if (e->ndebug) buf_printf(&b, "- %d debugger(s)\n", e->ndebug);
-      if (e->nicon) buf_printf(&b, "- %d file icon theme(s)\n", e->nicon);
-      if (e->nconfig) buf_puts(&b, "- settings\n");
-    }
+    if (e->ngrammar) buf_printf(&b, "- %d grammar(s): mme highlights with its own\n", e->ngrammar);
+    for (i = 0; i < (size_t)e->nicon; i++)
+      buf_printf(&b, "- File icon theme: %s (Preferences: File Icon Theme; workbench.iconTheme \"%s\")\n", e->icons[i].label,
+                 e->icons[i].id);
+    page_contributes(&b, e);
   }
   if (readme && rlen) {
     buf_puts(&b, "\n---\n\n");
@@ -1487,9 +1719,12 @@ void ext_draw (int x, int y, int w, int h, int focus) {
       }
       else if (!is_on(it)) tag = "disabled";
       else if (hs == NULL || strcmp(hs, "starting") == 0) tag = "enabled";	/* its activation event has not come */
-      else if (strcmp(hs, "running") == 0) {
-        tag = "running";
-        rgb = 0x73C991;
+      else if (strcmp(hs, "running") == 0) {	/* "running 0.4s": how long the host was busy starting it */
+        int busy, ms = ehost_start_ms(it->id, &busy);
+        static char rt[32];
+        if (ms >= 0 && busy >= 500) snprintf(rt, sizeof(rt), "running %d.%ds", busy / 1000, busy % 1000 / 100);
+        tag = ms >= 0 && busy >= 500 ? rt : "running";
+        rgb = busy >= 1000 ? 0xCCA700 : 0x73C991;	/* a second or more: yellow, it holds the others back */
       }
       else if (strcmp(hs, "error") == 0) {
         tag = "failed";

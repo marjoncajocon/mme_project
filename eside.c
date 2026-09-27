@@ -789,6 +789,11 @@ uint32_t file_icon (const char *name, int *st) {
   };
   const char *dot = strrchr(name, '.');
   size_t i;
+  uint32_t th = icons_file(name);
+  if (th) {	/* the icon theme's picture (mme-sdl) */
+    *st = S_ICON_GREY;
+    return th;
+  }
   if (m_stricmp(name, "makefile") == 0) {
     *st = S_ICON_ORANGE;
     return 0xE779;
@@ -1102,12 +1107,21 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
     cx = x + ind;
     k++;
     if (ind + 4 >= w) continue;
-    if (n->dir) icon = n->open ? 0xEAB4 : 0xEAB6, ist = st;	/* chevrons */
+    if (n->dir) {
+      uint32_t fi = icons_folder(n->name, n->open, g_vdepth[k - 1] == 0 && g_ws);
+      icon = n->open ? 0xEAB4 : 0xEAB6, ist = st;	/* chevrons */
+      if (fi) {	/* and the icon theme's folder after it, as VS Code shows it */
+        scr_put(cx, sy, icon, ist);
+        cx += 2;
+        icon = fi;
+      }
+    }
     else {
       if (g_vnest[k - 1] > 0) {	/* files nested under it: a chevron too */
         scr_put(cx, sy, nest_open(k - 1) ? 0xEAB4 : 0xEAB6, st);
         cx += 2;
       }
+      else if (icons_active()) cx += 2;	/* the icon under the folders' icons, past their chevrons */
       icon = file_icon(n->name, &ist);
       if (st == S_SIDE_SEL || st == S_SIDE_CUR || st == S_SIDE_ACTIVE) ist = st;
     }

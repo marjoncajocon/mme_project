@@ -741,6 +741,8 @@ enum {
   CMD_PORT_FORWARD, CMD_PORTS,	/* eports.c */
   CMD_EDITOR_TO_WINDOW, CMD_EDITOR_COPY_WINDOW,	/* Move / Copy Editor into New Window */
   CMD_ACC_VIEW, CMD_ACC_HELP,	/* Accessible View, Accessibility Help (eaccess.c) */
+  CMD_ICON_THEME,	/* Preferences: File Icon Theme (eicons.c) */
+  CMD_NB_OUT_BROWSER,	/* Notebook: Open Output in Browser (enb.c: the extensions' renderers) */
   CMD_N
 };
 
@@ -1115,7 +1117,23 @@ void side_click (int view, int row, int col, SideAct *act);
 void side_wheel (int view, int d);
 int side_idle (int view);	/* 1: something changed, draw again */
 
-uint32_t file_icon (const char *name, int *st);	/* Seti's icon and its color */
+uint32_t file_icon (const char *name, int *st);	/* Seti's icon and its color (or the icon theme's) */
+
+/* eicons.c: file icon themes (workbench.iconTheme); their icons are code points from ICON_CP, pictures in mme-sdl */
+#define ICON_CP 0xF0000u
+#define ICON_CP_END 0xF8000u
+void icons_pictures (int on);	/* the window draws pictures in cells (sdl2_port/esdl.c) */
+void icons_settings (void);
+int icons_active (void);	/* a theme's pictures show */
+uint32_t icons_file (const char *name);	/* 0: mme's own icon */
+uint32_t icons_folder (const char *name, int open, int root);	/* 0: none */
+const uint32_t *icons_pixels (uint32_t cp, int size);	/* 0xAARRGGBB, size * size; NULL: none */
+void icons_pick (void);	/* Preferences: File Icon Theme */
+uint32_t *svg_render (const char *src, size_t n, int w, int h);	/* esvg.c: 0xAARRGGBB; NULL: not SVG */
+int ext_icon_theme_count (void);	/* eext.c: the installed extensions' icon themes */
+const char *ext_icon_theme_id (int i);
+const char *ext_icon_theme_label (int i);
+const char *ext_icon_theme_path (const char *id);
 void files_draw (int x, int y, int w, int h, int focus, const char *active);
 int files_key (int k, SideAct *act);
 void files_click (int row, int col, SideAct *act);
@@ -1220,7 +1238,7 @@ void diff_embed_stats (size_t *add, size_t *del);	/* the lines that came and wen
 ** enb.c - Jupyter notebooks (.ipynb): VS Code's notebook editor in a tab
 ** (PAGE_NOTEBOOK), a kernel (mme-kernel.py) that runs its cells
 */
-enum { NB_RUN_ALL, NB_RESTART, NB_INTERRUPT, NB_CLEAR, NB_RUN };
+enum { NB_RUN_ALL, NB_RESTART, NB_INTERRUPT, NB_CLEAR, NB_RUN, NB_OUT_BROWSER };
 int nb_is_file (const char *path);	/* its name ends in .ipynb */
 void *nb_open (const char *path);	/* NULL: not a notebook; a file not there: a new one; path NULL: Untitled-1.ipynb */
 void nb_close (void *page);
@@ -1315,6 +1333,14 @@ void mme_show_trees (void);	/* mme.c: the view shown (treeView.reveal) */
 void lsp_ext_notify (const char *method, const char *params);	/* elsp.c: a notification to the extension host */
 void lsp_ext_start (void);	/* the host started when no document is open (a notebook's kernels) */
 int lsp_ext_wait (int ms, int (*done) (void));	/* its messages read until done() or ms */
+int lsp_ext_ready (int ms);	/* started and waited for; 0: not running */
+const char *ehost_nb_type (const char *path);	/* ehost.c: an extension's notebook format for this file; NULL */
+char *ehost_nb_load (const char *type, const char *path);	/* as .ipynb JSON; NULL: not read */
+int ehost_nb_save (const char *type, const char *path, const char *text);	/* 0: written */
+int ehost_start_ms (const char *id, int *busy);	/* ehost.c: how long it took to start; -1: not yet */
+Json *ehost_ext_info (const char *id);	/* what the host knows of it (its page); NULL: no host */
+void ehost_key_report (const char *ext, Buf *b);	/* its keys, those taking mme's marked */
+int keys_mme_cmd (int k1, int k2);	/* ekeys.c: mme's own command with that key */
 void task_ext_list (const Json *tasks);	/* etask.c: mme/tasks, the extensions' tasks */
 void test_ext_items (const Json *tests);	/* etest.c: mme/tests, the extensions' test controllers' */
 void test_ext_state (const Json *p);	/* mme/testState */

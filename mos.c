@@ -970,6 +970,7 @@ static long g_spawn_pgid;
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#include <sys/sysctl.h>
 #endif
 
 extern char **environ;
@@ -1476,8 +1477,84 @@ int os_kill (long pid, int sig) {
 
 
 /* the process; what it started cleans up after itself when its pipes close (the extension host does) */
+/* every process's (pid, parent) into *id / *par; how many */
+static size_t procs (long **id, long **par) {
+  size_t n = 0, cap = 0;
+  *id = *par = NULL;
+#define PUT(p, pp) do { \
+    if (n == cap) { \
+      cap = cap ? cap * 2 : 256; \
+      *id = (long *)xrealloc(*id, cap * sizeof(long)); \
+      *par = (long *)xrealloc(*par, cap * sizeof(long)); \
+    } \
+    (*id)[n] = (p); \
+    (*par)[n++] = (pp); \
+  } while (0)
+#if defined(__APPLE__)
+  {	/* the kernel's table of them */
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0};
+    size_t len = 0, i;
+    struct kinfo_proc *kp;
+    if (sysctl(mib, 3, NULL, &len, NULL, 0) == 0 && len > 0) {
+      len += len / 8;	/* a few more may start meanwhile */
+      kp = (struct kinfo_proc *)xmalloc(len);
+      if (sysctl(mib, 3, kp, &len, NULL, 0) == 0)
+        for (i = 0; i < len / sizeof(*kp); i++) PUT((long)kp[i].kp_proc.p_pid, (long)kp[i].kp_eproc.e_ppid);
+      free(kp);
+    }
+  }
+#else
+  {	/* Linux (Android too): /proc/<pid>/stat has the parent after the name in parentheses */
+    DIR *d = opendir("/proc");
+    struct dirent *de;
+    while (d && (de = readdir(d)) != NULL) {
+      char f[300], s[512], *rp;
+      FILE *fp;
+      size_t got;
+      long pp;
+      if (de->d_name[0] < '1' || de->d_name[0] > '9') continue;
+      snprintf(f, sizeof(f), "/proc/%s/stat", de->d_name);
+      if ((fp = fopen(f, "r")) == NULL) continue;
+      got = fread(s, 1, sizeof(s) - 1, fp);
+      fclose(fp);
+      s[got] = '\0';
+      if ((rp = strrchr(s, ')')) != NULL && sscanf(rp + 1, " %*c %ld", &pp) == 1) PUT(atol(de->d_name), pp);
+    }
+    if (d) closedir(d);
+  }
+  if (n == 0) {	/* no /proc (the BSDs): ps says them */
+    FILE *fp = popen("ps -A -o pid= -o ppid= 2>/dev/null", "r");
+    long p, pp;
+    while (fp && fscanf(fp, "%ld %ld", &p, &pp) == 2) PUT(p, pp);
+    if (fp) pclose(fp);
+  }
+#endif
+#undef PUT
+  return n;
+}
+
+
+/* pid and everything it started (a language server's own helpers), the deepest first: none is left to init */
 int os_kill_tree (long pid) {
-  return kill((pid_t)pid, SIGKILL);
+  long *id, *par, *tree;
+  size_t n, nt = 1, i, k;
+  kill((pid_t)pid, SIGSTOP);	/* it starts no more meanwhile */
+  n = procs(&id, &par);
+  tree = (long *)xmalloc((n + 1) * sizeof(long));
+  tree[0] = pid;
+  for (i = 0; i < nt; i++)	/* breadth first: every descendant once */
+    for (k = 0; k < n; k++) {
+      size_t j;
+      int seen = 0;
+      if (par[k] != tree[i] || id[k] <= 1 || id[k] == tree[i]) continue;
+      for (j = 0; j < nt && !seen; j++) seen = tree[j] == id[k];
+      if (!seen) tree[nt++] = id[k];
+    }
+  for (i = nt; i-- > 0;) kill((pid_t)tree[i], SIGKILL);
+  free(tree);
+  free(id);
+  free(par);
+  return 0;
 }
 
 /*

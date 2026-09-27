@@ -962,6 +962,22 @@ SCENARIOS = [
          "and a cell run with it runs in the extension: its stdout and its result are the cell's outputs, its "
          "execution order the cell's count",
          exts=[("acme.web", "acme.web")], private=True),
+    Scen("ext-host-notebook-serializer", "nbx/sample.acmenb",
+         ["w:6000", "d", "k:" + DOWN, "k:" + CTRL_ENTER, "w:2500", "d",
+          "k:" + ENTER, "k:" + HOME + "say ", "k:" + ESC, "k:" + CTRL_S, "w:2500", "k:" + CTRL_W, "w:800",
+          "k:" + CTRL_P, "k:sample", "w:800", "k:" + ENTER, "w:4000", "d"],
+         "a notebook of an extension's own format (workspace.registerNotebookSerializer, contributes.notebooks "
+         "*.acmenb) opens in the notebook editor: the extension reads it (its markdown and code cells), its "
+         "kernel for that type is picked at once and runs a cell (the output in capitals); an edited cell saved "
+         "goes back through the extension, and the file opened again has it",
+         exts=[("acme.nb", "acme.nb")], private=True),
+    Scen("ext-host-notebook-renderer", "nbx/sample.acmenb",
+         ["w:6000", "k:" + DOWN, "k:" + CTRL_ENTER, "w:2500", "d", "k:" + CTRL_SHIFT_P, "k:open output in browser",
+          "w:600", "k:" + ENTER, "w:2500", "d"],
+         "an output of a mime type only an extension's notebook renderer draws (contributes.notebookRenderer) says "
+         "so in the notebook; Notebook: Open Output in Browser puts the cell's outputs on a page the extension "
+         "host serves (the renderer's script draws it there) and opens it in the browser",
+         exts=[("acme.nb", "acme.nb")], private=True, fake_browser=True),
     Scen("ext-view-enable-disable", "lang/plain.txt",
          ["w:5000", "k:" + csiu("x", ctrl=True, shift=True), "w:1000", "d"] + click(15, 8) + ["w:4000", "d"]
          + click(15, 8) + ["w:5000", "d"] + click(15, 8) + ["w:3000"] + click(15, 14) + ["w:3000"]
@@ -990,6 +1006,27 @@ SCENARIOS = [
          "Disable on an extension for C takes the language with it: mme.languageServers's \"c\" is \"\" (mme's "
          "own server off, its command kept in mme.extensions.savedServers); Enable gives the same command back",
          stub_lsp=("c",), exts=[("acme.cext", "acme.cext")]),
+    Scen("ext-view-details-page", "lang/edit.c",
+         ["w:5000", "k:" + csiu("x", ctrl=True, shift=True), "w:1000"] + click(15, 6) + ["w:3000", "d"]
+         + click(60, 15) + ["k:" + "`[6~" * 2, "w:500", "d"],
+         "an extension's page (a click on its row) says how it runs: started on onLanguage:c, its activation's "
+         "time, the host's log lines of its own (console.log found by the call stack), the VS Code API it asked "
+         "for that mme lacks; then its commands, its keybindings (Alt+Z takes mme's Toggle Word Wrap), its "
+         "settings",
+         exts=[("acme.cext", "acme.cext")],
+         subs=[(re.compile(r"\d+ ms"), "<N> ms"), (re.compile(r"about \d+ MB"), "about <N> MB")]),
+    Scen("ext-icon-theme-terminal", "lang/edit.c",
+         ["w:1500", "k:" + CTRL_SHIFT_E, "w:800", "d", "k:" + CTRL_SHIFT_P, "k:file icon theme", "w:600",
+          "k:" + ENTER, "w:800", "d", "k:" + ESC, "w:500"],
+         "workbench.iconTheme names an extension's icon theme (SVG icons): in a terminal the explorer keeps "
+         "mme's own icons (the pictures are mme-sdl's); Preferences: File Icon Theme lists mme's own and the "
+         "extension's, the one in use marked current",
+         settings={"workbench.iconTheme": "acme-icons"}, exts=[("acme.icons", "acme.icons")]),
+    Scen("ext-host-key-takes-mme", "lang/edit.c",
+         ["w:5000", "k:" + ALT_Z, "w:1500", "d"],
+         "an extension's key wins over mme's own while its when holds, as in VS Code: Alt+Z in a C file runs "
+         "the extension's command (its message shows), not Toggle Word Wrap",
+         exts=[("acme.cext", "acme.cext")]),
     Scen("ext-host-completion", "lang/plain.txt",
          ["w:5000", "k:" + END + " dem", "w:300", "k:" + csiu(" ", ctrl=True), "w:2000", "d"],
          "an extension's completion provider (registerCompletionItemProvider) answers Ctrl+Space: its "

@@ -99,10 +99,11 @@ typedef struct Nb {
   int follow;	/* the caret (the cell) must be shown */
   char title[300];
   char xctl[128];	/* an extension's kernel (createNotebookController) runs its cells: its id; "": mme's own */
+  char xtype[128];	/* an extension's notebook format (its serializer reads and writes the file); "": .ipynb */
 } Nb;
 
 typedef struct XCtl {	/* an extension's notebook controller, as the host said */
-  char *id, *label, *desc;
+  char *id, *label, *desc, *type;
 } XCtl;
 
 static XCtl *g_xc;
@@ -394,7 +395,8 @@ static void out_show (Out *o) {
       buf_puts(&o->text, s);
       free(s);
     }
-    else if (d && d->type == J_OBJ && d->n > 0) buf_printf(&o->text, "[%s: not shown in mme]", d->kid[0]->key);
+    else if (d && d->type == J_OBJ && d->n > 0)
+      buf_printf(&o->text, "[%s: Notebook: Open Output in Browser shows it]", d->kid[0]->key);
     return;
   }
   buf_printf(&o->text, "[%s]", json_str(json_get(j, "output_type"), "output"));
@@ -1219,6 +1221,7 @@ void nb_ext_controllers (const Json *list) {
     free(g_xc[i].id);
     free(g_xc[i].label);
     free(g_xc[i].desc);
+    free(g_xc[i].type);
   }
   free(g_xc);
   g_xc = NULL;
@@ -1227,7 +1230,7 @@ void nb_ext_controllers (const Json *list) {
   g_xc = (XCtl *)xmalloc(list->n * sizeof(XCtl));
   for (k = 0; k < list->n; k++) {
     const char *type = json_str(json_get(list->kid[k], "type"), "");
-    if (strcmp(type, "jupyter-notebook") != 0 && strcmp(type, "*") != 0) continue;	/* mme's notebooks are .ipynb */
+    g_xc[g_nxc].type = xstrdup(type);	/* the notebooks it is for: .ipynb's "jupyter-notebook", an extension's own, "*" */
     g_xc[g_nxc].id = xstrdup(json_str(json_get(list->kid[k], "id"), ""));
     g_xc[g_nxc].label = xstrdup(json_str(json_get(list->kid[k], "label"), ""));
     g_xc[g_nxc].desc = xstrdup(json_str(json_get(list->kid[k], "description"), ""));
@@ -1256,21 +1259,30 @@ void nb_ext_message (const Json *p) {
 
 
 /* the toolbar's kernel name clicked: mme's own kernel, or an extension's */
+/* the controller fits the notebook: its type is the notebook's ("jupyter-notebook" for .ipynb), or "*" */
+static int xc_fits (const Nb *nb, const XCtl *x) {
+  return strcmp(x->type, "*") == 0 || strcmp(x->type, nb->xtype[0] ? nb->xtype : "jupyter-notebook") == 0;
+}
+
+
 static void pick_kernel (Nb *nb) {
   Pick p;
-  int i, r;
+  int i, r, map[256], n = 0;
   lsp_ext_start();
   pick_init(&p, "Select Kernel");
   p.keep_order = 1;
   pick_add(&p, "mme: Jupyter / Python (mme-kernel.py)", nb->xctl[0] ? NULL : "selected", 0xEB2D);	/* codicon plug */
-  for (i = 0; i < g_nxc; i++)
+  for (i = 0; i < g_nxc && n < 256; i++) {
+    if (!xc_fits(nb, &g_xc[i])) continue;
+    map[n++] = i;
     pick_add(&p, g_xc[i].label, strcmp(nb->xctl, g_xc[i].id) == 0 ? "selected" : g_xc[i].desc[0] ? g_xc[i].desc : g_xc[i].id, 0xEB2D);
+  }
   r = pick_run(&p);
   pick_free(&p);
   if (r < 0) return;
   k_stop(nb);
   nb->kinfo[0] = '\0';
-  snprintf(nb->xctl, sizeof(nb->xctl), "%s", r == 0 ? "" : g_xc[r - 1].id);
+  snprintf(nb->xctl, sizeof(nb->xctl), "%s", r == 0 ? "" : g_xc[map[r - 1]].id);
   for (i = 0; i < (int)nb->n; i++) nb->cell[i]->state = 0;
   nb->nq = 0;
   nb->running = 0;
@@ -1288,7 +1300,7 @@ static void pick_kernel (Nb *nb) {
 
 int nb_is_file (const char *path) {
   const char *dot = path ? strrchr(path_basename(path), '.') : NULL;
-  return dot && m_fncmp(dot, ".ipynb") == 0;
+  return (dot && m_fncmp(dot, ".ipynb") == 0) || ehost_nb_type(path) != NULL;	/* or an extension's format */
 }
 
 
@@ -1303,12 +1315,24 @@ static void lang_from_meta (Nb *nb) {
 
 
 void *nb_open (const char *path) {
-  Nb *nb;
+  Nb *nb = NULL;
   char *s = NULL;
   size_t len = 0;
-  int fd = path ? os_open(path, OS_READ) : -1, i;
+  const char *dot = path ? strrchr(path_basename(path), '.') : NULL;
+  const char *xtype = path && !(dot && m_fncmp(dot, ".ipynb") == 0) ? ehost_nb_type(path) : NULL;
+  int fd = path && !xtype ? os_open(path, OS_READ) : -1, i;
   static int untitled;
-  if (fd >= 0) {
+  if (xtype) {	/* an extension's format: its serializer reads it, as .ipynb JSON */
+    char keep[128];
+    snprintf(keep, sizeof(keep), "%s", xtype);	/* ehost_nb_type's buffer is used again */
+    if ((s = ehost_nb_load(keep, path)) == NULL) return NULL;
+    len = strlen(s);
+    xtype = NULL;
+    nb = (Nb *)xmalloc(sizeof(Nb));
+    memset(nb, 0, sizeof(*nb));
+    snprintf(nb->xtype, sizeof(nb->xtype), "%s", keep);
+  }
+  else if (fd >= 0) {
     Buf b;
     char chunk[65536];
     long k;
@@ -1319,8 +1343,10 @@ void *nb_open (const char *path) {
     buf_putc(&b, '\0');
     s = buf_take(&b);
   }
-  nb = (Nb *)xmalloc(sizeof(Nb));
-  memset(nb, 0, sizeof(*nb));
+  if (nb == NULL) {
+    nb = (Nb *)xmalloc(sizeof(Nb));
+    memset(nb, 0, sizeof(*nb));
+  }
   nb->path = path ? xstrdup(path) : NULL;
   nb->to = nb->from = nb->err = -1;
   buf_init(&nb->in);
@@ -1347,6 +1373,12 @@ void *nb_open (const char *path) {
   if (path) snprintf(nb->title, sizeof(nb->title), "%s", path_basename(path));
   else snprintf(nb->title, sizeof(nb->title), "Untitled-%d.ipynb", ++untitled);
   lsp_ext_start();	/* the extensions' kernels come to the kernel picker */
+  for (i = 0; nb->xtype[0] && i < g_nxc; i++)	/* an extension's notebook: its own kernel, when it has one */
+    if (strcmp(g_xc[i].type, nb->xtype) == 0) {
+      snprintf(nb->xctl, sizeof(nb->xctl), "%s", g_xc[i].id);
+      snprintf(nb->kinfo, sizeof(nb->kinfo), "%s", g_xc[i].label);	/* its name on the toolbar at once */
+      break;
+    }
   for (i = 0; i < MAX_NB; i++)
     if (g_nb[i] == NULL) {
       g_nb[i] = nb;
@@ -1415,7 +1447,7 @@ int nb_save (void *page, int as) {
       free(name);
       name = full;
     }
-    if (!nb_is_file(name)) {
+    if (!nb_is_file(name) && !nb->xtype[0]) {
       char *with = (char *)xmalloc(strlen(name) + 7);
       sprintf(with, "%s.ipynb", name);
       free(name);
@@ -1426,6 +1458,12 @@ int nb_save (void *page, int as) {
     snprintf(nb->title, sizeof(nb->title), "%s", path_basename(name));
   }
   s = nb_text(nb, &len);
+  if (nb->xtype[0]) {	/* an extension's format: its serializer writes the file */
+    int r = ehost_nb_save(nb->xtype, nb->path, s);
+    free(s);
+    if (r == 0) nb->saved = nb->changes;
+    return r;
+  }
   fd = os_open(nb->path, OS_WRITE);
   if (fd < 0) {
     toast(1, "Failed to save '%s'", path_basename(nb->path));
@@ -2244,10 +2282,50 @@ static void clear_all (Nb *nb) {
 }
 
 
+/* Notebook: Open Output in Browser: the selected cell's outputs on a page (the extension host's), drawn by the
+** extensions' notebook renderers for their mime types, HTML as it is: what the notebook shows as text */
+static void output_in_browser (Nb *nb) {
+  const Cell *c = nb->sel < nb->n ? nb->cell[nb->sel] : NULL;
+  Buf b;
+  size_t i, k = 0;
+  if (c == NULL || c->nout == 0) {
+    toast(0, "The selected cell has no output");
+    return;
+  }
+  if (!lsp_ext_ready(15000)) {
+    toast(1, "Notebook: the extension host is not running (it serves the page)");
+    return;
+  }
+  buf_init(&b);
+  buf_puts(&b, "{\"title\":");
+  json_put_str(&b, nb->title, strlen(nb->title));
+  buf_puts(&b, ",\"outputs\":[");
+  for (i = 0; i < c->nout; i++) {
+    const Out *o = &c->out[i];
+    const Json *d = json_get(o->j, "data");
+    if (o->type == OT_DATA && d) {
+      if (k++) buf_putc(&b, ',');
+      json_write(&b, d);
+    }
+    else if (o->text.len) {	/* a stream, an error: its text */
+      if (k++) buf_putc(&b, ',');
+      buf_puts(&b, "{\"text/plain\":");
+      json_put_str(&b, o->text.s, o->text.len);
+      buf_putc(&b, '}');
+    }
+  }
+  buf_puts(&b, "]}");
+  buf_putc(&b, '\0');
+  lsp_ext_notify("mme/nbRender", b.s);
+  buf_free(&b);
+}
+
+
 void nb_command (void *page, int what) {
   Nb *nb = (Nb *)page;
   if (nb == NULL) return;
   switch (what) {
+    case NB_OUT_BROWSER: output_in_browser(nb); break;
     case NB_RUN_ALL: run_all(nb); break;
     case NB_RESTART: restart(nb); break;
     case NB_INTERRUPT: interrupt(nb); break;

@@ -5720,6 +5720,7 @@ static void apply_settings (int report) {
   int r = settings_load();
   acc_settings_changed();
   ext_init();	/* the extensions' themes, before the theme is set */
+  icons_settings();	/* workbench.iconTheme */
   {	/* which extensions run: when it changed, the extension host starts again with the new ones */
     Buf b;
     const Json *run = settings_get("mme\\.extensions\\.run"), *node = settings_get("mme\\.extensions\\.nodePath");
@@ -17758,6 +17759,11 @@ static void run_command (int cmd) {
     case CMD_SUPERTYPES: hierarchy_ask(LOC_SUPER); break;
     case CMD_SUBTYPES: hierarchy_ask(LOC_SUB); break;
     case CMD_THEME: pick_theme(); break;
+    case CMD_ICON_THEME: icons_pick(); break;
+    case CMD_NB_OUT_BROWSER:
+      if (HAS_DOC && !G->diff && T->page == PAGE_NOTEBOOK) nb_command(T->pdata, NB_OUT_BROWSER);
+      else toast(0, "Open a notebook first.");
+      break;
     case CMD_ZEN:
       E.zen = !E.zen;
       if (E.zen) toast(0, "Zen Mode: Esc Esc or Ctrl+K Z to leave");

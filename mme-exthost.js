@@ -182,8 +182,46 @@ async function quit () {
 
 // Output > Extension Host. console.* and stray writes to stdout land here too:
 // stdout is the wire to mme and must carry nothing else.
-function log (s) {
+function log (s, who) {
   notify('mme/output', {channel: 'Extension Host', text: s + '\n'});
+  let list;
+  try {
+    list = exts;	// not made yet while the host's own code loads
+  } catch (e) {
+    return;
+  }
+  if (s.startsWith('[info] node ')) return;	// the list of them all: on no page
+  for (const e of list) if (e === who || s.includes(e.id)) keepLine(e, s);	// its page shows them (mme/extInfo)
+}
+
+// the lines an extension's page shows: the last 60 of its own
+function keepLine (e, s) {
+  if (!e.lines) e.lines = [];
+  e.lines.push(s.length > 400 ? s.slice(0, 400) + ' ...' : s);
+  if (e.lines.length > 60) e.lines.shift();
+}
+
+// the extension whose code is running now (by the call stack's files); undefined: the host's own
+function whose () {
+  let list;
+  try {
+    list = exts;
+  } catch (e) {
+    return undefined;
+  }
+  if (!list.length) return undefined;
+  const lim = Error.stackTraceLimit;
+  Error.stackTraceLimit = 40;
+  const raw = new Error().stack;
+  Error.stackTraceLimit = lim;
+  const st = String(raw).replace(/\\/g, '/').toLowerCase();
+  let best;
+  for (const e of list) {
+    if (!e.dirKey) e.dirKey = e.dir.replace(/\\/g, '/').toLowerCase() + '/';
+    const at = st.indexOf(e.dirKey);
+    if (at >= 0 && (!best || at < best.at)) best = {e, at};	// the innermost frame: the one that called
+  }
+  return best && best.e;
 }
 
 function fmt (args) {
@@ -198,9 +236,9 @@ function safeJson (v) {
   }
 }
 
-console.log = console.info = console.debug = (...a) => log(fmt(a));
-console.warn = (...a) => log('[warning] ' + fmt(a));
-console.error = (...a) => log('[error] ' + fmt(a));
+console.log = console.info = console.debug = (...a) => log(fmt(a), whose());
+console.warn = (...a) => log('[warning] ' + fmt(a), whose());
+console.error = (...a) => log('[error] ' + fmt(a), whose());
 process.stdout.write = (chunk, enc, cb) => {
   log(String(chunk).replace(/\n$/, ''));
   if (typeof enc === 'function') enc();
@@ -219,10 +257,15 @@ process.on('uncaughtException', (e) => {
 process.on('unhandledRejection', (e) => log('[error] unhandled: ' + (e && e.stack ? e.stack : e)));
 
 const missing = new Set();
-function said (name) {	// an API not made yet: said once
+function said (name) {	// an API not made yet: said once (and once for each extension that asks, on its page)
+  const e = whose();
+  if (e) {
+    if (!e.missing) e.missing = new Set();
+    e.missing.add(name);
+  }
   if (missing.has(name)) return;
   missing.add(name);
-  log('[missing] ' + name);
+  log('[missing] ' + name, e);
 }
 
 
@@ -4698,9 +4741,216 @@ async function nbInterrupt (p) {	// mme/nbInterrupt {controller, path}
   }
 }
 
+// workspace.registerNotebookSerializer: a notebook format of an extension's (contributes.notebooks). mme's
+// notebook editor reads .ipynb, so the extension's NotebookData goes to it as .ipynb JSON and comes back
+// from it the same way: mme/nbDeserialize reads the file with the serializer, mme/nbSerialize writes it.
+const nbSerializers = new Map();	// notebookType -> {serializer, options}
+
+function registerNotebookSerializer (type, serializer, options) {
+  nbSerializers.set(type, {serializer, options: options || {}});
+  return new Disposable(() => nbSerializers.delete(type));
+}
+
+function textLines (s) {	// as Jupyter keeps a cell's source: its lines, each with its \n
+  return String(s || '').split(/(?<=\n)/).filter((x) => x !== '');
+}
+
+function outputToIpynb (o) {
+  const outs = [];
+  const data = {};
+  for (const it of (o && o.items) || []) {
+    const text = Buffer.from(it.data || []).toString('utf8');
+    if (it.mime === 'application/vnd.code.notebook.stdout' || it.mime === 'application/vnd.code.notebook.stderr')
+      outs.push({output_type: 'stream', name: it.mime.endsWith('stdout') ? 'stdout' : 'stderr', text: textLines(text)});
+    else if (it.mime === 'application/vnd.code.notebook.error') {
+      let e = {};
+      try {
+        e = JSON.parse(text);
+      } catch (err) {
+        e = {name: 'Error', message: text};
+      }
+      outs.push({output_type: 'error', ename: e.name || 'Error', evalue: e.message || '', traceback: String(e.stack || '').split('\n')});
+    } else if (/^image\//.test(it.mime) && !/svg/.test(it.mime)) data[it.mime] = Buffer.from(it.data || []).toString('base64');
+    else data[it.mime] = textLines(text);
+  }
+  if (Object.keys(data).length) outs.push({output_type: 'display_data', data, metadata: (o && o.metadata) || {}});
+  return outs;
+}
+
+function ipynbToOutput (j) {
+  const t = j.output_type;
+  const join = (v) => (Array.isArray(v) ? v.join('') : String(v || ''));
+  if (t === 'stream') return new NotebookCellOutput([j.name === 'stderr' ? NotebookCellOutputItem.stderr(join(j.text)) : NotebookCellOutputItem.stdout(join(j.text))]);
+  if (t === 'error') return new NotebookCellOutput([NotebookCellOutputItem.error({name: j.ename, message: j.evalue, stack: (j.traceback || []).join('\n')})]);
+  const items = [];
+  for (const [mime, v] of Object.entries(j.data || {}))
+    items.push(new NotebookCellOutputItem(/^image\//.test(mime) && !/svg/.test(mime) ? Buffer.from(join(v), 'base64') : Buffer.from(join(v)), mime));
+  return new NotebookCellOutput(items, undefined, j.metadata || {});
+}
+
+// NotebookData as the .ipynb mme's editor reads (the notebook's own metadata kept under metadata.mme)
+function dataToIpynb (data, type) {
+  const cells = ((data && data.cells) || []).map((c) => {
+    const code = c.kind === NotebookCellKind.Code;
+    const cell = {cell_type: code ? 'code' : 'markdown', metadata: Object.assign({}, c.metadata || {}, {vscode: {languageId: c.languageId || ''}}),
+      source: textLines(c.value)};
+    if (code) {
+      cell.execution_count = (c.executionSummary && c.executionSummary.executionOrder) || null;
+      cell.outputs = [].concat(...(c.outputs || []).map(outputToIpynb));
+    }
+    return cell;
+  });
+  const first = ((data && data.cells) || []).find((c) => c.kind === NotebookCellKind.Code);
+  return {cells, metadata: {language_info: {name: (first && first.languageId) || 'plaintext'}, mme: {notebookType: type, metadata: (data && data.metadata) || {}}},
+    nbformat: 4, nbformat_minor: 5};
+}
+
+function ipynbToData (j, options) {
+  const lang = (j.metadata && j.metadata.language_info && j.metadata.language_info.name) || 'plaintext';
+  const cells = (j.cells || []).map((c) => {
+    const meta = Object.assign({}, c.metadata || {});
+    const l = (meta.vscode && meta.vscode.languageId) || (c.cell_type === 'markdown' ? 'markdown' : lang);
+    delete meta.vscode;
+    const d = new NotebookCellData(c.cell_type === 'code' ? NotebookCellKind.Code : NotebookCellKind.Markup,
+      Array.isArray(c.source) ? c.source.join('') : String(c.source || ''), l);
+    d.metadata = meta;
+    d.outputs = options.transientOutputs || c.cell_type !== 'code' ? [] : (c.outputs || []).map(ipynbToOutput);
+    if (c.execution_count) d.executionSummary = {executionOrder: c.execution_count};
+    return d;
+  });
+  const data = new NotebookData(cells);
+  data.metadata = (j.metadata && j.metadata.mme && j.metadata.mme.metadata) || {};
+  return data;
+}
+
+async function nbSerializerFor (type) {
+  await Promise.race([extsRead, new Promise((r) => setTimeout(r, 10000))]);	// asked before the extensions were read
+  if (!nbSerializers.has(type)) await activateOn('onNotebook:' + type);
+  return nbSerializers.get(type);
+}
+
+async function nbDeserialize (p) {	// mme/nbDeserialize {seq, type, path}
+  try {
+    const s = await nbSerializerFor(p.type);
+    if (!s) throw new Error('no extension reads notebooks of the type ' + p.type);
+    let bytes = new Uint8Array(0);
+    try {
+      bytes = new Uint8Array(fs.readFileSync(p.path));
+    } catch (e) {}	// a new file: an empty notebook
+    const data = await s.serializer.deserializeNotebook(bytes, new CancellationTokenSource().token);
+    notify('mme/nbDeserialized', {seq: p.seq, text: JSON.stringify(dataToIpynb(data, p.type))});
+  } catch (e) {
+    log('[error] ' + p.type + ' notebook ' + p.path + ': ' + (e && e.stack ? e.stack : e));
+    notify('mme/nbDeserialized', {seq: p.seq, error: String(e && e.message ? e.message : e)});
+  }
+}
+
+async function nbSerialize (p) {	// mme/nbSerialize {seq, type, path, text}: the file written
+  try {
+    const s = await nbSerializerFor(p.type);
+    if (!s) throw new Error('no extension writes notebooks of the type ' + p.type);
+    const bytes = await s.serializer.serializeNotebook(ipynbToData(JSON.parse(p.text), s.options), new CancellationTokenSource().token);
+    fs.writeFileSync(p.path, Buffer.from(bytes || []));
+    notify('mme/nbSerialized', {seq: p.seq});
+  } catch (e) {
+    log('[error] ' + p.type + ' notebook ' + p.path + ': ' + (e && e.stack ? e.stack : e));
+    notify('mme/nbSerialized', {seq: p.seq, error: String(e && e.message ? e.message : e)});
+  }
+}
+
+// notebook renderers (contributes.notebookRenderer) are web code that draws the outputs of their mime types (a
+// plot, a widget). mme's notebook draws text and pictures, so "Notebook: Open Output in Browser" (mme/nbRender)
+// puts a cell's outputs on a page: each drawn by the extension's renderer for its mime type, HTML as it is,
+// pictures as pictures, the rest as text
+function rendererFor (mime) {
+  for (const e of exts) for (const r of (e.pkg.contributes && e.pkg.contributes.notebookRenderer) || []) {
+    const entry = typeof r.entrypoint === 'string' ? r.entrypoint : null;	// one that extends another's: not drawn alone
+    if (entry && (r.mimeTypes || []).some((m) => m === mime || (m.endsWith('/*') && mime.startsWith(m.slice(0, -1))))) return {ext: e, r, entry};
+  }
+  return null;
+}
+
+async function nbRender (p) {	// mme/nbRender {title, outputs: [{mime: text, or base64 for a picture}]}
+  await Promise.race([extsRead, new Promise((r) => setTimeout(r, 10000))]);
+  await wvStart();	// its port is in the renderers' links
+  const outs = [];
+  const roots = new Set();
+  let owner;
+  const join = (v) => (Array.isArray(v) ? v.join('') : String(v === undefined || v === null ? '' : v));
+  for (const data of p.outputs || []) {
+    const mimes = Object.keys(data || {});
+    const withRenderer = mimes.map((m) => ({m, rr: rendererFor(m)})).find((x) => x.rr);
+    if (withRenderer) {
+      const {m, rr} = withRenderer;
+      const bytes = /^image\//.test(m) && !/svg/.test(m) ? Buffer.from(join(data[m]), 'base64') : Buffer.from(typeof data[m] === 'object' && !Array.isArray(data[m]) ? JSON.stringify(data[m]) : join(data[m]));
+      roots.add(rr.ext.dir);
+      owner = owner || rr.ext;
+      outs.push({mime: m, entry: wvResourceUri(Uri.file(path.join(rr.ext.dir, rr.entry))).toString(), b64: bytes.toString('base64'),
+        renderer: rr.r.displayName || rr.r.id});
+    } else if (mimes.includes('text/html')) outs.push({html: join(data['text/html'])});
+    else if (mimes.find((m) => /^image\/(png|jpeg|gif|webp)$/.test(m))) {
+      const m = mimes.find((x) => /^image\/(png|jpeg|gif|webp)$/.test(x));
+      outs.push({img: true, mime: m, b64: join(data[m])});
+    } else if (mimes.includes('image/svg+xml')) outs.push({html: join(data['image/svg+xml'])});
+    else if (mimes.length) outs.push({text: join(data[mimes.includes('text/plain') ? 'text/plain' : mimes[0]])});
+  }
+  if (!outs.length) {
+    window.showInformationMessage('The cell has no output to show');
+    return;
+  }
+  const json = JSON.stringify(outs).replace(/</g, '\\u003c');
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${String(p.title || 'Output').replace(/</g, '&lt;')}</title>
+<style>body{font-family:var(--vscode-font-family,sans-serif);background:var(--vscode-editor-background);color:var(--vscode-editor-foreground)}
+.out{margin:12px 0;padding:8px;border-left:2px solid var(--vscode-focusBorder,#007acc)}.why{opacity:.6;font-size:12px}pre{white-space:pre-wrap}</style></head>
+<body><script type="application/json" id="mme-outputs">${json}</script><script type="module">
+const outs = JSON.parse(document.getElementById('mme-outputs').textContent);
+const ctx = {workspace: {isTrusted: true}, settings: {lineLimit: 30, outputScrolling: false, outputWordWrap: false},
+  setState () {}, getState () {}, getRenderer: async () => undefined, onDidChangeSettings: () => ({dispose () {}}), postMessage: undefined};
+let i = 0;
+for (const o of outs) {
+  const el = document.createElement('div');
+  el.className = 'out';
+  document.body.appendChild(el);
+  if (o.html !== undefined) {	// scripts put in by innerHTML do not run: made again
+    el.innerHTML = o.html;
+    for (const s of el.querySelectorAll('script')) {
+      const n = document.createElement('script');
+      for (const a of s.attributes) n.setAttribute(a.name, a.value);
+      n.textContent = s.textContent;
+      s.replaceWith(n);
+    }
+  } else if (o.img) el.innerHTML = '<img src="data:' + o.mime + ';base64,' + o.b64 + '">';
+  else if (o.text !== undefined) {
+    const pre = document.createElement('pre');
+    pre.textContent = o.text;
+    el.appendChild(pre);
+  } else {
+    const why = document.createElement('div');
+    why.className = 'why';
+    why.textContent = o.mime + ', drawn by ' + o.renderer;
+    el.appendChild(why);
+    const box = document.createElement('div');
+    el.appendChild(box);
+    try {
+      const m = await import(o.entry);
+      const api = await (m.activate || m.default)(ctx);
+      const bytes = Uint8Array.from(atob(o.b64), (c) => c.charCodeAt(0));
+      await api.renderOutputItem({id: String(i++), mime: o.mime, metadata: {}, data: () => bytes,
+        text: () => new TextDecoder().decode(bytes), json: () => JSON.parse(new TextDecoder().decode(bytes)),
+        blob: () => new Blob([bytes], {type: o.mime})}, box, new AbortController().signal);
+    } catch (e) {
+      box.textContent = 'The renderer failed: ' + (e && e.message ? e.message : e);
+    }
+  }
+}
+</script></body></html>`;
+  const panel = createWebviewPanel('mme.notebookOutput', p.title || 'Notebook Output', 1, {enableScripts: true, localResourceRoots: [...roots].map((d) => Uri.file(d))}, owner);
+  panel.webview.html = html;
+}
+
 const notebooksNs = {
   createNotebookController,
-  registerNotebookSerializer: () => new Disposable(() => {}),	// mme reads and writes .ipynb itself
+  registerNotebookSerializer,
   registerNotebookCellStatusBarItemProvider: () => new Disposable(() => {}),
   createRendererMessaging: () => ({onDidReceiveMessage: stubEvent(), postMessage: async () => false}),
   onDidOpenNotebookDocument: stubEvent(), onDidCloseNotebookDocument: stubEvent(),
@@ -5434,7 +5684,7 @@ const workspace = spare({
   get textDocuments () {
     return [...docs.values()];
   },
-  notebookDocuments: [],
+  notebookDocuments: [], registerNotebookSerializer,
   getConfiguration,
   onDidChangeConfiguration: onDidChangeConfiguration.event,
   onDidOpenTextDocument: onDidOpenTextDocument.event,
@@ -5734,21 +5984,31 @@ async function activate (e) {
       if (d) await activate(d);
     }
     const main = e.pkg.main;
-    const t0 = Date.now();
+    const t0 = Date.now(), h0 = process.memoryUsage().heapUsed;
     try {
       e.ctx = makeContext(e);
       if (main) {
         const mod = require(path.resolve(e.dir, main));
+        e.loadMs = Date.now() - t0;	// its code read: the host could do nothing else meanwhile
         e.module = mod;
-        if (typeof mod.activate === 'function') e.exports = await mod.activate(e.ctx);
+        if (typeof mod.activate === 'function') {
+          const r = mod.activate(e.ctx);
+          e.syncMs = Date.now() - t0;	// and what activate() did before its first await
+          e.heapMB = Math.max(0, Math.round((process.memoryUsage().heapUsed - h0) / 1048576));
+          e.exports = await r;
+        }
       }
       e.active = true;
-      log('[info] activated ' + e.id + ' in ' + (Date.now() - t0) + ' ms');
-      notify('mme/extensionState', {id: e.id, state: 'running'});
+      e.activateMs = Date.now() - t0;
+      e.event = e.event || '';
+      log('[info] activated ' + e.id + ' in ' + e.activateMs + ' ms' + (e.syncMs !== undefined ? ' (' + e.syncMs + ' ms busy)' : '') +
+        (e.event ? ', on ' + e.event : ''));
+      notify('mme/extensionState', {id: e.id, state: 'running', ms: e.activateMs, busyMs: e.syncMs === undefined ? e.loadMs || 0 : e.syncMs});
     } catch (err) {
       e.failed = true;
+      e.error = String(err && err.message ? err.message : err);
       log('[error] ' + e.id + ' failed to activate: ' + (err && err.stack ? err.stack : err));
-      notify('mme/extensionState', {id: e.id, state: 'error', message: String(err && err.message ? err.message : err)});
+      notify('mme/extensionState', {id: e.id, state: 'error', message: e.error});
     }
   })().finally(done);
   return e.activating;
@@ -5762,7 +6022,23 @@ function missingDeps (e) {
 // an activation event happened: every extension waiting for it starts
 async function activateOn (ev) {
   const waiting = exts.filter((e) => !e.active && !e.failed && e.events.some((x) => x === ev || x === '*'));
-  for (const e of waiting) await activate(e);
+  for (const e of waiting) if (!e.activating) e.event = ev;
+  // side by side, as VS Code does: one that waits long (a download, a sign-in) does not hold the others back
+  await Promise.all(waiting.map((e) => activate(e)));
+}
+
+// what an extension's page shows about it while it runs (mme/extInfo)
+function extInfo (p) {
+  const e = exts.find((x) => x.id === String(p.id || '').toLowerCase());
+  const r = {id: p.id, seq: p.seq, known: !!e};
+  if (e) Object.assign(r, {
+    state: e.active ? 'running' : e.failed ? (e.error ? 'error' : 'not started') : e.activating ? 'starting' : 'waiting',
+    error: e.error || '', event: e.event || '', activateMs: e.activateMs, busyMs: e.syncMs === undefined ? e.loadMs : e.syncMs,
+    heapMB: e.heapMB, events: [...new Set(e.pkg.activationEvents || [])],
+    implied: new Set(e.events).size - new Set(e.pkg.activationEvents || []).size, missing: [...(e.missing || [])], lines: e.lines || [],
+    needs: missingDeps(e),
+  });
+  notify('mme/extInfoIs', r);
 }
 
 function readExtension (dir) {
@@ -5777,6 +6053,7 @@ function readExtension (dir) {
   for (const td of c.taskDefinitions || []) if (td.type) events.push('onTaskType:' + td.type);
   for (const cp of c.chatParticipants || []) if (cp.id) events.push('onChatParticipant:' + cp.id);
   for (const t of c.languageModelTools || []) if (t.name) events.push('onLanguageModelTool:' + t.name);
+  for (const nb of c.notebooks || []) if (nb.type) events.push('onNotebook:' + nb.type);
   const props = [];
   const confs = Array.isArray(c.configuration) ? c.configuration : c.configuration ? [c.configuration] : [];
   for (const cf of confs) for (const [k, v] of Object.entries(cf.properties || {})) {
@@ -5878,6 +6155,10 @@ function settingsChanged (all) {
 
 // ----------------------------------------------------------------- starting
 
+let extsReadDone;
+const extsRead = new Promise((r) => {	// the extensions known (start() read them): what mme asks for early waits for it
+  extsReadDone = r;
+});
 async function start () {
   let init;
   try {
@@ -5898,6 +6179,7 @@ async function start () {
     }
   }
   log('[info] node ' + process.version + ', ' + exts.length + ' extension(s): ' + exts.map((e) => e.id).join(', '));
+  extsReadDone();
   await wvStart().catch((e) => log('[error] the webview server: ' + e.message));	// its port is in asWebviewUri's links, asked for at once
   // the palette's commands: what the running extensions contribute
   const cmds = [];
@@ -5910,7 +6192,7 @@ async function start () {
   const keys = [];
   for (const e of exts) for (const k of (e.pkg.contributes && e.pkg.contributes.keybindings) || []) {
     const key = isWin ? k.win || k.key : process.platform === 'darwin' ? k.mac || k.key : k.linux || k.key;
-    if (key && k.command) keys.push({key, command: k.command, when: k.when || ''});
+    if (key && k.command) keys.push({key, command: k.command, when: k.when || '', ext: e.id});
   }
   const props = [];
   for (const e of exts) {
@@ -6012,6 +6294,9 @@ async function dispatch (msg) {
     case 'mme/debugEnded': debugEnded(); break;
     case 'mme/nbExec': nbExec(params || {}); break;	// a notebook cell, run with an extension's kernel
     case 'mme/nbInterrupt': nbInterrupt(params || {}); break;
+    case 'mme/nbDeserialize': nbDeserialize(params || {}); break;	// a notebook of an extension's format
+    case 'mme/nbSerialize': nbSerialize(params || {}); break;
+    case 'mme/nbRender': nbRender(params || {}); break;	// Notebook: Open Output in Browser
     case 'mme/dapIn': dapIn(params || {}); break;
     case 'mme/dapOut': dapOut(params || {}); break;
     case 'mme/debugResponse': debugResponse(params || {}); break;
@@ -6020,6 +6305,7 @@ async function dispatch (msg) {
     case 'mme/testCancel': cancelTestRuns(); break;
     case 'mme/runTask': runTaskFromMme(params || {}); break;
     case 'mme/treeSelect': treeSelect(params || {}); break;
+    case 'mme/extInfo': extInfo(params || {}); break;	// an extension's page
     case 'mme/treeAction': treeAction(params || {}); break;
     case 'window/workDoneProgress/cancel': {	// the progress item clicked: Cancel
       const c = params && progressCancels.get(params.token);

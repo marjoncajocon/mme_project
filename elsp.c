@@ -646,10 +646,24 @@ static Srv *server (const char *lang) {
 
 
 static Srv *srv_of (const char *lang);
+static Srv *ext_srv (void);
 
 /* the extension host started without a document (a notebook: its extensions' kernels); nothing to run: nothing */
 void lsp_ext_start (void) {
   if (*ehost_command()) server(EXT_LANG);
+}
+
+
+/* the host started (when there is something to run) and waited for until it is ready; 0: not in ms */
+int lsp_ext_ready (int ms) {
+  long long end = os_now_us() + (long long)ms * 1000;
+  Srv *s;
+  lsp_ext_start();
+  while ((s = srv_of(EXT_LANG)) != NULL && !s->dead && !s->ready && os_now_us() < end) {
+    lsp_poll();
+    if (!s->ready) os_wait_readable(s->from, 20);
+  }
+  return ext_srv() != NULL;
 }
 
 

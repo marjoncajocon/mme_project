@@ -560,6 +560,9 @@ def build_tree():
     w(os.path.join(lang, "sticky.c"), sticky_file())
     w(os.path.join(lang, "wrap.js"), WRAP_FILE)
     w(os.path.join(FIX, "vim", "text.txt"), VIM_FILE)
+    # a notebook of an extension's own format (test/ext-fixture/acme.nb reads and writes it)
+    w(os.path.join(FIX, "nbx", "sample.acmenb"),
+      '{"cells": [{"code": false, "text": "# Acme notebook"}, {"code": true, "text": "hello from acme"}]}\n')
 
     # a folder for the explorer, tabs, go-to-file and search scenarios
     proj = os.path.join(FIX, "proj")

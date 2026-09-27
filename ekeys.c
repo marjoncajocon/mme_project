@@ -475,6 +475,25 @@ int keys_default (int cmd, int *k2) {
 }
 
 
+/* mme's own command with k1 (k2) as one of its keys, CMD_NONE: none (an extension's key takes it: ehost.c) */
+int keys_mme_cmd (int k1, int k2) {
+  int c;
+  for (c = 1; c < CMD_N; c++) {
+    const char *s = cmd_default_keys(c);
+    while (s && *s) {
+      const char *comma = strstr(s, ", ");
+      char one[64];
+      int a, b = 0;
+      snprintf(one, sizeof(one), "%.*s", comma ? (int)(comma - s) : (int)strlen(s), s);
+      a = key_parse(one, &b);
+      if (a && a == k1 && b == k2) return c;
+      s = comma ? comma + 2 : NULL;
+    }
+  }
+  return CMD_NONE;
+}
+
+
 /* the list written back to keybindings.json */
 void keys_save (void) {
   size_t i;

@@ -157,7 +157,8 @@ static const char *const names[CMD_N] = {
   "Settings Sync: Turn On...", "Settings Sync: Turn Off", "Settings Sync: Sync Now", "Settings Sync: Show Synced Data",
   "Ports: Forward a Port", "Ports: Focus on Ports View",
   "View: Move Editor into New Window", "View: Copy Editor into New Window",
-  "Open Accessible View", "Help: Accessibility Help"
+  "Open Accessible View", "Help: Accessibility Help",
+  "Preferences: File Icon Theme", "Notebook: Open Output in Browser"
 };
 
 static const char *const keys[CMD_N] = {
@@ -232,7 +233,8 @@ static const char *const keys[CMD_N] = {
   "", "", "", "",
   "", "",
   "", "",
-  "Alt+F2", "Alt+F1"
+  "Alt+F2", "Alt+F1",
+  "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -405,7 +407,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "workbench.userDataSync.actions.syncNow", "workbench.userDataSync.actions.showSyncedData",
   "remote.tunnel.forwardCommandPalette", "~remote.forwardedPorts.focus",
   "workbench.action.moveEditorToNewWindow", "workbench.action.copyEditorToNewWindow",
-  "editor.action.accessibleView", "editor.action.accessibilityHelp"
+  "editor.action.accessibleView", "editor.action.accessibilityHelp",
+  "workbench.action.selectIconTheme", "mme.notebook.openOutputInBrowser"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
