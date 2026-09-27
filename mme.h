@@ -1494,6 +1494,8 @@ void panel_kill (void);	/* the one in front */
 void panel_kill_all (void);
 const char *panel_title (void);
 int panel_new (int cols, int rows);	/* one more, in front */
+int panel_new_named (int cols, int rows, const char *name);	/* an extension's, the default shell */
+int on_ext_terminal (const char *name);	/* mme.c: that terminal, shown */
 void panel_cwd (const char *dir);	/* the next one starts there (else the folder open) */
 int panel_count (void);
 int panel_current (void);

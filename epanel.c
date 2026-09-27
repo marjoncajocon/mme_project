@@ -993,6 +993,12 @@ int panel_new (int cols, int rows) {
 }
 
 
+/* an extension's terminal (createTerminal): the default shell, named as it said */
+int panel_new_named (int cols, int rows, const char *name) {
+  return term_new(g_n, ++g_next_grp, cols, rows, NULL, NULL, name && *name ? name : NULL);
+}
+
+
 /* the same with profile p (panel_profile_name) */
 int panel_new_profile (int cols, int rows, int p) {
   find_profiles();

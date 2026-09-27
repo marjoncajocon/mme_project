@@ -1475,12 +1475,17 @@ void ext_draw (int x, int y, int w, int h, int focus) {
     for (i = 0; i < ROWS; i++) scr_fill(x, sy + i, w, st);
     scr_put(x + 1, sy, 0xEB29, st == S_SIDE ? S_ICON_BLUE : st);	/* codicon package */
     cx = x + 3;
-    cx += scr_putsw(cx, sy, x + w - cx - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
-    if (g_ext[it->ext].code) {	/* its code: disabled, enabled (waiting for its files), running, failed, needs ... */
-      const char *hs = ehost_state(it->id), *tag;
+    {	/* its name, and its code's state after it: the state keeps its room, a long name is cut */
+      const char *hs = g_ext[it->ext].code ? ehost_state(it->id) : NULL, *tag = NULL;
       uint32_t rgb = 0;
       char t[48];
-      if (!is_on(it)) tag = "disabled";
+      int room = x + w - cx - 1, tagw = 0;
+      if (!g_ext[it->ext].code) tag = NULL;
+      else if (!is_on(it) && hs && strcmp(hs, "running") == 0 && !ehost_disabled(it->id)) {
+        tag = "running (needed)";	/* not enabled itself: one that runs needs it (Python for Python Debugger) */
+        rgb = 0x73C991;
+      }
+      else if (!is_on(it)) tag = "disabled";
       else if (hs == NULL || strcmp(hs, "starting") == 0) tag = "enabled";	/* its activation event has not come */
       else if (strcmp(hs, "running") == 0) {
         tag = "running";
@@ -1494,8 +1499,17 @@ void ext_draw (int x, int y, int w, int h, int focus) {
         tag = hs;	/* "needs dart-code" */
         rgb = 0xCCA700;
       }
-      snprintf(t, sizeof(t), "  %s", tag);
-      {
+      if (tag) {
+        snprintf(t, sizeof(t), "  %s", tag);
+        tagw = (int)str_cols(t);
+        if (tagw > room - 6) tagw = room - 6 > 0 ? room - 6 : 0;	/* a very narrow bar: the name first */
+      }
+      if ((int)str_cols(it->display) > room - tagw && room - tagw > 1) {	/* "Claude Code for V…  running" */
+        cx += scr_putsw(cx, sy, room - tagw - 1, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
+        cx += scr_put(cx, sy, 0x2026, st == S_SIDE ? S_SIDE_TITLE : st);
+      }
+      else cx += scr_putsw(cx, sy, room, it->display, st == S_SIDE ? S_SIDE_TITLE : st);
+      if (tag && tagw > 0) {
         int n = scr_putsw(cx, sy, x + w - cx - 1, t, dim), i;
         if (rgb && st == S_SIDE)
           for (i = 2; i < n; i++) scr_set_fg(cx + i, sy, rgb);

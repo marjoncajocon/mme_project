@@ -247,7 +247,8 @@ char *vscode_find_ext (const char *id) {
     vec_init(&v);
     if (os_listdir(roots.v[i], &v) == 0)
       for (k = 0; k < v.n; k++)
-        if (m_strnicmp(v.v[k], id, n) == 0 && (v.v[k][n] == '-' || v.v[k][n] == '\0') &&
+        if (m_strnicmp(v.v[k], id, n) == 0 &&	/* "id" or "id-1.2.3", not "id-companion" (another extension) */
+            (v.v[k][n] == '\0' || (v.v[k][n] == '-' && v.v[k][n + 1] >= '0' && v.v[k][n + 1] <= '9')) &&
             (best_name == NULL || strcmp(v.v[k], best_name) > 0)) {
           free(best);
           free(best_name);

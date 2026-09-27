@@ -120,6 +120,39 @@ static int read_pkg (const char *dir) {
 }
 
 
+/* package.json's extensionDependencies of the extension in dir, lower case */
+static void deps_of (const char *dir, Vec *out) {
+  char *f = path_join(dir, "package.json"), *s;
+  size_t len, i;
+  Json *j;
+  vec_init(out);
+  s = read_file(f, &len);
+  free(f);
+  if (s == NULL) return;
+  j = json_parse(s, len);
+  free(s);
+  if (j == NULL) return;
+  {
+    const Json *d = json_get(j, "extensionDependencies");
+    for (i = 0; d && d->type == J_ARR && i < d->n; i++) {
+      char *id = xstrdup(json_str(d->kid[i], "")), *c;
+      for (c = id; *c; c++)
+        if (*c >= 'A' && *c <= 'Z') *c = (char)(*c + 32);
+      vec_push(out, id);
+    }
+  }
+  json_free(j);
+}
+
+
+static int running (const char *id) {
+  size_t i;
+  for (i = 0; i < g_nrun; i++)
+    if (m_stricmp(g_run[i].id, id) == 0) return 1;
+  return 0;
+}
+
+
 static void work_out (void) {
   size_t i, n;
   Buf b;
@@ -138,6 +171,26 @@ static void work_out (void) {
     g_run[g_nrun].dir = xstrdup(dir);
     g_run[g_nrun].state = NULL;
     g_nrun++;
+  }
+  for (i = 0; i < g_nrun; i++) {	/* what they depend on runs too, as in VS Code (Expo: YAML, js-debug), and theirs */
+    Vec deps;
+    size_t k;
+    deps_of(g_run[i].dir, &deps);
+    for (k = 0; k < deps.n; k++) {
+      const char *id = deps.v[k];
+      char *dir;
+      if (strncmp(id, "vscode.", 7) == 0 || running(id) || ehost_disabled(id)) continue;	/* disabled: it says "needs" */
+      if ((dir = vscode_find_ext(id)) == NULL) continue;
+      if (read_pkg(dir)) {
+        g_run = (HExt *)xrealloc(g_run, (g_nrun + 1) * sizeof(HExt));
+        g_run[g_nrun].id = xstrdup(id);
+        g_run[g_nrun].dir = dir;
+        g_run[g_nrun].state = NULL;
+        g_nrun++;
+      }
+      else free(dir);
+    }
+    vec_free(&deps);
   }
   buf_init(&b);
   for (i = 0; i < g_nrun; i++) buf_printf(&b, "%s;", g_run[i].dir);
@@ -634,10 +687,26 @@ int ehost_message (const char *method, const Json *p) {
     if (strcmp(json_str(json_get(p, "state"), ""), "error") == 0)
       toast(1, "Extension %s failed to start: %s", id, json_str(json_get(p, "message"), ""));
   }
+  else if (strcmp(method, "mme/terminalEnv") == 0) {	/* environmentVariableCollection: for the terminals to come */
+    const Json *v = json_get(p, "vars");
+    size_t i;
+    for (i = 0; v && v->type == J_OBJ && i < v->n; i++)
+      if (v->kid[i]->key) os_setenv(v->kid[i]->key, json_str(v->kid[i], ""));
+  }
+  else if (strcmp(method, "mme/terminal") == 0 && json_str(json_get(p, "shellPath"), "")[0] == '\0') {
+    const Json *v = json_get(p, "env");	/* no program of its own: an interactive terminal, the default shell */
+    size_t i;
+    for (i = 0; v && v->type == J_OBJ && i < v->n; i++)
+      if (v->kid[i]->key) os_setenv(v->kid[i]->key, json_str(v->kid[i], ""));
+    on_ext_terminal(json_str(json_get(p, "name"), "Terminal"));
+  }
   else if (strcmp(method, "mme/terminal") == 0) {
     Buf c;
     const Json *args = json_get(p, "shellArgs");
+    const Json *v = json_get(p, "env");
     size_t i;
+    for (i = 0; v && v->type == J_OBJ && i < v->n; i++)
+      if (v->kid[i]->key) os_setenv(v->kid[i]->key, json_str(v->kid[i], ""));
     buf_init(&c);
     buf_puts(&c, json_str(json_get(p, "shellPath"), ""));
     for (i = 0; args && args->type == J_ARR && i < args->n; i++) buf_printf(&c, " %s", json_str(args->kid[i], ""));

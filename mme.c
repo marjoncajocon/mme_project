@@ -18374,6 +18374,20 @@ void on_debug (int what, const char *path, size_t line) {
 }
 
 
+/* an extension's terminal with the default shell (Claude Code: Open in Terminal), in front */
+int on_ext_terminal (const char *name) {
+  E.panel = 1;
+  E.panel_view = 0;
+  E.focus = F_PANEL;
+  layout();
+  if (panel_new_named(PANEL_COLS, L.panel_h - 1, name) != 0) {
+    if (!panel_alive()) E.panel = 0;
+    return -1;
+  }
+  return 0;
+}
+
+
 int on_task_terminal (const char *name, const char *cmd, const char *cwd, int id) {
   E.panel = 1;
   E.panel_view = 0;

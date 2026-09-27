@@ -136,19 +136,35 @@ setInterval(() => {
   }
 }, 2000).unref();
 
+// every running extension's deactivate (some read their context from its argument: Python Environments),
+// then what it subscribed, as VS Code does; once, whether mme asked (shutdown) or went away
+let deactivating = null;
+function deactivateAll () {
+  if (!deactivating)
+    deactivating = Promise.all(exts.filter((e) => e.active).map(async (e) => {
+      try {
+        if (e.module && typeof e.module.deactivate === 'function') await e.module.deactivate(e.ctx);
+      } catch (err) {
+        // its own trouble: the rest goes on
+      }
+      for (const d of (e.ctx && e.ctx.subscriptions) || []) {
+        try {
+          if (d && typeof d.dispose === 'function') await d.dispose();
+        } catch (err) {
+          // gone already
+        }
+      }
+    }));
+  return deactivating;
+}
+
 // the host goes (mme said exit, or its pipe closed): the extensions' deactivate, then what they started
 let quitting = false;
 async function quit () {
   if (quitting) return;
   quitting = true;
   const done = new Promise((r) => setTimeout(r, 1500));	// an extension that does not finish is not waited for
-  const deact = Promise.all(exts.filter((e) => e.active && e.module && typeof e.module.deactivate === 'function').map((e) => {
-    try {
-      return Promise.resolve(e.module.deactivate()).catch(() => {});
-    } catch (err) {
-      return Promise.resolve();
-    }
-  }));
+  const deact = deactivateAll();
   await Promise.race([deact, done]);
   for (const c of spawned) {
     try {
@@ -243,6 +259,7 @@ class EventEmitter {
     };
   }
   fire (e) {
+    if (!this || !Array.isArray(this._ls)) return;	// called unbound (CMake Tools passes emitter.fire): nothing, as VS Code's
     for (const l of this._ls.slice()) {
       try {
         l.listener.call(l.thisArg, e);
@@ -1982,20 +1999,75 @@ async function showDocument (uri, opts) {
 const terminals = [];
 function createTerminal (a, b, c) {
   const o = typeof a === 'object' && a ? a : {name: a, shellPath: b, shellArgs: c};
+  let made = false;
+  const make = () => {	// mme's terminal: the default shell when it names none (Claude Code's), its env set
+    if (made) return;
+    made = true;
+    const env = {};
+    for (const [k, v] of Object.entries(o.env || {})) if (v !== null && v !== undefined) env[k] = String(v);
+    notify('mme/terminal', {name: t.name, shellPath: o.shellPath || '', shellArgs: [].concat(o.shellArgs || []).map(String),
+      cwd: o.cwd ? toUri(o.cwd).fsPath : '', env});
+  };
   const t = {
     name: o.name || 'Terminal', processId: Promise.resolve(undefined), creationOptions: o, exitStatus: undefined, state: {isInteractedWith: false},
     shellIntegration: undefined,
     sendText (text, addNewLine) {
+      make();
       notify('mme/terminalSend', {name: t.name, text: String(text) + (addNewLine === false ? '' : '\r')});
     },
     show () {
-      notify('mme/terminal', {name: t.name, shellPath: o.shellPath || '', shellArgs: o.shellArgs || [], cwd: o.cwd ? toUri(o.cwd).fsPath : ''});
+      make();
     },
     hide () {},
     dispose () {},
   };
   terminals.push(t);
+  if (!o.hideFromUser && !o.pty) setTimeout(make, 0);	// VS Code makes it at once (shown when show() is called)
   return t;
+}
+
+// the variables extensions set for terminals (environmentVariableCollection: Claude Code's CLAUDE_CODE_SSE_PORT),
+// worked out from the environment mme gave the host; mme sets them for the terminals it opens after
+const termEnv = new Map();	// name -> {value, type} (EnvironmentVariableMutatorType: 1 replace, 2 append, 3 prepend)
+function sendTermEnv () {
+  const vars = {};
+  for (const [k, m] of termEnv) {
+    const base = process.env[k] || '';
+    vars[k] = m.type === 2 ? base + m.value : m.type === 3 ? m.value + base : m.value;
+  }
+  notify('mme/terminalEnv', {vars});
+}
+function envCollection () {
+  const c = {
+    persistent: true, description: '',
+    replace (k, v) {
+      termEnv.set(k, {value: String(v), type: 1});
+      sendTermEnv();
+    },
+    append (k, v) {
+      termEnv.set(k, {value: String(v), type: 2});
+      sendTermEnv();
+    },
+    prepend (k, v) {
+      termEnv.set(k, {value: String(v), type: 3});
+      sendTermEnv();
+    },
+    get: (k) => (termEnv.has(k) ? {value: termEnv.get(k).value, type: termEnv.get(k).type, options: {}} : undefined),
+    forEach (cb, thisArg) {
+      for (const [k, m] of termEnv) cb.call(thisArg, k, {value: m.value, type: m.type, options: {}}, c);
+    },
+    delete (k) {
+      termEnv.delete(k);
+      sendTermEnv();
+    },
+    clear () {
+      termEnv.clear();
+      sendTermEnv();
+    },
+    getScoped: () => c,
+    [Symbol.iterator]: () => [...termEnv].map(([k, m]) => [k, {value: m.value, type: m.type, options: {}}])[Symbol.iterator](),
+  };
+  return c;
 }
 
 
@@ -2025,6 +2097,7 @@ async function openTextDocument (x) {
   if (open) return open;
   let text;
   if (contentProviders.has(uri.scheme)) text = await contentProviders.get(uri.scheme).provideTextDocumentContent(uri, noToken);
+  else if (fsProviders.has(uri.scheme)) text = Buffer.from(await fsProviders.get(uri.scheme).readFile(uri)).toString('utf8');
   else text = await fs.promises.readFile(uri.fsPath, 'utf8');
   const d = new TextDocument(uri, languageOf(uri.fsPath), 1, text || '');
   return d;
@@ -2069,40 +2142,63 @@ async function applyEdit (we) {
   return !!(r && r.applied);
 }
 
+const fsProviders = new Map();	// scheme -> provider (registerFileSystemProvider: Claude Code's, a remote's)
+function fsProvider (u) {
+  const uri = toUri(u);
+  return uri.scheme !== 'file' ? fsProviders.get(uri.scheme) : undefined;
+}
+
 const fsApi = {
   async stat (u) {
+    const pv = fsProvider(u);
+    if (pv) return pv.stat(toUri(u));
     const s = await fs.promises.stat(toUri(u).fsPath).catch((e) => {
       throw FileSystemError.FileNotFound(String(u));
     });
     return {type: s.isDirectory() ? 2 : 1, ctime: s.ctimeMs, mtime: s.mtimeMs, size: s.size};
   },
   async readFile (u) {
+    const pv = fsProvider(u);
+    if (pv) return Buffer.from(await pv.readFile(toUri(u)));
     return (await fs.promises.readFile(toUri(u).fsPath).catch(() => {	// a Buffer, as VS Code's: its toString() is the text
       throw FileSystemError.FileNotFound(String(u));
     }));
   },
   async writeFile (u, data) {
+    const pv = fsProvider(u);
+    if (pv) return pv.writeFile(toUri(u), data, {create: true, overwrite: true});
     const f = toUri(u).fsPath;
     await fs.promises.mkdir(path.dirname(f), {recursive: true});
     await fs.promises.writeFile(f, Buffer.from(data));
   },
   async readDirectory (u) {
+    const pv = fsProvider(u);
+    if (pv) return pv.readDirectory(toUri(u));
     const ents = await fs.promises.readdir(toUri(u).fsPath, {withFileTypes: true});
     return ents.map((d) => [d.name, d.isDirectory() ? 2 : d.isSymbolicLink() ? 64 : 1]);
   },
   async createDirectory (u) {
+    const pv = fsProvider(u);
+    if (pv) return pv.createDirectory(toUri(u));
     await fs.promises.mkdir(toUri(u).fsPath, {recursive: true});
   },
   async delete (u, o) {
+    const pv = fsProvider(u);
+    if (pv) return pv.delete(toUri(u), {recursive: !!(o && o.recursive)});
     await fs.promises.rm(toUri(u).fsPath, {recursive: !!(o && o.recursive), force: true});
   },
   async rename (a, b) {
+    const pv = fsProvider(a);
+    if (pv) return pv.rename(toUri(a), toUri(b), {overwrite: true});
     await fs.promises.rename(toUri(a).fsPath, toUri(b).fsPath);
   },
   async copy (a, b) {
+    const pv = fsProvider(a);
+    if (pv && typeof pv.copy === 'function') return pv.copy(toUri(a), toUri(b), {overwrite: true});
+    if (pv) return pv.writeFile(toUri(b), await pv.readFile(toUri(a)), {create: true, overwrite: true});
     await fs.promises.cp(toUri(a).fsPath, toUri(b).fsPath, {recursive: true});
   },
-  isWritableFileSystem: (scheme) => scheme === 'file',
+  isWritableFileSystem: (scheme) => scheme === 'file' || (fsProviders.has(scheme) && !(fsProviders.get(scheme)._readonly)),
 };
 
 // a glob as a RegExp over a /-separated relative path ({a,b}, **, *, ?, [..])
@@ -5299,6 +5395,10 @@ const window = spare({
     return d;
   },
   createTextEditorDecorationType: () => ({key: 'dec' + nextHandle++, dispose () {}}),
+  registerTerminalLinkProvider: () => new Disposable(() => {}),	// mme finds the terminal's links itself
+  registerTerminalProfileProvider: () => new Disposable(() => {}),
+  onDidWriteTerminalData: stubEvent(),
+  registerFileDecorationProvider: () => new Disposable(() => {}),
   createWebviewPanel: (a, b, c, d) => createWebviewPanel(a, b, c, d), registerWebviewViewProvider, registerCustomEditorProvider,
   createTreeView, registerTreeDataProvider,
   registerWebviewPanelSerializer: () => new Disposable(() => {}),	// a panel is not brought back after a restart
@@ -5351,6 +5451,12 @@ const workspace = spare({
   isTrusted: true,
   openTextDocument, applyEdit, findFiles, createFileSystemWatcher, getWorkspaceFolder, asRelativePath,
   fs: fsApi,
+  registerPortAttributesProvider: () => new Disposable(() => {}),	// ports: mme's Ports view forwards them itself
+  registerFileSystemProvider (scheme, provider, options) {
+    provider._readonly = !!(options && options.isReadonly);
+    fsProviders.set(scheme, provider);
+    return new Disposable(() => fsProviders.delete(scheme));
+  },
   registerTextDocumentContentProvider (scheme, p) {
     contentProviders.set(scheme, p);
     return new Disposable(() => contentProviders.delete(scheme));
@@ -5412,6 +5518,10 @@ const languages = spare({
   registerDocumentSemanticTokensProvider: reg('semanticTokens'),
   registerDocumentRangeSemanticTokensProvider: reg('semanticTokensRange'),
   registerCallHierarchyProvider: reg('callHierarchy'),
+  registerInlineValuesProvider: reg('inlineValues'),
+  registerEvaluatableExpressionProvider: reg('evaluatable'),
+  registerDocumentDropEditProvider: reg('drop'),
+  registerDocumentPasteEditProvider: reg('paste'),
   registerTypeHierarchyProvider: reg('typeHierarchy'),
 }, 'languages');
 
@@ -5491,6 +5601,8 @@ const debug = spare({
     debugAdapterFactories.set(type, factory);
     return new Disposable(() => debugAdapterFactories.delete(type));
   },
+  registerDebugVisualizationProvider: () => new Disposable(() => {}),	// the variables are drawn by mme's own view
+  registerDebugVisualizationTreeProvider: () => new Disposable(() => {}),
   registerDebugAdapterTrackerFactory (type, factory) {	// mme sends it the session's messages (mme/dapIn, mme/dapOut)
     const x = {type, factory};
     debugTrackerFactories.push(x);
@@ -5531,7 +5643,13 @@ const vscodeApi = spare({
   ...enums, ...moreClasses,
   window, workspace, languages, commands: commandsNs, env, extensions: extensionsNs, tasks, debug, l10n,
   scm: spare({createSourceControl: undefined, inputBox: undefined}, 'scm'),
-  comments: spare({}, 'comments'), authentication: spare(authentication, 'authentication'),
+  comments: spare({createCommentController (id, label) {
+    const ctl = {id, label, options: undefined, commentingRangeProvider: undefined, reactionHandler: undefined,
+      createCommentThread: (uri, range, comments) => ({uri, range, comments: comments || [], collapsibleState: 0, canReply: true,
+        contextValue: undefined, label: undefined, state: 0, dispose () {}}),
+      dispose () {}};
+    return ctl;
+  }}, 'comments'), authentication: spare(authentication, 'authentication'),
   notebooks: spare(notebooksNs, 'notebooks'), tests: spare({createTestController}, 'tests'), chat: spare(chatNs, 'chat'), lm: spare(lm, 'lm'),
 }, '');
 
@@ -5584,10 +5702,7 @@ function makeContext (e) {
     storagePath: path.join(state, 'ws-' + ws), storageUri: Uri.file(path.join(state, 'ws-' + ws)),
     globalStoragePath: path.join(state, 'global'), globalStorageUri: Uri.file(path.join(state, 'global')),
     logPath: path.join(state, 'logs'), logUri: Uri.file(path.join(state, 'logs')),
-    environmentVariableCollection: {persistent: true, description: '', replace () {}, append () {}, prepend () {}, get () {},
-      forEach () {}, delete () {}, clear () {}, getScoped () {
-        return this;
-      }},
+    environmentVariableCollection: envCollection(),
     languageModelAccessInformation: {onDidChange: stubEvent(), canSendRequest: () => undefined},
   };
 }
@@ -5859,14 +5974,7 @@ async function dispatch (msg) {
       return;
     }
     if (method === 'shutdown') {
-      for (const e of exts) {
-        try {
-          if (e.active && e.module && typeof e.module.deactivate === 'function') await e.module.deactivate();
-          for (const s of (e.ctx && e.ctx.subscriptions) || []) if (s && typeof s.dispose === 'function') s.dispose();
-        } catch (err) {
-          log('[error] ' + e.id + ' deactivate: ' + err.message);
-        }
-      }
+      await Promise.race([deactivateAll(), new Promise((r) => setTimeout(r, 1500))]);
       send({jsonrpc: '2.0', id, result: null});
       return;
     }
