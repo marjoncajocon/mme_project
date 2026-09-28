@@ -4,16 +4,16 @@
 No dependencies, no installer: one executable. `mme .` opens this folder,
 like `code .` does.
 
-```
- File  Edit  Selection  View  Go  Help            main.c - repo - mme
- ▎  EXPLORER                 │  main.c ×
-    ⌄ REPO                   │ src › main.c
-      ⌄ src                ● │   1  int main (void) {
-         main.c            M │   2    int x = 2;
-       notes.txt           U │   3    int y = 3;
-       readme.md             │   4    return x + y;
-  ⎇ master*                          Ln 1, Col 1   Spaces: 2   UTF-8   LF   C
-```
+**mme in a terminal** (here mmc-term): Go to File, a function typed, saved
+from the Command Palette, `git diff` in the terminal panel, the change in
+Source Control.
+
+![mme editing in a terminal](media/mme-terminal.gif)
+
+**mme-sdl**, the same editor in a window of its own (SDL2, `sdl2_port/`),
+doing the same:
+
+![mme-sdl editing in its own window](media/mme-sdl.gif)
 
 The icons are codicons and Seti's, from a Nerd Font: mmc-term's JetBrains
 Mono Nerd Font has them (it must be in `usr/share/fonts` of the mmc folder),
