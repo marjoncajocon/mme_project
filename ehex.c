@@ -13,6 +13,13 @@
 ** adapter (readMemory) a page at a time as they are shown, a few pages
 ** kept; what the adapter cannot read shows as "??", and each stop reads
 ** again what is shown (the program may have changed it).
+** When the adapter can write memory (supportsWriteMemoryRequest) and the
+** program is paused, the bytes can be changed as in VS Code's Hex Editor:
+** hex digits over the byte (two to a byte), letters in the decoded text
+** (Tab goes from one column to the other); the bytes changed show in
+** another color until Ctrl+S writes them (writeMemory, a request for each
+** run of them) and they are read again. Ctrl+Z / Ctrl+Y undo and redo
+** what is not written yet.
 */
 
 #include "mme.h"
@@ -38,6 +45,18 @@ typedef struct MPage {	/* a page of a debuggee's memory */
   unsigned long use;	/* when it was looked at last */
 } MPage;
 
+typedef struct MEdit {	/* a byte of memory changed, not written yet */
+  unsigned long long a;
+  unsigned char v;
+  int wr;	/* its writeMemory is asked, not answered yet */
+} MEdit;
+
+typedef struct MUndo {	/* a byte typed, for Ctrl+Z / Ctrl+Y */
+  unsigned long long a;
+  int had;	/* it was changed before: to was */
+  unsigned char was, v;
+} MUndo;
+
 typedef struct Hex {
   char *path;
   unsigned char *b;	/* the bytes from off: the whole file, or the page of a big one read last */
@@ -57,6 +76,12 @@ typedef struct Hex {
   unsigned long clock;
   MPage *mp;	/* NMPAGE */
   struct Hex *next;	/* the memory views open */
+  MEdit *ed;	/* the bytes changed, not written */
+  int ned, med;
+  MUndo *un;	/* what was typed: [0, iun) done, [iun, nun) undone */
+  int nun, iun, mun;
+  int text;	/* the cursor is in the decoded text, not the bytes */
+  int nib;	/* 1: the byte's high digit is typed, the low one comes next */
 } Hex;
 
 #define MAX_HEX	(64 << 20)	/* a file bigger than this is read a page at a time, not whole */
@@ -117,6 +142,35 @@ static MPage *mfind (Hex *h, unsigned long long a) {
 }
 
 
+/* the change of the byte at a, -1 none */
+static int ed_find (Hex *h, unsigned long long a) {
+  int i;
+  for (i = 0; i < h->ned; i++)
+    if (h->ed[i].a == a) return i;
+  return -1;
+}
+
+
+/* the byte at a changed to v (had), or back to what the memory has (!had) */
+static void ed_set (Hex *h, unsigned long long a, int had, unsigned char v) {
+  int i = ed_find(h, a);
+  if (!had) {
+    if (i >= 0) h->ed[i] = h->ed[--h->ned];
+    return;
+  }
+  if (i < 0) {
+    if (h->ned == h->med) {
+      h->med = h->med ? h->med * 2 : 16;
+      h->ed = (MEdit *)xrealloc(h->ed, (size_t)h->med * sizeof(MEdit));
+    }
+    i = h->ned++;
+    h->ed[i].a = a;
+  }
+  h->ed[i].v = v;
+  h->ed[i].wr = 0;
+}
+
+
 /*
 ** The page of memory that has address a, asked of the adapter when it is
 ** not kept or was read before the last stop (the old bytes show until the
@@ -170,9 +224,12 @@ static unsigned char byte_at (Hex *h, size_t at) {
 }
 
 
-/* a byte as it shows: 0..255, or -1 nothing (memory not read yet), -2 "??" */
+/* a byte as it shows: 0..255, or -1 nothing (memory not read yet), -2 "??"; a change shows over the memory */
 static int shown_byte (Hex *h, size_t at) {
-  return h->mref ? mem_byte(h, at) : byte_at(h, at);
+  int b, i;
+  if (!h->mref) return byte_at(h, at);
+  b = mem_byte(h, at);	/* asks for the page all the same */
+  return (i = ed_find(h, at)) >= 0 ? h->ed[i].v : b;
 }
 
 
@@ -290,6 +347,8 @@ void hex_close (void *page) {
   free(h->b);
   free(h->mref);
   free(h->mp);
+  free(h->ed);
+  free(h->un);
   free(h);
 }
 
@@ -318,8 +377,8 @@ const char *hex_status (void *page) {
   Hex *h = (Hex *)page;
   unsigned b;
   if (h == NULL) return "";
-  if (h->mref) {	/* memory: the address, and the byte there as far as it is read */
-    int m = h->known ? mem_byte(h, h->at) : -1;
+  if (h->mref) {	/* memory: the address, and the byte there as far as it is read (changed: as it is now) */
+    int m = h->known ? shown_byte(h, h->at) : -1;
     if (m >= 0) snprintf(s, sizeof(s), "0x%0*llX   0x%02X (%d)", h->ow, (unsigned long long)h->at, (unsigned)m, m);
     else snprintf(s, sizeof(s), "0x%0*llX   %s", h->ow, (unsigned long long)h->at, m == -2 ? "unreadable" : "reading...");
     return s;
@@ -395,7 +454,8 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
         continue;
       }
       b = shown_byte(hx, at);
-      if (at == hx->at) st = focus ? S_SEL : S_MATCH;
+      if (at == hx->at) st = focus && !(hx->mref && hx->text) ? S_SEL : S_MATCH;
+      else if (hx->mref && ed_find(hx, at) >= 0) st = S_GIT_M;	/* changed, not written: VS Code's modified color */
       else if (b <= 0) st = S_LINE;	/* zeros dim, as VS Code shows them */
       if (b >= 0) snprintf(s, sizeof(s), "%02X", (unsigned)b);
       else snprintf(s, sizeof(s), "%s", b == -2 ? "??" : "  ");
@@ -408,16 +468,26 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
       int b, st = S_TEXT;
       if (at >= hx->n || cx >= x + w) break;
       b = shown_byte(hx, at);
-      if (at == hx->at) st = focus ? S_SEL : S_MATCH;
+      if (at == hx->at) st = focus && !(hx->mref && !hx->text) ? S_SEL : S_MATCH;
+      else if (hx->mref && ed_find(hx, at) >= 0) st = S_GIT_M;
       else if (b < 32 || b >= 127) st = S_LINE;
       scr_put(cx++, y + 1 + r, (b >= 32 && b < 127) ? b : b == -1 ? ' ' : b == -2 ? '?' : '.', st);
     }
   }
   {	/* the line under it: the file, where the cursor is, what the byte is */
     char line[300];
-    if (hx->mref)
-      snprintf(line, sizeof(line), " Memory %.64s   %s   read-only", hx->mref,
-               hex_status(page));
+    if (hx->mref) {	/* read-only when the adapter cannot write it, or the program runs; else the changes */
+      int wr = dbg_mem_writable(), n = 0, busy = 0, i;
+      char more[64] = "";
+      for (i = 0; i < hx->ned; i++) {
+        if (hx->ed[i].wr) busy++;
+        else n++;
+      }
+      if (busy) snprintf(more, sizeof(more), "   writing %d byte%s...", busy, busy == 1 ? "" : "s");
+      else if (n) snprintf(more, sizeof(more), "   %d byte%s changed (Ctrl+S writes)", n, n == 1 ? "" : "s");
+      snprintf(line, sizeof(line), " Memory %.64s   %s%s%s", hx->mref, hex_status(page),
+               wr == 0 ? "   read-only" : wr == -1 ? "   read-only: not paused" : "", more);
+    }
     else snprintf(line, sizeof(line), " %s   %llu bytes   %s   read-only%s", path_basename(hx->path),
                   (unsigned long long)hx->n, hex_status(page), hx->paged ? " (read from the disk as it is shown)" : "");
     scr_fill(x, y + h - 1, w, S_STATUS);
@@ -426,7 +496,9 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus) {
   if (focus) {	/* the cursor sits on the byte */
     size_t r2 = hx->at / COLS;
     if (r2 >= hx->top && r2 < hx->top + (size_t)rows)
-      scr_cursor(x + 1 + hx->ow + 2 + (int)(hx->at % COLS) * 3, y + 1 + (int)(r2 - hx->top));
+      scr_cursor(hx->mref && hx->text ? x + 1 + hx->ow + 2 + COLS * 3 + 1 + (int)(hx->at % COLS)
+                                      : x + 1 + hx->ow + 2 + (int)(hx->at % COLS) * 3 + (hx->mref ? hx->nib : 0),
+                 y + 1 + (int)(r2 - hx->top));
   }
 }
 
@@ -533,6 +605,192 @@ static void do_find (Hex *h, int again) {
 }
 
 
+/*
+** {==================================================================
+** Changing a debuggee's memory, like VS Code's Hex Editor on a memory
+** reference: the bytes typed are kept until Ctrl+S writes them
+** ===================================================================
+*/
+
+/* the byte at the cursor may be changed now; else it says why not (0) */
+static int may_edit (Hex *h) {
+  int b, i, wr = dbg_mem_writable();
+  if (wr == 0) {
+    toast(0, "The debug adapter does not support writing memory: the memory view is read-only");
+    return 0;
+  }
+  if (wr < 0) {
+    toast(0, "Memory can only be changed while the program is paused");
+    return 0;
+  }
+  if ((i = ed_find(h, h->at)) >= 0 && h->ed[i].wr) {
+    toast(0, "The byte at 0x%llX is being written", (unsigned long long)h->at);
+    return 0;
+  }
+  b = h->known ? mem_byte(h, h->at) : -1;
+  if (b == -2) {
+    toast(0, "The memory at 0x%llX cannot be read, so it cannot be changed", (unsigned long long)h->at);
+    return 0;
+  }
+  if (b == -1) {
+    toast(0, "The memory at 0x%llX is still being read", (unsigned long long)h->at);
+    return 0;
+  }
+  return 1;
+}
+
+
+/* the byte at the cursor becomes v (a step of Ctrl+Z; what was undone cannot be redone after it) */
+static void put_byte (Hex *h, unsigned char v) {
+  int i = ed_find(h, h->at);
+  MUndo *u;
+  if (h->iun == h->mun) {
+    h->mun = h->mun ? h->mun * 2 : 32;
+    h->un = (MUndo *)xrealloc(h->un, (size_t)h->mun * sizeof(MUndo));
+  }
+  u = &h->un[h->iun++];
+  h->nun = h->iun;
+  u->a = h->at;
+  u->had = i >= 0;
+  u->was = i >= 0 ? h->ed[i].v : 0;
+  u->v = v;
+  ed_set(h, h->at, 1, v);
+}
+
+
+/* a hex digit over the byte (the high one, then the low one and on), or a letter in the decoded text */
+static void type_byte (Hex *h, int k) {
+  int b;
+  if (!may_edit(h)) return;
+  b = shown_byte(h, h->at);
+  if (h->text) {
+    put_byte(h, (unsigned char)k);
+    h->nib = 0;
+  }
+  else {
+    int d = k <= '9' ? k - '0' : (k | 0x20) - 'a' + 10;
+    MUndo *u = h->iun > 0 && h->iun == h->nun ? &h->un[h->iun - 1] : NULL;
+    if (h->nib && u && u->a == h->at) {	/* the low digit: the same step of Ctrl+Z as the high one */
+      u->v = (unsigned char)((b & 0xF0) | d);
+      ed_set(h, h->at, 1, u->v);
+    }
+    else put_byte(h, (unsigned char)(h->nib ? (b & 0xF0) | d : (d << 4) | (b & 0x0F)));
+    if ((h->nib = !h->nib)) return;
+  }
+  if (h->at + 1 < h->n) h->at++;
+}
+
+
+/* Ctrl+Z / Ctrl+Y: a byte typed and not written, undone or done again; the cursor goes to it */
+void hex_undo (void *page, int redo) {
+  Hex *h = (Hex *)page;
+  MUndo *u;
+  int i;
+  if (h == NULL || h->mref == NULL || (redo ? h->iun >= h->nun : h->iun <= 0)) return;
+  u = &h->un[redo ? h->iun : h->iun - 1];
+  if ((i = ed_find(h, u->a)) >= 0 && h->ed[i].wr) {
+    toast(0, "The byte at 0x%llX is being written", u->a);
+    return;
+  }
+  if (redo) ed_set(h, u->a, 1, u->v);
+  else ed_set(h, u->a, u->had, u->was);
+  h->iun += redo ? 1 : -1;
+  h->at = (size_t)u->a;
+  h->nib = 0;
+  scroll_to(h);
+}
+
+
+/* the changes of a memory view for its tab: *changes the bytes not written (0: nothing to save) */
+void hex_changes (void *page, long *changes, long *saved) {
+  Hex *h = (Hex *)page;
+  int i;
+  *changes = *saved = 0;
+  for (i = 0; h && i < h->ned; i++) *changes += !h->ed[i].wr;
+}
+
+
+static int by_addr (const void *x, const void *y) {
+  unsigned long long a = ((const MEdit *)x)->a, b = ((const MEdit *)y)->a;
+  return a < b ? -1 : a > b;
+}
+
+
+/*
+** Ctrl+S: the bytes changed are written, a writeMemory for each run of
+** them, as VS Code's Hex Editor saves; -1 when they cannot be now (they
+** stay). A file's page has nothing to write.
+*/
+int hex_save (void *page) {
+  Hex *h = (Hex *)page;
+  unsigned char run[MPAGE];
+  int i, j, wr;
+  if (h == NULL || h->mref == NULL) return 0;
+  for (i = 0; i < h->ned && h->ed[i].wr; i++) {}
+  if (i == h->ned) return 0;
+  if ((wr = dbg_mem_writable()) <= 0) {
+    toast(0, wr == 0 ? "The debug adapter does not support writing memory" : "Memory can only be written while the program is paused");
+    return -1;
+  }
+  qsort(h->ed, (size_t)h->ned, sizeof(MEdit), by_addr);
+  for (i = 0; i < h->ned; i = j) {
+    int n = 0;
+    for (j = i; j < h->ned && !h->ed[j].wr && n < MPAGE && h->ed[j].a == h->ed[i].a + (unsigned long long)n; j++)
+      run[n++] = h->ed[j].v;
+    if (n == 0) {
+      j = i + 1;
+      continue;
+    }
+    if (dbg_write_memory(h->mref, (long long)(h->ed[i].a - h->ref), h->ed[i].a, run, (size_t)n) != 0) return -1;
+    while (n-- > 0) h->ed[i + n].wr = 1;
+  }
+  return 0;
+}
+
+
+/*
+** writeMemory's answer for the n bytes at address at: written, they are
+** read again (the adapter may have put something else); failed, they are
+** changes again, not written (the message is told by edebug.c).
+*/
+void hex_mem_wrote (const char *mref, unsigned long long at, size_t n, int ok) {
+  Hex *h;
+  for (h = g_mem; h; h = h->next) {
+    int i, k;
+    if (strcmp(h->mref, mref) != 0) continue;
+    for (i = 0; i < h->ned;) {
+      MEdit *e = &h->ed[i];
+      MPage *p;
+      if (!e->wr || e->a - at >= n) {
+        i++;
+        continue;
+      }
+      if (!ok) {
+        e->wr = 0;
+        i++;
+        continue;
+      }
+      if ((p = mfind(h, e->a)) != NULL) {	/* shows as written until it is read again */
+        p->st[e->a - p->at] = MB_READ;
+        p->b[e->a - p->at] = e->v;
+      }
+      for (k = 0; k < h->nun;) {	/* written: not undone any more */
+        if (h->un[k].a == e->a) {
+          memmove(h->un + k, h->un + k + 1, (size_t)(h->nun - k - 1) * sizeof(MUndo));
+          h->nun--;
+          if (k < h->iun) h->iun--;
+        }
+        else k++;
+      }
+      *e = h->ed[--h->ned];
+    }
+    if (ok) h->gen++;
+  }
+}
+
+/* }================================================================== */
+
+
 /* a key in the hex page; 1 when it was its */
 int hex_key (void *page, int k) {
   Hex *h = (Hex *)page;
@@ -540,6 +798,23 @@ int hex_key (void *page, int k) {
   int code = KEY_CODE(k);
   if (h == NULL) return 0;
   rows = (size_t)(h->h > 2 ? h->h - 2 : 1);
+  if (h->mref) {	/* memory: the typing changes it, Tab goes between the bytes and the letters */
+    if (k == K_TAB) {
+      h->text = !h->text;
+      h->nib = 0;
+      return 1;
+    }
+    if (h->text ? k >= 32 && k < 127 : (k >= '0' && k <= '9') || ((k | 0x20) >= 'a' && (k | 0x20) <= 'f')) {
+      type_byte(h, k);
+      scroll_to(h);
+      return 1;
+    }
+    if (k == CTRL('z') || k == CTRL('y')) {
+      hex_undo(h, k == CTRL('y'));
+      return 1;
+    }
+    h->nib = 0;	/* the cursor moves: the next digit is a byte's high one */
+  }
   switch (code) {
     case K_LEFT: if (h->at > 0) h->at--; break;
     case K_RIGHT: if (h->at + 1 < h->n) h->at++; break;
@@ -597,7 +872,9 @@ int hex_click (void *page, int mx, int my) {
   if (h == NULL || mx < h->x || mx >= h->x + h->w || my < h->y + 1 || my >= h->y + h->h - 1) return 0;
   r = my - h->y - 1;
   c = (mx - h->x - h->ow - 4) / 3;	/* the bytes' columns */
-  if (mx - h->x >= h->ow + 4 + COLS * 3) c = mx - h->x - h->ow - 4 - COLS * 3 - 1;	/* the letters */
+  h->text = mx - h->x >= h->ow + 4 + COLS * 3;
+  h->nib = 0;
+  if (h->text) c = mx - h->x - h->ow - 4 - COLS * 3 - 1;	/* the letters */
   if (c < 0) c = 0;
   if (c >= COLS) c = COLS - 1;
   at = (h->top + (size_t)r) * COLS + (size_t)c;

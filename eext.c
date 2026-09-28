@@ -1014,8 +1014,8 @@ typedef struct Job {
 static Job g_inst;	/* an install */
 
 
-static char *program (const char *name) {
 #ifdef _WIN32
+static char *program (const char *name) {
   if (strcmp(name, "tar") == 0) {	/* Windows' own (bsdtar reads zips; git's tar does not) */
     char *root = os_getenv("SystemRoot"), *sys, *p, *exe;
     if (root) {
@@ -1029,9 +1029,9 @@ static char *program (const char *name) {
       free(p);
     }
   }
-#endif
   return find_program(name);
 }
+#endif
 
 
 /* argv started; its output kept when capture */

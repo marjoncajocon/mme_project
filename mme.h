@@ -869,7 +869,7 @@ size_t md_line_of_row (const Doc *d, int w, size_t row);	/* and back, for scroll
 int md_anchor_row (const Doc *d, int w, const char *name, size_t *row);	/* [jump](#heading) */
 int md_link_at (int x, int y, char **link);	/* the link under the mouse; *link to free */
 
-/* ehex.c - the hex viewer for binaries (read-only, like VS Code's Hex Editor) */
+/* ehex.c - the hex viewer for binaries (read-only, like VS Code's Hex Editor; a debuggee's memory can be changed) */
 void *hex_open (const char *path);	/* NULL: too big, or unreadable */
 void *hex_mem_open (const char *mref);	/* a debuggee's memory (View Binary Data), read as it is shown */
 const char *hex_mem_ref (void *page);	/* its memoryReference; NULL: a file's page */
@@ -884,6 +884,10 @@ void hex_draw (void *page, int x, int y, int w, int h, int focus);
 int hex_key (void *page, int k);	/* 1: it was the viewer's */
 void hex_wheel (void *page, int d);
 int hex_click (void *page, int mx, int my);
+void hex_undo (void *page, int redo);	/* a memory view's bytes typed, not written: Ctrl+Z / Ctrl+Y */
+void hex_changes (void *page, long *changes, long *saved);	/* for its tab's dirty dot and the question on closing */
+int hex_save (void *page);	/* Ctrl+S: the bytes changed written (writeMemory); -1 not now */
+void hex_mem_wrote (const char *mref, unsigned long long at, size_t n, int ok);	/* writeMemory's answer */
 
 /* eimage.c - the picture preview (PNG, BMP, GIF, ICO drawn; the rest told about) */
 int img_is_image (const char *path);	/* by its ending */
@@ -2008,6 +2012,9 @@ void dbg_toolbar_draw (int x, int w, int y);	/* the floating toolbar, while debu
 int dbg_toolbar_hit (int x, int y);	/* the command clicked; -1 on it, 0 not */
 int dbg_read_memory (const char *mref, long long offset, unsigned long long at, unsigned count);	/* readMemory
 							** for ehex.c (at: the address, for its answer); -1: not now */
+int dbg_write_memory (const char *mref, long long offset, unsigned long long at, const unsigned char *b, size_t n);
+							/* writeMemory of n bytes for ehex.c; -1: not now */
+int dbg_mem_writable (void);	/* 1 memory can be written now; 0 the adapter cannot; -1 not paused */
 
 char *vs_subst (const char *s);	/* ${workspaceFolder}, ${file} ... put in */
 void vs_inputs (const Json *inputs);	/* a run begins: its file's "inputs", for ${input:id} (each asked once) */

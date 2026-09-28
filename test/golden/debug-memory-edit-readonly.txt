@@ -1,0 +1,63 @@
+---- cursor 45,7
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      memory-0x2000.b            
+|      Stub: plain            │ Address   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  Decoded text
+|                                 │ 00001FC0  DF DE DD DC DB DA D9 D8 D7 D6 D5 D4 D3 D2 D1 D0  ................
+|     VARIABLES                 │ 00001FD0  CF CE CD CC CB CA C9 C8 C7 C6 C5 C4 C3 C2 C1 C0  ................
+|       Locals                   │ 00001FE0  FF FE FD FC FB FA F9 F8 F7 F6 F5 F4 F3 F2 F1 F0  ................
+|         count: 42              │ 00001FF0  EF EE ED EC EB EA E9 E8 E7 E6 E5 E4 E3 E2 E1 E0  ................
+|          counter: 7             │ 00002000  48 65 6C 6C 6F 2C 20 6D 65 6D 6F 72 79 21 00 01  Hello, memory!..
+|▎    WATCH                    │ 00002010  02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11  ................
+|  ●      Add Expression         │ 00002020  12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21  .............. !
+|     CALL STACK                │ 00002030  22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31  "#$%&'()*+,-./01
+|       main     PAUSED ON ENTRY │ 00002040  00 61 62 63 64 65 66 67 68 69 6A 6B 6C 6D 6E 6F  .abcdefghijklmno
+|       main         prog.py  2 │ 00002050  70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F  pqrstuvwxyz{|}~.
+|      BREAKPOINTS               │ 00002060  40 41 42 43 44 45 46 47 48 49 4A 4B 4C 4D 4E 4F  @ABCDEFGHIJKLMNO
+|                                │ 00002070  50 51 52 53 54 55 56 57 58 59 5A 5B 5C 5D 5E 5F  PQRSTUVWXYZ[\]^_
+|                                 │ 00002080  A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 AA AB AC AD AE AF  ................
+|                                 │ Memory 0x2000   0x00002000   0x48 (72)   read-only
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                         The debug adapter does not support writing memory:      
+|                                │                          the memory view is read-only
+|                                 │  Evaluate expressio
+| 0x00002000   0x48 (72)                                                                                              
+---- cursor 45,7
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      memory-0x2000.b            
+|      Stub: plain            │ Address   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  Decoded text
+|                                 │ 00001FC0  DF DE DD DC DB DA D9 D8 D7 D6 D5 D4 D3 D2 D1 D0  ................
+|     VARIABLES                 │ 00001FD0  CF CE CD CC CB CA C9 C8 C7 C6 C5 C4 C3 C2 C1 C0  ................
+|       Locals                   │ 00001FE0  FF FE FD FC FB FA F9 F8 F7 F6 F5 F4 F3 F2 F1 F0  ................
+|         count: 42              │ 00001FF0  EF EE ED EC EB EA E9 E8 E7 E6 E5 E4 E3 E2 E1 E0  ................
+|          counter: 7             │ 00002000  48 65 6C 6C 6F 2C 20 6D 65 6D 6F 72 79 21 00 01  Hello, memory!..
+|▎    WATCH                    │ 00002010  02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11  ................
+|  ●      Add Expression         │ 00002020  12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21  .............. !
+|     CALL STACK                │ 00002030  22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31  "#$%&'()*+,-./01
+|       main     PAUSED ON ENTRY │ 00002040  00 61 62 63 64 65 66 67 68 69 6A 6B 6C 6D 6E 6F  .abcdefghijklmno
+|       main         prog.py  2 │ 00002050  70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F  pqrstuvwxyz{|}~.
+|      BREAKPOINTS               │ 00002060  40 41 42 43 44 45 46 47 48 49 4A 4B 4C 4D 4E 4F  @ABCDEFGHIJKLMNO
+|                                │ 00002070  50 51 52 53 54 55 56 57 58 59 5A 5B 5C 5D 5E 5F  PQRSTUVWXYZ[\]^_
+|                                 │ 00002080  A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 AA AB AC AD AE AF  ................
+|                                 │ Memory 0x2000   0x00002000   0x48 (72)   read-only
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                         The debug adapter does not support writing memory:      
+|                                │                          the memory view is read-only
+|                                 │  Evaluate expressio
+| 0x00002000   0x48 (72)                                                                                              
+exited=0

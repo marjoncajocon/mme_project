@@ -13,7 +13,8 @@
 ** of its own (the focused one is the one the views show and the keys
 ** drive). An adapter's runInTerminal runs the program in a terminal of the
 ** panel; the Disassembly and a variable's memory (the hex viewer) are the
-** adapter's disassemble and readMemory.
+** adapter's disassemble and readMemory (the bytes changed there, its
+** writeMemory).
 */
 
 #include "mme.h"
@@ -52,6 +53,7 @@ typedef int Sock;
 enum { RQ_INIT, RQ_LAUNCH, RQ_SETBP, RQ_CONFDONE, RQ_THREADS, RQ_STACK, RQ_SCOPES,
        RQ_VARS, RQ_WATCH, RQ_REPL, RQ_HOVER, RQ_STEP, RQ_DISCONNECT, RQ_SETVAR, RQ_GOTOT, RQ_GOTO,
        RQ_EXCINFO, RQ_DBINFO, RQ_SETDBP, RQ_CUSTOM, RQ_COMPL, RQ_DISASM, RQ_READMEM,
+       RQ_WRITEMEM,
        RQ_OTHER };	/* RQ_CUSTOM: an extension's customRequest */
 
 typedef struct Req {
@@ -148,6 +150,8 @@ typedef struct Ses {	/* a debug session: one adapter */
   int track;	/* the host wants the messages (its trackers, its custom events) */
   int noproc;	/* connected to a port only: no adapter process of mme's */
   int cap_compl, cap_disasm, cap_mem, cap_gran;	/* completions, disassemble, readMemory, steppingGranularity */
+  int cap_wmem;	/* writeMemory: the memory view can change the bytes */
+  int wrote;	/* a writeMemory of those asked together went: the variables are asked again after the last */
   char trig[32];	/* completionTriggerCharacters */
   char *cfg;	/* its configuration, variables put in (Restart starts it again) */
   char *post;	/* its postDebugTask, NULL none */
@@ -997,6 +1001,7 @@ static void got_caps (const Json *c) {
   D.cap_disasm = json_bool(json_get(c, "supportsDisassembleRequest"), 0);
   D.cap_mem = json_bool(json_get(c, "supportsReadMemoryRequest"), 0);
   D.cap_gran = json_bool(json_get(c, "supportsSteppingGranularity"), 0);
+  D.cap_wmem = json_bool(json_get(c, "supportsWriteMemoryRequest"), 0);
   {	/* what typed asks for completions besides a word: ".", "->" ... */
     const Json *t = json_get(c, "completionTriggerCharacters");
     size_t i, k = 0;
@@ -1358,6 +1363,7 @@ static void ask_disasm (int show);
 static void got_disasm (int ok, const Json *msg, const Json *body, int show);
 
 static void got_memory (int ok, const Json *body, const char *tag);
+static void got_wrote (int ok, const Json *msg, const char *tag);
 
 static void got_completions (int ok, const Json *body, const char *text);
 
@@ -2347,6 +2353,7 @@ static void got_response (const Json *msg) {
     case RQ_COMPL: got_completions(ok, body, r.path); break;
     case RQ_DISASM: got_disasm(ok, msg, body, (int)r.arg); break;
     case RQ_READMEM: got_memory(ok, body, r.path); break;
+    case RQ_WRITEMEM: got_wrote(ok, msg, r.path); break;
     case RQ_WATCH: {
       int w = FOC ? wrow_of((int)r.arg) : -1;
       if (w < 0) break;
@@ -2927,6 +2934,77 @@ static void got_memory (int ok, const Json *body, const char *tag) {
   hex_mem_got(mref, at, count, ok, daddr, bytes, n,
               ok && skip && skip->type == J_NUM && skip->num > 0 ? (unsigned long long)skip->num : 0);
   free(bytes);
+}
+
+
+/* base64 (writeMemory's data) of n bytes onto b */
+static void b64_encode (Buf *b, const unsigned char *s, size_t n) {
+  static const char dig[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  size_t i;
+  for (i = 0; i < n; i += 3) {
+    unsigned v = (unsigned)s[i] << 16 | (i + 1 < n ? (unsigned)s[i + 1] << 8 : 0) | (i + 2 < n ? s[i + 2] : 0);
+    buf_putc(b, dig[v >> 18 & 63]);
+    buf_putc(b, dig[v >> 12 & 63]);
+    buf_putc(b, i + 1 < n ? dig[v >> 6 & 63] : '=');
+    buf_putc(b, i + 2 < n ? dig[v & 63] : '=');
+  }
+}
+
+
+/* the memory view may change the bytes: 1 now; 0 the adapter cannot (supportsWriteMemoryRequest); -1 not paused */
+int dbg_mem_writable (void) {
+  if (D.on && !D.cap_wmem) return 0;
+  return dbg_stopped() ? 1 : -1;
+}
+
+
+/*
+** writeMemory of the n bytes changed at the reference's offset (the
+** address at, said again with the answer), whole or not at all
+** (allowPartial false), as VS Code's Hex Editor saves; -1: not now.
+*/
+int dbg_write_memory (const char *mref, long long offset, unsigned long long at, const unsigned char *bytes, size_t n) {
+  Buf b, tag;
+  if (dbg_mem_writable() <= 0) return -1;
+  buf_init(&b);
+  buf_puts(&b, "{\"memoryReference\":");
+  json_put_str(&b, mref, strlen(mref));
+  buf_printf(&b, ",\"offset\":%lld,\"allowPartial\":false,\"data\":\"", offset);
+  b64_encode(&b, bytes, n);
+  buf_puts(&b, "\"}");
+  buf_init(&tag);
+  buf_printf(&tag, "%llx %u %s", at, (unsigned)n, mref);
+  request("writeMemory", b.s, RQ_WRITEMEM, 0, tag.s);
+  buf_free(&tag);
+  buf_free(&b);
+  return 0;
+}
+
+
+/*
+** Its answer: the memory views read the bytes again; after the last of
+** those asked together the variables and the watches are asked again, as
+** VS Code does. Failed: the adapter's message.
+*/
+static void got_wrote (int ok, const Json *msg, const char *tag) {
+  unsigned long long at;
+  size_t n;
+  char *e;
+  int i;
+  if (tag == NULL) return;
+  at = strtoull(tag, &e, 16);
+  n = (size_t)strtoul(e, &e, 10);
+  hex_mem_wrote(*e == ' ' ? e + 1 : e, at, n, ok);
+  if (!ok) toast(1, "%s", json_str(json_get(msg, "body.error.format"), json_str(json_get(msg, "message"), "Writing memory failed")));
+  else D.wrote = 1;
+  for (i = 0; i < D.nreq && D.req[i].kind != RQ_WRITEMEM; i++) {}
+  if (i == D.nreq && D.wrote) {
+    D.wrote = 0;
+    if (D.stopped && FOC) {	/* the values again (not the frame's file: the memory view stays in front) */
+      ask_scopes();
+      eval_watches();
+    }
+  }
 }
 
 

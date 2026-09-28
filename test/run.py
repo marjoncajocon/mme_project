@@ -262,6 +262,11 @@ def RUN_TASK(label):
 # stubdap.py as the debug adapter of launch.json's type "stub" (the debug-* scenarios)
 DBG_SETTINGS = {"mme.debugAdapters": {"stub": "python " + os.path.join(HERE, "stubdap.py").replace("\\", "/")}}
 F12 = "`[24~"
+# the stub without supportsWriteMemoryRequest: its memory view read-only
+DBG_RO_SETTINGS = {"mme.debugAdapters": {"stub": DBG_SETTINGS["mme.debugAdapters"]["stub"] + " --no-write-memory"}}
+# Run and Debug, count's View Binary Data (Shift+F10, the fourth item): its memory, the cursor on 0x2000
+MEM_VIEW = (["w:1500"] + PALETTE("Start Debugging") + ["w:3500"] + PALETTE("Run and Debug") +
+            ["k:" + DOWN * 3, "w:300", "k:`[21;2~", "w:600", "k:" + DOWN * 3 + "|", "w:1500"])
 
 # stublsp.py --f3 as the C server; a file of fix/lsp/f3 opened with Go to File; a command from the palette
 F3_LSP = {"mme.languageServers": {"*": "", "c": stub_cmd("--f3")}}
@@ -1723,7 +1728,7 @@ SCENARIOS = [
          "Open Disassembly View shows the adapter's instructions around the paused one (marked, its source lines "
          "between them); F10 there steps one instruction; a variable's View Binary Data is its memory "
          "(readMemory) in the hex viewer, the offsets its addresses",
-         settings=DBG_SETTINGS,
+         settings=DBG_RO_SETTINGS,
          subs=[(re.compile(r"\b[A-Za-z]: \S+ .*"), "<CRUMBS of mme-data/debug/Disassembly>")]),
     Scen("debug-memory-paging", "dbg",
          ["w:1500"] + PALETTE("Start Debugging") + ["w:3500"] + PALETTE("Run and Debug") +
@@ -1736,7 +1741,31 @@ SCENARIOS = [
          "variable's address, more read (readMemory, 4 KB a time) as Ctrl+G, Ctrl+End, Ctrl+Home go there; what the "
          "adapter cannot read (its unreadableBytes: the hole 0x2800..0x3100, from 4 GB up) is \"??\"; after a step "
          "the view reads again (0x2040, the stops counted, is 01)",
+         settings=DBG_RO_SETTINGS),
+    Scen("debug-memory-edit", "dbg",
+         MEM_VIEW + ["k:4a", "k:" + TAB, "k:i", "w:500", "d", "k:" + CTRL_Z, "w:400", "d", "k:" + CTRL_Y,
+                     "k:" + CTRL_G, "w:400", "k:2015|", "w:600", "k:" + TAB, "k:63", "w:500", "d",
+                     "k:" + CTRL_S, "w:2000", "d",
+                     "k:" + CTRL_G, "w:400", "k:1FF0|", "w:600", "k:ff", "k:" + CTRL_S, "w:1500", "d",
+                     "k:" + CTRL_W, "w:800", "d", "k:" + ESC, "w:400", "k:" + CTRL_Z, "w:300", "k:" + CTRL_W, "w:800", "d"],
+         "the memory view of an adapter with supportsWriteMemoryRequest is edited like VS Code's Hex Editor: hex "
+         "digits over the byte (4a: 0x2000 is 4A, the cursor on), Tab to the decoded text where a letter is its "
+         "byte (i: 69); the bytes changed are in another color and the tab has the dirty dot; Ctrl+Z / Ctrl+Y "
+         "undo and redo them; Ctrl+S writes them (writeMemory for each run), the memory is read again and the "
+         "VARIABLES too (counter, the byte at 0x2015, is 99); a write the adapter refuses (0x1FF0, its read-only "
+         "code) tells its message and keeps the change; closing the tab asks Save / Don't Save / Cancel",
          settings=DBG_SETTINGS),
+    Scen("debug-memory-edit-refused", "dbg",
+         MEM_VIEW + ["k:" + CTRL_G, "w:400", "k:2800|", "w:1200", "k:1", "w:500", "d",
+                     "k:" + CTRL_G, "w:400", "k:2000|", "w:600", "k:`[15~", "w:2500", "k:5", "w:500", "d"],
+         "the memory view refuses a change, with a message: of an unreadable byte (\"??\", the hole at 0x2800), "
+         "and when the program is not paused (F5: it ran to its end)",
+         settings=DBG_SETTINGS),
+    Scen("debug-memory-edit-readonly", "dbg",
+         MEM_VIEW + ["k:4", "w:500", "d", "k:" + CTRL_S, "w:800", "d"],
+         "an adapter without supportsWriteMemoryRequest: the memory view stays read-only (its status line says "
+         "so) and typing says why; Ctrl+S has nothing to write",
+         settings=DBG_RO_SETTINGS),
     Scen("debug-compound", "dbg",
          ["w:1500"] + PALETTE("Select and Start Debugging") + ["w:300", "d", "k:Both", "k:|", "w:400"] +
          PALETTE("Start Debugging") + ["w:4500", "d"] + PALETTE("Stop Debugging") + ["w:3000", "d"],

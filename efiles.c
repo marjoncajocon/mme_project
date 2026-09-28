@@ -52,19 +52,52 @@ int fs_rename (const char *from, const char *to) {
 }
 
 
+/*
+** GetFinalPathNameByHandleW is Vista's: looked up when it runs, so that
+** tcc (whose headers lack it) builds mme and XP starts it; there a link
+** can't be followed to where it goes, and a walk does not go into one
+*/
+typedef DWORD (WINAPI *FinalPathFn) (HANDLE, LPWSTR, DWORD, DWORD);
+
+static FinalPathFn final_path (void) {
+  static int tried;
+  static FinalPathFn fn;
+  if (!tried) {
+    HMODULE k = GetModuleHandleW(L"kernel32.dll");
+    tried = 1;
+    if (k) fn = (FinalPathFn)(void (*)(void))GetProcAddress(k, "GetFinalPathNameByHandleW");
+  }
+  return fn;
+}
+
+
+static int links_known (void) {
+  return final_path() != NULL;
+}
+
+
 /* the folder path is, links and junctions followed (os_realpath does not follow them here); NULL: unknown */
 char *fs_real_dir (const char *path) {
   wchar_t *w = wide(path), buf[4096];
-  HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-                         FILE_FLAG_BACKUP_SEMANTICS, NULL);	/* a folder is opened only with that */
+  FinalPathFn fin = final_path();
+  HANDLE h;
   DWORD n;
   int k;
   char *r;
-  free(w);
-  if (h == INVALID_HANDLE_VALUE) return NULL;
-  n = GetFinalPathNameByHandleW(h, buf, 4096, FILE_NAME_NORMALIZED);
-  CloseHandle(h);
-  if (n == 0 || n >= 4096) return NULL;
+  if (fin == NULL) {	/* XP: the path as it is, made whole */
+    n = GetFullPathNameW(w, 4096, buf, NULL);
+    free(w);
+    if (n == 0 || n >= 4096) return NULL;
+  }
+  else {
+    h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                    FILE_FLAG_BACKUP_SEMANTICS, NULL);	/* a folder is opened only with that */
+    free(w);
+    if (h == INVALID_HANDLE_VALUE) return NULL;
+    n = fin(h, buf, 4096, 0);	/* FILE_NAME_NORMALIZED */
+    CloseHandle(h);
+    if (n == 0 || n >= 4096) return NULL;
+  }
   k = WideCharToMultiByte(CP_UTF8, 0, buf, -1, NULL, 0, NULL, NULL);
   if (k <= 0) return NULL;
   r = (char *)xmalloc((size_t)k);
@@ -272,6 +305,9 @@ int fs_dir_first (Vec *seen, const char *path) {
 int fs_walk_into (Vec *seen, const char *path) {
   OsStat st;
   if (os_lstat(path, &st) != 0 || !st.is_link) return 1;
+#ifdef _WIN32
+  if (!links_known()) return 0;	/* XP: where a link goes is unknown, so it could go round */
+#endif
   return fs_dir_first(seen, path);
 }
 

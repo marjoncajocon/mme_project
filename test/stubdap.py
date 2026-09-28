@@ -7,7 +7,8 @@ answers the Debug Adapter Protocol over stdin/stdout with the same things every
 time, so what mme draws from a session can be pinned.
 
     initialize      the capabilities the newer surfaces need: completions,
-                    disassemble, readMemory, steppingGranularity
+                    disassemble, readMemory, writeMemory, steppingGranularity
+                    (--no-write-memory: without supportsWriteMemoryRequest)
     launch          "program" is the file shown as the stopped frame's source;
                     "runInTerminal": true asks mme (the reverse request) to run
                     "python -c ..." in its terminal - a program that reads a
@@ -15,7 +16,8 @@ time, so what mme draws from a session can be pinned.
                     answered
     configurationDone   a stop on entry, thread 1, line 2 of the program,
                     instruction pointer 0x1000
-    variables       count = 42 (memoryReference 0x2000), counter = 7
+    variables       count = 42 (memoryReference 0x2000), counter = the byte
+                    at 0x2015 (7 until writeMemory changes it)
     evaluate        "= <the expression>"
     completions     count, counter, compute: those that start with the word
     disassemble     instructions 4 bytes apart around the pointer, of "main"
@@ -24,6 +26,9 @@ time, so what mme draws from a session can be pinned.
                     changes it), elsewhere (a ^ a >> 8) & 255; unreadable
                     (unreadableBytes): below 0x1000, the hole 0x2800..0x3100,
                     and from 4 GB up
+    writeMemory     the bytes are kept (a readMemory after shows them); an
+                    error for bytes in the holes (not mapped) and in
+                    0x1000..0x2000 (the code, read-only)
     next / stepIn   a stop again: the pointer 4 bytes on when the granularity
                     is "instruction", else the next line
     continue        exited 0, terminated
@@ -42,6 +47,8 @@ state = {"program": "", "line": 2, "ip": 0x1000, "name": "stub", "stops": 0}
 MEM_TOP = 1 << 32
 HOLES = [(0, 0x1000), (0x2800, 0x3100)]
 HELLO = b"Hello, memory!" + bytes(range(50))
+CODE = (0x1000, 0x2000)
+written = {}  # address: the byte writeMemory put there
 
 
 def readable(a):
@@ -49,6 +56,8 @@ def readable(a):
 
 
 def mem_byte(a):
+    if a in written:
+        return written[a]
     if 0x2000 <= a < 0x2000 + len(HELLO):
         return HELLO[a - 0x2000]
     if a == 0x2040:
@@ -125,7 +134,8 @@ def main():
             respond(m, {"supportsConfigurationDoneRequest": True, "supportsCompletionsRequest": True,
                         "completionTriggerCharacters": ["."], "supportsDisassembleRequest": True,
                         "supportsReadMemoryRequest": True, "supportsSteppingGranularity": True,
-                        "supportsSetVariable": True})
+                        "supportsSetVariable": True,
+                        "supportsWriteMemoryRequest": "--no-write-memory" not in sys.argv})
             event("initialized")
         elif c == "launch":
             state["program"] = a.get("program", "")
@@ -152,7 +162,7 @@ def main():
         elif c == "variables":
             respond(m, {"variables": [{"name": "count", "value": "42", "variablesReference": 0,
                                        "memoryReference": "0x2000"},
-                                      {"name": "counter", "value": "7", "variablesReference": 0}]})
+                                      {"name": "counter", "value": str(mem_byte(0x2015)), "variablesReference": 0}]})
         elif c == "evaluate":
             respond(m, {"result": "= " + a.get("expression", ""), "variablesReference": 0})
         elif c == "completions":
@@ -183,6 +193,19 @@ def main():
             if skip:
                 body["unreadableBytes"] = skip
             respond(m, body)
+        elif c == "writeMemory":
+            start = (int(a.get("memoryReference", "0"), 0) + int(a.get("offset", 0))) & ((1 << 64) - 1)
+            data = base64.b64decode(a.get("data", ""))
+            bad = [start + k for k in range(len(data)) if not readable(start + k)]
+            code = [start + k for k in range(len(data)) if CODE[0] <= start + k < CODE[1]]
+            if bad:
+                respond(m, success=False, message="Unable to write memory at 0x%x: the address is not mapped" % bad[0])
+            elif code:
+                respond(m, success=False, message="Unable to write memory at 0x%x: the page is read-only" % code[0])
+            else:
+                for k, x in enumerate(bytearray(data)):
+                    written[start + k] = x
+                respond(m, {"bytesWritten": len(data)})
         elif c in ("next", "stepIn", "stepOut"):
             respond(m)
             state["stops"] += 1

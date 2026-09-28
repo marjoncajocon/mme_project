@@ -1,6 +1,7 @@
 /*
 ** tcc/winsock2.h - the part of Winsock mme uses (the debugger's TCP
-** connection to an adapter), for tcc 0.9.27, which has no winsock2.h.
+** connection to an adapter, the Ports view's relay listening for a
+** container's forwarded port), for tcc 0.9.27, which has no winsock2.h.
 */
 #ifndef MME_TCC_WINSOCK2_H
 #define MME_TCC_WINSOCK2_H
@@ -64,6 +65,10 @@ struct timeval {
 };
 #endif
 
+#define SD_SEND	1
+
+int WINAPI __WSAFDIsSet (SOCKET fd, fd_set *set);
+#define FD_ISSET(fd, set)	__WSAFDIsSet((SOCKET)(fd), (fd_set *)(set))
 #define FD_ZERO(set)	(((fd_set *)(set))->fd_count = 0)
 #define FD_SET(fd, set)	do { \
     if (((fd_set *)(set))->fd_count < FD_SETSIZE) \
@@ -74,6 +79,10 @@ int WINAPI WSAStartup (WORD version, WSADATA *data);
 int WINAPI WSACleanup (void);
 SOCKET WINAPI socket (int af, int type, int protocol);
 int WINAPI connect (SOCKET s, const struct sockaddr *name, int namelen);
+int WINAPI bind (SOCKET s, const struct sockaddr *name, int namelen);
+int WINAPI listen (SOCKET s, int backlog);
+SOCKET WINAPI accept (SOCKET s, struct sockaddr *addr, int *addrlen);
+int WINAPI shutdown (SOCKET s, int how);
 int WINAPI closesocket (SOCKET s);
 int WINAPI select (int nfds, fd_set *r, fd_set *w, fd_set *e, const struct timeval *timeout);
 int WINAPI send (SOCKET s, const char *buf, int len, int flags);

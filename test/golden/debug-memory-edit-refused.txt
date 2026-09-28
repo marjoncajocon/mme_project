@@ -1,0 +1,63 @@
+---- cursor 45,9
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      memory-0x2000.b            
+|      Stub: plain            │ Address   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  Decoded text
+|                                 │ 000027A0  87 86 85 84 83 82 81 80 8F 8E 8D 8C 8B 8A 89 88  ................
+|     VARIABLES                 │ 000027B0  97 96 95 94 93 92 91 90 9F 9E 9D 9C 9B 9A 99 98  ................
+|       Locals                   │ 000027C0  E7 E6 E5 E4 E3 E2 E1 E0 EF EE ED EC EB EA E9 E8  ................
+|         count: 42              │ 000027D0  F7 F6 F5 F4 F3 F2 F1 F0 FF FE FD FC FB FA F9 F8  ................
+|          counter: 7             │ 000027E0  C7 C6 C5 C4 C3 C2 C1 C0 CF CE CD CC CB CA C9 C8  ................
+|▎    WATCH                    │ 000027F0  D7 D6 D5 D4 D3 D2 D1 D0 DF DE DD DC DB DA D9 D8  ................
+|  ●      Add Expression         │ 00002800  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|     CALL STACK                │ 00002810  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|       main     PAUSED ON ENTRY │ 00002820  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|       main         prog.py  2 │ 00002830  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|      BREAKPOINTS               │ 00002840  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|                                │ 00002850  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|                                 │ 00002860  ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ?? ??  ????????????????
+|                                 │ Memory 0x2000   0x00002800   unreadable
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │                         The memory at 0x2800 cannot be read, so it cannot be    
+|                                │                          changed
+|                                 │  Evaluate expressio
+| 0x00002800   unreadable                                                                                             
+---- cursor 45,9
+|   File  Edit  Selection  View  Go  Run  Terminal  Help                           dbg
+|      RUN AND DEBUG              │  prog.py      memory-0x2000.bin  
+|      Stub: plain            │ Address   00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  Decoded text
+|                                 │ 00001FA0  BF BE BD BC BB BA B9 B8 B7 B6 B5 B4 B3 B2 B1 B0  ................
+|     VARIABLES                 │ 00001FB0  AF AE AD AC AB AA A9 A8 A7 A6 A5 A4 A3 A2 A1 A0  ................
+|      WATCH                    │ 00001FC0  DF DE DD DC DB DA D9 D8 D7 D6 D5 D4 D3 D2 D1 D0  ................
+|        Add Expression         │ 00001FD0  CF CE CD CC CB CA C9 C8 C7 C6 C5 C4 C3 C2 C1 C0  ................
+|      CALL STACK                │ 00001FE0  FF FE FD FC FB FA F9 F8 F7 F6 F5 F4 F3 F2 F1 F0  ................
+|▎    BREAKPOINTS               │ 00001FF0  EF EE ED EC EB EA E9 E8 E7 E6 E5 E4 E3 E2 E1 E0  ................
+|                                 │ 00002000  48 65 6C 6C 6F 2C 20 6D 65 6D 6F 72 79 21 00 01  Hello, memory!..
+|                                │ 00002010  02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11  ................
+|                                 │ 00002020  12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F 20 21  .............. !
+|                                │ 00002030  22 23 24 25 26 27 28 29 2A 2B 2C 2D 2E 2F 30 31  "#$%&'()*+,-./01
+|                                 │ 00002040  00 61 62 63 64 65 66 67 68 69 6A 6B 6C 6D 6E 6F  .abcdefghijklmno
+|                                │ 00002050  70 71 72 73 74 75 76 77 78 79 7A 7B 7C 7D 7E 7F  pqrstuvwxyz{|}~.
+|                                 │ 00002060  40 41 42 43 44 45 46 47 48 49 4A 4B 4C 4D 4E 4F  @ABCDEFGHIJKLMNO
+|                                 │ Memory 0x2000   0x00002000   0x48 (72)   read-only: not paused
+|                                 │── PROBLEMS 0 ─ OUTPUT ─ DEBUG CONSOLE ─ TERMINAL ─────────────────────────────────
+|                                 │ Starting the debugger...
+|                                 │ stub adapter: launched Stub: plain
+|                                 │ Process exited with code 0.
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                 │
+|                                │                         Memory can only be changed while the program is paused  
+|                                 │  Please start a deb
+| 0x00002000   0x48 (72)                                                                                              
+exited=0

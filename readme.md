@@ -21,20 +21,105 @@ other terminals need a Nerd Font too. Without one the icons show as boxes.
 
 ## Build
 
-The only tool needed is [zig](https://ziglang.org), used as a C compiler
-(`zig cc`). Like Lua and mmc, all the C code is in the root folder.
+mme is plain C11 with no libraries: one C compiler is all it needs. Like Lua
+and mmc, all the C code is in the root folder. There are two programs:
+
+* `mme`, the editor in a terminal: `build.bat` (Windows), `makefile` (Linux, macOS);
+* `mme-sdl`, the same editor in a window of its own (SDL2): `sdl2_port\build.bat`,
+  `sdl2_port\makefile` (see `sdl2_port/README.md` for how it works).
+
+### What you need
+
+"Tested with" is what builds mme today; older versions may work but are not
+tried (tcc must be 0.9.27: `sdl2_port\tcc\` fills in what that version lacks).
+
+| Tool | Tested with | For | Where |
+|---|---|---|---|
+| [zig](https://ziglang.org/download/) | 0.17.0-dev | the default compiler of both programs; the only one for `cross` | on the PATH, or `D:\env\zig\zig.exe` |
+| MinGW-w64 gcc | 14.2.0 (x86_64, UCRT) | `sdl2_port\build gcc` | on the PATH, or `D:\env\mingw\MinGW\bin\gcc.exe` |
+| 32 bit MinGW-w64 gcc | not tried | `sdl2_port\build gcc 32` | `i686-w64-mingw32-gcc` on the PATH, or `set GCC32=path\to\gcc.exe` |
+| [Tiny C Compiler](https://bellard.org/tcc/) | 0.9.27 (x86_64 and i386) | `sdl2_port\build tcc` (64) and `build xp` (32) | `tcc.exe` / `i386-win32-tcc.exe` on the PATH, or `D:\env\tcc\` |
+| Visual C++ | not tried | `sdl2_port\build msvc` | a "Native Tools" prompt, or found with vswhere ("Desktop development with C++") |
+| a C11 compiler: gcc or clang | zig's clang | `make` on Linux and macOS | the system's `cc` |
+| SDL2 | 2.32.10 (at run time any 2.0.5 or later) | mme-sdl only | Windows: unpack `SDL2-devel-2.32.10-mingw.zip` (and `-VC.zip` for msvc) into `sdl2_port\deps`, so that `sdl2_port\deps\SDL2-2.32.10\include\SDL.h` is there. Linux: `apt install libsdl2-dev` (`dnf install SDL2-devel`, `pacman -S sdl2`); macOS: `brew install sdl2` |
+| node | 22.22 | optional: makes `ehost_js.h` from `mme-exthost.js` again (the checked-in one is used without it) | on the PATH |
+
+Nothing else: no CMake, no package manager. The fonts for mme-sdl (JetBrains
+Mono Nerd Font) are copied from the mmc checkout beside this one, or from the
+mmc shell's `usr\share\fonts`.
+
+### mme (the terminal editor)
 
 ```
-build                 Windows: mme.exe, copied into %MME_DEST% (D:\mmc-shell\usr\bin)
-build cross           every platform, into dist\
-build install D:\mmc  copy mme.exe into D:\mmc\usr\bin
+build                  Windows (zig): mme.exe, copied into %MME_DEST% (D:\mmc-shell\usr\bin)
+build cross            every platform (zig), into dist\: Windows, Linux (static musl),
+                       macOS, on x86_64 and aarch64, and arm-linux (32 bit Android)
+build install D:\mmc   copy mme.exe into D:\mmc\usr\bin
 build clean
 ```
 
 ```
-make                  Linux / macOS (make CC=gcc works too: it is plain C11)
-make cross
-sudo make install     /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
+make                   Linux / macOS (zig cc; make CC=gcc or CC=clang works too)
+make cross             every platform, into dist/ (needs zig)
+sudo make install      /usr/local/bin/mme (make install PREFIX=/usr for /usr/bin)
+```
+
+### mme-sdl (the window)
+
+```
+cd sdl2_port
+build                  zig, 64 bit: Windows 7 and later      -> bin\mme-sdl.exe
+build zig 32           zig, 32 bit: Windows 7 and later      -> bin32\
+build gcc              MinGW-w64 gcc, 64 bit                 -> bin\
+build gcc 32           32 bit MinGW-w64 gcc                  -> bin32\
+build tcc              tcc 0.9.27, 64 bit                    -> bin\
+build xp               tcc 0.9.27, 32 bit, msvcrt.dll: Windows XP and later -> bin32\
+build msvc             Visual C++                            -> bin\
+build cross            zig: Linux and macOS (x86_64, aarch64) -> dist\ (they load the system's SDL2)
+build clean
+```
+
+```
+cd sdl2_port
+make                   Linux / macOS, with the system's SDL2 (sdl2-config)
+sudo make install      /usr/local/bin/mme-sdl, fonts into /usr/local/share/mme-fonts
+```
+
+Each Windows build is the program on its own: `mme-sdl.exe`, its `SDL2.dll`
+and `mme-fonts\`. A 64 bit build is also copied into `%SDL_DEST%`
+(`D:\mmc-shell\usr\bin`), so `mme-sdl .` works from the mmc shell.
+
+### Where builds are copied
+
+`MME_DEST` (mme) and `SDL_DEST` (mme-sdl) say where a Windows build is copied,
+`D:\mmc-shell\usr\bin` when not set. A folder that does not exist means no
+copy (`set MME_DEST=X:\none`); in cmd `set MME_DEST=` also works, but in
+PowerShell `$env:MME_DEST=''` removes the variable and the default comes
+back.
+
+### What is known to build
+
+Every target above was built on 2026-09-28 from the same sources:
+
+| Target | Result |
+|---|---|
+| `build`, `build cross` (mme: Windows, Linux, macOS on x86_64 and aarch64, arm-linux) | no warnings |
+| `sdl2_port\build` zig 64, zig 32, cross | no warnings |
+| `sdl2_port\build gcc` (64) | builds, with gcc-only warnings zig's clang does not make: `-Wformat-truncation` notes on `snprintf` into fixed buffers (a long name is cut, as meant), and six older ones (`mos.c`, `eaccess.c`, two in `mme.c`) |
+| `sdl2_port\build tcc`, `build xp` | builds; one `M_PI redefined` note (SDL's header and tcc's `math.h`) |
+| `sdl2_port\build gcc 32`, `build msvc` | not tried here (no 32 bit MinGW, no Visual Studio on that machine) |
+
+### The regression suite
+
+`test\` has it (see `test/README.md`): it also needs Python 3 (3.9 tested), git
+on the PATH, and the mmc checkout beside this one (its terminal core runs mme
+in a pseudo console).
+
+```
+cd test
+build                  hx.exe (the harness) and its helpers
+python mkfix.py        the fixtures
+python run.py --build  build mme and run every scenario
 ```
 
 | File | What is in it |
@@ -483,8 +568,18 @@ With no file open the editor shows the keys to start with.
   PgDn, Ctrl+Home / Ctrl+End, Ctrl+G to an address (hex, or `10#` decimal) -
   and 64 pages are kept; what the adapter cannot read (its unreadableBytes)
   shows as `??`. Each stop (and the adapter's `memory` event) reads again
-  what is shown. Ctrl+F looks through the memory read so far. It is
-  read-only (writeMemory is not used).
+  what is shown. Ctrl+F looks through the memory read so far. When the
+  adapter writes memory (supportsWriteMemoryRequest) and the program is
+  paused, the bytes are edited like VS Code's Hex Editor: hex digits over the
+  byte under the cursor (two to a byte, then the next), Tab to the decoded
+  text where a letter typed is its byte; the bytes changed show in another
+  color, the tab gets the dirty dot, Ctrl+Z / Ctrl+Y undo and redo them, and
+  **Ctrl+S** writes them (writeMemory for each run of them, allowPartial
+  false), then the memory and the VARIABLES are read again. A write the
+  adapter refuses shows its message and the changes stay; closing the tab
+  with changes asks Save / Don't Save / Cancel. `??` bytes cannot be
+  changed, nor any while the program runs; without the capability the view
+  stays read-only (its status line says so).
 - **Data breakpoints** — the right button on a variable (or Shift+F10 on the
   one selected) gives VS Code's menu: Set Value, Copy Value, Add to Watch, and
   Break on Value Change / Read / Access, when the adapter can

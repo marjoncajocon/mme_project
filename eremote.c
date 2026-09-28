@@ -2175,12 +2175,12 @@ void remote_command (int cmd) {
     case CMD_WSL_REOPEN:
       if (wsl_folder(side_root()) == 0) mme_command(CMD_CLOSE_WINDOW);	/* the window is WSL's now, as VS Code's */
       break;
-    case CMD_DC_REBUILD:
+    case CMD_DC_REBUILD:	/* outside a container's window it rebuilds and reopens */
       if (is_at("dev-container")) {
         leave("rebuild");
         break;
       }
-      /* fall through: here it rebuilds and reopens */
+      /* fall through */
     case CMD_DC_REOPEN: case CMD_DC_REBUILD_REOPEN:
       if (have_docker() && (c = devc_config(side_root())) != NULL) {
         if (devc_window(c, cmd != CMD_DC_REOPEN) == 0) mme_command(CMD_CLOSE_WINDOW);

@@ -6152,13 +6152,14 @@ static void tab_new (void) {
 }
 
 
-/* a notebook's changes on its tab's doc: the dot, the questions on closing come from there */
+/* a notebook's changes on its tab's doc (a memory view's bytes not written too): the dot, the questions on closing come from there */
 static void nb_sync (void) {
   int g, i;
   for (g = 0; g < g_ngrp; g++)
     for (i = 0; i < g_grp[g].ntab; i++) {
       Tab *t = g_grp[g].tab[i];
       if (t->page == PAGE_NOTEBOOK) nb_changes(t->pdata, &t->doc->changes, &t->doc->saved);
+      else if (t->page == PAGE_HEX) hex_changes(t->pdata, &t->doc->changes, &t->doc->saved);
     }
 }
 
@@ -18207,6 +18208,11 @@ static void run_command (int cmd) {
         nb_sync();
         return;
       }
+      if (HAS_DOC && !G->diff && T->page == PAGE_HEX) {	/* a debuggee's memory: the bytes changed written */
+        hex_save(T->pdata);
+        nb_sync();
+        return;
+      }
       if (HAS_DOC && !G->diff && T->page == PAGE_SEARCHED) {	/* a .code-search file */
         if (searched_save(T->pdata, cmd == CMD_SAVE_AS) == 0) {
           free(T->ppath);
@@ -18258,8 +18264,11 @@ static void run_command (int cmd) {
       else focus_group(keep < g_ngrp ? keep : 0);
       break;
     }
-    case CMD_UNDO: if (HAS_DOC) undo(0); break;
-    case CMD_REDO: if (HAS_DOC) undo(1); break;
+    case CMD_UNDO:
+    case CMD_REDO:
+      if (HAS_DOC && !G->diff && T->page == PAGE_HEX) hex_undo(T->pdata, cmd == CMD_REDO);	/* a memory view's bytes */
+      else if (HAS_DOC) undo(cmd == CMD_REDO);
+      break;
     case CMD_CUT: if (HAS_DOC) copy(1); break;
     case CMD_COPY: if (HAS_DOC) copy(0); break;
     case CMD_PASTE: if (HAS_DOC && E.clip) insert(E.clip, E.cliplen); break;

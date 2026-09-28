@@ -1406,7 +1406,7 @@ static size_t group_num (const char *s, const size_t *cap, int g) {
 
 /* what line s says to pattern p, into m's reading so far */
 static void pat_read (Matcher *m, const Pat *p, const char *s, const size_t *cap) {
-  char *v;
+  char *v = NULL;
   if (p->file && (v = group_of(s, cap, p->file)) != NULL) {
     free(m->file);
     m->file = v;
