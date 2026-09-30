@@ -25,6 +25,8 @@ typedef struct Color {
   uint32_t rgb;
 } Color;
 
+#define UNSET	0xFF000000u	/* a slot the theme does not give: made from its others (hover_colors) */
+
 /* Dark+: VS Code's dark theme, the base of the others */
 static const uint32_t dark_plus[C_N] = {
   [C_EDITOR_BG] = 0x1E1E1E, [C_EDITOR_FG] = 0xD4D4D4, [C_LINE_BG] = 0x282828,
@@ -51,6 +53,8 @@ static const uint32_t dark_plus[C_N] = {
   [C_TAB_ON_BG] = 0x1E1E1E, [C_TAB_ON_FG] = 0xFFFFFF, [C_CRUMB] = 0xA9A9A9,
   [C_ACCENT] = 0x007ACC, [C_MCURSOR] = 0xAEAFAD, [C_LIGHTBULB] = 0xFFCC00,
   [C_MINIMAP_SLIDER] = 0x333333, [C_THUMB] = 0x434343, [C_THUMB_ON] = 0x5A5A5A,
+  [C_THUMB_ACTIVE] = UNSET, [C_LIST_HOVER_BG] = UNSET, [C_TAB_HOVER_BG] = UNSET, [C_TAB_HOVER_FG] = UNSET,
+  [C_TOOLBAR_HOVER] = UNSET, [C_SASH_HOVER] = UNSET,
   [C_BRACKET1] = 0xFFD700, [C_BRACKET2] = 0xDA70D6, [C_BRACKET3] = 0x179FFF,
   [C_BRACKET_MATCH] = 0x2E4A2E,
   [C_GUIDE] = 0x404040, [C_GUIDE_ON] = 0x707070, [C_RULER] = 0x5A5A5A,
@@ -439,6 +443,26 @@ static void outlines_make (void) {
 
 
 /* the theme by its name (or the first one); the screen is sent again */
+static uint32_t mix (uint32_t a, uint32_t b, int pct) {	/* pct of b into a */
+  unsigned r = ((a >> 16) * (unsigned)(100 - pct) + (b >> 16) * (unsigned)pct) / 100;
+  unsigned g = (((a >> 8) & 255) * (unsigned)(100 - pct) + ((b >> 8) & 255) * (unsigned)pct) / 100;
+  unsigned bl = ((a & 255) * (unsigned)(100 - pct) + (b & 255) * (unsigned)pct) / 100;
+  return (uint32_t)((r << 16) | (g << 8) | bl);
+}
+
+
+/* the hover colors a theme did not give: VS Code's defaults, made from its own */
+static void hover_colors (void) {
+  uint32_t *c = g_color;
+  if (c[C_THUMB_ACTIVE] == UNSET) c[C_THUMB_ACTIVE] = mix(c[C_THUMB_ON], c[C_EDITOR_FG], 30);	/* scrollbarSlider.activeBackground */
+  if (c[C_LIST_HOVER_BG] == UNSET) c[C_LIST_HOVER_BG] = mix(c[C_SIDE_BG], c[C_SIDE_FG], 6);	/* list.hoverBackground */
+  if (c[C_TAB_HOVER_BG] == UNSET) c[C_TAB_HOVER_BG] = mix(c[C_TAB_BG], c[C_TAB_FG], 12);	/* tab.hoverBackground */
+  if (c[C_TAB_HOVER_FG] == UNSET) c[C_TAB_HOVER_FG] = mix(c[C_TAB_FG], c[C_TAB_ON_FG], 60);	/* tab.hoverForeground */
+  if (c[C_TOOLBAR_HOVER] == UNSET) c[C_TOOLBAR_HOVER] = mix(c[C_SIDE_BG], c[C_SIDE_FG], 35);	/* toolbar.hoverBackground */
+  if (c[C_SASH_HOVER] == UNSET) c[C_SASH_HOVER] = c[C_ACCENT];	/* sash.hoverBorder: focusBorder */
+}
+
+
 int theme_set (const char *name) {
   int t, i, hc = 0;
   name = theme_alias(name);
@@ -459,6 +483,7 @@ int theme_set (const char *name) {
     hc = a->light >= 2 ? a->light - 1 : 0;
     a->load(a->arg, g_color);
   }
+  hover_colors();
   theme_customize(g_color, theme_name(t));	/* workbench.colorCustomizations has the last word */
   tm_theme_again();	/* and editor.tokenColorCustomizations, over the grammar's rules */
   snprintf(g_curname, sizeof(g_curname), "%s", theme_name(t));
@@ -533,6 +558,22 @@ const char *theme_sgr (int st) {
 
 
 /* a token style's colors, for cells that get their own (squiggles) */
+void theme_style (int st, uint32_t *fg, uint32_t *bg, uint32_t *at) {
+  const char *a;
+  *at = 0;
+  if (st >= S_N) {
+    theme_tok(st, fg, bg);
+    if ((st - S_N) / B_N == T_HEADING) *at = RGB_BOLD;
+    return;
+  }
+  if (st < 0) st = S_TEXT;
+  *fg = g_color[style[st].fg];
+  *bg = g_color[style[st].bg];
+  for (a = style[st].attr; *a; a++)
+    if ((a == style[st].attr || a[-1] == ';') && a[1] == ';') *at |= *a == '1' ? RGB_BOLD : *a == '3' ? RGB_ITALIC : *a == '4' ? RGB_UNDER : 0;
+}
+
+
 void theme_tok (int st, uint32_t *fg, uint32_t *bg) {
   st -= S_N;
   *fg = g_color[C_TOK + st / B_N];

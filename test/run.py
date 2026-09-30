@@ -388,6 +388,11 @@ SCENARIOS = [
          ["w:1800"] + click(10, 8) + ["w:900", "d",
                                       "k:`[<65;10;15M", "k:`[<65;10;15M", "k:`[<65;10;15M", "w:600", "d"],
          "a long tree scrolls with the wheel and shows its scrollbar"),
+    Scen("hover-feedback", "proj",
+         ["w:1800"] + click(12, 11) + ["w:700"] + click(12, 13) + ["w:700", "k:`[<35;38;2M", "w:400"] + brows(1) +
+         ["k:`[<35;10;7M", "w:400"] + brows(1, 6),
+         "the mouse moved over a tab not in front: tab.hoverBackground and its x; then over an\n"
+         "         Explorer row: list.hoverBackground there, and the tab plain again"),
     Scen("explorer-open-editors", "proj",
          ["w:1800"] + click(12, 11) + ["w:700"] + click(12, 13) + ["w:700"] +
          click(10, 3) + ["w:700", "d"],

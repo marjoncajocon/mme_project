@@ -604,7 +604,7 @@ void menubar_draw (int open) {
   scr_fill(0, 0, cols, S_MENUBAR);
   scr_put(1, 0, 0xF121, S_APPICON);	/* the app's icon: </> */
   for (i = 0; i < NMENU; i++) {
-    int x = title_x(i), st = (i == open) ? S_MENUBAR_ON : S_MENUBAR;
+    int x = title_x(i), st = (i == open || (open < 0 && mouse_over(x, 0, (int)strlen(menus[i].name) + 2, 1))) ? S_MENUBAR_ON : S_MENUBAR;
     scr_fill(x, 0, (int)strlen(menus[i].name) + 2, st);
     scr_puts(x + 1, 0, menus[i].name, st);
   }
@@ -783,6 +783,7 @@ int popup_list (int x0, int y0, const char *const *label, const int *flags, int 
     else if (code == K_MOUSE) {
       Mouse *mo = &term_mouse;
       int inside = mo->x >= x && mo->x < x + w && mo->y > y && mo->y < y + h - 1;
+      mouse_track(mo);
       if (mo->wheel) {	/* a menu too tall for the window scrolls */
         top += mo->wheel * 3;
         continue;
@@ -848,6 +849,7 @@ int menu_popup (int x0, int y0, const int *cmd, const char *const *label) {
     else if (code == K_MOUSE) {
       Mouse *mo = &term_mouse;
       int inside = mo->x >= x && mo->x < x + w && mo->y > y && mo->y < y + h - 1;
+      mouse_track(mo);
       if (mo->wheel) {	/* a menu too tall for the window scrolls */
         top += mo->wheel * 3;
         continue;
@@ -901,8 +903,25 @@ int menu_run (int m) {
       Mouse *mo = &term_mouse;
       int inside = mo->x >= g_drop.x && mo->x < g_drop.x + g_drop.w &&
                    mo->y > g_drop.y && mo->y < g_drop.y + g_drop.h - 1;
+      mouse_track(mo);
       if (mo->wheel) {	/* a menu too tall for the window scrolls */
         g_drop.top += mo->wheel * 3;
+        continue;
+      }
+      if (mo->button == 3 && mo->drag) {	/* a move: the item under it; over another title, that menu (VS Code's) */
+        if (inside) {
+          int i = g_drop.top + mo->y - g_drop.y - 1;
+          if (cmd[i] != 0) sel = i;
+        }
+        else if (mo->y == 0) {
+          int hit = menubar_hit(mo->x);
+          if (hit >= 0 && hit != m) {
+            m = hit;
+            sel = step(menus[m].cmd, -1, 1);
+            g_drop.top = 0;
+            follow = 1;
+          }
+        }
         continue;
       }
       if (mo->button != 0) continue;
@@ -988,6 +1007,7 @@ int context_menu (int x0, int y0, const char *const *label, const char *const *k
     else if (code == K_MOUSE) {
       Mouse *m = &term_mouse;
       int inside = m->x >= x && m->x < x + w && m->y > y && m->y < y + h - 1;
+      mouse_track(m);
       if (m->wheel) {	/* a menu too tall for the window scrolls */
         top += m->wheel * 3;
         continue;
@@ -1404,6 +1424,9 @@ static void pick_draw (const Pick *p, const Vis *vis, size_t sel, size_t top) {
       }
     }
   }
+  for (i = 0; i < g_box.rows && top + (size_t)i < vis->n; i++)	/* the row under the mouse (the keys keep the selection) */
+    if (top + (size_t)i != sel && mouse_over(g_box.x + 1, g_box.y + 3 + i, g_box.w - 2, 1))
+      scr_hover(g_box.x + 1, g_box.y + 3 + i, g_box.w - 2);
   free(hit);
 }
 
@@ -1513,6 +1536,7 @@ int pick_run (Pick *p) {
     else if (code == K_MOUSE) {
       Mouse *m = &term_mouse;
       int row = m->y - g_box.y - 3;
+      mouse_track(m);
       int inside = m->x >= g_box.x && m->x < g_box.x + g_box.w &&
                    m->y >= g_box.y && m->y < g_box.y + g_box.rows + 4;
       if (m->wheel) {
@@ -1665,6 +1689,7 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
         scr_fill(bx[i], y + 5, bw[i], st);
         if (st == S_STATUS) scr_round(bx[i], y + 5, bw[i], 1, RC_ALL, RR_SMALL);
         scr_puts(bx[i] + 2, y + 5, button[i], st);
+        if (i != sel && mouse_over(bx[i], y + 5, bw[i], 1)) scr_hover(bx[i], y + 5, bw[i]);	/* button.secondaryHoverBackground */
       }
     }
     if (said != sel) {	/* a screen reader's: the question, then the button with the focus */
@@ -1686,7 +1711,8 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
     if (code == K_ENTER || code == ' ') return sel;
     if (code == K_LEFT || (code == K_TAB && (k & KM_SHIFT))) sel = (sel + n - 1) % n;
     else if (code == K_RIGHT || code == K_TAB) sel = (sel + 1) % n;
-    else if (code == K_MOUSE && term_mouse.button == 0 && term_mouse.press) {
+    else if (code == K_MOUSE) mouse_track(&term_mouse);
+    if (code == K_MOUSE && term_mouse.button == 0 && term_mouse.press) {
       for (i = 0; i < n; i++)
         if (term_mouse.y == y + 5 && term_mouse.x >= bx[i] && term_mouse.x < bx[i] + bw[i])
           return i;
@@ -1974,10 +2000,15 @@ static int note_box (int bottom, int w, int sev, const char *src, const char *ms
   }
   *close_x = x + w - 3;
   scr_put(*close_x, y + 1, 0xEA76, S_TOAST);	/* codicon close */
+  if (mouse_over(*close_x, y + 1, 1, 1)) {
+    scr_hover(*close_x, y + 1, 1);
+    tip_want(*close_x, y + 2, "Clear Notification (Delete)");
+  }
   *gear_x = -1;
   if (src && *src) {
     *gear_x = x + w - 5;
     scr_put(*gear_x, y + 1, 0xEAF8, S_TOAST);	/* gear: the notification center */
+    if (mouse_over(*gear_x, y + 1, 1, 1)) scr_hover(*gear_x, y + 1, 1);
     snprintf(buf, sizeof(buf), "Source: %s", src);
     scr_putsw(x + 5, y + 1 + nl, w - 7, buf, S_BOX_DIM);
   }
@@ -1995,6 +2026,7 @@ static int note_box (int bottom, int w, int sev, const char *src, const char *ms
       }
       scr_fill(bx, TG.btn_y, bw, st);
       scr_puts(bx + 1, TG.btn_y, a->act[i], st);
+      if (mouse_over(bx, TG.btn_y, bw, 1)) scr_hover(bx, TG.btn_y, bw);	/* button.hoverBackground */
       TG.bx0[i] = bx;
       TG.bx1[i] = bx + bw;
       bx -= 1;
@@ -2111,7 +2143,8 @@ void note_center (void) {
       if (sel < nq) ask_answer(sel, -1);
       else note_del(n - 1 - (sel - nq));
     }
-    else if (code == K_MOUSE && term_mouse.press && !term_mouse.drag && !term_mouse.wheel) {
+    else if (code == K_MOUSE) mouse_track(&term_mouse);
+    if (code == K_MOUSE && term_mouse.press && !term_mouse.drag && !term_mouse.wheel) {
       Mouse *m = &term_mouse;
       if (m->x < x || m->x >= x + w || m->y < y || m->y >= y + h) return;	/* outside */
       if (m->y == y && m->x == clear_x) toast_clear_all();

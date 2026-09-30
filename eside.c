@@ -34,6 +34,12 @@ static const uint32_t act_icon[VIEW_N] = {
   0xEB39	/* remote-explorer: the Remote Explorer */
 };
 
+/* their tooltips, VS Code's */
+static const char *const act_tip[VIEW_N] = {
+  "Explorer (Ctrl+Shift+E)", "Search (Ctrl+Shift+F)", "Source Control (Ctrl+Shift+G)", "Run and Debug (Ctrl+Shift+D)",
+  "Extensions (Ctrl+Shift+X)", "Testing", "Views", "Remote Explorer"
+};
+
 /* VS Code's order: the Remote Explorer after Run and Debug */
 static const int act_order[VIEW_N] = {VIEW_FILES, VIEW_SEARCH, VIEW_GIT, VIEW_DEBUG, VIEW_REMOTE, VIEW_EXT, VIEW_TEST, VIEW_TREE};
 
@@ -57,6 +63,10 @@ void act_draw (int x, int y, int h, int view, int shown) {
     if (row >= y + h || (gear >= 0 && row >= gear - 1)) break;	/* (the side bar's own never reach the gear) */
     if (on) scr_put(opt.side_right ? x + ACT_W - 1 : x, row, 0x258E, S_ACT_BAR);	/* the bar on the side of the editor */
     scr_put(x + 1, row, v[i] < VIEW_N ? act_icon[v[i]] : view_icon(v[i] - VIEW_MOVED), on ? S_ACT_ON : S_ACT);
+    if (mouse_over(x, row, ACT_W, 1)) {	/* activityBar.foreground, and its name */
+      scr_set_fg(x + 1, row, ui_color(C_ACT_FG));
+      tip_want(x + ACT_W, row, v[i] < VIEW_N ? act_tip[v[i]] : view_name(v[i] - VIEW_MOVED));
+    }
     if (row + 1 < y + h) {	/* VS Code's badge: a number at the icon's foot, white on blue */
       int dot = 0, c = act_badge(v[i], &dot);
       if (c > 0) {
@@ -71,7 +81,13 @@ void act_draw (int x, int y, int h, int view, int shown) {
       }
     }
   }
-  if (gear >= 0) scr_put(x + 1, gear, 0xEAF8, S_ACT);	/* Manage: codicon settings-gear */
+  if (gear >= 0) {
+    scr_put(x + 1, gear, 0xEAF8, S_ACT);	/* Manage: codicon settings-gear */
+    if (mouse_over(x, gear, ACT_W, 1)) {
+      scr_set_fg(x + 1, gear, ui_color(C_ACT_FG));
+      tip_want(x + ACT_W, gear, "Manage");
+    }
+  }
 }
 
 
@@ -177,8 +193,11 @@ void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t show
   at = (int)((double)top * (h - len) / (double)(total - shown) + 0.5);
   if (at < 0) at = 0;
   if (at > h - len) at = h - len;
-  for (len += at; at < len; at++)	/* a half block, so it shows on any background */
-    scr_put_rgb(x + w - 1, y + at, 0x2590, ui_color(C_THUMB), ui_color(C_SIDE_BG), 0);
+  {
+    uint32_t th = ui_color(mouse_over(x + w - 1, y + at, 1, len) ? C_THUMB_ON : C_THUMB);
+    for (len += at; at < len; at++)	/* a half block, so it shows on any background */
+      scr_put_rgb(x + w - 1, y + at, 0x2590, th, ui_color(C_SIDE_BG), 0);
+  }
 }
 
 
@@ -1146,9 +1165,11 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
   if (w >= 24 && g_root.path) {	/* New File, New Folder, Refresh, Collapse Folders */
     static const uint32_t ic[4] = {0xEA7F, 0xEA80, 0xEB37, 0xEAC5};
     int i;
+    static const char *const tip[4] = {"New File...", "New Folder...", "Refresh Explorer", "Collapse Folders in Explorer"};
     for (i = 0; i < 4; i++) {
       g_icon_x[i] = w - 9 + i * 2;	/* from x: clicks come as the column in the sidebar */
       scr_put(x + g_icon_x[i], head_y, ic[i], S_SIDE_TITLE);
+      if (mouse_over(x + g_icon_x[i], head_y, 1, 1)) tip_want(x + g_icon_x[i], head_y + 1, tip[i]);
     }
   }
   problems_count();

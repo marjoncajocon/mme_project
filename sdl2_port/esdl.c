@@ -71,7 +71,7 @@ static struct {
   int nrowdirty;
   SDL_Rect *rects;
   char title[512];
-  SDL_Cursor *ptr[3];
+  SDL_Cursor *ptr[PTR_N];
   int ptr_now;
   char font_fam[128];	/* editor.fontFamily and editor.fontSize, as the editor's font was made from them */
   double font_size;
@@ -1680,7 +1680,7 @@ void scr_flush (void) {
     snprintf(W.title, sizeof(W.title), "%s", ui_title);
     SDL_SetWindowTitle(W.win, W.title[0] ? W.title : "mme");
   }
-  if (g_ptr != W.ptr_now && g_ptr >= 0 && g_ptr < 3 && W.ptr[g_ptr]) {
+  if (g_ptr != W.ptr_now && g_ptr >= 0 && g_ptr < PTR_N && W.ptr[g_ptr]) {
     SDL_SetCursor(W.ptr[g_ptr]);
     W.ptr_now = g_ptr;
   }
@@ -2194,6 +2194,8 @@ int term_open (void) {
   W.ptr[PTR_DEFAULT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
   W.ptr[PTR_TEXT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_IBEAM);
   W.ptr[PTR_POINTER] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_HAND);
+  W.ptr[PTR_EW] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZEWE);	/* a sash */
+  W.ptr[PTR_NS] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_SIZENS);
   W.ptr_now = -1;
   W.ccx = W.ccy = -1;
   W.ime_x = W.ime_y = -1;
@@ -2210,7 +2212,7 @@ void term_close (void) {
   int i;
   if (W.win == NULL) return;
   SDL_StopTextInput();
-  for (i = 0; i < 3; i++)
+  for (i = 0; i < PTR_N; i++)
     if (W.ptr[i]) SDL_FreeCursor(W.ptr[i]);
   if (W.tex) SDL_DestroyTexture(W.tex);
   if (W.ren) SDL_DestroyRenderer(W.ren);
@@ -2502,6 +2504,13 @@ static void on_event (const SDL_Event *e) {
           if (W.tb_hover >= 0 && W.tb_press < 0) {
             W.tb_hover = -1;
             tb_refresh();
+          }
+          if (g_mbutton < 0) {	/* nor is anything of mme's: a move out of the window */
+            memset(&term_mouse, 0, sizeof(term_mouse));
+            term_mouse.out = term_mouse.drag = term_mouse.press = 1;
+            term_mouse.button = 3;
+            g_mcol = g_mrow = -1;
+            push(K_MOUSE);
           }
           break;
       }

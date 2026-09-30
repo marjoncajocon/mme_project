@@ -1,0 +1,4 @@
+[181818]      EXPLORER                   ?[272727] ? main.c  ? [1f1f1f] ? readme.md  ? [181818]
+[181818]      EXPLORER                   ? ? main.c    [1f1f1f] ? readme.md  ? [181818]
+[181818] ?  [222222] ? docs                     [181818] ?[1f1f1f]   4                                                                     ??          [434343]
+exited=0

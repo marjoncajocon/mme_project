@@ -408,6 +408,10 @@ typedef struct Mouse {
 } Mouse;
 
 extern Mouse term_mouse;
+int mouse_over (int x, int y, int w, int h);	/* mme.c: the mouse hovers those cells (no button down) */
+void mouse_track (const Mouse *m);	/* a mouse event read (by a menu's, a picker's own loop too): where it is */
+int mouse_over_text (int x, int y, int w, int h);	/* the same in the text zone's cells of the group drawn */
+void tip_want (int x, int y, const char *text);	/* what is hovered: its tooltip at x, y after a moment */
 
 int term_open (void);	/* -1: not a terminal */
 void term_close (void);
@@ -560,6 +564,7 @@ enum {
   C_DIFF_ADD, C_DIFF_ADD_HI, C_DIFF_DEL, C_DIFF_DEL_HI,
   C_TABS_BG, C_TAB_BG, C_TAB_FG, C_TAB_ON_BG, C_TAB_ON_FG, C_CRUMB,
   C_ACCENT, C_MCURSOR, C_LIGHTBULB, C_MINIMAP_SLIDER, C_THUMB, C_THUMB_ON,
+  C_THUMB_ACTIVE, C_LIST_HOVER_BG, C_TAB_HOVER_BG, C_TAB_HOVER_FG, C_TOOLBAR_HOVER, C_SASH_HOVER,	/* the mouse over them */
   C_BRACKET1, C_BRACKET2, C_BRACKET3, C_BRACKET_MATCH,
   C_GUIDE, C_GUIDE_ON, C_RULER, C_INLAY_FG, C_INLAY_BG, C_LENS,	/* indent guides, rulers, inlay hints, code lens */
   C_GHOST,	/* editorGhostText.foreground: the inline suggestion drawn in the text */
@@ -572,6 +577,7 @@ uint32_t ui_color (int slot);	/* 0xRRGGBB */
 int theme_set (const char *name);	/* the theme's index; the first one when the name is not known */
 const char *theme_sgr (int st);	/* the escape for style st */
 void theme_tok (int st, uint32_t *fg, uint32_t *bg);	/* a TOK() style's colors */
+void theme_style (int st, uint32_t *fg, uint32_t *bg, uint32_t *at);	/* any style's colors (S_* or TOK()), RGB_* */
 int theme_count (void);
 const char *theme_name (int i);
 int theme_current (void);
@@ -600,8 +606,11 @@ void scr_underline (int x, int y, int w, uint32_t color);	/* a link: underlined,
 void scr_squiggle (int x, int y, int w, uint32_t color);	/* a curly underline */
 void scr_set_fg (int x, int y, uint32_t fg);	/* a cell's color changed, the rest kept */
 void scr_set_bg (int x, int y, uint32_t bg);
+void scr_tint (int x, int y, int w, uint32_t c, int pct);	/* w cells' backgrounds pct of the way to c (a hover) */
+void scr_hover (int x, int y, int w);	/* those cells as VS Code's toolbar.hoverBackground does them */
 void scr_glyph (int x, int y, uint32_t ch, uint32_t fg);	/* a guide line: ch in fg, the background kept */
 uint32_t scr_ch (int x, int y);	/* what the cell shows */
+int scr_cell (int x, int y, uint32_t *bg);	/* its style (S_RGB: its own colors), and its background; -1 off screen */
 void scr_fill (int x, int y, int w, int st);
 void scr_box (int x, int y, int w, int h, int st);	/* a filled rectangle */
 enum { RC_TL = 1, RC_TR = 2, RC_BL = 4, RC_BR = 8, RC_ALL = 15 };
@@ -610,7 +619,7 @@ void scr_round (int x, int y, int w, int h, int corners, int size);	/* those cel
 void scr_restyle (int x, int y, int w, int st);	/* the colors of cells, not their text */
 void scr_cursor (int x, int y);
 void scr_cursor_shape (int decscusr);	/* 1 .. 6: block, underline, bar; blinking or not */
-enum { PTR_DEFAULT, PTR_TEXT, PTR_POINTER };	/* the mouse pointer: an arrow, an I beam, a hand */
+enum { PTR_DEFAULT, PTR_TEXT, PTR_POINTER, PTR_EW, PTR_NS, PTR_N };	/* the mouse pointer: an arrow, an I beam, a hand, resize */
 void scr_pointer (int shape);	/* over what can be clicked: PTR_POINTER */
 
 /*

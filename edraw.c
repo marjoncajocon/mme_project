@@ -403,13 +403,8 @@ static ECell *own_colors (int x, int y) {
   ECell *c = cell_at(x, y);
   if (c == NULL) return NULL;
   if (c->st != S_RGB) {
-    if (c->st >= S_N) theme_tok(c->st, &c->fg, &c->bg);
-    else {
-      c->fg = ui_color(C_EDITOR_FG);
-      c->bg = ui_color(C_EDITOR_BG);
-    }
+    theme_style(c->st, &c->fg, &c->bg, &c->at);
     c->st = S_RGB;
-    c->at = 0;
   }
   return c;
 }
@@ -440,9 +435,39 @@ uint32_t scr_ch (int x, int y) {
 }
 
 
+int scr_cell (int x, int y, uint32_t *bg) {
+  const ECell *c = cell_at(x, y);
+  uint32_t fg, at;
+  if (c == NULL) return -1;
+  if (c->st == S_RGB) *bg = c->bg;
+  else theme_style(c->st, &fg, bg, &at);
+  return c->st;
+}
+
+
 void scr_set_bg (int x, int y, uint32_t bg) {
   ECell *c = own_colors(x, y);
   if (c) c->bg = bg;
+}
+
+
+/* w cells' backgrounds pct of the way to c, their text kept: the mouse over them */
+void scr_tint (int x, int y, int w, uint32_t c, int pct) {
+  for (; w > 0; w--, x++) {
+    ECell *e = own_colors(x, y);
+    unsigned r, g, b;
+    if (e == NULL) continue;
+    r = ((e->bg >> 16) * (unsigned)(100 - pct) + (c >> 16) * (unsigned)pct) / 100;
+    g = (((e->bg >> 8) & 255) * (unsigned)(100 - pct) + ((c >> 8) & 255) * (unsigned)pct) / 100;
+    b = ((e->bg & 255) * (unsigned)(100 - pct) + (c & 255) * (unsigned)pct) / 100;
+    e->bg = (uint32_t)((r << 16) | (g << 8) | b);
+  }
+}
+
+
+/* VS Code's toolbar.hoverBackground (#5A5D5E50): an icon, a small button under the mouse */
+void scr_hover (int x, int y, int w) {
+  scr_tint(x, y, w, ui_color(C_TOOLBAR_HOVER), 31);
 }
 
 
@@ -742,7 +767,7 @@ void scr_flush (void) {
   }
   S.full = 0;
   if (g_ptr != g_ptr_sent) {	/* the hand over buttons, the I beam over text */
-    static const char *const name[] = {"default", "text", "pointer"};
+    static const char *const name[PTR_N] = {"default", "text", "pointer", "ew-resize", "ns-resize"};
     buf_printf(&o, "\033]22;%s\033\\", name[g_ptr]);
     g_ptr_sent = g_ptr;
   }

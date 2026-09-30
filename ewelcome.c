@@ -93,6 +93,7 @@ static void link (int x, int y, int w, const char *s, int on) {
     c += scr_put_rgb(x + c, y, cp, fg, bg, on ? RGB_UNDER : 0);
     i += len;
   }
+  if (mouse_over(x, y, c, 1)) scr_underline(x, y, c, fg);	/* textLink: underlined under the mouse */
 }
 
 

@@ -3346,10 +3346,12 @@ static int draw_tab (int x, int y, const char *name, int on, int dirty, int prev
                 : page == PAGE_MERGE ? 0xEAFB : page == PAGE_SEARCHED ? 0xEA6D : page == PAGE_MDIFF ? 0xEAE1
                 : page == PAGE_NOTEBOOK ? 0xEBAF
                 : file_icon(name, &ist);	/* a page: gear, </>, merge, search */
-  int st = on ? S_TAB_ON : S_TAB;
+  int st = on ? S_TAB_ON : S_TAB, hov, xhov;
   if (x + w > L.ed_x + L.ed_w) w = L.ed_x + L.ed_w - x;
   if (w <= 0) return x;
   x1 = x + w;
+  hov = mouse_over(x, y, w, 1);
+  xhov = mouse_over(x1 - 2, y, 1, 1);
   scr_fill(x, y, w, st);
   (void)ist;
   scr_put(x + 1, y, icon, st);
@@ -3359,14 +3361,26 @@ static int draw_tab (int x, int y, const char *name, int on, int dirty, int prev
     for (i = 0; i < n; i++) scr_set_fg(x + 3 + i, y, git_fg(gmark));
   }
   *close_x = x1 - 2;
-  if (dirty) scr_put(x1 - 2, y, 0x25CF, st);	/* the dot */
+  if (dirty && !xhov) scr_put(x1 - 2, y, 0x25CF, st);	/* the dot; the x on it */
   else if (pinned) scr_put(x1 - 2, y, 0xEBA0, st);	/* codicon pinned */
-  else if (on) scr_put(x1 - 2, y, 0xEA76, st);	/* codicon close */
+  else if (on || hov || dirty) scr_put(x1 - 2, y, 0xEA76, st);	/* codicon close: on the tab in front and the one under the mouse */
   else if (gmark && vopt.tab_badges) {	/* VS Code's badge: M, U, A, D */
     scr_put(x1 - 2, y, (uint32_t)gmark, st);
     scr_set_fg(x1 - 2, y, git_fg(gmark));
   }
   scr_put(x1 - 1, y, ' ', st);
+  if (hov && !on) {	/* tab.hoverBackground, tab.hoverForeground (a name in git's color keeps it) */
+    int i;
+    for (i = x; i < x1; i++) {
+      scr_set_bg(i, y, ui_color(C_TAB_HOVER_BG));
+      if (!(gmark && vopt.tab_colors && i >= x + 3 && i < x + 3 + n) && !(i == x1 - 2 && gmark && !dirty && !hov))
+        scr_set_fg(i, y, ui_color(C_TAB_HOVER_FG));
+    }
+  }
+  if (xhov) {
+    scr_hover(x1 - 2, y, 1);
+    tip_want(x1 - 2, y + 1, pinned ? "Unpin" : "Close (Ctrl+W)");
+  }
   return x1;
 }
 
@@ -3428,7 +3442,10 @@ static struct {
 
 
 static void crumb_add (int x0, int x1, const char *dir, size_t sym) {
+  int i;
   if (CB.n == MAX_CRUMB) return;
+  if (mouse_over(x0, L.ed_y + 1, x1 - x0, 1))	/* breadcrumb.focusForeground */
+    for (i = x0; i < x1; i++) scr_set_fg(i, L.ed_y + 1, ui_color(C_TAB_ON_FG));
   CB.x0[CB.n] = x0;
   CB.x1[CB.n] = x1;
   CB.dir[CB.n] = dir ? xstrdup(dir) : NULL;
@@ -4018,7 +4035,7 @@ static void draw_status (void) {
   }
   if (SBH.item >= 0 && SBH.item < g_nsbi && g_sbi[SBH.item].x1 > g_sbi[SBH.item].x0) {
     SbItem *it = &g_sbi[SBH.item];	/* the one under the mouse: lighter, and its tooltip after a while */
-    for (i = it->x0; i < it->x1; i++) scr_set_bg(i, y, 0x333333);
+    for (i = it->x0; i < it->x1; i++) scr_set_bg(i, y, ui_color(C_STATUS_ITEM));	/* statusBarItem.hoverBackground */
     if (it->tip[0] && os_now_us() - SBH.since > 700000 && y >= 3) {
       int w = (int)str_cols(it->tip) + 4, x = it->x0;
       if (w > E.cols) w = E.cols;
@@ -4361,7 +4378,7 @@ static int sb_thumb (int *pos) {
 
 
 static void draw_scrollbar (void) {
-  int x = L.ed_x + L.ed_w - 1, row, pos, size = sb_thumb(&pos);
+  int x = L.ed_x + L.ed_w - 1, row, pos, size = sb_thumb(&pos), hov = mouse_over(x, L.text_y + pos, 1, size);
   size_t n = T->doc->n, nd, i;
   const Diag *dv = lsp_diags(T->doc, &nd);
   unsigned char *mark = (unsigned char *)calloc((size_t)L.view_h + 1, 1);
@@ -4402,7 +4419,7 @@ static void draw_scrollbar (void) {
 #undef MARK
   for (row = 0; row < L.view_h; row++) {
     int on = row >= pos && row < pos + size && size < L.view_h;
-    uint32_t bg = ui_color(on ? (E.drag_sb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    uint32_t bg = ui_color(on ? (E.drag_sb ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
     uint32_t col[9];
     col[0] = 0;
     col[1] = ui_color(C_GUTTER_ON);
@@ -4440,11 +4457,11 @@ static int hsb_thumb (int *pos, int *x0, int *w) {
 
 
 static void draw_hscrollbar (void) {
-  int pos, x0, w, size = hsb_thumb(&pos, &x0, &w), i, y = L.text_y + L.view_h;
+  int pos, x0, w, size = hsb_thumb(&pos, &x0, &w), i, y = L.text_y + L.view_h, hov = mouse_over(x0 + pos, y, size, 1);
   scr_fill(L.ed_x, y, x0 - L.ed_x, S_TEXT);
   for (i = 0; i < w; i++) {	/* half a row high: the lower half of the cell */
     int on = i >= pos && i < pos + size;
-    uint32_t fg = ui_color(on ? (E.drag_hsb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    uint32_t fg = ui_color(on ? (E.drag_hsb ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
     scr_put_rgb(x0 + i, y, 0x2584, fg, ui_color(C_EDITOR_BG), 0);
   }
 }
@@ -4884,6 +4901,8 @@ static void draw_group_edges (int g) {
   int ex = L.area_x + L.area_w, ey = L.area_y + L.area_h;
   int on = E.grp_resize == 1000 + g, onb = E.grp_resize == 2000 + g;
   if (g_ngrp < 2) return;	/* one group (maybe centered): no line */
+  if (x < ex && mouse_over(x, L.gy[g], 1, L.gh[g])) on = 1;	/* sash.hoverBorder */
+  if (y < ey && mouse_over(L.gx[g], y, L.gw[g], 1)) onb = 1;
   if (x < ex)
     for (i = L.gy[g]; i < L.gy[g] + L.gh[g] + (y < ey ? 1 : 0); i++)
       scr_put(x, i, 0x2502, on ? S_TOGGLE_ON : S_BORDER);
@@ -4925,6 +4944,84 @@ static void draw_drop (void) {
 
 
 /* everything but the overlays; emenu.c draws those on top */
+/* the mouse, for hover (see mouse_over) */
+static struct {
+  int on, held;	/* it moved over the window; a button is down (only what it drags looks it) */
+  Mouse m;
+  char tip[200], was[200];	/* the tooltip wanted this frame, and since `since` */
+  int tip_x, tip_y;
+  long long since;
+} MH;
+
+
+static void tip_draw (void);
+
+static int is_icon (uint32_t ch) {	/* a codicon (the Private Use Area) */
+  return ch >= 0xE000 && ch <= 0xF8FF;
+}
+
+
+/*
+** What is under the mouse in a pane of lists (the side bar), once its view
+** drew it: a row of the list gets list.hoverBackground where it has the
+** pane's own background (a selected row, a box, a button keep theirs); an
+** icon in a title row gets toolbar.hoverBackground. Every view at once.
+*/
+static void side_hover (int x, int y, int w, int h, uint32_t pane) {
+  int my = MH.m.y, mx = MH.m.x, i, blank = 1, title = 0;
+  uint32_t bg;
+  if (!mouse_over(x, y, w, h)) return;
+  for (i = 0; i < w; i++) {
+    uint32_t ch = scr_ch(x + i, my);
+    int st = scr_cell(x + i, my, &bg);
+    if (st == S_SIDE_TITLE || st == S_SIDE_HEAD) title = 1;
+    if (ch != ' ' && ch != 0) blank = 0;
+  }
+  if (title) {	/* a view's title, a section's header: its actions */
+    if (is_icon(scr_ch(mx, my)) && mx > x) scr_hover(mx, my, 1);
+    return;
+  }
+  if (blank || mx >= x + w - 1) return;	/* under the list's end; its scrollbar */
+  for (i = 0; i < w - 1; i++)
+    if (scr_cell(x + i, my, &bg) >= 0 && bg == pane) scr_set_bg(x + i, my, ui_color(C_LIST_HOVER_BG));
+}
+
+
+/*
+** The panel's title row under the mouse: a tab not shown brighter, an
+** icon in its box with its name under it, and the line in the rest (the
+** sash that sizes the panel) in sash.hoverBorder.
+*/
+static void panel_hover_title (void) {
+  int y = L.panel_y, mx = MH.m.x, i;
+  uint32_t fg, bg, at, ch;
+  if (!mouse_over(L.panel_x, y, L.panel_w, 1)) return;
+  ch = scr_ch(mx, y);
+  if (is_icon(ch)) {
+    const char *tip = mx == g_pn.close_x ? "Hide Panel (Ctrl+J)"
+                    : mx == g_pn.max_x ? (E.panel_max ? "Restore Panel Size" : "Maximize Panel Size")
+                    : mx == g_pn.more_x ? "Views and More Actions..." : mx == g_pn.clear_x ? "Clear Output"
+                    : mx == g_pn.kill_x ? "Kill Terminal" : mx == g_pn.split_x ? "Split Terminal (Ctrl+Shift+5)"
+                    : mx == g_pn.prof_x ? "Launch Profile..." : mx == g_pn.add_x ? "New Terminal (Ctrl+Shift+`)" : NULL;
+    scr_hover(mx, y, 1);
+    tip_want(mx, y + 1, tip);
+    return;
+  }
+  if (ch == 0x2500 && !L.panel_side) {	/* the sash */
+    for (i = 0; i < L.panel_w; i++)
+      if (scr_ch(L.panel_x + i, y) == 0x2500) scr_set_fg(L.panel_x + i, y, ui_color(C_SASH_HOVER));
+    return;
+  }
+  if (scr_cell(mx, y, &bg) == S_PANEL_TAB) {	/* a tab: panelTitle.activeForeground over it */
+    int a = mx, b = mx;
+    theme_style(S_PANEL_TAB_ON, &fg, &bg, &at);
+    while (a > L.panel_x && scr_cell(a - 1, y, &bg) == S_PANEL_TAB && scr_ch(a - 1, y) != 0x2500) a--;
+    while (b < L.panel_x + L.panel_w && scr_cell(b, y, &bg) == S_PANEL_TAB && scr_ch(b, y) != 0x2500) b++;
+    for (i = a; i < b; i++) scr_set_fg(i, y, fg);
+  }
+}
+
+
 static void compose (void) {
   vw_fix();	/* the views shown are where they are */
   layout();
@@ -4939,8 +5036,9 @@ static void compose (void) {
     if (E.view >= VIEW_MOVED)	/* a panel's view moved into the side bar */
       pview_draw_side(mv_pv(E.view - VIEW_MOVED), L.side_x, L.body_y, L.side_w - 1, L.side_h, E.focus == F_SIDE);
     else view_draw_side(E.view, L.side_x, L.body_y, L.side_w - 1, L.side_h, E.focus == F_SIDE, L.body_h);
+    side_hover(L.side_x, L.body_y, L.side_w - 1, L.side_h, ui_color(C_SIDE_BG));
     for (ey = 0; ey < L.side_h; ey++)	/* the edge that drags */
-      scr_put(L.edge_x, L.body_y + ey, 0x2502, E.resizing ? S_TOGGLE_ON : S_BORDER);
+      scr_put(L.edge_x, L.body_y + ey, 0x2502, E.resizing || mouse_over(L.edge_x, L.body_y, 1, L.side_h) ? S_TOGGLE_ON : S_BORDER);
   }
   if (!(E.panel_max && L.panel_h >= L.body_h)) {	/* every editor group (a maximized panel hides them) */
     int g, cur = g_gcur, other;
@@ -4964,8 +5062,12 @@ static void compose (void) {
   if (L.panel_h > 0) {
     int ex = panel_edge(), i;
     if (ex >= 0)	/* a panel at a side: its edge, which drags */
-      for (i = 0; i < L.panel_h; i++) scr_put(ex, L.panel_y + i, 0x2502, E.resizing_panel == 2 ? S_TOGGLE_ON : S_BORDER);
+      for (i = 0; i < L.panel_h; i++)
+        scr_put(ex, L.panel_y + i, 0x2502, E.resizing_panel == 2 || mouse_over(ex, L.panel_y, 1, L.panel_h) ? S_TOGGLE_ON : S_BORDER);
     draw_panel();
+    panel_hover_title();
+    if (E.panel_view == 1 || E.panel_view >= PV_VARS)	/* the Problems, a view's rows: a list */
+      side_hover(L.panel_x, L.panel_y + 1, L.panel_w, L.panel_h - 1, ui_color(C_EDITOR_BG));
   }
   if (L.aux_w > 0) {	/* the secondary side bar, with its edge on the editors' side */
     int ex = opt.side_right ? L.aux_x + L.aux_w : L.aux_x - 1, i;
@@ -4983,6 +5085,7 @@ static void compose (void) {
     dbg_toolbar_draw(L.area_x, L.area_w, L.body_y);
   }
   toast_draw();
+  tip_draw();
 }
 
 
@@ -22443,9 +22546,78 @@ static void zone_mouse (const Mouse *m, Mouse *z) {
 }
 
 
+/*
+** Hover: where the mouse is while no button is down. What is drawn under
+** it asks mouse_over() and looks lighter; a tooltip it wants shows after
+** a moment. A click alone (a terminal's, the test harness's) is no hover:
+** only a move turns it on, and leaving the window (mme-sdl) turns it off.
+*/
+void mouse_track (const Mouse *m) {
+  if (m->button == 3 && m->drag && !m->wheel) MH.on = !m->out;	/* it moved: hover */
+  MH.held = m->button != 3 && m->press && !m->wheel;
+  MH.m = *m;
+}
+
+
+int mouse_over (int x, int y, int w, int h) {
+  return MH.on && !MH.held && MH.m.x >= x && MH.m.x < x + w && MH.m.y >= y && MH.m.y < y + h;
+}
+
+
+int mouse_over_text (int x, int y, int w, int h) {
+  int tx, ty;
+  if (!MH.on || MH.held) return 0;
+  scr_zone_pt((int)(G - g_grp), &MH.m, &tx, &ty);
+  return tx >= x && tx < x + w && ty >= y && ty < y + h;
+}
+
+
+void tip_want (int x, int y, const char *text) {
+  if (!MH.on || MH.held || text == NULL || !text[0]) return;
+  snprintf(MH.tip, sizeof(MH.tip), "%s", text);
+  MH.tip_x = x;
+  MH.tip_y = y;
+}
+
+
+/* the tooltip wanted, once it was wanted for 700 ms: one row, VS Code's hover box */
+static void tip_draw (void) {
+  if (strcmp(MH.tip, MH.was) != 0) {
+    memcpy(MH.was, MH.tip, sizeof(MH.was));
+    MH.since = os_now_us();
+  }
+  if (MH.tip[0] && os_now_us() - MH.since > 700000) {
+    int w = (int)str_cols(MH.tip) + 2, x = MH.tip_x, y = MH.tip_y;
+    if (w > E.cols) w = E.cols;
+    if (x + w > E.cols) x = E.cols - w;
+    if (x < 0) x = 0;
+    if (y >= E.rows) y = E.rows - 1;
+    if (y < 0) y = 0;
+    scr_fill(x, y, w, S_BOX);
+    scr_putsw(x + 1, y, w - 2, MH.tip, S_BOX);
+    scr_tint(x, y, w, ui_color(C_BORDER), 45);	/* editorHoverWidget: a shade apart from what is under it */
+    scr_round(x, y, w, 1, RC_ALL, RR_SMALL);
+  }
+  MH.tip[0] = '\0';
+}
+
+
 static int pointer_at (const Mouse *m, const Mouse *zm) {
   int in_editor = m->x >= L.area_x && m->y >= L.text_y && m->y < L.text_y + L.view_h &&
-                  !in_panel(m->x, m->y);
+                  !in_panel(m->x, m->y), g;
+  if (m->button == 3 || E.resizing || E.resizing_panel || E.grp_resize) {	/* a sash, or one held */
+    if (E.resizing || E.resizing_panel == 2 || E.grp_resize / 1000 == 1) return PTR_EW;
+    if (E.resizing_panel == 1 || E.grp_resize / 1000 == 2) return PTR_NS;
+    if (L.side_w > 0 && m->x == L.edge_x && m->y >= L.body_y && m->y < L.body_y + L.side_h) return PTR_EW;
+    if (L.panel_h > 0 && panel_edge() >= 0 && m->x == panel_edge() && m->y >= L.panel_y && m->y < L.panel_y + L.panel_h)
+      return PTR_EW;
+    if (L.panel_h > 0 && !L.panel_side && m->y == L.panel_y && scr_ch(m->x, m->y) == 0x2500) return PTR_NS;
+    for (g = 0; g_ngrp > 1 && g < g_ngrp; g++) {
+      int gx = L.gx[g] + L.gw[g], gy = L.gy[g] + L.gh[g];
+      if (gx < L.area_x + L.area_w && m->x == gx && m->y >= L.gy[g] && m->y < gy) return PTR_EW;
+      if (gy < L.area_y + L.area_h && m->y == gy && m->x >= L.gx[g] && m->x < gx) return PTR_NS;
+    }
+  }
   if (in_panel(m->x, m->y) && m->y > L.panel_y && E.panel_view == 0) return PTR_TEXT;	/* the terminal's text */
   if (E.side && E.view == VIEW_MOVED + MV_TERMINAL && L.side_w > 0 && m->y > L.body_y && m->y < L.body_y + L.side_h &&
       m->x >= L.side_x && m->x < L.side_x + L.side_w - 1) return PTR_TEXT;	/* in the side bar */
@@ -22463,6 +22635,14 @@ static void on_mouse (void) {
   int press = m->button == 0 && m->press && !m->drag;
   E.follow = 0;
   zone_mouse(m, &zm);	/* zm: where it is in the text's cells */
+  mouse_track(m);
+  if (m->out && m->button == 3) {	/* it left the window: nothing is hovered */
+    sb_hover(-1, -1);
+    g_mm_hover = 0;
+    panel_hover(-1, -1);
+    E.link_y = 0;
+    return;
+  }
   if (press && toast_click(m->x, m->y)) return;	/* a notification's buttons, its x */
   scr_pointer(pointer_at(m, &zm));
   g_mm_hover = HAS_DOC && mm_width() > 0 && m->x >= L.mm_x && m->x < L.mm_x + mm_width() &&

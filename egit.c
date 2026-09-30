@@ -3223,13 +3223,13 @@ static int vthumb (int h, int *pos) {
 
 /* the vertical scrollbar at x: the thumb, and the changes where they are, like the editor's */
 static void draw_vbar (int x, int y, int h) {
-  int pos, size = vthumb(h, &pos), r;
+  int pos, size = vthumb(h, &pos), r, hov = mouse_over_text(x, y + pos, 1, size);
   size_t n = vcount(), all = n > (size_t)h ? n : (size_t)h;	/* all fits: a row of it is a row of the bar */
   for (r = 0; r < h; r++) {
     size_t a = all * (size_t)r / (size_t)h, b = all * (size_t)(r + 1) / (size_t)h, i;
     unsigned kinds = 0;
     int on = size < h && r >= pos && r < pos + size;
-    uint32_t bg = ui_color(on ? (D.drag_sb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    uint32_t bg = ui_color(on ? (D.drag_sb ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
     if (b <= a) b = a + 1;
     for (i = a; i < b && i < n; i++)
       if (!(D.nvis && D.vis[i].hidden)) kinds |= row_kinds(vk(i));
@@ -3263,10 +3263,10 @@ static int hthumb (int bw, int *pos) {
 
 /* the horizontal scrollbar: half a row high, the lower half of the cell, like the editor's */
 static void draw_hbar (int x, int y, int bw) {
-  int pos, size = hthumb(bw, &pos), i;
+  int pos, size = hthumb(bw, &pos), i, hov = mouse_over_text(x + pos, y, size, 1);
   for (i = 0; i < bw; i++) {
     int on = i >= pos && i < pos + size;
-    uint32_t fg = ui_color(on ? (D.drag_hsb ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    uint32_t fg = ui_color(on ? (D.drag_hsb ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
     scr_put_rgb(x + i, y, 0x2584, fg, ui_color(C_EDITOR_BG), 0);
   }
 }
@@ -3501,6 +3501,13 @@ int diff_title_draw (int x1, int y) {
     int on = (i == 2 && !vopt.diff_trim) || (i == 3 && vopt.diff_hide) || (i == 4 && !D.split_now);
     D.act_x[i] = x + 1 + 2 * i;
     scr_put(D.act_x[i], y, icon[i], on ? S_TOGGLE_ON : S_TABS);
+    if (mouse_over(D.act_x[i], y, 2, 1)) {
+      static const char *const tip[6] = {"Previous Change (Shift+F7)", "Next Change (F7)",
+                                         "Show Leading/Trailing Whitespace Differences", "Collapse Unchanged Regions",
+                                         "Toggle Inline View (Alt+I)", "Open File (Alt+O)"};
+      scr_hover(D.act_x[i], y, 1);
+      tip_want(D.act_x[i], y + 1, tip[i]);
+    }
   }
   D.nact = 6;
   return x;
