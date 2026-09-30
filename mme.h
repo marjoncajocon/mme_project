@@ -1502,6 +1502,7 @@ int diff_sel_get (size_t *line, size_t *col);	/* the modified side's selection: 
 void diff_sel_set (size_t line, size_t col);	/* the anchor (the caret is the other end) */
 void diff_sel_clear (void);
 void diff_sel_start (void);	/* a drag: the selection starts at the caret */
+int diff_copy (void);	/* a selection's text to the clipboard; 0: none */
 void diff_new_text (const char *s, size_t n);	/* the modified side's text again: the lines are made from it */
 void diff_draw (int x, int y, int w, int h, int wrap);	/* wrap: editor.wordWrap */
 int diff_key (int k);	/* DIFF_* */

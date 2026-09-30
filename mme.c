@@ -18270,7 +18270,10 @@ static void run_command (int cmd) {
       else if (HAS_DOC) undo(cmd == CMD_REDO);
       break;
     case CMD_CUT: if (HAS_DOC) copy(1); break;
-    case CMD_COPY: if (HAS_DOC) copy(0); break;
+    case CMD_COPY:
+      if (G->diff && HAS_DIFF && !diff_editable()) diff_copy();	/* a commit's diff: its selection */
+      else if (HAS_DOC) copy(0);
+      break;
     case CMD_PASTE: if (HAS_DOC && E.clip) insert(E.clip, E.cliplen); break;
     case CMD_FIND:
       if (HAS_DOC && T->page == PAGE_SETTINGS && !G->diff) sui_search();

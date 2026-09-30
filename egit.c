@@ -1648,8 +1648,9 @@ typedef struct DState {
   size_t *sri, *srs;	/* each screen row drawn: its view row, and which row of it (word wrap) */
   int nsr, capsr;
   int embed;	/* a file of the multi-diff editor: its changes only, nothing but the rows */
-  int dsel;	/* a selection on the modified side: from the anchor to the caret */
-  size_t sel_line, sel_col;	/* the anchor: the new side's line (from 1) and its byte */
+  int dsel;	/* a selection: from the anchor to the caret */
+  int sside;	/* its side: 0 the modified, 1 the original (a read-only diff: either is copied from) */
+  size_t sel_line, sel_col;	/* the anchor: the side's line (from 1) and its byte */
 } DState;
 
 static DState D;
@@ -2597,30 +2598,42 @@ static const DLine *row_line (size_t k) {
 }
 
 
-/* the new side's line of row k (0: the row has none) */
-static size_t new_line_of (size_t k) {
-  const DLine *l;
+/* the DLine of row k on a side (old: the original), NULL: the row has none there */
+static const DLine *side_dline (size_t k, int old) {
   if (D.split_now) {
-    if (k >= D.nrow || D.row[k].r < 0) return 0;
-    return D.line[D.row[k].r].n;
+    long i = k < D.nrow ? (old ? D.row[k].l : D.row[k].r) : -1;
+    return i >= 0 ? &D.line[i] : NULL;
   }
-  l = k < D.nline ? &D.line[k] : NULL;
-  return l ? l->n : 0;
+  return (k < D.nline && D.line[k].kind != (old ? '+' : '-')) ? &D.line[k] : NULL;
+}
+
+
+/* a side's line of row k, from 1 (0: the row has none) */
+static size_t line_of (size_t k, int old) {
+  const DLine *l = side_dline(k, old);
+  return l ? (old ? l->o : l->n) : 0;
+}
+
+
+static size_t new_line_of (size_t k) {
+  return line_of(k, 0);
+}
+
+
+/* a side's line at the cursor's row (a row without one: the next one's), from 1 */
+static size_t near_line (int old) {
+  size_t k, n = nrows(), l;
+  for (k = D.crow; k < n; k++)
+    if ((l = line_of(k, old)) != 0) return l;
+  for (k = D.crow < n ? D.crow : n; k-- > 0;)
+    if ((l = line_of(k, old)) != 0) return l;
+  return 1;
 }
 
 
 /* the file's line at the cursor's row (a row only on the old side: the next one's), from 1 */
 size_t diff_line (void) {
-  size_t k, n = nrows();
-  for (k = D.crow; k < n; k++) {
-    const DLine *l = row_line(k);
-    if (l && l->n) return l->n;
-  }
-  for (k = D.crow < n ? D.crow : n; k-- > 0;) {
-    const DLine *l = row_line(k);
-    if (l && l->n) return l->n;
-  }
-  return 1;
+  return near_line(0);
 }
 
 
@@ -2849,22 +2862,24 @@ static void show_row (size_t i) {
 }
 
 
-/* the new side's line at the caret's row, "" when the row has none */
+/* the caret's side's line at its row, "" when the row has none */
 static const DLine *caret_dline (void) {
-  if (D.split_now) return (D.crow < D.nrow && D.row[D.crow].r >= 0) ? &D.line[D.row[D.crow].r] : NULL;
-  return (D.crow < D.nline && D.line[D.crow].kind != '-') ? &D.line[D.crow] : NULL;
+  return side_dline(D.crow, D.sside);
 }
 
 
 static const char *caret_line (void) {
   const DLine *l = caret_dline();
-  return l ? l->s : "";
+  size_t n;
+  return l ? side_text(l, D.sside, &n, NULL) : "";
 }
 
 
 static size_t caret_len (void) {
   const DLine *l = caret_dline();
-  return l ? l->len : 0;
+  size_t n = 0;
+  if (l) side_text(l, D.sside, &n, NULL);
+  return n;
 }
 
 
@@ -2898,14 +2913,20 @@ static void crow_move (long d) {
 }
 
 
-/* where the caret is in the file: its line (from 1) and byte; 0: nowhere to type */
-size_t diff_caret (size_t *col) {
-  size_t line, i = vpos(D.crow);
-  if (D.nvis && i < D.nvis && D.vis[i].hidden && D.vis[i].k == D.crow) return 0;	/* a hidden region: Enter opens it */
-  line = new_line_of(D.crow);
-  if (line == 0) line = diff_line();	/* a row of the old side only: the next line of the file */
+/* where the caret is on its side: its line (from 1) and byte */
+static size_t caret_pos (size_t *col) {
+  size_t line = line_of(D.crow, D.sside);
+  if (line == 0) line = near_line(D.sside);	/* a row of the other side only: the next line */
   if (col) *col = D.ccol;
   return line;
+}
+
+
+/* where the caret is in the file: its line (from 1) and byte; 0: nowhere to type */
+size_t diff_caret (size_t *col) {
+  size_t i = vpos(D.crow);
+  if (D.nvis && i < D.nvis && D.vis[i].hidden && D.vis[i].k == D.crow) return 0;	/* a hidden region: Enter opens it */
+  return caret_pos(col);
 }
 
 
@@ -3008,10 +3029,10 @@ static int caret_x (int x, const char *s, size_t n, int tw, size_t seg, size_t c
 }
 
 
-/* the selection's bytes in the new side's line `line` (n bytes): [*a, *b), *b n + 1 with its newline; 0: none */
+/* the selection's bytes in its side's line `line` (n bytes): [*a, *b), *b n + 1 with its newline; 0: none */
 static int sel_bytes (size_t line, size_t n, size_t *a, size_t *b) {
   size_t cl, cc, l0, c0, l1, c1;
-  if (!D.dsel || line == 0 || (cl = diff_caret(&cc)) == 0) return 0;
+  if (!D.dsel || line == 0 || (cl = caret_pos(&cc)) == 0) return 0;
   if (D.sel_line < cl || (D.sel_line == cl && D.sel_col <= cc)) {
     l0 = D.sel_line;
     c0 = D.sel_col;
@@ -3034,7 +3055,7 @@ static int sel_bytes (size_t line, size_t n, size_t *a, size_t *b) {
 /* the selection's background over line l's text (drawn at x, w columns) on row seg */
 static void paint_sel (int x, int y, int w, const DLine *l, const char *s, size_t n, size_t seg) {
   size_t a, b, st[DSEG], ns, c0, c1, ca, cb, c;
-  if (w <= 0 || l->kind == '-' || !sel_bytes(l->n, n, &a, &b)) return;
+  if (w <= 0 || l->kind == (D.sside ? '+' : '-') || !sel_bytes(D.sside ? l->o : l->n, n, &a, &b)) return;
   ns = dsegs(s, n, w, st);
   if (seg >= ns) return;
   if (D.wrap) {
@@ -3071,7 +3092,7 @@ static void draw_side (int x, int y, int w, const DLine *l, int left, int nw, in
   scr_fill(x + nw, y, w - nw, st);
   if (seg == 0 && l->kind != ' ') scr_put(x + nw, y, l->kind == '+' ? '+' : '-', st);
   draw_text(x + nw + 2, y, w - nw - 2, l, s, len, tok, seg, cur);
-  if (!left) paint_sel(x + nw + 2, y, w - nw - 2, l, s, len, seg);
+  if (left == D.sside) paint_sel(x + nw + 2, y, w - nw - 2, l, s, len, seg);
 }
 
 
@@ -3288,9 +3309,10 @@ void diff_draw (int x, int y, int w, int h, int wrap) {
   if (wrap) D.left = 0;
   else {
     size_t wide = diff_wide() + 1, tc = text_cols(), maxl = wide > tc ? wide - tc : 0;
-    if (diff_editable() && (D.crow != D.lastrow || D.ccol != D.lastcol)) {	/* the caret moved: the view follows it */
+    if ((diff_editable() || D.dsel) && (D.crow != D.lastrow || D.ccol != D.lastcol)) {	/* the caret moved: the view follows it */
       size_t c = dcol(caret_line(), caret_len(), D.ccol < caret_len() ? D.ccol : caret_len());
-      size_t tw = D.tcr > 1 ? (size_t)D.tcr : 1;
+      int tc = D.split_now && D.sside ? D.tcl : D.tcr;
+      size_t tw = tc > 1 ? (size_t)tc : 1;
       if (c < D.left) D.left = c;
       else if (c >= D.left + tw) D.left = c - tw + 1;
     }
@@ -3543,17 +3565,13 @@ int diff_click (int mx, int my) {
     return DIFF_YES;
   }
   D.crow = k;
-  if (diff_editable()) {	/* the caret where it was clicked, on the new side */
-    int nw = 2, cx;
-    size_t m = D.nmax;
-    while (m >= 10) {
-      m /= 10;
-      nw++;
-    }
-    nw++;
-    cx = mx - (D.split_now ? D.x + D.hw + 1 + nw + 2 : D.x + 2 * nw + 2);
+  if (!D.dsel)	/* a press: the side clicked (a drag stays on the side it started on) */
+    D.sside = !diff_editable() && (D.split_now ? mx < D.x + D.hw : k < D.nline && D.line[k].kind == '-');
+  {	/* the caret where it was clicked, on its side */
+    int nw = D.nw, cx, tc = D.split_now && D.sside ? D.tcl : D.tcr;
+    cx = mx - (D.split_now ? D.x + (D.sside ? 0 : D.hw + 1) + nw + 2 : D.x + 2 * nw + 2);
     if (D.wrap) {	/* the row of the line clicked: from where it starts */
-      size_t st[DSEG], ns = dsegs(caret_line(), caret_len(), D.tcr, st);
+      size_t st[DSEG], ns = dsegs(caret_line(), caret_len(), tc, st);
       if (seg >= ns) D.ccol = caret_len();
       else {
         size_t c0 = dcol(caret_line(), caret_len(), st[seg]), e = seg + 1 < ns ? st[seg + 1] : caret_len();
@@ -3570,11 +3588,100 @@ int diff_click (int mx, int my) {
 }
 
 
+/* a read-only diff: Shift and a move grows the selection on its side */
+static int sel_move (int code, size_t h) {
+  switch (code) {
+    case K_UP: case K_DOWN: case K_PGUP: case K_PGDN: case K_HOME: case K_END: case K_LEFT: case K_RIGHT: break;
+    default: return 0;
+  }
+  diff_sel_start();
+  switch (code) {
+    case K_UP: crow_move(-1); break;
+    case K_DOWN: crow_move(1); break;
+    case K_PGUP: crow_move(-(long)h); break;
+    case K_PGDN: crow_move((long)h); break;
+    case K_HOME: D.ccol = 0; break;
+    case K_END: D.ccol = caret_len(); break;
+    case K_LEFT:
+      if (D.ccol > 0) D.ccol = prev_byte(caret_line(), D.ccol);
+      else crow_move(-1), D.ccol = caret_len();
+      break;
+    default:
+      if (D.ccol < caret_len()) D.ccol = next_byte(caret_line(), D.ccol);
+      else crow_move(1), D.ccol = 0;
+      break;
+  }
+  if (D.ccol > caret_len()) D.ccol = caret_len();
+  return 1;
+}
+
+
+/* Ctrl+A in a read-only diff: all of its side */
+static void sel_all (void) {
+  size_t k = nrows();
+  while (k > 0 && line_of(k - 1, D.sside) == 0) k--;
+  if (k == 0) return;
+  diff_sel_set(1, 0);
+  D.crow = k - 1;
+  D.ccol = caret_len();
+  D.lastrow = D.crow;	/* the view stays where it is, like VS Code's */
+  D.lastcol = D.ccol;
+}
+
+
+/* the selection's text (its side) to the clipboard; 0: there is none */
+int diff_copy (void) {
+  size_t cl, cc, l0, c0, l1, c1, k, n = nrows();
+  Buf b;
+  if (!D.open || !D.dsel || (cl = caret_pos(&cc)) == 0) return 0;
+  if (D.sel_line < cl || (D.sel_line == cl && D.sel_col <= cc)) {
+    l0 = D.sel_line;
+    c0 = D.sel_col;
+    l1 = cl;
+    c1 = cc;
+  }
+  else {
+    l0 = cl;
+    c0 = cc;
+    l1 = D.sel_line;
+    c1 = D.sel_col;
+  }
+  if (l0 == l1 && c0 == c1) return 0;
+  buf_init(&b);
+  for (k = 0; k < n; k++) {
+    const DLine *l = side_dline(k, D.sside);
+    size_t ln = line_of(k, D.sside), len, a, e;
+    const char *s;
+    if (l == NULL || ln < l0 || ln > l1) continue;
+    s = side_text(l, D.sside, &len, NULL);
+    a = ln == l0 ? (c0 < len ? c0 : len) : 0;
+    e = ln == l1 ? (c1 < len ? c1 : len) : len;
+    if (e > a) buf_putn(&b, s + a, e - a);
+    if (ln != l1) buf_putc(&b, '\n');
+  }
+  clip_set(b.s ? b.s : "", b.len);
+  buf_free(&b);
+  return 1;
+}
+
+
 int diff_key (int k) {
   int code = KEY_CODE(k);
   size_t h = D.h > 0 ? (size_t)D.h : 1;
+  if (!diff_editable()) {	/* read only: select and copy, like VS Code */
+    if ((k & KM_SHIFT) && !(k & (KM_CTRL | KM_ALT)) && sel_move(code, h)) return DIFF_YES;
+    if (k == CTRL('a')) {
+      sel_all();
+      return DIFF_YES;
+    }
+    if (k == CTRL('c') || (code == K_INS && (k & KM_CTRL))) return diff_copy() ? DIFF_YES : DIFF_NO;
+  }
+  if (code == K_ESC && D.dsel) {	/* Escape: the selection goes first, then the diff */
+    D.dsel = 0;
+    return DIFF_YES;
+  }
   if (code == K_UP || code == K_DOWN || code == K_PGUP || code == K_PGDN || code == K_HOME || code == K_END ||
-      code == K_LEFT || code == K_RIGHT || code == K_ESC)
+      code == K_LEFT || code == K_RIGHT)
     D.dsel = 0;	/* a move without Shift: the selection goes */
   switch (code) {
     case K_UP:
@@ -3918,7 +4025,7 @@ void diff_sel_clear (void) {
 /* a drag goes on: the selection starts at the caret, when there is none yet */
 void diff_sel_start (void) {
   size_t col, line;
-  if (D.dsel || !diff_editable() || (line = diff_caret(&col)) == 0) return;
+  if (D.dsel || (line = diff_editable() ? diff_caret(&col) : caret_pos(&col)) == 0) return;
   diff_sel_set(line, col);
 }
 
