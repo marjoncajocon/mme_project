@@ -82,6 +82,8 @@ build tcc              tcc 0.9.27, 64 bit                    -> bin\
 build xp               tcc 0.9.27, 32 bit, msvcrt.dll: Windows XP and later -> bin32\
 build msvc             Visual C++                            -> bin\
 build cross            zig: Linux and macOS (x86_64, aarch64) -> dist\ (they load the system's SDL2)
+./build.sh single      zig, build.sh only: one stand-alone exe, SDL2 linked in and the fonts inside
+                       -> dist\mme-sdl-x86_64-windows.exe (single 32: mme-sdl-x86-windows.exe)
 build clean
 ```
 
@@ -115,6 +117,7 @@ Every target above was built on 2026-09-28 from the same sources:
 | `sdl2_port\build tcc`, `build xp` | builds; one `M_PI redefined` note (SDL's header and tcc's `math.h`) |
 | `sdl2_port\build gcc 32`, `build msvc` | not tried here (no 32 bit MinGW, no Visual Studio on that machine) |
 | `build.sh` (and `cross`), `sdl2_port/build.sh` zig 64, zig 32, gcc, tcc, xp, cross | built from the mmc shell on 2026-10-07, the same results as `build.bat` (`build.sh` has no msvc: use `build.bat`) |
+| `sdl2_port/build.sh single`, `single 32` | no warnings; about 14.6 MB each, only Windows' own dlls imported; run alone in an empty folder (2026-10-07) |
 
 ### The regression suite
 

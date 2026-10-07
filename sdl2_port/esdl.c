@@ -1746,10 +1746,56 @@ static int title_custom (void) {
 }
 
 
+#ifdef MME_SINGLE
+/*
+** The stand-alone program (build.sh single: SDL2 linked in, no files
+** beside it): the fonts are its RCDATA resources, named as their files.
+** GDI and the font list read files, so they are put in mme-data/mme-fonts
+** (again when one is missing, or another build carries another size).
+*/
+static BOOL CALLBACK font_unpack_one (HMODULE m, LPCSTR type, LPSTR name, LONG_PTR to) {
+  HRSRC r;
+  HGLOBAL g;
+  const char *p;
+  char low[128], *file;
+  DWORD n;
+  OsStat st;
+  size_t i;
+  (void)type;
+  if (IS_INTRESOURCE(name) || (r = FindResourceA(m, name, MAKEINTRESOURCEA(10))) == NULL) return TRUE;	/* RT_RCDATA */
+  if ((n = SizeofResource(m, r)) == 0 || (g = LoadResource(m, r)) == NULL || (p = (const char *)LockResource(g)) == NULL)
+    return TRUE;
+  for (i = 0; name[i] && i + 1 < sizeof(low); i++) low[i] = (char)(name[i] >= 'A' && name[i] <= 'Z' ? name[i] + 32 : name[i]);
+  low[i] = '\0';	/* resource names come upper case */
+  file = path_join((const char *)to, low);
+  if (os_stat(file, &st) != 0 || !st.exists || st.size != (long long)n) {
+    int fd = os_open(file, OS_WRITE);
+    if (fd >= 0) {
+      if (os_write(fd, p, n) != (long)n) n = 0;
+      os_close(fd);
+      if (n == 0) os_unlink(file);
+    }
+  }
+  free(file);
+  return TRUE;
+}
+
+
+static char *font_unpack (void) {
+  char *to = data_path("mme-fonts");
+  OsStat st;
+  if (os_stat(to, &st) != 0 || !st.exists) os_mkdir(to);
+  EnumResourceNamesA(NULL, MAKEINTRESOURCEA(10), font_unpack_one, (LONG_PTR)to);
+  return to;
+}
+#endif
+
+
 /*
 ** The folder the fonts come with (tfont.c keeps one): mme-fonts next to
 ** the program, else share/mme-fonts beside its bin (make install's), else
-** usr/share/fonts when it is in an mmc shell's usr/bin
+** usr/share/fonts when it is in an mmc shell's usr/bin; the stand-alone
+** program's own when there is no mme-fonts next to it
 */
 static void font_dirs (void) {
   char *exe = os_exe_path(NULL), *dir, *up, *share, *fonts;
@@ -1757,6 +1803,12 @@ static void font_dirs (void) {
   if (exe == NULL) return;
   dir = path_dirname(exe);
   fonts = path_join(dir, "mme-fonts");
+#ifdef MME_SINGLE
+  if (os_stat(fonts, &st) != 0 || !st.exists || !st.is_dir) {
+    free(fonts);
+    fonts = font_unpack();
+  }
+#endif
   if (os_stat(fonts, &st) != 0 || !st.exists || !st.is_dir) {
     free(fonts);
     up = path_dirname(dir);

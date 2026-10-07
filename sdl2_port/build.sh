@@ -6,6 +6,8 @@
 #   ./build.sh [zig | gcc | tcc] [32 | 64]   zig and 64 by default; 64 -> bin/, 32 -> bin32/
 #   ./build.sh xp                            i386-win32-tcc, 32 bit SDL2: Windows XP
 #   ./build.sh cross                         zig: Linux and macOS (x86_64, aarch64) into dist/
+#   ./build.sh single [32 | 64]              zig: one stand-alone mme-sdl.exe, nothing beside it
+#                                            (SDL2 linked in, the fonts inside) -> dist/
 #   ./build.sh clean
 # Linux, macOS:
 #   ./build.sh                               mme-sdl with the system's SDL2 (sdl2-config), CC or cc
@@ -82,7 +84,54 @@ cross () {
   exit 0
 }
 
+# a path as the resource compiler reads it from obj/single*/fonts.rc: /d/x is D:/x, a relative one from there
+rc_path () {
+  case "$1" in
+    /[a-zA-Z]/*) p=${1#/}; echo "${p%%/*}:/${p#*/}" ;;
+    /*) echo "$1" ;;
+    *) echo "../../$1" ;;
+  esac
+}
+
+# one program and nothing else: SDL2's static library linked in, the fonts
+# (and their licence) as RCDATA resources, unpacked by esdl.c into mme-data
+single () {
+  if [ "$WIN" = 0 ]; then
+    echo "single: Windows only (on Linux and macOS SDL2 comes with the system)"
+    exit 2
+  fi
+  case "${1:-64}" in
+    64) TARGET=x86_64-windows-gnu; SDLARCH=x86_64-w64-mingw32; NAME=x86_64 ;;
+    32) TARGET=x86-windows-gnu; SDLARCH=i686-w64-mingw32; NAME=x86 ;;
+    *) echo "the second word is 32 or 64, not $1"; exit 2 ;;
+  esac
+  if [ ! -f "$SDL/$SDLARCH/lib/libSDL2.a" ]; then
+    echo "SDL2 is not in $SDL: see README.md"
+    exit 1
+  fi
+  OBJ=obj/single${1:-64}
+  mkdir -p $OBJ dist
+  : > $OBJ/fonts.rc
+  for f in "$FONTS"/JetBrainsMonoNerdFontMono-*.ttf "$FONTS"/JetBrainsMonoNerdFont-OFL.txt; do
+    [ -f "$f" ] && echo "$(basename "$f") RCDATA \"$(rc_path "$f")\"" >> $OBJ/fonts.rc
+  done
+  if [ ! -s $OBJ/fonts.rc ]; then
+    echo "no fonts in $FONTS (JetBrainsMonoNerdFontMono-*.ttf)"
+    exit 1
+  fi
+  OUTX=dist/mme-sdl-$NAME-windows.exe
+  rm -f $OUTX 2>/dev/null || mv -f $OUTX $OUTX.old$$
+  $ZIG cc -std=c11 -O2 -s -Wall -Wextra -pedantic -target $TARGET -DMME_SINGLE -I.. -I$SDL/include \
+    -o $OUTX $SRC ../mme.rc $OBJ/fonts.rc $SDL/$SDLARCH/lib/libSDL2.a \
+    -lshell32 -lws2_32 -lgdi32 -luser32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi \
+    -Wl,--subsystem,windows || exit 1
+  rm -f dist/*.pdb
+  echo "built sdl2_port/$OUTX: stand-alone, no SDL2.dll or mme-fonts needed"
+  exit 0
+}
+
 case "$1" in
+  single) single "$2" ;;
   clean)
     rm -rf dist bin bin32 obj mme-sdl
     exit 0

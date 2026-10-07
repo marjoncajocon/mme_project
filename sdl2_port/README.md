@@ -56,6 +56,15 @@ build msvc       Visual C++               from a "Native Tools" prompt, or found
 build clean
 ```
 
+**One file.** `./build.sh single` (build.sh only, from the mmc shell or
+git-bash; `single 32` for 32 bit) makes `dist\mme-sdl-x86_64-windows.exe`, a
+program with nothing beside it: SDL2's static library (`libSDL2.a`) is linked
+in and the four JetBrains Mono Nerd Font files and their licence are in it as
+resources (about 14.6 MB). Run where there is no `mme-fonts\` next to it, it
+puts them in its `mme-data\mme-fonts` the first time (GDI reads font files),
+and leaves them there after. It runs where the zig build does (Windows 7 and
+later, with the Universal C Runtime).
+
 64 bit goes into `bin\`, 32 bit into `bin32\`. Each is the program on its
 own: `mme-sdl.exe` with its `SDL2.dll` (SDL's 64 or 32 bit one), `mme-fonts\`
 (JetBrains Mono Nerd Font, taken from the mmc checkout beside this one, or
