@@ -28,6 +28,12 @@ and mmc, all the C code is in the root folder. There are two programs:
 * `mme-sdl`, the same editor in a window of its own (SDL2): `sdl2_port\build.bat`,
   `sdl2_port\makefile` (see `sdl2_port/README.md` for how it works).
 
+Each `build.bat` has a twin, `build.sh`, with the same words, for a bash-like
+shell: the mmc shell (`D:\mmc-shell`), git-bash, Linux and macOS
+(`./build.sh`, `./build.sh cross`, `cd sdl2_port && ./build.sh tcc` ...). On
+Linux and macOS `build.sh` builds with the system's compiler (and, for
+mme-sdl, the system's SDL2), as `make` does.
+
 ### What you need
 
 "Tested with" is what builds mme today; older versions may work but are not
@@ -108,6 +114,7 @@ Every target above was built on 2026-09-28 from the same sources:
 | `sdl2_port\build gcc` (64) | builds, with gcc-only warnings zig's clang does not make: `-Wformat-truncation` notes on `snprintf` into fixed buffers (a long name is cut, as meant), and six older ones (`mos.c`, `eaccess.c`, two in `mme.c`) |
 | `sdl2_port\build tcc`, `build xp` | builds; one `M_PI redefined` note (SDL's header and tcc's `math.h`) |
 | `sdl2_port\build gcc 32`, `build msvc` | not tried here (no 32 bit MinGW, no Visual Studio on that machine) |
+| `build.sh` (and `cross`), `sdl2_port/build.sh` zig 64, zig 32, gcc, tcc, xp, cross | built from the mmc shell on 2026-10-07, the same results as `build.bat` (`build.sh` has no msvc: use `build.bat`) |
 
 ### The regression suite
 

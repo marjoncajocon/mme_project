@@ -21,12 +21,12 @@
 |        Terminal              │   its .ttf/.otf files into mme-fonts. In a terminal the terminal's font is used.
 |        Source Control        │
 |        Testing               │
-|        Debug                 │   Editor: Tab Size
-|      Extensions              │   The number of spaces a tab is equal to. This setting is overridden based on the
-|        Emmet                 │   file contents when Editor: Detect Indentation is on.
-|        HTML                  │    4
-|        Vim                   │
-|                             │   Editor: Insert Spaces
-|                              │    Insert spaces when pressing Tab. This setting is overridden based on the file
+|        Debug                 │   Editor: Line Height
+|      Extensions              │   Controls the line height of the code editor and the diff viewer (mme-sdl). Use 0
+|        Emmet                 │   to compute the line height from the font. Values between 0 and 8 are used as a
+|        HTML                  │   multiplier with the font size. Values greater than or equal to 8 are used as
+|        Vim                   │   pixels. In a terminal the terminal's rows are used.
+|                             │    0
+|                              │
 |                                                                                                                     
 exited=0

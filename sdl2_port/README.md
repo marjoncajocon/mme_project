@@ -152,8 +152,14 @@ mmc-term or Windows Terminal window (the terminal keeps those two keys: the
 menu and the Command Palette have the commands).
 
 Ctrl+= / Ctrl+- (the keypad's too) and Ctrl+NumPad0 zoom, as in VS Code;
-`editor.fontFamily` and `editor.fontSize` are VS Code's settings, and a change
-to them shows at once. Moved to a screen with another DPI, the font keeps its
+`editor.fontFamily`, `editor.fontSize` and `editor.lineHeight` are VS Code's
+settings, and a change to them shows at once. `editor.lineHeight` covers the
+code editor, its gutter and the diff viewer: 0 is the font's own height, less
+than 8 times the font size (1.5), 8 and more pixels (24); the text stays in
+the middle of its taller row. `mme.ui.fontRendering` says how the whole
+window's text is drawn: `cleartype` (the default, hinted and ClearType
+filtered like other Windows programs), `grayscale` (hinted, gray smoothed) or
+`mac` (unhinted, gray smoothed and a little heavier, the way macOS draws it). Moved to a screen with another DPI, the font keeps its
 size. The wheel scrolls a line per notch step (a touchpad's small steps add
 up), sideways too. A file dropped on the window pastes its path, as a
 terminal does. The image preview shows the picture itself.

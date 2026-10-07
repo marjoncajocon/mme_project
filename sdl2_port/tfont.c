@@ -468,7 +468,7 @@ static int gw = 0, gh = 0;
 
 
 static int use_gdi (void) {
-  return smoothing != SMOOTH_STB;
+  return smoothing == SMOOTH_CLEARTYPE || smoothing == SMOOTH_GRAY;
 }
 
 
@@ -805,7 +805,7 @@ int font_init (const Config *c) {
 #ifdef _WIN32
   smoothing = c->smoothing;
 #else
-  smoothing = SMOOTH_STB;
+  smoothing = c->smoothing == SMOOTH_MAC ? SMOOTH_MAC : SMOOTH_STB;
 #endif
   use_ligatures = c->ligatures;
   if (c->font_file[0] != '\0') {	/* an explicit file wins */
@@ -848,7 +848,7 @@ int font_init (const Config *c) {
   }
   if (!f_regular.ok) return -1;
 #ifdef _WIN32
-  if (f_regular.family[0] == L'\0') smoothing = SMOOTH_STB;	/* GDI cannot name it */
+  if (f_regular.family[0] == L'\0' && use_gdi()) smoothing = SMOOTH_STB;	/* GDI cannot name it */
 #endif
   font_set_px(cur_px);
   return 0;
@@ -928,7 +928,7 @@ static Slot *cache_insert (uint32_t key) {
 static void face_scale (Face *f, float px, int snap) {
   int x0, y0, x1, y1;
   f->scale = f->scale_y = stbtt_ScaleForMappingEmToPixels(&f->info, px);
-  if (snap && px < 32.0f &&
+  if (snap && smoothing != SMOOTH_MAC && px < 32.0f &&	/* macOS does not hint */
       stbtt_GetCodepointBox(&f->info, 'x', &x0, &y0, &x1, &y1) && y1 > 0) {
     float xh = (float)y1 * f->scale;
     float want = (float)floor(xh + 0.5f);
@@ -945,6 +945,11 @@ static void face_scale (Face *f, float px, int snap) {
 */
 static float darkening (void) {
   float k = (22.0f - cur_px) / 11.0f;
+  if (smoothing == SMOOTH_MAC) {	/* macOS's font smoothing: heavier strokes at every size */
+    if (k < 0.0f) k = 0.0f;
+    if (k > 1.0f) k = 1.0f;
+    return 0.45f + 0.35f * k;
+  }
   if (k <= 0.0f) return 0.0f;
   if (k > 1.0f) k = 1.0f;
   return use_gdi() ? 0.5f * k : 0.8f * k;

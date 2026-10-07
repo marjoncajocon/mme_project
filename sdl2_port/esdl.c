@@ -76,6 +76,8 @@ static struct {
   char font_fam[128];	/* editor.fontFamily and editor.fontSize, as the editor's font was made from them */
   double font_size;
   double ui_size;	/* mme.ui.fontSize: the rest of the window's */
+  double line_h;	/* editor.lineHeight, as the editor's cells were made from it */
+  int render;	/* mme.ui.fontRendering, as the fonts were made with it: SMOOTH_* */
   int relayout;	/* a font's cells changed: the editor lays its zones out again before the next key */
   long long font_seen;	/* when the settings were looked at last */
   float wheel_x, wheel_y;	/* a touchpad's scrolling, less than a line so far */
@@ -1698,6 +1700,8 @@ void scr_flush (void) {
 ** ===================================================================
 */
 
+static float font_px (double size);
+
 static void font_metrics (void) {
   W.ime_x = -1;	/* the IME's window is placed again */
   W.cw = font_cell_w();
@@ -1715,6 +1719,15 @@ static void font_metrics (void) {
   FE.glyph = ed_font_glyph;
   if (FE.cw < 1) FE.cw = 1;
   if (FE.ch < 1) FE.ch = 1;
+  if (W.line_h > 0) {	/* editor.lineHeight: taller (or shorter) rows, the text in their middle */
+    double em = font_px(W.font_size), want = W.line_h < 8 ? em * W.line_h : W.line_h * W.scale * W.zoom;
+    int lh;
+    if (want < em) want = em;
+    if (want > FE.ch * 4.0) want = FE.ch * 4.0;
+    lh = (int)(want + 0.5);
+    FE.ascent += (lh - FE.ch) / 2;
+    FE.ch = lh;
+  }
   scr_zone_metrics(FU.cw, FU.ch, FE.cw, FE.ch);	/* the editor's text: zones of these cells */
   W.relayout = 1;
 }
@@ -1783,7 +1796,7 @@ static void font_sizes (void) {
 static int ui_font_make (double size) {
   Config c;
   memset(&c, 0, sizeof(c));
-  c.smoothing = SMOOTH_CLEARTYPE;	/* Windows: GDI's ClearType, like every other Windows program */
+  c.smoothing = W.render;	/* Windows: GDI's ClearType by default, like every other Windows program */
   c.ligatures = 0;	/* one character a cell: mme places each itself */
   if (font_init(&c) != 0) return -1;
   W.ui_size = size;
@@ -1796,7 +1809,7 @@ static int ed_font_make (const char *fam, double size) {
   Config c;
   size_t n = 0;
   memset(&c, 0, sizeof(c));
-  c.smoothing = SMOOTH_CLEARTYPE;
+  c.smoothing = W.render;
   c.ligatures = 0;
   snprintf(W.font_fam, sizeof(W.font_fam), "%s", fam);
   W.font_size = size;
@@ -1808,8 +1821,26 @@ static int ed_font_make (const char *fam, double size) {
 }
 
 
+/* mme.ui.fontRendering: cleartype (the default), grayscale, mac */
+static int rendering_mode (void) {
+  const char *s = json_str(settings_get("mme\\.ui\\.fontRendering"), "cleartype");
+  if (strcmp(s, "mac") == 0) return SMOOTH_MAC;
+  if (strcmp(s, "grayscale") == 0) return SMOOTH_GRAY;
+  return SMOOTH_CLEARTYPE;
+}
+
+
+/* editor.lineHeight: 0 (or nonsense): the font's own */
+static double line_height (void) {
+  double v = json_num(settings_get("editor\\.lineHeight"), 0);
+  return v > 0 && v <= 300 ? v : 0;
+}
+
+
 static int font_setup (void) {
   W.zoom = 1.0f;
+  W.render = rendering_mode();
+  W.line_h = line_height();
   font_dirs();
   if (ui_font_make(json_num(settings_get("mme\\.ui\\.fontSize"), 14)) != 0) return -1;
   if (ed_font_make(json_str(settings_get("editor\\.fontFamily"), ""), json_num(settings_get("editor\\.fontSize"), 14)) != 0)
@@ -1823,9 +1854,19 @@ static int font_setup (void) {
 static void font_settings (void) {
   const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
   double size = json_num(settings_get("editor\\.fontSize"), 14), ui = json_num(settings_get("mme\\.ui\\.fontSize"), 14);
-  int again = 0;
+  double lh = line_height();
+  int again = 0, render = rendering_mode();
   W.custom = title_custom();
   W.font_seen = (long long)SDL_GetTicks();
+  if (render != W.render) {	/* another rendering: both fonts made again */
+    W.render = render;
+    W.font_fam[0] = '\x01';
+    W.ui_size = -1;
+  }
+  if (lh != W.line_h) {
+    W.line_h = lh;
+    again = 1;
+  }
   if ((size != W.font_size || strcmp(fam, W.font_fam) != 0) && ed_font_make(fam, size) == 0) again = 1;
   if (ui != W.ui_size && ui_font_make(ui) == 0) again = 1;
   if (!again) return;

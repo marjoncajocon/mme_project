@@ -247,6 +247,7 @@ double theme_contrast (uint32_t a, uint32_t b);
 #define SMOOTH_CLEARTYPE	0
 #define SMOOTH_GRAY		1
 #define SMOOTH_STB		2
+#define SMOOTH_MAC		3	/* stb_truetype, unhinted, heavier strokes: macOS's look */
 
 typedef struct Glyph {
   int w, h, xoff, yoff;	/* yoff from the baseline, up is negative */
