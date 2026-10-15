@@ -334,6 +334,7 @@ static void clip_text (const char *s);
 static int draw_sticky (int gw, Pos sa, Pos sb);
 static void hl_row (int sy, size_t y, int gw, size_t from, size_t to, size_t left);
 static const Pos *hl_ranges (size_t *n);
+static int mm_cols (int ed_w);
 static void draw_peek (void);
 static void view_blocks_update (int other);
 static void draw_quick (int sy, size_t y, int gw, int is_cur);
@@ -1769,7 +1770,7 @@ static void text_zone (int set) {	/* set 0: only its size (the zone's cells are 
 
 /* the group in front's minimap and scrollbars; the text's rows under them */
 static void group_layout (void) {
-  L.mm_w = (E.minimap && HAS_DOC && !G->diff && !T->page && L.ed_w >= 60) ? MM_W : 0;
+  L.mm_w = (E.minimap && HAS_DOC && !G->diff && !T->page && L.ed_w >= 60) ? mm_cols(L.ed_w) : 0;
   L.sb_w = (HAS_DOC && !G->diff && !T->page && L.ed_w >= 30) ? 1 : 0;
   L.mml_w = 0;
   L.mm_x = L.ed_x + L.ed_w - L.sb_w - L.mm_w;
@@ -4207,8 +4208,53 @@ static size_t mm_ch (void) {	/* characters of text in one dot */
 }
 
 
+/*
+** mme-sdl's minimap is pixels, VS Code's: a line is 2 of them tall and a
+** character 1 wide (times editor.minimap.scale and the screen's scale), a
+** strip on its left for the git changes. A terminal has the dots above.
+*/
+typedef struct MmPx {
+  int on;	/* 0: cells (a terminal) */
+  int cw, ch;	/* a cell's pixels */
+  int lh, chw;	/* a line's height, a character's width */
+  int gut;	/* the git strip and the gap after it */
+} MmPx;
+
+static int mm_px (MmPx *p) {
+  double sc;
+  memset(p, 0, sizeof(*p));
+  if (!scr_cell_px(&p->cw, &p->ch, &sc)) return 0;
+  p->chw = (int)(vopt.mm_scale * sc + 0.5);
+  if (p->chw < 1) p->chw = 1;
+  p->lh = 2 * p->chw;
+  p->gut = (int)(3 * sc + 0.5);
+  if (p->gut < 2) p->gut = 2;
+  p->on = 1;
+  return 1;
+}
+
+
+/* the minimap's cells: VS Code's editor.minimap.maxColumn characters wide in pixels, not more than a sixth of the editor */
+static int mm_cols (int ed_w) {
+  MmPx p;
+  int c;
+  if (!mm_px(&p)) return MM_W;
+  c = (vopt.mm_maxcol * p.chw + p.gut + p.cw - 1) / p.cw;
+  if (c > ed_w / 6) c = ed_w / 6;
+  return c < 6 ? 6 : c;
+}
+
+
+/* the lines of text it has room for */
+static size_t mm_lines (void) {
+  MmPx p;
+  if (mm_px(&p)) return (size_t)L.view_h * (size_t)p.ch / (size_t)p.lh;
+  return (size_t)L.view_h * mm_lpr();
+}
+
+
 static size_t mm_top (void) {
-  size_t lpr = mm_lpr(), cap = (size_t)L.view_h * lpr, n = T->doc->n, t;
+  size_t cap = mm_lines(), n = T->doc->n, t;
   if (n <= cap || n <= (size_t)L.text_h) return 0;
   t = (size_t)((double)T->top * (double)(n - cap) / (double)(n - (size_t)L.text_h));
   return t > n - cap ? n - cap : t;
@@ -4272,6 +4318,336 @@ static void mm_mark (uint32_t *tint, unsigned char *pri, size_t top, size_t y, s
 #define MM_MOD	0x0078D4
 #define MM_DEL	0xF85149
 
+/*
+** The pixel minimap's lines, kept per document: each character column's
+** token (+1, 0: blank) and how much ink the character has (MMC_INK: its
+** top two bits) of the lines it showed last. A frame reads them;
+** a change has the lines from the first one it touched colored again
+** (Doc.mm_from), so scrolling and typing do not color every line again.
+*/
+#define MMC_COLS	256	/* the characters of a line kept */
+#define MMC_INK(b)	((b) >> 6)	/* 1 punctuation, 2 a letter, 3 a capital or a digit */
+#define MMC_TOK(b)	(((b) & 63) - 1)
+#define MMC_LINES	2048	/* lines kept (a 4K screen shows about 1000) */
+#define NMMC	4
+
+typedef struct MmCache {
+  const Doc *d;	/* NULL: free */
+  const void *sx;	/* what they were colored with */
+  int tabw, cols;
+  unsigned long used;	/* the most recent one wins a slot */
+  size_t *tag;	/* MMC_LINES: the line an entry has, (size_t)-1: none */
+  unsigned char *tok;	/* MMC_LINES * MMC_COLS */
+} MmCache;
+
+static MmCache g_mmc[NMMC];
+static unsigned long g_mmc_clock;
+
+static void mmc_clear (MmCache *c) {
+  size_t i;
+  if (c->tag)
+    for (i = 0; i < MMC_LINES; i++) c->tag[i] = (size_t)-1;
+}
+
+
+static MmCache *mmc_of (Doc *d, int cols) {
+  MmCache *c = NULL;
+  int k;
+  for (k = 0; k < NMMC && c == NULL; k++)
+    if (g_mmc[k].d == d) c = &g_mmc[k];
+  if (c == NULL) {	/* the one used longest ago */
+    c = &g_mmc[0];
+    for (k = 1; k < NMMC; k++)
+      if (g_mmc[k].used < c->used) c = &g_mmc[k];
+    if (c->tag == NULL) {
+      c->tag = (size_t *)xmalloc(MMC_LINES * sizeof(size_t));
+      c->tok = (unsigned char *)xmalloc((size_t)MMC_LINES * MMC_COLS);
+    }
+    c->d = d;
+    c->sx = NULL;
+    c->cols = -1;
+  }
+  if (c->sx != (const void *)T->sx || c->tabw != TABW || c->cols != cols) {	/* another language, tab width, width */
+    c->sx = T->sx;
+    c->tabw = TABW;
+    c->cols = cols;
+    mmc_clear(c);
+  }
+  else if (d->mm_from != (size_t)-1) {	/* the lines changed: from the first one on (they may have moved) */
+    size_t i;
+    for (i = 0; i < MMC_LINES; i++)
+      if (c->tag[i] != (size_t)-1 && c->tag[i] >= d->mm_from) c->tag[i] = (size_t)-1;
+  }
+  d->mm_from = (size_t)-1;
+  c->used = ++g_mmc_clock;
+  return c;
+}
+
+
+static void mmc_forget (const Doc *d) {	/* the document is gone: its slot is free */
+  int k;
+  for (k = 0; k < NMMC; k++)
+    if (g_mmc[k].d == d) {
+      g_mmc[k].d = NULL;
+      g_mmc[k].used = 0;
+    }
+}
+
+
+/* line y's tokens, a byte a character column (+1, 0 blank): colored when not kept */
+static const unsigned char *mmc_line (MmCache *c, size_t y) {
+  static unsigned char *tok;
+  static size_t cap;
+  size_t k = y % MMC_LINES, head, x = 0, col = 0, len, cols = (size_t)c->cols;
+  unsigned char *t = c->tok + k * MMC_COLS;
+  const Row *r;
+  if (c->tag[k] == y) return t;
+  memset(t, 0, cols);
+  c->tag[k] = y;
+  r = row_at(y);
+  head = 4 * cols + 8;	/* the bytes its columns can take, UTF-8 and all */
+  if (head > r->len) head = r->len;
+  if (head + 1 > cap) {
+    cap = head + 256;
+    tok = (unsigned char *)xrealloc(tok, cap);
+  }
+  syntax_line_head(T->doc, T->sx, y, tok, head);	/* the grammar is too slow for hundreds of lines a frame */
+  while (x < head && col < cols) {
+    size_t w = char_width(r, x, col, &len), i;
+    unsigned char b = (unsigned char)r->s[x];
+    int ink = (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') ? 3 : (b >= 'a' && b <= 'z') || b >= 0x80 ? 2 : 1;
+    if (b != ' ' && b != '\t')
+      for (i = 0; i < w && col + i < cols; i++) t[col + i] = (unsigned char)((tok[x] + 1) | (ink << 6));
+    col += w;
+    x += len;
+  }
+  return t;
+}
+
+
+/* a rectangle of the minimap's pixels (clipped), col blended over what is there pct of 100 */
+static void mm_fill (uint32_t *px, int pw, int ph, int x, int y, int w, int h, uint32_t col, int pct) {
+  int i, j;
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > pw) w = pw - x;
+  if (y + h > ph) h = ph - y;
+  for (j = y; j < y + h; j++) {
+    uint32_t *p = px + (size_t)j * (size_t)pw + (size_t)x, under = 0, got = 0;
+    int have = 0;
+    for (i = 0; i < w; i++) {
+      if (pct >= 100) p[i] = col;
+      else {	/* what is under a run is mostly one color: blended once */
+        if (!have || p[i] != under) {
+          under = p[i];
+          got = blend(col, under, pct);
+          have = 1;
+        }
+        p[i] = got;
+      }
+    }
+  }
+}
+
+
+/* a mark at line y (on the screen from top), bytes x0 .. x1 of it, col over what is there pct of 100 */
+static void mm_mark_px (const MmPx *p, uint32_t *px, int pw, int ph, size_t top, size_t y, size_t x0, size_t x1,
+                        uint32_t col, int pct) {
+  const Row *r;
+  size_t lim, c0, c1;
+  if (y < top || y >= T->doc->n) return;
+  r = row_at(y);
+  lim = (size_t)(pw - p->gut) / (size_t)p->chw;
+  c0 = col_of_upto(r, x0, lim);
+  if (c0 >= lim) return;
+  c1 = col_of_upto(r, x1 > x0 ? x1 : x0 + 1, lim);
+  if (c1 <= c0) c1 = c0 + 1;
+  mm_fill(px, pw, ph, p->gut + (int)c0 * p->chw, (int)(y - top) * p->lh, (int)(c1 - c0) * p->chw, p->lh, col, pct);
+}
+
+
+/* how strong a character shows: as much ink as it has (punctuation little), a comment's fainter */
+static int mm_ink (unsigned char b) {
+  static const int pct[4] = {0, 40, 70, 88};
+  int v = pct[MMC_INK(b)];
+  return MMC_TOK(b) == T_COMMENT ? v * 3 / 4 : v;
+}
+
+
+/*
+** The pictures made last, by what they show (a hash of everything that
+** goes in them): a frame where only the caret moved, or the mouse, shows
+** the one it has. A slot each for a few editor groups side by side.
+*/
+#define NMMP	4
+
+typedef struct MmPic {
+  unsigned long long key;	/* 0: none */
+  uint32_t *px;
+  size_t cap;
+  unsigned long used;
+} MmPic;
+
+static MmPic g_mmp[NMMP];
+
+static unsigned long long mm_hash (unsigned long long h, const void *v, size_t n) {	/* FNV-1a */
+  const unsigned char *s = (const unsigned char *)v;
+  size_t i;
+  for (i = 0; i < n; i++) h = (h ^ s[i]) * 1099511628211ULL;
+  return h;
+}
+
+
+#define MM_HASH(h, v)	((h) = mm_hash((h), &(v), sizeof(v)))
+
+static void draw_minimap_px (const MmPx *p) {
+  static int *qmv;	/* the git mark of each line shown */
+  static size_t qcap;
+  uint32_t *px;
+  int pw = mm_width() * p->cw, ph = L.view_h * p->ch, slider = vopt.mm_slider || g_mm_hover || E.drag_mm, i;
+  int cols = (pw - p->gut) / p->chw, git = opt.scm_decor && T->real && !T->page;
+  size_t n = T->doc->n, top = mm_top(), nl = (size_t)(ph + p->lh - 1) / (size_t)p->lh, last, y, nd, nh, d;
+  uint32_t bg = ui_color(C_EDITOR_BG), sl = ui_color(C_MINIMAP_SLIDER);
+  const Diag *dv = lsp_diags(T->doc, &nd);
+  const Pos *hv = hl_ranges(&nh);
+  unsigned long long key = 14695981039346656037ULL;
+  MmCache *c;
+  MmPic *pic = NULL;
+  if (pw <= 0 || ph <= 0 || cols <= 0) return;
+  if (cols > MMC_COLS) cols = MMC_COLS;
+  if (cols > vopt.mm_maxcol) cols = vopt.mm_maxcol;
+  last = top + nl > n ? n : top + nl;
+  if (last - top > qcap) {
+    qcap = last - top + 64;
+    qmv = (int *)xrealloc(qmv, qcap * sizeof(int));
+  }
+  for (y = top; y < last; y++) qmv[y - top] = git ? quick_mark(T->doc, T->real, y) : 0;
+  {	/* what the picture shows */
+    const Doc *dp = T->doc;
+    const void *sx = T->sx;
+    int tw = TABW, fo = E.find_open && E.find[0];
+    uint32_t col;
+    MM_HASH(key, dp);
+    MM_HASH(key, T->doc->edits);
+    MM_HASH(key, sx);
+    MM_HASH(key, tw);
+    MM_HASH(key, n);
+    MM_HASH(key, top);
+    MM_HASH(key, T->top);
+    MM_HASH(key, L.text_h);
+    MM_HASH(key, pw);
+    MM_HASH(key, ph);
+    MM_HASH(key, cols);
+    MM_HASH(key, slider);
+    key = mm_hash(key, p, sizeof(*p));
+    MM_HASH(key, vopt.mm_chars);
+    MM_HASH(key, bg);
+    MM_HASH(key, sl);
+    for (i = 0; i < T_N; i++) {	/* the theme */
+      col = tok_color(i);
+      MM_HASH(key, col);
+    }
+    col = ui_color(C_ERROR);
+    MM_HASH(key, col);
+    col = ui_color(C_WARNING);
+    MM_HASH(key, col);
+    key = mm_hash(key, qmv, (last - top) * sizeof(int));
+    MM_HASH(key, nh);
+    if (nh) key = mm_hash(key, hv, nh * 2 * sizeof(Pos));
+    MM_HASH(key, nd);
+    for (d = 0; d < nd; d++) {
+      MM_HASH(key, dv[d].a);
+      MM_HASH(key, dv[d].b);
+      MM_HASH(key, dv[d].sev);
+    }
+    MM_HASH(key, fo);
+    if (fo) {
+      key = mm_hash(key, E.find, strlen(E.find));
+      MM_HASH(key, E.find_case);
+      MM_HASH(key, E.find_word);
+      MM_HASH(key, E.find_regex);
+      MM_HASH(key, E.find_insel);
+      MM_HASH(key, E.fsel_a);
+      MM_HASH(key, E.fsel_b);
+    }
+    if (key == 0) key = 1;
+  }
+  for (i = 0; i < NMMP; i++)
+    if (g_mmp[i].key == key) {	/* nothing it shows changed */
+      g_mmp[i].used = ++g_mmc_clock;
+      scr_bitmap(L.mm_x, L.text_y, mm_width(), L.view_h, g_mmp[i].px);
+      return;
+    }
+  pic = &g_mmp[0];
+  for (i = 1; i < NMMP; i++)
+    if (g_mmp[i].used < pic->used) pic = &g_mmp[i];
+  if ((size_t)pw * (size_t)ph > pic->cap) {
+    pic->cap = (size_t)pw * (size_t)ph;
+    pic->px = (uint32_t *)xrealloc(pic->px, pic->cap * sizeof(uint32_t));
+  }
+  pic->key = key;
+  pic->used = ++g_mmc_clock;
+  px = pic->px;
+  for (i = 0; i < pw * ph; i++) px[i] = bg;
+  if (slider && T->top + (size_t)L.text_h > top && T->top < last) {	/* the lines the editor shows */
+    int y0 = T->top > top ? (int)(T->top - top) * p->lh : 0;
+    mm_fill(px, pw, ph, 0, y0, pw, (int)((T->top + (size_t)L.text_h - (T->top > top ? T->top : top)) * (size_t)p->lh),
+            sl, 100);
+  }
+  c = mmc_of(T->doc, cols);
+  for (y = top; y < last; y++) {
+    const unsigned char *t = mmc_line(c, y);
+    int py = (int)(y - top) * p->lh, k = 0, qm = qmv[y - top];
+    if (qm)	/* the git changes: the strip on the left */
+      mm_fill(px, pw, ph, 0, py, p->gut - 1, p->lh, qm & QM_MOD ? MM_MOD : qm & QM_ADD ? MM_ADD : MM_DEL, 100);
+    while (k < cols) {	/* runs of one token: a word is one fill */
+      int e = k + 1;
+      if (t[k] == 0) {
+        k++;
+        continue;
+      }
+      while (e < cols && t[e] == t[k]) e++;
+      if (vopt.mm_chars)	/* characters: a line 2 pixels of ink, VS Code's look */
+        mm_fill(px, pw, ph, p->gut + k * p->chw, py, (e - k) * p->chw, p->lh, tok_color(MMC_TOK(t[k])), mm_ink(t[k]));
+      else {	/* blocks: one token one solid block, a pixel between lines */
+        while (e < cols && t[e] && MMC_TOK(t[e]) == MMC_TOK(t[k])) e++;
+        mm_fill(px, pw, ph, p->gut + k * p->chw, py, (e - k) * p->chw, p->lh > 2 ? p->lh - 1 : p->lh,
+                tok_color(MMC_TOK(t[k])), 45);
+      }
+      k = e;
+    }
+  }
+  {	/* the marks over the text, as VS Code's, the stronger over the weaker: occurrences, find matches,
+	** warnings, errors */
+    for (d = 0; d < nh; d++)
+      if (hv[d * 2].y == hv[d * 2 + 1].y) mm_mark_px(p, px, pw, ph, top, hv[d * 2].y, hv[d * 2].x, hv[d * 2 + 1].x, 0xA0A0A0, 55);
+    if (E.find_open && E.find[0])
+      for (y = top; y < last; y++) {
+        const Row *r = row_at(y);
+        size_t xx, end = x_of_col(r, (size_t)cols), m;	/* only the bytes it shows */
+        for (xx = 0; xx < end; xx++)
+          if ((m = match_at(y, xx)) > 0) {
+            mm_mark_px(p, px, pw, ph, top, y, xx, xx + m, 0xD18616, 90);
+            xx += m - 1;
+          }
+      }
+    for (i = 2; i >= 1; i--)	/* warnings, then errors over them */
+      for (d = 0; d < nd; d++)
+        if (dv[d].sev == i && dv[d].a.y >= top && dv[d].a.y < last) {
+          size_t x1 = dv[d].b.y == dv[d].a.y ? dv[d].b.x : row_at(dv[d].a.y)->len;
+          mm_mark_px(p, px, pw, ph, top, dv[d].a.y, dv[d].a.x, x1, ui_color(i == 1 ? C_ERROR : C_WARNING), 90);
+        }
+  }
+  scr_bitmap(L.mm_x, L.text_y, mm_width(), L.view_h, px);
+}
+
+
 static void draw_minimap (void) {
   /* the Braille dots: bit[line][left, right] */
   static const unsigned char bit[MM_LINES][2] = {{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}};
@@ -4279,8 +4655,15 @@ static void draw_minimap (void) {
   size_t top = mm_top(), lpr = mm_lpr(), last = top + (size_t)L.view_h * lpr, y;
   int slider = vopt.mm_slider || g_mm_hover || E.drag_mm;
   uint32_t dot[MM_LINES][2 * MM_W];
-  uint32_t *tint = (uint32_t *)calloc((size_t)L.view_h * MM_W + 1, sizeof(uint32_t));
-  unsigned char *pri = (unsigned char *)calloc((size_t)L.view_h * MM_W + 1, 1);
+  uint32_t *tint;
+  unsigned char *pri;
+  MmPx p;
+  if (mm_px(&p)) {
+    draw_minimap_px(&p);
+    return;
+  }
+  tint = (uint32_t *)calloc((size_t)L.view_h * MM_W + 1, sizeof(uint32_t));
+  pri = (unsigned char *)calloc((size_t)L.view_h * MM_W + 1, 1);
   if (tint == NULL || pri == NULL) {
     free(tint);
     free(pri);
@@ -4352,7 +4735,15 @@ static void draw_minimap (void) {
 /* a click or a drag on the minimap: the slider taken follows the mouse; elsewhere, that line in the middle */
 static void minimap_mouse (Mouse *m) {
   size_t n = T->doc->n, h = (size_t)L.text_h, lpr = mm_lpr(), top0 = mm_top(), top;
-  long ry = m->y - L.text_y, s0, sh = (long)((h + lpr - 1) / lpr), want;
+  long ry = m->y - L.text_y, s0, sh, want, units = L.view_h;
+  MmPx p;
+  if (mm_px(&p)) {	/* pixels: in lines, not rows */
+    long py = (m->fx || m->fy ? (long)m->fy * p.ch / 256 : (long)m->y * p.ch + p.ch / 2) - (long)L.text_y * p.ch;
+    ry = py < 0 ? 0 : py / p.lh;
+    lpr = 1;
+    units = (long)mm_lines();
+  }
+  sh = (long)((h + lpr - 1) / lpr);
   if (n <= h) {
     T->top = 0;
     E.drag_mm = 1;
@@ -4371,9 +4762,9 @@ static void minimap_mouse (Mouse *m) {
   }
   want = ry - (E.drag_mm - 1);	/* the slider's top row wanted */
   if (want < 0) want = 0;
-  if (n <= h * lpr) top = (size_t)want * lpr;
+  if (n <= (size_t)units * lpr) top = (size_t)want * lpr;	/* it shows every line: the slider's row is its line */
   else {
-    double f = (double)want / (double)(L.view_h - sh > 0 ? L.view_h - sh : 1);
+    double f = (double)want / (double)(units - sh > 0 ? units - sh : 1);
     top = (size_t)((f > 1 ? 1 : f) * (double)(n - h) + 0.5);
   }
   T->top = top > n - h ? n - h : top;
@@ -16234,6 +16625,7 @@ static void doc_forget (const Doc *d) {
   if (SM.ask_d == d) SM.ask_d = NULL;
   if (HL.d == d) HL.d = NULL;
   if (SR.d == d) SR.d = NULL;
+  mmc_forget(d);
   {
     SySlot *y = sy_of(d, 0);
     if (y) sym_clear_slot(y);

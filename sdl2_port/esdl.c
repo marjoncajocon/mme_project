@@ -19,8 +19,12 @@
 #include "SDL_syswm.h"
 
 #define scr_flush scr_flush_vt	/* edraw.c's own: the terminal's escape sequences, not used here */
+#define scr_cell_px scr_cell_px_vt
+#define scr_bitmap scr_bitmap_vt
 #include "../edraw.c"
 #undef scr_flush
+#undef scr_cell_px
+#undef scr_bitmap
 
 #include "../mterm.h"
 
@@ -980,6 +984,10 @@ static const Zone *zone_at (int x, int y) {
 }
 
 
+#define BITMAP_CELL	0x110001u	/* not a character: a cell that shows a scr_bitmap */
+
+static void bm_paint_row (int y, const ECell *grid);
+
 static void paint_row (int y, const ECell *grid) {
   const ECell *b = &grid[(size_t)y * (size_t)S.cols];
   int x, pass, k;
@@ -991,6 +999,10 @@ static void paint_row (int y, const ECell *grid) {
       int wide = b[x].w == 2 && x + 1 < S.cols;
       if (b[x].ch == ZONE_HOLE) {	/* a text zone shows there */
         if (pass == 0 && zone_at(x, y) == NULL) fill(&W.fr, x * W.cw, y * W.ch, W.cw, W.ch, ui_color(C_EDITOR_BG));
+        continue;
+      }
+      if (b[x].ch == BITMAP_CELL) {	/* a scr_bitmap's: its pixels after */
+        if (pass == 0) fill(&W.fr, x * W.cw, y * W.ch, W.cw, W.ch, ui_color(C_EDITOR_BG));
         continue;
       }
       if (b[x].ch == 0 && x > 0 && b[x - 1].w == 2) continue;	/* the right half of a wide one: painted with it */
@@ -1025,6 +1037,7 @@ static void paint_row (int y, const ECell *grid) {
       }
     }
   }
+  bm_paint_row(y, grid);
   if (theme_hc()) paint_outlines(grid, S.cols, S.rows, y, 0, y * W.ch, W.cw, W.ch);
   paint_round(y, grid);
   if (y == 0 && W.borderless) tb_paint(b);	/* the title bar's buttons, over its right end */
@@ -1176,6 +1189,139 @@ static void image_paint (const Pic *p, int y0, int y1) {
   }
   for (j = y0; j <= y1; j++) mark(j);
 }
+
+
+/*
+** {==================================================================
+** Pixels over cells (scr_bitmap: the minimap). Its cells are marked
+** BITMAP_CELL; a cell drawn over after (a menu) is not, and keeps its own
+** look. The ones of a frame are compared with the ones shown: a band of
+** cells whose pixels changed is copied again, and a picture gone or moved
+** has its rows painted again from their cells.
+** ===================================================================
+*/
+
+#define MAX_BMP	8
+
+typedef struct {
+  int x, y, cols, rows;	/* the cells */
+  int cw, ch;	/* a cell's pixels when it was made */
+  uint32_t *px;
+  size_t cap;
+} Bmp;
+
+static Bmp bm_a[MAX_BMP], bm_b[MAX_BMP];
+static Bmp *bm_new = bm_a, *bm_shown = bm_b;	/* this frame's; the ones on the screen */
+static int nbm_new, nbm_shown;
+static unsigned char *bm_rows;	/* the screen rows whose pixels changed (S.rows of them) */
+static int nbm_rows;
+
+
+int scr_cell_px (int *cw, int *ch, double *scale) {
+  *cw = W.cw;
+  *ch = W.ch;
+  *scale = W.scale * W.zoom;
+  return W.cw > 0 && W.ch > 0;
+}
+
+
+void scr_bitmap (int x, int y, int w, int h, const uint32_t *px) {
+  Bmp *b;
+  size_t n;
+  int i, j;
+  if (nbm_new == MAX_BMP || w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > S.cols || y + h > S.rows) return;
+  b = &bm_new[nbm_new++];
+  n = (size_t)w * (size_t)W.cw * (size_t)h * (size_t)W.ch;
+  if (n > b->cap) {
+    b->px = (uint32_t *)xrealloc(b->px, n * sizeof(uint32_t));
+    b->cap = n;
+  }
+  memcpy(b->px, px, n * sizeof(uint32_t));
+  b->x = x;
+  b->y = y;
+  b->cols = w;
+  b->rows = h;
+  b->cw = W.cw;
+  b->ch = W.ch;
+  for (j = y; j < y + h; j++)
+    for (i = x; i < x + w; i++) {
+      ECell *c = &S.back[(size_t)j * (size_t)S.cols + (size_t)i];
+      c->ch = BITMAP_CELL;
+      c->st = S_TEXT;
+      c->w = 1;
+      c->fg = c->bg = c->at = c->ul = 0;
+    }
+}
+
+
+/* picture b's pixels over screen row y, in its cells grid still has as BITMAP_CELL */
+static void bm_row (const Bmp *b, int y, const ECell *grid) {
+  int i, j, py;
+  if (y < b->y || y >= b->y + b->rows || b->cw != W.cw || b->ch != W.ch) return;
+  for (i = b->x; i < b->x + b->cols; i++) {
+    const uint32_t *src;
+    if (grid[(size_t)y * (size_t)S.cols + (size_t)i].ch != BITMAP_CELL) continue;
+    src = b->px + (size_t)(y - b->y) * (size_t)W.ch * (size_t)(b->cols * W.cw) + (size_t)(i - b->x) * (size_t)W.cw;
+    for (j = 0; j < W.ch; j++) {
+      py = y * W.ch + j;
+      if (py >= W.fr.h || i * W.cw + W.cw > W.fr.w) break;
+      memcpy(W.fr.px + (size_t)py * (size_t)W.fr.w + (size_t)(i * W.cw), src + (size_t)j * (size_t)(b->cols * W.cw),
+             (size_t)W.cw * sizeof(uint32_t));
+    }
+  }
+}
+
+
+static void bm_paint_row (int y, const ECell *grid) {	/* the pictures shown, over row y painted from its cells */
+  int k;
+  for (k = 0; k < nbm_shown; k++) bm_row(&bm_shown[k], y, grid);
+}
+
+
+/*
+** Before the rows are painted: this frame's pictures become the shown ones;
+** the rows of the ones gone or moved are to be painted again (force), the
+** bands whose pixels changed copied again (bm_rows, bm_after)
+*/
+static void bm_frame (unsigned char *force) {
+  int k, r;
+  Bmp *t;
+  if (nbm_rows != S.rows) {
+    free(bm_rows);
+    bm_rows = (unsigned char *)xmalloc((size_t)S.rows + 1);
+    nbm_rows = S.rows;
+  }
+  memset(bm_rows, 0, (size_t)S.rows + 1);
+  for (k = 0; k < nbm_new || k < nbm_shown; k++) {
+    const Bmp *o = k < nbm_shown ? &bm_shown[k] : NULL, *n = k < nbm_new ? &bm_new[k] : NULL;
+    int same = o && n && o->x == n->x && o->y == n->y && o->cols == n->cols && o->rows == n->rows && o->cw == n->cw &&
+               o->ch == n->ch;
+    if (o && !same)
+      for (r = o->y; r < o->y + o->rows && r < S.rows; r++) force[r] = 1;
+    if (n == NULL) continue;
+    for (r = 0; r < n->rows && n->y + r < S.rows; r++) {
+      size_t band = (size_t)n->cols * (size_t)n->cw * (size_t)n->ch, at = (size_t)r * band;
+      if (!same || memcmp(o->px + at, n->px + at, band * sizeof(uint32_t)) != 0) bm_rows[n->y + r] = 1;
+    }
+  }
+  t = bm_shown;	/* swapped: the buffers are kept for the next frame */
+  bm_shown = bm_new;
+  bm_new = t;
+  nbm_shown = nbm_new;
+  nbm_new = 0;
+}
+
+
+static void bm_after (void) {	/* the bands that changed, over rows that were not painted again */
+  int y;
+  for (y = 0; y < nbm_rows && y < S.rows; y++)
+    if (bm_rows[y]) {
+      bm_paint_row(y, S.front);
+      mark(y);
+    }
+}
+
+/* }================================================================== */
 
 
 static void images_row (int y) {	/* the pictures over row y again (it was painted from its cells) */
@@ -1753,6 +1899,7 @@ void scr_flush (void) {
   picture_size();
   if (W.up0 > S.rows) W.up0 = S.rows;
   zones_changed();
+  bm_frame(g_zrow);	/* (the rows of a picture gone: painted again, as a zone's) */
   for (y = 0; y < S.rows; y++) {
     if (!S.full && !g_zrow[y] && !row_changed(y) && !(theme_hc() && (row_changed(y - 1) || row_changed(y + 1))))
       continue;	/* (an outline's sides in a row depend on the rows beside it) */
@@ -1763,6 +1910,7 @@ void scr_flush (void) {
     painted1 = y;
   }
   memcpy(S.front, S.back, row * (size_t)S.rows);
+  bm_after();
   {
     int k;
     for (k = 0; k < MAX_ZONE; k++)

@@ -309,6 +309,7 @@ typedef struct Doc {
   size_t hl_from;	/* the first line changed since the highlighter looked */
   size_t br_from;	/* and since the bracket depths were counted */
   size_t tm_from;	/* and since the grammar tokenized it */
+  size_t mm_from;	/* and since mme-sdl's minimap colored it */
   size_t *depth;	/* the bracket depth each line starts with */
   size_t depth_cap, depth_n;	/* its size, and the lines counted: 0 .. depth_n - 1 */
   unsigned char *hl;	/* the highlighter's state at the start of each line */
@@ -629,6 +630,16 @@ void scr_pointer (int shape);	/* over what can be clicked: PTR_POINTER */
 ** again for nothing). Its cells must be drawn blank first.
 */
 void scr_image (int x, int y, int w, int h, const char *data, size_t n);
+
+/*
+** Pixels over cells (mme-sdl: the minimap): w by h cells at x, y show px,
+** 0xRRGGBB, w * cw wide and h * ch tall (scr_cell_px's sizes). What is
+** drawn over those cells after (a menu, a hover) still shows. scr_cell_px
+** says how many pixels a cell is and how many a 96 DPI pixel is; 0: a
+** terminal, no pixels (scr_bitmap does nothing there)
+*/
+int scr_cell_px (int *cw, int *ch, double *scale);
+void scr_bitmap (int x, int y, int w, int h, const uint32_t *px);
 
 void scr_flush (void);
 extern void (*scr_overlay_hook) (void);	/* edraw.c: drawn over everything before it shows */

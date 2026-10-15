@@ -694,6 +694,18 @@ void scr_image (int x, int y, int w, int h, const char *data, size_t n) {
 }
 
 
+int scr_cell_px (int *cw, int *ch, double *scale) {	/* a terminal: cells, no pixels */
+  *cw = *ch = 0;
+  *scale = 1;
+  return 0;
+}
+
+
+void scr_bitmap (int x, int y, int w, int h, const uint32_t *px) {
+  (void)x, (void)y, (void)w, (void)h, (void)px;
+}
+
+
 void (*scr_overlay_hook) (void);	/* drawn over everything, just before it shows (screencast mode) */
 
 void scr_flush (void) {

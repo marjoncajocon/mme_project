@@ -106,6 +106,7 @@ static Pos raw_insert (Doc *d, Pos at, const char *s, size_t n) {
   if (at.y < d->hl_from) d->hl_from = at.y;
   if (at.y < d->br_from) d->br_from = at.y;
   if (at.y < d->tm_from) d->tm_from = at.y;
+  if (at.y < d->mm_from) d->mm_from = at.y;
   size_t tlen = r->len - at.x, i, k = 0, from = 0, y;
   Row *last;
   for (i = 0; i < n; i++)
@@ -143,6 +144,7 @@ static void raw_delete (Doc *d, Pos a, Pos b) {
   if (a.y < d->hl_from) d->hl_from = a.y;
   if (a.y < d->br_from) d->br_from = a.y;
   if (a.y < d->tm_from) d->tm_from = a.y;
+  if (a.y < d->mm_from) d->mm_from = a.y;
   if (a.y == b.y) {
     memmove(ra->s + a.x, ra->s + b.x, ra->len - b.x);
     ra->len -= b.x - a.x;
@@ -399,7 +401,7 @@ void doc_set_text (Doc *d, const char *s, size_t len) {
   undo_clear(&d->undo);	/* the edits were for the rows that went: undone, they would write past the new ones */
   undo_clear(&d->redo);
   d->n = 0;
-  d->hl_n = d->hl_from = d->br_from = d->tm_from = 0;	/* the highlighter starts again */
+  d->hl_n = d->hl_from = d->br_from = d->tm_from = d->mm_from = 0;	/* the highlighter starts again */
   d->edits++;
   for (i = 0; i <= len; i++) {
     if (i < len && s[i] != '\n') continue;
