@@ -22,6 +22,8 @@
 cd "$(dirname "$0")" || exit 1
 
 SDL=deps/SDL2-2.32.10
+PROG=${MME_PROG:-mme-sdl}	# the program's name (build-gpu.sh: mme-sdl-gpu)
+XCF=${MME_CFLAGS-}	# more C flags (build-gpu.sh: -DMME_GPU)
 FONTS=../../mmc
 [ -f "$FONTS/JetBrainsMonoNerdFontMono-Regular.ttf" ] || FONTS=/d/mmc-shell/usr/share/fonts
 ZIG=zig
@@ -133,7 +135,7 @@ single () {
 case "$1" in
   single) single "$2" ;;
   clean)
-    rm -rf dist bin bin32 obj mme-sdl
+    rm -rf dist bin bin32 obj mme-sdl mme-sdl-gpu
     exit 0
     ;;
   cross) cross ;;
@@ -144,10 +146,10 @@ if [ "$WIN" = 0 ]; then	# Linux, macOS: the system's SDL2, as the makefile does
     "") ;;
     *) echo "usage: ./build.sh [cross | clean]"; exit 2 ;;
   esac
-  ${CC:-cc} -std=c11 -O2 -Wall -Wextra -pedantic -s -I.. $(sdl2-config --cflags) -o mme-sdl $SRC \
+  ${CC:-cc} -std=c11 -O2 -Wall -Wextra -pedantic $XCF -s -I.. $(sdl2-config --cflags) -o $PROG $SRC \
     $(sdl2-config --libs) -lm -lpthread || exit 1
   fonts_into bin/mme-fonts
-  echo "built sdl2_port/mme-sdl (fonts: bin/mme-fonts; make install puts both in place)"
+  echo "built sdl2_port/$PROG (fonts: bin/mme-fonts; make install puts both in place)"
   exit 0
 fi
 
@@ -169,18 +171,18 @@ case "$ARCH" in
 esac
 mkdir -p $OUT $OBJ
 
-# a mme-sdl.exe that is running cannot be written over, but it can be renamed
-rm -f $OUT/mme-sdl.exe.old* 2>/dev/null
-rm -f $OUT/mme-sdl.exe 2>/dev/null || mv -f $OUT/mme-sdl.exe $OUT/mme-sdl.exe.old$$
+# a $PROG.exe that is running cannot be written over, but it can be renamed
+rm -f $OUT/$PROG.exe.old* 2>/dev/null
+rm -f $OUT/$PROG.exe 2>/dev/null || mv -f $OUT/$PROG.exe $OUT/$PROG.exe.old$$
 
 case "$CC" in
   zig)
     TARGET=x86_64-windows-gnu
     [ "$ARCH" = 32 ] && TARGET=x86-windows-gnu
-    $ZIG cc -std=c11 -O2 -s -Wall -Wextra -pedantic -target $TARGET -I.. -I$SDL/include \
-      -o $OUT/mme-sdl.exe $SRC ../mme.rc $SDL/$SDLARCH/lib/libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 \
+    $ZIG cc -std=c11 -O2 -s -Wall -Wextra -pedantic $XCF -target $TARGET -I.. -I$SDL/include \
+      -o $OUT/$PROG.exe $SRC ../mme.rc $SDL/$SDLARCH/lib/libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 \
       -Wl,--subsystem,windows || exit 1
-    rm -f $OUT/mme-sdl.pdb
+    rm -f $OUT/$PROG.pdb
     ;;
   gcc)
     if [ "$ARCH" = 64 ]; then
@@ -199,7 +201,7 @@ case "$CC" in
       fi
     fi
     (cd .. && "$WINDRES" mme.rc -O coff -o sdl2_port/$OBJ/mme.res.o) || exit 1
-    "$GCC" -std=c11 -O2 -s -Wall -Wextra -pedantic -I.. -I$SDL/include -o $OUT/mme-sdl.exe $SRC $OBJ/mme.res.o \
+    "$GCC" -std=c11 -O2 -s -Wall -Wextra -pedantic $XCF -I.. -I$SDL/include -o $OUT/$PROG.exe $SRC $OBJ/mme.res.o \
       $SDL/$SDLARCH/lib/libSDL2.dll.a -lshell32 -lws2_32 -lgdi32 -lm -mwindows || exit 1
     ;;
   tcc)
@@ -221,7 +223,7 @@ case "$CC" in
     for d in kernel32 user32 gdi32 shell32 ws2_32 advapi32; do
       [ -f $OBJ/$d.def ] || "$TCC" -impdef "$SYSDLL/$d.dll" -o $OBJ/$d.def || exit 1
     done
-    "$TCC" -O2 -Itcc -I.. -I$SDL/include -DSDLCALL= -o $OUT/mme-sdl.exe $SRC \
+    "$TCC" -O2 $XCF -Itcc -I.. -I$SDL/include -DSDLCALL= -o $OUT/$PROG.exe $SRC \
       $OBJ/SDL2.def $OBJ/kernel32.def $OBJ/user32.def $OBJ/gdi32.def $OBJ/shell32.def $OBJ/ws2_32.def \
       $OBJ/advapi32.def -Wl,-subsystem=gui || exit 1
     cp -f ../mme.ico $OUT/
@@ -235,15 +237,15 @@ cp -f $SDL/$SDLARCH/bin/SDL2.dll $OUT/
 
 [ -d $OUT/fonts ] && [ ! -d $OUT/mme-fonts ] && mv $OUT/fonts $OUT/mme-fonts
 fonts_into $OUT/mme-fonts
-echo "built sdl2_port/$OUT/mme-sdl.exe ($CC, $ARCH bit)"
+echo "built sdl2_port/$OUT/$PROG.exe ($CC, $ARCH bit)"
 [ "$ARCH" = 64 ] && [ -n "$SDL_DEST" ] && [ -d "$SDL_DEST" ] || exit 0
-rm -f "$SDL_DEST"/mme-sdl.exe.old* 2>/dev/null
-put $OUT/mme-sdl.exe "$SDL_DEST/mme-sdl.exe" || exit 1
+rm -f "$SDL_DEST"/$PROG.exe.old* 2>/dev/null
+put $OUT/$PROG.exe "$SDL_DEST/$PROG.exe" || exit 1
 [ -f "$SDL_DEST/SDL2.dll" ] || cp -f $OUT/SDL2.dll "$SDL_DEST/"
 [ -f $OUT/mme.ico ] && cp -f $OUT/mme.ico "$SDL_DEST/"
 mkdir -p "$SDL_DEST/mme-fonts"
 for f in $OUT/mme-fonts/*; do
   [ -f "$SDL_DEST/mme-fonts/$(basename "$f")" ] || cp -f "$f" "$SDL_DEST/mme-fonts/"
 done
-echo "copied to $SDL_DEST/mme-sdl.exe (with SDL2.dll and mme-fonts)"
+echo "copied to $SDL_DEST/$PROG.exe (with SDL2.dll and mme-fonts)"
 exit 0

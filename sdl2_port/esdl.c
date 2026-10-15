@@ -1411,8 +1411,111 @@ static void present_surface (void) {
 }
 
 
-/* the rows painted since last time into the texture, and the window shown */
+/*
+** {==================================================================
+** Frame times (MME_FRAMESTATS=file): how long painting a frame and
+** showing it took, written to the file when the window closes. The CPU
+** build and the GPU one (build-gpu.sh) compared on the same keys
+** ===================================================================
+*/
+
+#define FS_MAX 65536
+
+static struct {
+  char *path;	/* NULL: not measured */
+  float *paint, *show;	/* per frame, in ms */
+  int n, rows;	/* the frames measured, the rows painted in them */
+  long long t0, flush0;	/* the first frame; this frame's start */
+} FS;
+
+
+static double fs_ms (long long a, long long b) {
+  return (double)(b - a) * 1000.0 / (double)SDL_GetPerformanceFrequency();
+}
+
+
+static int fs_cmp (const void *a, const void *b) {
+  float x = *(const float *)a, y = *(const float *)b;
+  return x < y ? -1 : x > y;
+}
+
+
+/* the total, mean, median, 95th and 99th percentiles and the worst of n samples, as a line */
+static void fs_line (FILE *f, const char *what, float *v, int n) {
+  double sum = 0;
+  int i;
+  if (n == 0) return;
+  for (i = 0; i < n; i++) sum += v[i];
+  qsort(v, (size_t)n, sizeof(float), fs_cmp);
+  fprintf(f, "%-8s total %9.1f ms  mean %7.3f  p50 %7.3f  p95 %7.3f  p99 %7.3f  max %7.3f\n", what, sum, sum / n,
+          v[n / 2], v[(int)(n * 0.95)], v[(int)(n * 0.99)], v[n - 1]);
+}
+
+
+static void fs_start (void) {
+  char *p = os_getenv("MME_FRAMESTATS");
+  if (p == NULL || p[0] == 0) {
+    free(p);
+    return;
+  }
+  FS.path = p;
+  FS.paint = (float *)calloc(FS_MAX, sizeof(float));
+  FS.show = (float *)calloc(FS_MAX, sizeof(float));
+  if (FS.paint == NULL || FS.show == NULL) {
+    free(FS.paint);
+    free(FS.show);
+    free(FS.path);
+    FS.path = NULL;
+  }
+}
+
+
+static void fs_done (void) {
+  FILE *f;
+  SDL_RendererInfo ri;
+  if (FS.path == NULL) return;
+  f = fopen(FS.path, "w");
+  if (f) {
+    fprintf(f, "renderer %s\nwindow   %dx%d px, %dx%d cells\nframes   %d in %.1f s, %d rows painted\n",
+            W.use_surface ? "window surface (GDI, CPU)" : W.ren && SDL_GetRendererInfo(W.ren, &ri) == 0 ? ri.name : "?",
+            W.tw, W.th, S.cols, S.rows, FS.n, FS.n ? fs_ms(FS.t0, (long long)SDL_GetPerformanceCounter()) / 1000 : 0.0,
+            FS.rows);
+    fs_line(f, "paint", FS.paint, FS.n);
+    fs_line(f, "show", FS.show, FS.n);
+    fclose(f);
+  }
+  free(FS.paint);
+  free(FS.show);
+  free(FS.path);
+  memset(&FS, 0, sizeof(FS));
+}
+
+/* }================================================================== */
+
+
+static void present_now (void);
+
+
+/* the picture shown, timed when MME_FRAMESTATS asks: painting is from the flush's start to here */
 static void present (void) {
+  long long a;
+  if (FS.path == NULL || FS.flush0 == 0 || FS.n >= FS_MAX) {
+    FS.flush0 = 0;
+    present_now();
+    return;
+  }
+  a = (long long)SDL_GetPerformanceCounter();
+  present_now();
+  if (FS.n == 0) FS.t0 = FS.flush0;
+  FS.paint[FS.n] = (float)fs_ms(FS.flush0, a);
+  FS.show[FS.n] = (float)fs_ms(a, (long long)SDL_GetPerformanceCounter());
+  FS.n++;
+  FS.flush0 = 0;
+}
+
+
+/* the rows painted since last time into the texture, and the window shown */
+static void present_now (void) {
   if (W.use_surface) {
     present_surface();
     if (W.rowdirty) memset(W.rowdirty, 0, (size_t)W.nrowdirty);
@@ -1631,6 +1734,7 @@ void scr_flush (void) {
   int y, painted0 = S.rows, painted1 = -1, caret_row = 0;
   size_t row = (size_t)S.cols * sizeof(ECell);
   long long now = (long long)SDL_GetTicks();
+  if (FS.path) FS.flush0 = (long long)SDL_GetPerformanceCounter();
   if (scr_overlay_hook) scr_overlay_hook();
   if (W.win == NULL || S.back == NULL) return;
   if (S.full || now - W.font_seen >= 1000) font_settings();	/* editor.fontSize changed: the font too */
@@ -1651,6 +1755,7 @@ void scr_flush (void) {
     if (!S.full && !g_zrow[y] && !row_changed(y) && !(theme_hc() && (row_changed(y - 1) || row_changed(y + 1))))
       continue;	/* (an outline's sides in a row depend on the rows beside it) */
     paint_row(y, S.back);
+    FS.rows++;
     if (W.car_py < (y + 1) * W.ch && W.car_py + W.car_ph > y * W.ch) caret_row = 1;
     if (y < painted0) painted0 = y;
     painted1 = y;
@@ -1686,7 +1791,10 @@ void scr_flush (void) {
     SDL_SetCursor(W.ptr[g_ptr]);
     W.ptr_now = g_ptr;
   }
-  if (W.up1 < W.up0 && !W.dirty && W.shown) return;
+  if (W.up1 < W.up0 && !W.dirty && W.shown) {
+    FS.flush0 = 0;	/* nothing to show: not a frame */
+    return;
+  }
   present();
 }
 
@@ -2274,15 +2382,28 @@ int term_open (void) {
   if (W.win == NULL) return -1;
   SDL_SetWindowHitTest(W.win, hit_test, NULL);
   SDL_SetWindowMinimumSize(W.win, 40 * W.cw, 10 * W.ch);
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(MME_GPU)
   SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");	/* the window's own bitmap (GDI, X11's), not a texture */
   W.use_surface = SDL_GetWindowSurface(W.win) != NULL;
 #endif
+#ifdef MME_GPU
+  /* build-gpu.sh: the picture is still painted here, the GPU only takes the rows that changed into a texture
+  ** and puts it on the screen (Direct3D, OpenGL, Metal: SDL_RENDER_DRIVER picks one); no GPU, the software one */
+#ifdef _WIN32
+  SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "direct3d11", SDL_HINT_DEFAULT);	/* not SDL's Direct3D 9: less
+                    memory, no 12 ms frames now and then (measured); SDL_RENDER_DRIVER still picks another */
+#endif
+  W.ren = SDL_CreateRenderer(W.win, -1, SDL_RENDERER_ACCELERATED);
+  if (W.ren == NULL) W.ren = SDL_CreateRenderer(W.win, -1, SDL_RENDERER_SOFTWARE);
+  if (W.ren == NULL) return -1;
+#else
   if (!W.use_surface) {	/* the picture is painted here already: no GPU driver to load (tens of MB) */
     W.ren = SDL_CreateRenderer(W.win, -1, SDL_RENDERER_SOFTWARE);
     if (W.ren == NULL) W.ren = SDL_CreateRenderer(W.win, -1, 0);
     if (W.ren == NULL) return -1;
   }
+#endif
+  fs_start();
   window_icon();
   key_filter();
   W.ptr[PTR_DEFAULT] = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_ARROW);
@@ -2305,6 +2426,7 @@ int term_open (void) {
 void term_close (void) {
   int i;
   if (W.win == NULL) return;
+  fs_done();
   SDL_StopTextInput();
   for (i = 0; i < PTR_N; i++)
     if (W.ptr[i]) SDL_FreeCursor(W.ptr[i]);

@@ -84,6 +84,8 @@ build msvc             Visual C++                            -> bin\
 build cross            zig: Linux and macOS (x86_64, aarch64) -> dist\ (they load the system's SDL2)
 ./build.sh single      zig, build.sh only: one stand-alone exe, SDL2 linked in and the fonts inside
                        -> dist\mme-sdl-x86_64-windows.exe (single 32: mme-sdl-x86-windows.exe)
+./build-gpu.sh         build.sh's words (zig, gcc, tcc, 32, 64): mme-sdl-gpu.exe beside mme-sdl.exe,
+                       the picture shown by the GPU (see below)
 build clean
 ```
 
@@ -96,6 +98,34 @@ sudo make install      /usr/local/bin/mme-sdl, fonts into /usr/local/share/mme-f
 Each Windows build is the program on its own: `mme-sdl.exe`, its `SDL2.dll`
 and `mme-fonts\`. A 64 bit build is also copied into `%SDL_DEST%`
 (`D:\mmc-shell\usr\bin`), so `mme-sdl .` works from the mmc shell.
+
+### mme-sdl-gpu: the GPU shows the picture
+
+`./build-gpu.sh` builds `mme-sdl-gpu.exe` (`-DMME_GPU`), copied beside
+`mme-sdl.exe` and never over it, so both can be used. Both paint the frame
+the same way, on the CPU. mme-sdl copies only the changed rows into the
+window's own bitmap (GDI). mme-sdl-gpu uploads those rows to a texture and
+SDL's renderer draws it: Direct3D 11 on Windows, or whichever
+`SDL_RENDER_DRIVER` names (`direct3d`, `direct3d12`, `opengl`, `software`).
+`MME_FRAMESTATS=file` makes either one write how long its frames took when
+it closes.
+
+Measured on 2026-10-15 (Windows 11, 1920x1080, `mme.c` open, 300 keys 25 ms
+apart, medians of 3 runs). "Show" is the ms to put a frame on the screen;
+painting took the same in every build (1.2 to 2.2 ms):
+
+| Window, keys | mme-sdl (GDI) show / memory | mme-sdl-gpu D3D11 | D3D9 | OpenGL |
+|---|---|---|---|---|
+| maximized, PageDown/Up (every row) | 1.9 ms / 58 MB | 2.1 ms / 114 MB | 2.5 ms / 162 MB | 1.4 ms / 191 MB |
+| maximized, arrows (a row or two) | 1.2 ms / 58 MB | 2.0 ms / 113 MB | 2.3 ms / 162 MB | 1.6 ms / 361 MB |
+| 1100x700, PageDown/Up | 1.0 ms / 48 MB | 1.6 ms / 90 MB | 1.7 ms / 130 MB | 1.1 ms / 133 MB |
+| 1100x700, arrows | 0.8 ms / 48 MB | 1.5 ms / 92 MB | 1.6 ms / 131 MB | 1.1 ms / 178 MB |
+
+All of these are far below a 60 Hz frame (16.7 ms), so either one feels
+instant. mme-sdl stays the default: it is as fast or faster and uses half
+the memory, because it never loads a GPU driver. mme-sdl-gpu (OpenGL) only
+gains about 0.5 ms on a full redraw of a large window. It could matter more
+on a 4K screen or on a slow CPU.
 
 ### Where builds are copied
 
