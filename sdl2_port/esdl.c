@@ -76,7 +76,9 @@ static struct {
   char font_fam[128];	/* editor.fontFamily and editor.fontSize, as the editor's font was made from them */
   double font_size;
   double ui_size;	/* mme.ui.fontSize: the rest of the window's */
+  char ui_fam[128];	/* mme.ui.fontFamily, as the window's font was made from it */
   double line_h;	/* editor.lineHeight, as the editor's cells were made from it */
+  double ui_line_h;	/* mme.ui.lineHeight, as the rest of the window's cells were */
   int render;	/* mme.ui.fontRendering, as the fonts were made with it: SMOOTH_* */
   int relayout;	/* a font's cells changed: the editor lays its zones out again before the next key */
   long long font_seen;	/* when the settings were looked at last */
@@ -1810,6 +1812,21 @@ void scr_flush (void) {
 
 static float font_px (double size);
 
+
+/* a cell of a font of size px made lh tall (a line height setting: 0 none, under 8 times the font size, else
+** pixels), the text in its middle */
+static void cell_height (double lh, double size, int *ch, int *ascent) {
+  double em = font_px(size), want = lh < 8 ? em * lh : lh * W.scale * W.zoom;
+  int h;
+  if (lh <= 0) return;
+  if (want < em) want = em;
+  if (want > *ch * 4.0) want = *ch * 4.0;
+  h = (int)(want + 0.5);
+  *ascent += (h - *ch) / 2;
+  *ch = h;
+}
+
+
 static void font_metrics (void) {
   W.ime_x = -1;	/* the IME's window is placed again */
   W.cw = font_cell_w();
@@ -1817,6 +1834,7 @@ static void font_metrics (void) {
   W.ascent = font_ascent();
   if (W.cw < 1) W.cw = 1;
   if (W.ch < 1) W.ch = 1;
+  cell_height(W.ui_line_h, W.ui_size, &W.ch, &W.ascent);	/* mme.ui.lineHeight: the menus', the side bar's rows */
   FU.cw = W.cw;
   FU.ch = W.ch;
   FU.ascent = W.ascent;
@@ -1827,15 +1845,7 @@ static void font_metrics (void) {
   FE.glyph = ed_font_glyph;
   if (FE.cw < 1) FE.cw = 1;
   if (FE.ch < 1) FE.ch = 1;
-  if (W.line_h > 0) {	/* editor.lineHeight: taller (or shorter) rows, the text in their middle */
-    double em = font_px(W.font_size), want = W.line_h < 8 ? em * W.line_h : W.line_h * W.scale * W.zoom;
-    int lh;
-    if (want < em) want = em;
-    if (want > FE.ch * 4.0) want = FE.ch * 4.0;
-    lh = (int)(want + 0.5);
-    FE.ascent += (lh - FE.ch) / 2;
-    FE.ch = lh;
-  }
+  cell_height(W.line_h, W.font_size, &FE.ch, &FE.ascent);	/* editor.lineHeight: the code's rows */
   scr_zone_metrics(FU.cw, FU.ch, FE.cw, FE.ch);	/* the editor's text: zones of these cells */
   W.relayout = 1;
 }
@@ -1952,13 +1962,25 @@ static void font_sizes (void) {
 }
 
 
-/* the window's font: mme's own (JetBrains Mono, from mme-fonts), mme.ui.fontSize */
-static int ui_font_make (double size) {
+/* a font list's first family, VS Code's way ("'Cascadia Mono', Consolas, monospace": Cascadia Mono) */
+static void first_family (const char *fam, char *out, size_t n) {
+  size_t i = 0;
+  while (*fam == ' ' || *fam == '\'' || *fam == '"') fam++;
+  while (fam[i] && fam[i] != ',' && fam[i] != '\'' && fam[i] != '"' && i + 1 < n) i++;
+  memcpy(out, fam, i);
+  out[i] = '\0';
+}
+
+
+/* the rest of the window's font: mme.ui.fontFamily (none, or one not installed: JetBrains Mono), mme.ui.fontSize */
+static int ui_font_make (const char *fam, double size) {
   Config c;
   memset(&c, 0, sizeof(c));
   c.smoothing = W.render;	/* Windows: GDI's ClearType by default, like every other Windows program */
   c.ligatures = 0;	/* one character a cell: mme places each itself */
+  first_family(fam, c.font, sizeof(c.font));
   if (font_init(&c) != 0) return -1;
+  snprintf(W.ui_fam, sizeof(W.ui_fam), "%s", fam);
   W.ui_size = size;
   return 0;
 }
@@ -1967,16 +1989,12 @@ static int ui_font_make (double size) {
 /* the editor's font: editor.fontFamily (VS Code's list: its first family), editor.fontSize */
 static int ed_font_make (const char *fam, double size) {
   Config c;
-  size_t n = 0;
   memset(&c, 0, sizeof(c));
   c.smoothing = W.render;
   c.ligatures = 0;
   snprintf(W.font_fam, sizeof(W.font_fam), "%s", fam);
   W.font_size = size;
-  while (*fam == ' ' || *fam == '\'' || *fam == '"') fam++;
-  while (fam[n] && fam[n] != ',' && fam[n] != '\'' && fam[n] != '"' && n + 1 < sizeof(c.font)) n++;
-  memcpy(c.font, fam, n);
-  c.font[n] = '\0';
+  first_family(fam, c.font, sizeof(c.font));
   return ed_font_init(&c);
 }
 
@@ -1990,9 +2008,9 @@ static int rendering_mode (void) {
 }
 
 
-/* editor.lineHeight: 0 (or nonsense): the font's own */
-static double line_height (void) {
-  double v = json_num(settings_get("editor\\.lineHeight"), 0);
+/* editor.lineHeight or mme.ui.lineHeight: 0 (or nonsense): the font's own */
+static double line_height (const char *key) {
+  double v = json_num(settings_get(key), 0);
   return v > 0 && v <= 300 ? v : 0;
 }
 
@@ -2000,9 +2018,11 @@ static double line_height (void) {
 static int font_setup (void) {
   W.zoom = 1.0f;
   W.render = rendering_mode();
-  W.line_h = line_height();
+  W.line_h = line_height("editor\\.lineHeight");
+  W.ui_line_h = line_height("mme\\.ui\\.lineHeight");
   font_dirs();
-  if (ui_font_make(json_num(settings_get("mme\\.ui\\.fontSize"), 14)) != 0) return -1;
+  if (ui_font_make(json_str(settings_get("mme\\.ui\\.fontFamily"), ""), json_num(settings_get("mme\\.ui\\.fontSize"), 14)) != 0)
+    return -1;
   if (ed_font_make(json_str(settings_get("editor\\.fontFamily"), ""), json_num(settings_get("editor\\.fontSize"), 14)) != 0)
     return -1;
   font_sizes();
@@ -2012,9 +2032,9 @@ static int font_setup (void) {
 
 /* editor.fontFamily, editor.fontSize or mme.ui.fontSize changed in the settings: that font is made again */
 static void font_settings (void) {
-  const char *fam = json_str(settings_get("editor\\.fontFamily"), "");
+  const char *fam = json_str(settings_get("editor\\.fontFamily"), ""), *ui_fam = json_str(settings_get("mme\\.ui\\.fontFamily"), "");
   double size = json_num(settings_get("editor\\.fontSize"), 14), ui = json_num(settings_get("mme\\.ui\\.fontSize"), 14);
-  double lh = line_height();
+  double lh = line_height("editor\\.lineHeight"), ui_lh = line_height("mme\\.ui\\.lineHeight");
   int again = 0, render = rendering_mode();
   W.custom = title_custom();
   W.font_seen = (long long)SDL_GetTicks();
@@ -2023,13 +2043,14 @@ static void font_settings (void) {
     W.font_fam[0] = '\x01';
     W.ui_size = -1;
   }
-  if (lh != W.line_h) {
+  if (lh != W.line_h || ui_lh != W.ui_line_h) {
     W.line_h = lh;
+    W.ui_line_h = ui_lh;
     again = 1;
   }
   if ((size != W.font_size || strncmp(fam, W.font_fam, sizeof(W.font_fam) - 1) != 0) &&	/* kept cut short: a long one is the same */
       ed_font_make(fam, size) == 0) again = 1;
-  if (ui != W.ui_size && ui_font_make(ui) == 0) again = 1;
+  if ((ui != W.ui_size || strncmp(ui_fam, W.ui_fam, sizeof(W.ui_fam) - 1) != 0) && ui_font_make(ui_fam, ui) == 0) again = 1;
   if (!again) return;
   font_sizes();
   S.full = 1;
