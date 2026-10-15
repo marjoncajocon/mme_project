@@ -668,6 +668,27 @@ static HANDLE inheritable (int fd) {
 }
 
 
+/*
+** The handles a child is given are made inheritable just for its
+** CreateProcess, and every inheritable handle goes into whatever child
+** starts then: two threads starting programs at once (a git refresh on a
+** worker, a language server here) would each hand their pipe to the
+** other's child, which keeps it open, and a read waits for an end that
+** comes only when that child exits. One at a time, under this lock (a
+** spin: XP has no lock that sets itself up).
+*/
+static volatile LONG g_spawn_lock;
+
+static void spawn_lock (void) {
+  while (InterlockedCompareExchange(&g_spawn_lock, 1, 0) != 0) Sleep(0);
+}
+
+
+static void spawn_unlock (void) {
+  InterlockedExchange(&g_spawn_lock, 0);
+}
+
+
 int os_spawn (const char *exe, char **argv, char **envp, const int *fds,
               int nfds, OsProc *proc, long *pid) {
   STARTUPINFOW si;
@@ -698,20 +719,25 @@ int os_spawn (const char *exe, char **argv, char **envp, const int *fds,
   memset(&pi, 0, sizeof(pi));
   si.cb = sizeof(si);
   si.dwFlags = STARTF_USESTDHANDLES;
-  si.hStdInput = inheritable(nfds > 0 ? fds[0] : 0);
-  si.hStdOutput = inheritable(nfds > 1 ? fds[1] : 1);
-  si.hStdError = inheritable(nfds > 2 ? fds[2] : 2);
   wapp = widen(app);
   wcl = widen(cl.s);
   wenv = build_env_block(envp);
+  spawn_lock();
+  si.hStdInput = inheritable(nfds > 0 ? fds[0] : 0);
+  si.hStdOutput = inheritable(nfds > 1 ? fds[1] : 1);
+  si.hStdError = inheritable(nfds > 2 ? fds[2] : 2);
   ok = CreateProcessW(wapp, wcl, NULL, NULL, TRUE, CREATE_UNICODE_ENVIRONMENT,
                       wenv, NULL, &si, &pi) != 0;
-  if (!ok)
-    fd_printf(2, "mmc: %s: cannot execute (Windows error %lu)\n",
-              argv[0], (unsigned long)GetLastError());
-  if (si.hStdInput) CloseHandle(si.hStdInput);
-  if (si.hStdOutput) CloseHandle(si.hStdOutput);
-  if (si.hStdError) CloseHandle(si.hStdError);
+  {
+    DWORD err = ok ? 0 : GetLastError();
+    if (si.hStdInput) CloseHandle(si.hStdInput);
+    if (si.hStdOutput) CloseHandle(si.hStdOutput);
+    if (si.hStdError) CloseHandle(si.hStdError);
+    spawn_unlock();
+    if (!ok)
+      fd_printf(2, "mmc: %s: cannot execute (Windows error %lu)\n",
+                argv[0], (unsigned long)err);
+  }
   free(app);
   free(wapp);
   free(wcl);
@@ -758,13 +784,30 @@ static int proc_pause (long pid, int stop);
 ** A process and everything it started, and what those started (an extension
 ** host's language servers and daemons): the children first, deepest first, so
 ** none is left running on its own. Windows keeps a dead parent's id in its
-** children's entries, so they are found even when a parent went already.
+** children's entries, so they are found even when a parent went already; but
+** that id may be another's by now (explorer's long gone userinit, a pid reused
+** by gopls), so a child counts only when it started after its parent did.
 */
+static int proc_born (DWORD pid, unsigned long long *t) {	/* when it started; 0: unknown */
+  FILETIME c, e, k, u;
+  HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  int ok;
+  if (h == NULL) h = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, pid);	/* XP has no limited one */
+  if (h == NULL) return 0;
+  ok = GetProcessTimes(h, &c, &e, &k, &u) != 0;
+  CloseHandle(h);
+  if (ok) *t = ((unsigned long long)c.dwHighDateTime << 32) | c.dwLowDateTime;
+  return ok;
+}
+
+
 int os_kill_tree (long pid) {
   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   PROCESSENTRY32 pe;
   DWORD *id = NULL, *par = NULL, *tree;
+  unsigned long long *born;
   size_t n = 0, cap = 0, nt = 1, i, k;
+  int known;
   if (snap != INVALID_HANDLE_VALUE) {
     pe.dwSize = sizeof(pe);
     if (Process32First(snap, &pe))
@@ -780,14 +823,17 @@ int os_kill_tree (long pid) {
     CloseHandle(snap);
   }
   tree = (DWORD *)xmalloc((n + 1) * sizeof(DWORD));
+  born = (unsigned long long *)xmalloc((n + 1) * sizeof(unsigned long long));
   tree[0] = (DWORD)pid;
-  for (i = 0; i < nt; i++)	/* breadth first: every descendant once */
+  known = proc_born(tree[0], &born[0]);	/* unknown: its children cannot be told from strangers */
+  for (i = 0; i < nt && known; i++)	/* breadth first: every descendant once */
     for (k = 0; k < n; k++) {
       size_t j;
       int seen = 0;
       if (par[k] != tree[i] || id[k] == 0 || id[k] == tree[i]) continue;
       for (j = 0; j < nt && !seen; j++) seen = tree[j] == id[k];
-      if (!seen) tree[nt++] = id[k];
+      if (seen || !proc_born(id[k], &born[nt]) || born[nt] < born[i]) continue;	/* older: the id was reused */
+      tree[nt++] = id[k];
     }
   for (i = nt; i-- > 0;) {	/* the deepest first, the process itself last */
     HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, tree[i]);
@@ -797,6 +843,7 @@ int os_kill_tree (long pid) {
     }
   }
   free(tree);
+  free(born);
   free(id);
   free(par);
   return 0;
@@ -810,6 +857,7 @@ int os_kill (long pid, int sig) {
   if (sig == 18) return proc_pause(pid, 0);	/* CONT */
   if (sig == 17 || sig == 23 || sig == 28) return 0;	/* CHLD URG WINCH: nothing to do */
   h = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+  if (h == NULL) h = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, FALSE, (DWORD)pid);	/* XP has no LIMITED */
   if (h == NULL) return -1;
   if (sig == 0) {	/* only asks whether it exists */
     DWORD code = 0;
@@ -1144,10 +1192,23 @@ int os_open (const char *native, int mode) {
 }
 
 
+/*
+** A pipe is close-on-exec only once fcntl said so: a fork on another
+** thread in between (a git refresh on a worker) would give its child the
+** pipe for good, and a read of it would wait for that child to end. The
+** pipe and the fork, one at a time.
+*/
+static pthread_mutex_t g_spawn_mx = PTHREAD_MUTEX_INITIALIZER;
+
 int os_pipe (int fds[2]) {
-  if (pipe(fds) != 0) return -1;
+  pthread_mutex_lock(&g_spawn_mx);
+  if (pipe(fds) != 0) {
+    pthread_mutex_unlock(&g_spawn_mx);
+    return -1;
+  }
   fcntl(fds[0], F_SETFD, FD_CLOEXEC);
   fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+  pthread_mutex_unlock(&g_spawn_mx);
   return 0;
 }
 
@@ -1374,7 +1435,10 @@ const char *os_machine (void) {
 
 int os_spawn (const char *exe, char **argv, char **envp, const int *fds,
               int nfds, OsProc *proc, long *pid) {
-  pid_t p = fork();
+  pid_t p;
+  pthread_mutex_lock(&g_spawn_mx);
+  p = fork();
+  if (p != 0) pthread_mutex_unlock(&g_spawn_mx);	/* the child's copy is never used: it execs */
   if (p < 0) {
     fd_printf(2, "mmc: %s: cannot fork: %s\n", argv[0], strerror(errno));
     return -1;

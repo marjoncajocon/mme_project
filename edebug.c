@@ -36,6 +36,7 @@ typedef SOCKET Sock;
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <fcntl.h>
 typedef int Sock;
 #define NO_SOCK		(-1)
 #define sock_close	close
@@ -49,6 +50,9 @@ typedef int Sock;
 */
 
 #define MAX_MESSAGE	((size_t)64 << 20)	/* a Content-Length no real adapter sends */
+#define CON_LINE	((size_t)32 << 10)	/* a console line longer goes on the next */
+#define CON_BYTES	((size_t)8 << 20)	/* the console's text: past it the oldest lines go */
+#define POLL_MAX	((size_t)1 << 20)	/* read in one poll: the screen is drawn between */
 
 enum { RQ_INIT, RQ_LAUNCH, RQ_SETBP, RQ_CONFDONE, RQ_THREADS, RQ_STACK, RQ_SCOPES,
        RQ_VARS, RQ_WATCH, RQ_REPL, RQ_HOVER, RQ_STEP, RQ_DISCONNECT, RQ_SETVAR, RQ_GOTOT, RQ_GOTO,
@@ -110,6 +114,7 @@ typedef struct Thread {
 
 typedef struct CLine {	/* a line of the DEBUG CONSOLE */
   char *s;
+  size_t len;
   int cat;	/* CC_* */
 } CLine;
 
@@ -134,6 +139,7 @@ typedef struct Ses {	/* a debug session: one adapter */
   int out;	/* TCP: its stdout (the port, its logs) */
   Sock sock;
   Buf in, outline;
+  size_t inat;	/* in: what messages() has read of it */
   int seq;
   Req req[128];
   int nreq;
@@ -181,6 +187,7 @@ static int g_bp_dirty;	/* to be saved */
 static Vec g_opened;	/* the paths of the variables open, kept from stop to stop */
 static CLine *g_con;
 static int g_ncon, g_capcon;
+static size_t g_conbytes;	/* the text of g_con */
 static int g_log = -2;	/* $MME_DAPLOG: every message */
 
 /* the launch configurations of .vscode/launch.json */
@@ -455,29 +462,43 @@ static void con_add (const char *s, size_t n, int cat) {
   static int open_line = 0, open_cat = -1;
   while (n > 0) {
     const char *e = memchr(s, '\n', n);
-    size_t len = e ? (size_t)(e - s) : n;
-    if (len > 0 && s[len - 1] == '\r') len--;
-    if (open_line && open_cat == cat && g_ncon > 0) {	/* the rest of the last line */
+    size_t len = e ? (size_t)(e - s) : n, take = len;
+    if (len > 0 && s[len - 1] == '\r') len--, take--;
+    if (open_line && open_cat == cat && g_ncon > 0 && g_con[g_ncon - 1].len < CON_LINE) {	/* the rest of the last line */
       CLine *c = &g_con[g_ncon - 1];
-      size_t ol = strlen(c->s);
-      c->s = (char *)xrealloc(c->s, ol + len + 1);
-      memcpy(c->s + ol, s, len);
-      c->s[ol + len] = '\0';
+      if (take > CON_LINE - c->len) take = CON_LINE - c->len;
+      c->s = (char *)xrealloc(c->s, c->len + take + 1);
+      memcpy(c->s + c->len, s, take);
+      c->len += take;
+      c->s[c->len] = '\0';
     }
     else {
-      if (g_ncon == 5000) {	/* the oldest go */
-        int i;
-        for (i = 0; i < 1000; i++) free(g_con[i].s);
-        memmove(g_con, g_con + 1000, (size_t)(g_ncon - 1000) * sizeof(CLine));
-        g_ncon -= 1000;
+      if (g_ncon == 5000 || (g_conbytes > CON_BYTES && g_ncon > 1)) {	/* the oldest go */
+        int i, k = g_ncon > 2000 ? 1000 : g_ncon / 2;
+        for (i = 0; i < k; i++) {
+          g_conbytes -= g_con[i].len;
+          free(g_con[i].s);
+        }
+        memmove(g_con, g_con + k, (size_t)(g_ncon - k) * sizeof(CLine));
+        g_ncon -= k;
       }
       if (g_ncon == g_capcon) {
         g_capcon = g_capcon ? g_capcon * 2 : 256;
         g_con = (CLine *)xrealloc(g_con, (size_t)g_capcon * sizeof(CLine));
       }
-      g_con[g_ncon].s = xstrndup(s, len);
+      if (take > CON_LINE) take = CON_LINE;
+      g_con[g_ncon].s = xstrndup(s, take);
+      g_con[g_ncon].len = take;
       g_con[g_ncon].cat = cat;
       g_ncon++;
+    }
+    g_conbytes += take;
+    if (take < len) {	/* too long for one line: the rest goes on the next */
+      open_line = 1;
+      open_cat = cat;
+      s += take;
+      n -= take;
+      continue;
     }
     open_line = e == NULL;
     open_cat = cat;
@@ -517,6 +538,11 @@ static Sock tcp_connect (int port) {
 #endif
   s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (s == NO_SOCK) return s;
+#ifdef _WIN32
+  SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);	/* not the programs' run after it */
+#else
+  fcntl(s, F_SETFD, FD_CLOEXEC);
+#endif
   memset(&a, 0, sizeof(a));
   a.sin_family = AF_INET;
   a.sin_port = htons((unsigned short)port);
@@ -1546,7 +1572,7 @@ static int ext_adapter (Json **cfg, int nodebug, char ***argv, char **cwd) {
     int port = (int)json_num(json_get(ad, "port"), 0);
     long long end = os_now_us() + 5000000;
     Sock s = NO_SOCK;
-    while (port > 0 && (s = tcp_connect(port)) == NO_SOCK && os_now_us() < end) ;
+    while (port > 0 && (s = tcp_connect(port)) == NO_SOCK && os_now_us() < end) th_nap(20);
     json_free(res);
     if (s == NO_SOCK) {
       toast(1, "The debug adapter at port %d could not be reached", port);
@@ -1665,10 +1691,14 @@ static int start_one (Json *cfg, int nodebug) {
     tcp = argv[0] && strstr(path_basename(argv[0]), "dlv") != NULL;	/* dlv dap listens on a port */
     free(cmd);
   }
+  to[0] = to[1] = -1;
   if (argv[0] == NULL || os_pipe(to) != 0 || os_pipe(from) != 0) {
     toast(1, "The debug adapter could not start");
+    os_close(to[0]);	/* the first pipe, when the second did not come */
+    os_close(to[1]);
     for (i = 0; argv[i]; i++) free(argv[i]);
     free(argv);
+    free(xcwd);
     return -1;
   }
 #ifdef _WIN32
@@ -2457,41 +2487,71 @@ static size_t hdr_len (const char *s) {
 }
 
 
+/* "Content-Length:" in s..e, its case ignored (header names are), NULL none */
+static char *find_cl (char *s, const char *e) {
+  static const char k[] = "content-length:";
+  for (; s + 15 <= e; s++) {
+    size_t i;
+    for (i = 0; i < 15; i++) {
+      char c = s[i];
+      if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+      if (c != k[i]) break;
+    }
+    if (i == 15) return s;
+  }
+  return NULL;
+}
+
+
+/* lost in D.in: on from the next header after p, or past all but a tail that may begin one */
+static void resync (char *p) {
+  char *end = D.in.s + D.in.len, *next = find_cl(p, end);
+  if (next != NULL) D.inat = (size_t)(next - D.in.s);
+  else if (D.in.len - D.inat > 14) D.inat = D.in.len - 14;
+}
+
+
 /* the whole messages that came in D.in */
 static int messages (void) {
   int got = 0;
   Ses *me = g_d;
   for (;;) {
-    char *hdr_end, *cl;
+    char *p, *hdr_end, *cl;
     size_t body, hlen;
     Json *j;
-    if (g_d != me || !D.on || D.in.len == 0) break;	/* it ended (another may be talked to now) */
+    if (g_d != me || !D.on || D.inat >= D.in.len) break;	/* it ended (another may be talked to now) */
+    p = D.in.s + D.inat;
     D.in.s[D.in.len] = '\0';
-    hdr_end = strstr(D.in.s, "\r\n\r\n");
-    if (hdr_end == NULL) break;
-    hlen = (size_t)(hdr_end - D.in.s) + 4;
-    cl = strstr(D.in.s, "Content-Length:");
-    if (cl == NULL || cl > hdr_end) {
-      memmove(D.in.s, D.in.s + hlen, D.in.len - hlen);
-      D.in.len -= hlen;
+    hdr_end = strstr(p, "\r\n\r\n");
+    if (hdr_end == NULL) {
+      if (D.in.len - D.inat > 65536) resync(p + 1);	/* no header is that long */
+      break;
+    }
+    hlen = (size_t)(hdr_end - p) + 4;
+    cl = find_cl(p, hdr_end);
+    if (cl == NULL) {	/* a header without one: skipped */
+      D.inat += hlen;
       continue;
     }
     body = hdr_len(cl + 15);
-    if (body == (size_t)-1) {	/* not a length we will ever see: drop the header, or the reader wedges */
-      memmove(D.in.s, D.in.s + hlen, D.in.len - hlen);
-      D.in.len -= hlen;
+    if (body == (size_t)-1) {	/* not a length we will ever see: the next header, or the reader wedges */
+      resync(cl + 15);
       continue;
     }
-    if (D.in.len < hlen + body) break;
-    trace("<< ", D.in.s + hlen, body);
-    j = json_parse(D.in.s + hlen, body);
-    memmove(D.in.s, D.in.s + hlen + body, D.in.len - hlen - body);
-    D.in.len -= hlen + body;
+    if (D.in.len - D.inat < hlen + body) break;
+    trace("<< ", p + hlen, body);
+    j = json_parse(p + hlen, body);
+    D.inat += hlen + body;
     if (j) {
       got_message(j);	/* it may end the session */
       json_free(j);
       got = 1;
     }
+  }
+  if (me->on && me->inat > 0) {	/* what was read goes, once */
+    memmove(me->in.s, me->in.s + me->inat, me->in.len - me->inat);
+    me->in.len -= me->inat;
+    me->inat = 0;
   }
   return got;
 }
@@ -2503,6 +2563,10 @@ static void adapter_output (const char *s, size_t n) {
   for (i = 0; i < n; i++) {
     if (s[i] != '\n') {
       if (s[i] != '\r') buf_putc(&D.outline, s[i]);
+      if (D.outline.len >= CON_LINE) {	/* no line of the port: the console has it as it comes */
+        con_add(D.outline.s, D.outline.len, CC_OUT);
+        D.outline.len = 0;
+      }
       continue;
     }
     buf_putc(&D.outline, '\0');
@@ -2529,8 +2593,9 @@ static int poll_one (void) {
   char chunk[65536];
   int got = 0, status;
   long n;
+  size_t took = 0;	/* read this poll: a flood waits for the next */
   if (D.out >= 0)
-    while (D.on && os_wait_readable(D.out, 0) == 1) {
+    while (D.on && took < POLL_MAX && os_wait_readable(D.out, 0) == 1) {
       n = os_read(D.out, chunk, sizeof(chunk));
       if (n <= 0) {
         os_close(D.out);
@@ -2538,10 +2603,11 @@ static int poll_one (void) {
         break;
       }
       adapter_output(chunk, (size_t)n);
+      took += (size_t)n;
       got = 1;
     }
   if (D.sock != NO_SOCK)
-    while (D.on && sock_ready(D.sock)) {
+    while (D.on && took < POLL_MAX && sock_ready(D.sock)) {
       n = (long)recv(D.sock, chunk, (int)sizeof(chunk), 0);
       if (n <= 0) {
         adapter_gone();
@@ -2550,9 +2616,10 @@ static int poll_one (void) {
       buf_putn(&D.in, chunk, (size_t)n);
       buf_putc(&D.in, '\0');
       D.in.len--;
+      took += (size_t)n;
     }
   if (D.from >= 0)
-    while (D.on && os_wait_readable(D.from, 0) == 1) {
+    while (D.on && took < POLL_MAX && os_wait_readable(D.from, 0) == 1) {
       n = os_read(D.from, chunk, sizeof(chunk));
       if (n <= 0) {
         adapter_gone();
@@ -2561,6 +2628,7 @@ static int poll_one (void) {
       buf_putn(&D.in, chunk, (size_t)n);
       buf_putc(&D.in, '\0');
       D.in.len--;
+      took += (size_t)n;
     }
   got |= messages();
   if (!D.on) return 1;
@@ -2573,7 +2641,7 @@ static int poll_one (void) {
     end_session();
     return 1;
   }
-  if (D.in.len == 0 && !D.noproc && !D.reaped && D.pid > 0 && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
+  if (D.in.len == 0 && took < POLL_MAX && !D.noproc && !D.reaped && D.pid > 0 && os_poll_proc(D.proc, &status) == 1) {	/* it ended by itself (os_poll_proc reaps it: ask last) */
     D.reaped = 1;
     if (D.out >= 0) {	/* its last words */
       while (os_wait_readable(D.out, 0) == 1 && (n = os_read(D.out, chunk, sizeof(chunk))) > 0)
@@ -4038,6 +4106,7 @@ int console_key (int k) {
     int i;
     for (i = 0; i < g_ncon; i++) free(g_con[i].s);
     g_ncon = 0;
+    g_conbytes = 0;
   }
   else if (IS_TEXT(k) && len + 4 < sizeof(CN.in)) {
     len += (size_t)utf8_encode((uint32_t)k, CN.in + len);

@@ -403,6 +403,16 @@ static void wk_push (char *path, char *rel) {	/* WK.mx is held */
 }
 
 
+/* told to stop (WK.cancel), or found enough */
+static int wk_stopped (void) {
+  int r;
+  mx_lock(WK.mx);
+  r = WK.cancel || WK.hits >= MAX_HITS;
+  mx_unlock(WK.mx);
+  return r;
+}
+
+
 /* one file read and matched; NULL when it has nothing (a worker, or the editor's thread) */
 static SPack *scan_text (const Match *M, const char *path, const char *rel, char *s, size_t len) {
   size_t i, from = 0, line = 1, n = 0, cap = 0, ml;
@@ -417,6 +427,7 @@ static SPack *scan_text (const Match *M, const char *path, const char *rel, char
     size_t end, at;
     if (i < len && s[i] != '\n') continue;
     end = (i > from && s[i - 1] == '\r') ? i - 1 : i;
+    if ((line & 255) == 0 && WK.mx && wk_stopped()) break;	/* a slow pattern in a big file: the stop does not wait for its end */
     for (at = find_in(M, s + from, end - from, 0, &ml); at < end - from;
          at = find_in(M, s + from, end - from, at + (ml ? ml : 1), &ml)) {
       SHit *h;
@@ -539,6 +550,7 @@ static void worker (void *ud) {
       }
       vec_free(&v);
     }
+    else if (st.is_fifo || st.is_sock || st.is_chr || st.is_blk) ;	/* a pipe, a device: a read of it never ends */
     else if (st.size <= MAX_FILE && !binary_name(name) && !is_open_file(path)) {
       took = 1;
       if (WK.inc[0] == '\0' || search_globs(WK.inc, rel)) {
@@ -873,11 +885,14 @@ static void rows (void) {
 }
 
 
+static int g_replace_after;	/* Replace All asked while the workers still looked */
+
 static void run (void) {
   size_t sel = g_sel;
 
   snprintf(g_ran, sizeof(g_ran), "%s", Q);
   g_pending = 0;
+  g_replace_after = 0;	/* another search: not the matches Replace All was asked for */
   wk_stop();
   clear();
   load_ignore();
@@ -893,8 +908,15 @@ static void run (void) {
 }
 
 
+static void replace_all (void);
+
 int search_idle (void) {
   int r = searched_idle();	/* the Search Editors' searches go on as well */
+  if (g_replace_after && !WK.busy && !g_pending) {	/* every match found now: its question */
+    g_replace_after = 0;
+    replace_all();
+    return 1;
+  }
   if (WK.busy && !g_pending) {	/* the workers go on; what they found shows */
     size_t sel = g_sel;
     wk_poll();
@@ -1056,9 +1078,10 @@ static void replace_all (void) {
   char msg[512];
   size_t i, n = 0, files = 0, done = 0;
   if (g_pending) run();
-  while (WK.busy) {	/* every match first: the workers are given their time */
-    wk_poll();
-    if (WK.busy) th_nap(2);
+  if (WK.busy) {	/* every match first: asked when the workers are done (search_idle), the editor not frozen till then */
+    g_replace_after = 1;
+    toast(0, "Searching... Replace All follows when every match is found");
+    return;
   }
   rows();
   for (i = 0; i < g_nfile; i++)

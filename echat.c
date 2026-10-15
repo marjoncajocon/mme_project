@@ -1265,7 +1265,7 @@ static int approve (const char *what, const char *detail) {
 /* a shell command in the workspace, its output (at most 16 KB) and exit code; 60 seconds at most */
 static void run_shell (const char *cmd, Buf *out) {
   char *argv[5], *sh, *cwd;
-  int fds[2], io[3], null, code = -1, done = 0;
+  int fds[2], io[3], null, code = -1, done = 0, exited = 0;
   OsProc proc;
   long pid;
   long long end = os_now_us() + 60000000;
@@ -1319,14 +1319,16 @@ static void run_shell (const char *cmd, Buf *out) {
       else if (out->len < 16384) buf_putn(out, chunk, (size_t)n);
     }
     else if (r < 0) done = 1;
+    else if ((exited = os_poll_proc(proc, &code) == 1) != 0) done = 1;	/* the shell is gone and quiet: a job it
+										** left in the background keeps the pipe, not us */
     if (!done && os_now_us() > end) {
-      os_kill(pid, 9);
+      os_kill_tree(pid);	/* what it started too: an "npm run dev &" would outlive it */
       buf_puts(out, "\n(stopped after 60 seconds)");
       done = 1;
     }
   }
   os_close(fds[0]);
-  code = os_wait(proc);
+  if (!exited) code = os_wait(proc);
   buf_printf(out, "\n(exit code %d)", code);
   free(sh);
 }

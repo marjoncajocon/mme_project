@@ -374,6 +374,12 @@ void graph_load (void) {
 }
 
 
+/* the commits the graph asks git for */
+int graph_limit (void) {
+  return g_limit;
+}
+
+
 size_t graph_count (void) {
   return g_ncm;
 }
@@ -1074,12 +1080,24 @@ void git_graph_action (int what, size_t i, SideAct *act) {
 }
 
 
-/* a long git command: its notice shows at once, the screen waits for it */
+/*
+** A long git command: its notice shows at once, the screen waits for it.
+** ssh asking something (a new host's key, a key's passphrase) would wait
+** for ever: mme-sdl has no console for it, and mme's is in raw mode. So
+** ssh does not ask, and a host that does not answer is given up on:
+** git's error says why, as VS Code's does.
+*/
 static int slow (Buf *b, const char *what, const char *a0, const char *a1, const char *a2, const char *a3) {
+  char *was = os_getenv("GIT_SSH_COMMAND");
+  int rc;
   toast(0, "%s", what);
   toast_draw();
   scr_flush();
-  return gitv(b, 1, a0, a1, a2, a3, NULL);
+  if (was == NULL) os_setenv("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=20");
+  rc = gitv(b, 1, a0, a1, a2, a3, NULL);
+  if (was == NULL) os_setenv("GIT_SSH_COMMAND", NULL);
+  free(was);
+  return rc;
 }
 
 
@@ -1722,6 +1740,9 @@ typedef struct Blame {
 static Blame g_bl[NBLAME];
 static int g_bl_next;
 static char *g_bl_want;	/* asked for and not read yet */
+static GitAsync *g_bl_job;	/* git blame running on a worker */
+static char *g_bl_job_path;	/* the file it is for */
+static unsigned g_bl_gen, g_bl_job_gen;	/* blame_clear counts: a job started before one is not kept */
 
 
 static void blame_free (Blame *b) {
@@ -1742,6 +1763,7 @@ void blame_clear (void) {
   for (i = 0; i < NBLAME; i++) blame_free(&g_bl[i]);
   free(g_bl_want);
   g_bl_want = NULL;
+  g_bl_gen++;	/* the one running answers for the old state */
 }
 
 
@@ -1763,29 +1785,24 @@ static int is_hash40 (const char *p) {
 }
 
 
-static void blame_load (const char *path) {
-  const char *top = git_root(), *p;
-  size_t tl;
-  char *rel;
-  Buf b;
-  OsStat st;
-  Blame *BLp = &g_bl[g_bl_next];
-  g_bl_next = (g_bl_next + 1) % NBLAME;
+/* a slot for path's blame (an old one goes); empty until git's answer is read into it */
+static Blame *blame_slot (const char *path) {
+  Blame *BLp = blame_of(path);
+  if (BLp == NULL) {
+    BLp = &g_bl[g_bl_next];
+    g_bl_next = (g_bl_next + 1) % NBLAME;
+  }
   blame_free(BLp);
   BLp->path = xstrdup(path);
-  if (top == NULL) return;
-  if (os_stat(path, &st) == 0 && st.size > (1 << 20)) return;	/* a big file: git blame would take seconds, each save */
-  tl = strlen(top);
-  if (m_fnncmp(path, top, tl) != 0 || !path_is_sep(path[tl])) return;
-  rel = xstrdup(path + tl + 1);
-  buf_init(&b);
-  if (gitv(&b, 0, "blame", "--porcelain", "--", rel, NULL) != 0) {
-    free(rel);
-    buf_free(&b);
-    return;
-  }
-  free(rel);
-  for (p = b.s ? b.s : ""; *p;) {	/* "<hash> <orig> <final> [<n>]", its keys, "\t<line>" */
+  return BLp;
+}
+
+
+/* git blame --porcelain's output b, into path's slot */
+static void blame_read (const char *path, const Buf *b) {
+  Blame *BLp = blame_slot(path);
+  const char *p;
+  for (p = b->s ? b->s : ""; *p;) {	/* "<hash> <orig> <final> [<n>]", its keys, "\t<line>" */
     const char *e = strchr(p, '\n');
     size_t len = e ? (size_t)(e - p) : strlen(p);
     if (len > 41 && p[40] == ' ' && is_hash40(p)) {	/* a line of the file can look like one: check it */
@@ -1826,7 +1843,33 @@ static void blame_load (const char *path) {
     }
     p += len + (e ? 1 : 0);
   }
-  buf_free(&b);
+}
+
+
+/*
+** git blame of path started on a worker: the tab switched to does not
+** wait for it (a second, in a long history). Not in the repository, too
+** big: an empty slot says there is none.
+*/
+static void blame_start (const char *path) {
+  const char *top = git_root();
+  size_t tl;
+  OsStat st;
+  const char *a[] = {"blame", "--porcelain", "--", NULL, NULL};
+  if (top == NULL) return;
+  tl = strlen(top);
+  if ((os_stat(path, &st) == 0 && st.size > (1 << 20)) ||	/* a big file: git blame would take seconds, each save */
+      m_fnncmp(path, top, tl) != 0 || !path_is_sep(path[tl])) {
+    blame_slot(path);
+    return;
+  }
+  a[3] = path + tl + 1;
+  if ((g_bl_job = git_async(a)) == NULL) {
+    blame_slot(path);
+    return;
+  }
+  g_bl_job_path = xstrdup(path);
+  g_bl_job_gen = g_bl_gen;
 }
 
 
@@ -1863,12 +1906,28 @@ const char *git_blame (const char *path, size_t y, int short_form) {
 
 /* the editor is quiet: git blame of the file asked for; 1 when it ran */
 int git_blame_idle (void) {
-  char *path = g_bl_want;
-  if (path == NULL) return 0;
+  char *path;
+  if (g_bl_job) {	/* one at a time: the next waits for its answer */
+    Buf b;
+    int rc;
+    if (!git_async_done(g_bl_job)) return 0;
+    buf_init(&b);
+    rc = git_async_take(g_bl_job, &b);
+    g_bl_job = NULL;
+    if (g_bl_job_gen == g_bl_gen) {
+      if (rc == 0) blame_read(g_bl_job_path, &b);
+      else blame_slot(g_bl_job_path);	/* not in git: none, not asked again */
+    }
+    buf_free(&b);
+    free(g_bl_job_path);
+    g_bl_job_path = NULL;
+    return 1;
+  }
+  if ((path = g_bl_want) == NULL) return 0;
   g_bl_want = NULL;
-  if (blame_of(path) == NULL) blame_load(path);
+  if (blame_of(path) == NULL) blame_start(path);
   free(path);
-  return 1;
+  return 0;
 }
 
 /* }================================================================== */

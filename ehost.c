@@ -713,8 +713,10 @@ static void key_audit (const char *ext, Buf *b) {
     key_name(k1, 1, name, sizeof(name));
     if (k2) {
       size_t n = strlen(name);
-      name[n++] = ' ';
-      key_name(k2, 1, name + n, sizeof(name) - n);
+      if (n + 2 < sizeof(name)) {	/* the chord's second key, if there is room for it and its end */
+        name[n++] = ' ';
+        key_name(k2, 1, name + n, sizeof(name) - n);
+      }
     }
     c = k->cmd - CMD_N;
     if (b) {

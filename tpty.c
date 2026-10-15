@@ -31,6 +31,9 @@
 #ifndef EXTENDED_STARTUPINFO_PRESENT
 #define EXTENDED_STARTUPINFO_PRESENT	0x00080000
 #endif
+#ifndef FILE_FLAG_FIRST_PIPE_INSTANCE
+#define FILE_FLAG_FIRST_PIPE_INSTANCE	0x00080000
+#endif
 
 typedef HRESULT (WINAPI *CreatePcFn) (COORD, HANDLE, HANDLE, DWORD, void **);
 typedef HRESULT (WINAPI *ResizePcFn) (void *, COORD);
@@ -51,6 +54,7 @@ static FnPtr fn_create, fn_resize, fn_close;
 struct Pty {
   void *pcon;
   HANDLE in_write, out_read, process;
+  HANDLE wev;	/* the event of pty_write's overlapped writes */
   CRITICAL_SECTION lock;
   Buf queue;
   size_t queue_pos;
@@ -95,6 +99,25 @@ static wchar_t *widen (const char *s) {
   w[0] = L'\0';
   MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
   return w;
+}
+
+
+/* the shell's keyboard: a named pipe whose end of ours is overlapped, so
+** a write the shell does not take can give up (an anonymous pipe blocks) */
+static int in_pipe (HANDLE *rd, HANDLE *wr) {
+  static volatile LONG serial = 0;
+  char name[96];
+  snprintf(name, sizeof(name), "\\\\.\\pipe\\mmc-term-%lu-%ld",
+           (unsigned long)GetCurrentProcessId(), (long)InterlockedIncrement(&serial));
+  *wr = CreateNamedPipeA(name, PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                         PIPE_TYPE_BYTE | PIPE_WAIT, 1, 1 << 20, 0, 0, NULL);
+  if (*wr == INVALID_HANDLE_VALUE) return 0;
+  *rd = CreateFileA(name, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+  if (*rd == INVALID_HANDLE_VALUE) {
+    CloseHandle(*wr);
+    return 0;
+  }
+  return 1;
 }
 
 
@@ -197,7 +220,7 @@ Pty *pty_spawn (const char *exe, char **argv, int cols, int rows) {
                            "Windows 10 version 1809 or newer is needed.");
     return NULL;
   }
-  if (!CreatePipe(&in_read, &in_write, NULL, 0)) return NULL;
+  if (!in_pipe(&in_read, &in_write)) return NULL;
   if (!CreatePipe(&out_read, &out_write, NULL, 0)) {
     CloseHandle(in_read);
     CloseHandle(in_write);
@@ -263,19 +286,42 @@ Pty *pty_spawn (const char *exe, char **argv, int cols, int rows) {
   p->in_write = in_write;
   p->out_read = out_read;
   p->process = pi.hProcess;
+  p->wev = CreateEventA(NULL, TRUE, FALSE, NULL);
   p->refs = 3;
   InitializeCriticalSection(&p->lock);
   buf_init(&p->queue);
-  CloseHandle(CreateThread(NULL, 0, reader_thread, p, 0, NULL));
-  CloseHandle(CreateThread(NULL, 0, waiter_thread, p, 0, NULL));
+  {	/* a thread that did not start lets go of its reference itself */
+    HANDLE th = CreateThread(NULL, 0, reader_thread, p, 0, NULL);
+    if (th != NULL) CloseHandle(th);
+    else {
+      InterlockedExchange(&p->closed, 1);	/* nothing will come */
+      pty_unref(p);
+    }
+    th = CreateThread(NULL, 0, waiter_thread, p, 0, NULL);
+    if (th != NULL) CloseHandle(th);
+    else pty_unref(p);
+  }
   return p;
 }
 
 
+/* a shell that does not read its keyboard gets 2 s, then the rest is
+** dropped: the window must not hang (a paste of megabytes) */
 void pty_write (Pty *p, const char *s, size_t n) {
-  while (n > 0 && p->in_write != NULL) {
-    DWORD put = 0;
-    if (!WriteFile(p->in_write, s, (DWORD)n, &put, NULL) || put == 0) return;
+  DWORD start = GetTickCount();
+  while (n > 0 && p->in_write != NULL && p->wev != NULL && !p->closed) {
+    OVERLAPPED ov;
+    DWORD put = 0, spent = GetTickCount() - start;
+    DWORD chunk = n > 65536 ? 65536 : (DWORD)n;
+    if (spent >= 2000) return;
+    memset(&ov, 0, sizeof(ov));
+    ov.hEvent = p->wev;
+    if (!WriteFile(p->in_write, s, chunk, NULL, &ov)) {
+      if (GetLastError() != ERROR_IO_PENDING) return;
+      if (WaitForSingleObject(p->wev, 2000 - spent) != WAIT_OBJECT_0)
+        CancelIo(p->in_write);	/* too long: given up */
+    }
+    if (!GetOverlappedResult(p->in_write, &ov, &put, TRUE) || put == 0) return;
     s += put;
     n -= put;
   }
@@ -293,7 +339,9 @@ void pty_resize (Pty *p, int cols, int rows) {
 
 long pty_read (Pty *p, char *buf, size_t n) {
   size_t have;
+  LONG closed;
   EnterCriticalSection(&p->lock);
+  closed = p->closed;	/* said after the reader's last chunk: looked at here */
   have = p->queue.len - p->queue_pos;
   if (have > n) have = n;
   if (have > 0) {
@@ -303,9 +351,15 @@ long pty_read (Pty *p, char *buf, size_t n) {
       p->queue.len = 0;
       p->queue_pos = 0;
     }
+    else if (p->queue_pos > ((size_t)1 << 20) && p->queue_pos > p->queue.len / 2) {
+      /* never all read (steady output): what was read goes */
+      p->queue.len -= p->queue_pos;
+      memmove(p->queue.s, p->queue.s + p->queue_pos, p->queue.len);
+      p->queue_pos = 0;
+    }
   }
   LeaveCriticalSection(&p->lock);
-  if (have == 0 && p->closed) return -1;
+  if (have == 0 && closed) return -1;
   return (long)have;
 }
 
@@ -329,6 +383,8 @@ void pty_close (Pty *p) {
   p->pcon = NULL;
   CloseHandle(p->in_write);
   p->in_write = NULL;
+  if (p->wev != NULL) CloseHandle(p->wev);
+  p->wev = NULL;
   pty_unref(p);	/* the threads end on their own and let go as well */
 }
 
@@ -349,6 +405,7 @@ void pty_close (Pty *p) {
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 struct Pty {
@@ -357,10 +414,10 @@ struct Pty {
   int status, done;
 };
 
-/* shells of closed tabs that had not ended yet: waited for later */
-#define ORPHAN_MAX	64
-static pid_t orphans[ORPHAN_MAX];
-static int norphans = 0;
+/* shells of closed tabs that had not ended yet: waited for later (on
+** every spawn, close and exit check) */
+static pid_t *orphans = NULL;
+static int norphans = 0, corphans = 0;
 
 
 static void reap_orphans (void) {
@@ -385,7 +442,9 @@ Pty *pty_spawn (const char *exe, char **argv, int cols, int rows) {
   const char *slave_name;
   pid_t child;
   Pty *p;
-  int master = posix_openpt(O_RDWR | O_NOCTTY);
+  int master;
+  reap_orphans();
+  master = posix_openpt(O_RDWR | O_NOCTTY);
   if (master < 0) return NULL;
   if (grantpt(master) != 0 || unlockpt(master) != 0 ||
       (slave_name = ptsname(master)) == NULL) {
@@ -429,7 +488,17 @@ Pty *pty_spawn (const char *exe, char **argv, int cols, int rows) {
 }
 
 
+static long now_ms (void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+
+/* a shell that does not read its keyboard gets 2 s, then the rest is
+** dropped: the window must not hang (a paste of megabytes) */
 void pty_write (Pty *p, const char *s, size_t n) {
+  long start = now_ms();
   while (n > 0 && p->master >= 0) {
     ssize_t r = write(p->master, s, n);
     if (r > 0) {
@@ -441,6 +510,7 @@ void pty_write (Pty *p, const char *s, size_t n) {
       pf.fd = p->master;
       pf.events = POLLOUT;
       pf.revents = 0;
+      if (now_ms() - start >= 2000) return;
       poll(&pf, 1, 100);
     }
     else return;
@@ -482,9 +552,14 @@ void pty_close (Pty *p) {
   if (p->master >= 0) close(p->master);	/* the shell gets a hangup */
   if (!p->done && waitpid(p->child, NULL, WNOHANG) == 0) {
     kill(-p->child, SIGHUP);	/* its whole session: the jobs of the tab too */
-    if (norphans < ORPHAN_MAX) orphans[norphans++] = p->child;
+    if (norphans == corphans) {
+      corphans = corphans ? corphans * 2 : 16;
+      orphans = (pid_t *)xrealloc(orphans, (size_t)corphans * sizeof(pid_t));
+    }
+    orphans[norphans++] = p->child;
   }
   free(p);
+  reap_orphans();
 }
 
 /* }================================================================== */

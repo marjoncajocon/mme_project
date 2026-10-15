@@ -128,28 +128,89 @@ static int have_git (void) {
 
 static const char *repo_dir (void);
 
-/* git -C dir with the arguments of args (NULL ends them); err: stderr into out too; magic: a pathspec may be
-   ":(exclude)x" (else a file named "[ab].txt" or "*.c" is only that file) */
-static int git_run (const char *dir, Buf *out, int err, int magic, const char *const *args) {
+
+/*
+** A refresh read on a worker (git_refresh_async): what each git said,
+** kept under the command that said it. git_refresh then runs as it always
+** does, on this thread, and its git calls find their output here instead
+** of starting git again; one not here (the state moved meanwhile) runs.
+*/
+typedef struct Said {
+  char *key;	/* "o\x1fdir\x1fargs...", NULL once taken */
+  int rc;
+  char *out;
+  size_t len;
+  long ms;
+} Said;
+
+static Said *g_said;
+static size_t g_nsaid;
+
+
+/* the argv of git -C dir args (the pointers are args'), its count in *pn */
+static char **git_argv (const char *git, const char *dir, int magic, const char *const *args, int *pn) {
   char **argv;
-  int n = 0, rc, i, k = 0;
-  size_t from = out->len;
-  long long t0 = os_now_us();
-  Buf cmd;
-  if (!have_git()) return -1;
+  int n = 0, k = 0;
   while (args[k]) k++;
   argv = (char **)xmalloc(((size_t)k + 5) * sizeof(char *));
-  argv[n++] = g_git;
+  argv[n++] = (char *)git;
   argv[n++] = (char *)"-C";
   argv[n++] = (char *)dir;
   if (!magic) argv[n++] = (char *)"--literal-pathspecs";
   while (*args) argv[n++] = (char *)*args++;
   argv[n] = NULL;
-  rc = err ? run_capture_err(argv, out) : run_capture(argv, out);
+  *pn = n;
+  return argv;
+}
+
+
+/* a command's key in g_said: where it runs, what it is asked, stderr in its output or not */
+static char *argv_key (char **argv, int n, int err) {
+  Buf k;
+  int i;
+  buf_init(&k);
+  buf_putc(&k, err ? 'e' : 'o');
+  for (i = 2; i < n; i++) {
+    buf_putc(&k, '\x1f');
+    buf_puts(&k, argv[i]);
+  }
+  buf_putc(&k, '\0');
+  return buf_take(&k);
+}
+
+
+/* git -C dir with the arguments of args (NULL ends them); err: stderr into out too; magic: a pathspec may be
+   ":(exclude)x" (else a file named "[ab].txt" or "*.c" is only that file) */
+static int git_run (const char *dir, Buf *out, int err, int magic, const char *const *args) {
+  char **argv;
+  int n, rc = -1, i, done = 0;
+  size_t from = out->len, w;
+  long long t0 = os_now_us();
+  long ms = -1;
+  Buf cmd;
+  if (!have_git()) return -1;
+  argv = git_argv(g_git, dir, magic, args, &n);
+  if (g_nsaid) {	/* read on the worker already */
+    char *key = argv_key(argv, n, err);
+    for (w = 0; w < g_nsaid && !done; w++)
+      if (g_said[w].key && strcmp(g_said[w].key, key) == 0) {
+        buf_putn(out, g_said[w].out, g_said[w].len);
+        buf_putc(out, '\0');
+        out->len--;
+        rc = g_said[w].rc;
+        ms = g_said[w].ms;
+        free(g_said[w].key);
+        g_said[w].key = NULL;
+        done = 1;
+      }
+    free(key);
+  }
+  if (!done) rc = err ? run_capture_err(argv, out) : run_capture(argv, out);
+  if (ms < 0) ms = (long)((os_now_us() - t0) / 1000);
   buf_init(&cmd);	/* the OUTPUT view's Git channel, like VS Code's: "> git status -z [12ms]" */
   for (i = magic ? 3 : 4; i < n; i++) buf_printf(&cmd, " %s", argv[i]);
   buf_putc(&cmd, '\0');
-  out_log("Git", "[%s] > git%s [%ldms]", rc == 0 ? "info" : "error", cmd.s, (long)((os_now_us() - t0) / 1000));
+  out_log("Git", "[%s] > git%s [%ldms]", rc == 0 ? "info" : "error", cmd.s, ms);
   if (rc != 0 && out->len > from) out_append("Git", out->s + from, out->len - from < 4096 ? out->len - from : 4096);
   buf_free(&cmd);
   free(argv);
@@ -752,8 +813,8 @@ static int link_loops (const char *path) {
 }
 
 
-/* the links under the untracked folder dir (native; rel from the top) that loop, into g_links */
-static void links_in (const char *dir, const char *rel, size_t *left) {
+/* the links under the untracked folder dir (native; rel from the top) that loop, into links */
+static void links_in (const char *dir, const char *rel, size_t *left, Vec *links) {
   Vec v;
   size_t i;
   vec_init(&v);
@@ -764,9 +825,9 @@ static void links_in (const char *dir, const char *rel, size_t *left) {
       (*left)--;
       if (os_lstat(p, &st) == 0 && st.is_dir && strcmp(v.v[i], ".git") != 0) {
         char *r = xstrcat3(rel, "/", v.v[i]);
-        if (!st.is_link) links_in(p, r, left);
+        if (!st.is_link) links_in(p, r, left, links);
         else if (link_loops(p)) {
-          vec_push(&g_links, r);
+          vec_push(links, r);
           r = NULL;
         }
         free(r);
@@ -779,6 +840,8 @@ static void links_in (const char *dir, const char *rel, size_t *left) {
 #endif
 
 
+static Vec *g_said_links;	/* the links the worker found: not looked for again */
+
 /* git status -z -uall into b, the links in g_links left out (only Windows' git follows them) */
 static int status_all (Buf *b) {
 #ifdef _WIN32
@@ -787,6 +850,10 @@ static int status_all (Buf *b) {
   int dirs = 0, rc;
   vec_free(&g_links);
   vec_init(&g_links);
+  if (g_said_links) {
+    g_links = *g_said_links;
+    vec_init(g_said_links);
+  }
   buf_init(&u);
   if ((rc = git(&u, "status", "--porcelain=v1", "-z", "-unormal", NULL, NULL)) != 0) {
     buf_free(&u);
@@ -800,13 +867,14 @@ static int status_all (Buf *b) {
       OsStat st;
       dirs++;
       to_native(p);
-      if (os_lstat(p, &st) == 0 && st.is_link) {
+      if (g_said_links) ;	/* found on the worker */
+      else if (os_lstat(p, &st) == 0 && st.is_link) {
         if (link_loops(p)) {
           vec_push(&g_links, rel);
           rel = NULL;
         }
       }
-      else links_in(p, rel, &left);
+      else links_in(p, rel, &left, &g_links);
       free(rel);
       free(p);
     }
@@ -859,7 +927,7 @@ static int add_all (Buf *b) {
 /* }================================================================== */
 
 
-void git_refresh (void) {
+static void git_refresh_now (void) {
   Buf b;
   size_t i;
   lsp_watch_nudge();	/* a checkout, a pull, a stash: the servers watching files hear of them soon */
@@ -938,6 +1006,377 @@ void git_refresh (void) {
   build_rows();
   g_status_gen++;
 }
+
+
+/*
+** {==================================================================
+** Refreshing on a worker
+** ===================================================================
+**
+** Showing Source Control, a save: git status and the graph read again,
+** six programs or more one after the other (half a second, seconds in a
+** big repository), which froze the editor at each switch of the view.
+** git_refresh_async runs them on a worker while the view shows what it
+** had; their output comes back as g_said, and git_refresh_now reads it
+** as if it ran them. What git said the same as the last time (and the
+** git folder's files as they were) changes nothing: the quick diffs and
+** the blame stay, the multi-diff editor is not read again.
+*/
+
+typedef struct GJob {
+  char *git, *dir;	/* git, where the refresh starts (repo_dir) */
+  char **tops;	/* the repositories' */
+  int ntop, limit;
+  Mutex *mx;
+  int done;	/* under mx */
+  int stale;	/* this thread's: a git_refresh came after it */
+  Thread *th;
+  Said *said;
+  size_t nsaid;
+  Vec links;
+  Buf finger;	/* all it read: the same as the last one, nothing changed */
+} GJob;
+
+static GJob *g_job;
+static int g_again;	/* asked again while one ran */
+static char *g_finger;	/* the last refresh's; NULL: not known */
+
+
+/* git args in dir on the worker: kept in j->said, its output in out too */
+static int job_git (GJob *j, const char *dir, int magic, const char *const *args, Buf *out) {
+  int n, rc;
+  char **argv = git_argv(j->git, dir, magic, args, &n);
+  long long t0 = os_now_us();
+  Said *w;
+  out->len = 0;
+  rc = run_capture(argv, out);
+  j->said = (Said *)xrealloc(j->said, (j->nsaid + 1) * sizeof(Said));
+  w = &j->said[j->nsaid++];
+  w->key = argv_key(argv, n, 0);
+  w->rc = rc;
+  w->len = out->len;
+  w->out = (char *)xmalloc(out->len + 1);
+  if (out->len) memcpy(w->out, out->s, out->len);
+  w->ms = (long)((os_now_us() - t0) / 1000);
+  buf_printf(&j->finger, "%s\x1e%d\x1e", w->key, rc);
+  if (out->len) buf_putn(&j->finger, out->s, out->len);
+  free(argv);
+  return rc;
+}
+
+
+/* the git folder's files git_refresh_now reads, into the fingerprint */
+static void job_state (GJob *j, const char *gd) {
+  static const char *const names[] = {"index", "HEAD", "rebase-merge", "rebase-apply",
+                                      "CHERRY_PICK_HEAD", "MERGE_HEAD", "MERGE_MSG"};
+  size_t i;
+  for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+    char *p = path_join(gd, names[i]);
+    OsStat st;
+    if (os_stat(p, &st) == 0 && st.exists)
+      buf_printf(&j->finger, "\x1d%s %lld %lld %llu", names[i], st.size, (long long)st.mtime, st.ino);
+    free(p);
+  }
+}
+
+
+/* the worker: the programs git_refresh_now runs, in its order, with its arguments */
+static void job_main (void *ud) {
+  GJob *j = (GJob *)ud;
+  Buf b;
+  char *top = NULL, num[32];
+  int i;
+  const char *a_top[] = {"rev-parse", "--show-toplevel", "--git-dir", NULL};
+  const char *a_branch[] = {"branch", "--show-current", NULL};
+  const char *a_all[] = {"status", "--porcelain=v1", "-z", "-uall", NULL};
+  const char *a_repo[] = {"status", "--porcelain=v1", "-b", "-z", NULL};
+  const char *a_sync[] = {"rev-list", "--left-right", "--count", "@{upstream}...HEAD", NULL};
+  const char *a_log[] = {"log", "--all", "--date-order", "--decorate=full", num,
+                         "--format=%H%x1f%P%x1f%D%x1f%an%x1f%at%x1f%s%x1e", NULL};
+  buf_init(&b);
+  if (job_git(j, j->dir, 0, a_top, &b) != 0 || b.len == 0) goto out;
+  {
+    char *nl = strchr(b.s, '\n'), *gd;
+    if (nl) *nl++ = '\0';
+    chomp(b.s);
+    to_native(b.s);
+    top = xstrdup(b.s);
+    gd = xstrdup(nl ? nl : ".git");
+    chomp(gd);
+    to_native(gd);
+    if (!path_is_sep(gd[0]) && !(gd[0] && gd[1] == ':')) {
+      char *a = path_join(j->dir, gd);
+      free(gd);
+      gd = a;
+    }
+    job_state(j, gd);
+    free(gd);
+  }
+  job_git(j, top, 0, a_branch, &b);
+#ifdef _WIN32
+  {	/* status_all's: -unormal, the links in the untracked folders, then -uall without them */
+    const char *a_normal[] = {"status", "--porcelain=v1", "-z", "-unormal", NULL};
+    size_t k, left = LINK_LOOK;
+    int dirs = 0;
+    if (job_git(j, top, 0, a_normal, &b) == 0) {
+      for (k = 0; k + 3 < b.len;) {
+        const char *e = b.s + k;
+        size_t len = strlen(e + 3);
+        if (e[0] == '?' && len > 0 && e[3 + len - 1] == '/') {
+          char *rel = xstrndup(e + 3, len - 1), *p = path_join(top, rel);
+          OsStat st;
+          dirs++;
+          to_native(p);
+          if (os_lstat(p, &st) == 0 && st.is_link) {
+            if (link_loops(p)) {
+              vec_push(&j->links, rel);
+              rel = NULL;
+            }
+          }
+          else links_in(p, rel, &left, &j->links);
+          free(rel);
+          free(p);
+        }
+        k += 3 + len + 1;
+        if (e[0] == 'R' || e[0] == 'C') k += strlen(b.s + k) + 1;
+      }
+      for (k = 0; k < j->links.n; k++) buf_printf(&j->finger, "\x1d%s", j->links.v[k]);
+      if (dirs > 0 && j->links.n > 0) {
+        const char **a = (const char **)xmalloc((j->links.n + 6) * sizeof(char *));
+        int n = 0;
+        a[n++] = "status";
+        a[n++] = "--porcelain=v1";
+        a[n++] = "-z";
+        a[n++] = "-uall";
+        a[n++] = "--";
+        for (k = 0; k < j->links.n; k++) a[n++] = xstrcat3(":(exclude,literal)", j->links.v[k], "");
+        a[n] = NULL;
+        job_git(j, top, 1, a, &b);
+        for (k = 5; a[k]; k++) free((char *)a[k]);
+        free(a);
+      }
+      else if (dirs > 0) job_git(j, top, 0, a_all, &b);
+    }
+  }
+#else
+  job_git(j, top, 0, a_all, &b);
+#endif
+  for (i = 0; j->ntop > 1 && i < j->ntop; i++)
+    if (m_fncmp(j->tops[i], top) != 0) job_git(j, j->tops[i], 0, a_repo, &b);
+  snprintf(num, sizeof(num), "-n%d", j->limit + 1);
+  job_git(j, top, 0, a_log, &b);
+  job_git(j, top, 0, a_sync, &b);
+out:
+  buf_free(&b);
+  free(top);
+  buf_putc(&j->finger, '\0');
+  mx_lock(j->mx);
+  j->done = 1;
+  mx_unlock(j->mx);
+}
+
+
+static void job_free (GJob *j) {
+  size_t i;
+  int k;
+  for (i = 0; i < j->nsaid; i++) {
+    free(j->said[i].key);
+    free(j->said[i].out);
+  }
+  free(j->said);
+  for (k = 0; k < j->ntop; k++) free(j->tops[k]);
+  free(j->tops);
+  free(j->git);
+  free(j->dir);
+  vec_free(&j->links);
+  buf_free(&j->finger);
+  mx_free(j->mx);
+  free(j);
+}
+
+
+/* git status and the graph read again, now (after a commit, a stage: what the user did shows at once) */
+void git_refresh (void) {
+  if (g_job) g_job->stale = 1;	/* what it reads is older than this */
+  free(g_finger);
+  g_finger = NULL;
+  git_refresh_now();
+}
+
+
+/* the same, read on a worker: the view keeps what it shows until git has answered */
+void git_refresh_async (void) {
+  GJob *j;
+  int i;
+  if (g_job) {
+    g_again = 1;
+    return;
+  }
+  repos_scan();
+  if (!have_git() || g_nrepo == 0) {	/* no git to wait for */
+    git_refresh();
+    return;
+  }
+  j = (GJob *)xmalloc(sizeof(GJob));
+  memset(j, 0, sizeof(*j));
+  j->git = xstrdup(g_git);
+  j->dir = xstrdup(repo_dir());
+  j->limit = graph_limit();
+  j->ntop = g_nrepo;
+  j->tops = (char **)xmalloc((size_t)g_nrepo * sizeof(char *));
+  for (i = 0; i < g_nrepo; i++) j->tops[i] = xstrdup(g_repo[i].top);
+  j->mx = mx_new();
+  vec_init(&j->links);
+  buf_init(&j->finger);
+  if ((j->th = th_start(job_main, j)) == NULL) {
+    job_free(j);
+    git_refresh();
+    return;
+  }
+  g_job = j;
+}
+
+
+/*
+** One git command on a worker (git blame, the Timeline's log): started
+** with git_async, looked at with git_async_done each turn of the main
+** loop, its output taken with git_async_take, which logs it as git_run
+** does. A command started is always waited for to its end and taken.
+*/
+struct GitAsync {
+  char **argv;	/* its own copies */
+  int n, rc;
+  Mutex *mx;
+  int done;	/* under mx */
+  Thread *th;
+  Buf out;
+  long ms;
+};
+
+static int g_nasync;	/* started and not taken */
+
+
+static void async_main (void *ud) {
+  GitAsync *a = (GitAsync *)ud;
+  long long t0 = os_now_us();
+  a->rc = run_capture(a->argv, &a->out);
+  a->ms = (long)((os_now_us() - t0) / 1000);
+  mx_lock(a->mx);
+  a->done = 1;
+  mx_unlock(a->mx);
+}
+
+
+/* git args (NULL ends them) in the repository on a worker; NULL: no repository, no git, no thread */
+GitAsync *git_async (const char *const *args) {
+  GitAsync *a;
+  char **argv;
+  int i;
+  if (g_top == NULL || !have_git()) return NULL;
+  argv = git_argv(g_git, g_top, 0, args, &i);
+  a = (GitAsync *)xmalloc(sizeof(GitAsync));
+  memset(a, 0, sizeof(*a));
+  a->n = i;
+  a->argv = (char **)xmalloc(((size_t)i + 1) * sizeof(char *));
+  for (i = 0; i < a->n; i++) a->argv[i] = xstrdup(argv[i]);
+  a->argv[a->n] = NULL;
+  free(argv);
+  a->mx = mx_new();
+  buf_init(&a->out);
+  if ((a->th = th_start(async_main, a)) == NULL) {
+    for (i = 0; i < a->n; i++) free(a->argv[i]);
+    free(a->argv);
+    mx_free(a->mx);
+    buf_free(&a->out);
+    free(a);
+    return NULL;
+  }
+  g_nasync++;
+  return a;
+}
+
+
+int git_async_done (GitAsync *a) {
+  int d;
+  mx_lock(a->mx);
+  d = a->done;
+  mx_unlock(a->mx);
+  return d;
+}
+
+
+/* waits for it (at once when it is done), its output into out; its exit code */
+int git_async_take (GitAsync *a, Buf *out) {
+  Buf cmd;
+  int i, rc;
+  th_join(a->th);
+  g_nasync--;
+  rc = a->rc;
+  buf_putn(out, a->out.s ? a->out.s : "", a->out.len);
+  buf_putc(out, '\0');
+  out->len--;
+  buf_init(&cmd);
+  for (i = 4; i < a->n; i++) buf_printf(&cmd, " %s", a->argv[i]);
+  buf_putc(&cmd, '\0');
+  out_log("Git", "[%s] > git%s [%ldms]", rc == 0 ? "info" : "error", cmd.s, a->ms);
+  buf_free(&cmd);
+  for (i = 0; i < a->n; i++) free(a->argv[i]);
+  free(a->argv);
+  mx_free(a->mx);
+  buf_free(&a->out);
+  free(a);
+  return rc;
+}
+
+
+/* a refresh or a command on a worker is running */
+int git_busy (void) {
+  return g_job != NULL || g_nasync > 0;
+}
+
+
+/* the main loop's: a worker's refresh done goes in; 1: what shows changed */
+int git_async_idle (void) {
+  GJob *j = g_job;
+  int done, changed = 0;
+  if (j == NULL) return 0;
+  mx_lock(j->mx);
+  done = j->done;
+  mx_unlock(j->mx);
+  if (!done) return 0;
+  th_join(j->th);
+  g_job = NULL;
+  if (!j->stale && (g_finger == NULL || strcmp(g_finger, j->finger.s) != 0)) {
+    char *finger = xstrdup(j->finger.s);
+    g_said = j->said;
+    g_nsaid = j->nsaid;
+    g_said_links = &j->links;
+    git_refresh_now();	/* as it always reads it, git's answers already here */
+    g_said_links = NULL;
+    g_said = NULL;
+    g_nsaid = 0;
+    free(g_finger);
+    g_finger = finger;
+    changed = 1;
+  }
+  job_free(j);	/* the answers not asked for go with it */
+  if (g_again) {
+    g_again = 0;
+    git_refresh_async();
+  }
+  return changed;
+}
+
+
+/* the editor ends: the worker's git first */
+void git_stop (void) {
+  if (g_job == NULL) return;
+  th_join(g_job->th);
+  job_free(g_job);
+  g_job = NULL;
+}
+
+/* }================================================================== */
 
 
 const char *git_branch (void) {
@@ -3115,7 +3554,9 @@ static void draw_fold (int x, int y, int w, size_t hidden) {
 */
 static void draw_dmap (int x, int y, int h, size_t i0) {
   static const unsigned char bit[4][2] = {{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}};
-  size_t n = vcount(), per = (n + (size_t)h - 1) / (size_t)h, r;
+  size_t n = vcount(), per, r;
+  if (h <= 0) return;	/* a pane with no rows: nothing to divide them into */
+  per = (n + (size_t)h - 1) / (size_t)h;
   if (per == 0) per = 1;
   for (r = 0; (int)r < h; r++) {
     size_t i, kinds = 0;

@@ -25,6 +25,8 @@ typedef struct Chan {
   char **line;	/* a ring of MAX_LINES */
   int head, n;	/* the first one, how many */
   int open;	/* the last line has not ended yet */
+  size_t olen;	/* how long that one is */
+  int cr;	/* the last line ended at a '\r': a '\n' right after it ends nothing more */
   int top;	/* the first line shown */
   int follow;	/* the view stays at the end */
 } Chan;
@@ -67,26 +69,52 @@ static void add_line (Chan *c, const char *s, size_t n) {
 }
 
 
-/* text into a channel; lines end at '\n' (a '\r' before it goes), the last may stay open */
+#define MAX_OPEN	16384	/* a line that never ends is cut there (a progress bar, a dump) */
+
+/* the first '\r' or '\n' in s, or NULL */
+static const char *eol (const char *s, size_t n) {
+  size_t i;
+  for (i = 0; i < n; i++)
+    if (s[i] == '\n' || s[i] == '\r') return s + i;
+  return NULL;
+}
+
+
+/* text into a channel; lines end at '\n', "\r\n" or a lone '\r' (VS Code's text model breaks there too), the last may stay open */
 void out_append (const char *name, const char *s, size_t n) {
   Chan *c = chan(name);
   while (n > 0) {
-    const char *nl = (const char *)memchr(s, '\n', n);
-    size_t len = nl ? (size_t)(nl - s) : n;
-    size_t k = len;
-    if (k > 0 && s[k - 1] == '\r') k--;
+    const char *nl;
+    size_t k;
+    if (c->cr && *s == '\n') {	/* the rest of a "\r\n" split across two writes */
+      c->cr = 0;
+      s++;
+      n--;
+      continue;
+    }
+    c->cr = 0;
+    nl = eol(s, n);
+    k = nl ? (size_t)(nl - s) : n;
+    if (c->open && c->olen + k > MAX_OPEN) c->open = 0;	/* too long: the rest on a line of its own */
     if (c->open && c->n > 0) {	/* the rest of the last line */
       char **l = at(c, c->n - 1);
-      size_t old = strlen(*l);
-      *l = (char *)xrealloc(*l, old + k + 1);
-      memcpy(*l + old, s, k);
-      (*l)[old + k] = '\0';
+      *l = (char *)xrealloc(*l, c->olen + k + 1);
+      memcpy(*l + c->olen, s, k);
+      (*l)[c->olen + k] = '\0';
+      c->olen += k;
     }
-    else add_line(c, s, k);
+    else {
+      add_line(c, s, k);
+      c->olen = k;
+    }
     c->open = nl == NULL;
     if (nl == NULL) break;
-    s = nl + 1;
-    n -= len + 1;
+    if (*nl == '\r') {
+      if (k + 1 < n && nl[1] == '\n') k++;	/* "\r\n": one end */
+      else if (k + 1 == n) c->cr = 1;	/* its '\n' may come in the next write */
+    }
+    s += k + 1;
+    n -= k + 1;
   }
 }
 
@@ -138,7 +166,8 @@ void out_clear_chan (const char *name) {
   int i;
   for (i = 0; i < c->n; i++) free(*at(c, i));
   c->n = c->head = c->top = 0;
-  c->open = 0;
+  c->open = c->cr = 0;
+  c->olen = 0;
   c->follow = 1;
 }
 
@@ -150,7 +179,8 @@ void out_clear (void) {
   c = &g_chan[g_cur];
   for (i = 0; i < c->n; i++) free(*at(c, i));
   c->n = c->head = c->top = 0;
-  c->open = 0;
+  c->open = c->cr = 0;
+  c->olen = 0;
   c->follow = 1;
 }
 

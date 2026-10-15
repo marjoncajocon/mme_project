@@ -45,6 +45,7 @@ typedef struct Cell {
   int type;
   Buf src;	/* its text, lines ended by LF, no LF at the end */
   const Json *meta;	/* its metadata, written back as it is (NULL: {}) */
+  Json *meta_own;	/* the tree meta is in when it is not the file's */
   char id[40];	/* nbformat 4.5's cell id; "": none */
   Out *out;
   size_t nout;
@@ -153,6 +154,25 @@ static void strip_ansi (Buf *b, const char *s, size_t n) {	/* Jupyter's tracebac
     }
     if (s[i] != '\r') buf_putc(b, s[i]);
   }
+}
+
+
+/* a stream's text (while True: print()) is kept to its last ~2 MB, cut at a line, as VS Code's is */
+#define STREAM_MAX	(2u << 20)
+
+static void stream_cap (Buf *t) {
+  static const char mark[] = "[... output truncated: the first lines are not kept ...]\n";
+  size_t m = sizeof(mark) - 1, from;
+  const char *nl;
+  if (t->len <= STREAM_MAX) return;
+  from = t->len - STREAM_MAX / 4 * 3;	/* room to grow again before the next cut */
+  nl = memchr(t->s + from, '\n', t->len - from);
+  if (nl) from = (size_t)(nl - t->s) + 1;
+  else
+    while (from < t->len && ((unsigned char)t->s[from] & 0xC0) == 0x80) from++;	/* not in a UTF-8 character */
+  memmove(t->s + m, t->s + from, t->len - from);
+  memcpy(t->s, mark, m);
+  t->len = m + t->len - from;
 }
 
 
@@ -439,6 +459,7 @@ static Cell *cell_new (int type, const char *src, size_t n) {
 static void cell_free (Cell *c) {
   size_t i;
   cell_clear(c);
+  json_free(c->meta_own);
   buf_free(&c->src);
   for (i = 0; i < c->nundo; i++) free(c->undo[i].s);
   free(c->undo);
@@ -494,6 +515,7 @@ static void load_cells (Nb *nb) {
         o->type = OT_STREAM;
         snprintf(o->name, sizeof(o->name), "%s", json_str(json_get(oj, "name"), "stdout"));
         strip_ansi(&o->text, s, strlen(s));
+        stream_cap(&o->text);
         free(s);
       }
       else o->type = strcmp(ot, "error") == 0 ? OT_ERROR :
@@ -1055,6 +1077,7 @@ static void k_message (Nb *nb, const Json *m) {
       snprintf(o->name, sizeof(o->name), "%s", name);
     }
     strip_ansi(&o->text, s, strlen(s));
+    stream_cap(&o->text);
   }
   else if (strcmp(t, "result") == 0 || strcmp(t, "display") == 0 || strcmp(t, "error") == 0) {
     Buf b;
@@ -2267,11 +2290,35 @@ static Cell *g_deleted;	/* Z brings the last cell deleted back */
 static size_t g_deleted_at;
 
 
+static Json *json_copy (const Json *j) {	/* a tree of its own, as the file's goes when the notebook does */
+  Buf b;
+  Json *r;
+  buf_init(&b);
+  jw(&b, j, 0);
+  r = json_parse(b.s ? b.s : "null", b.len);
+  buf_free(&b);
+  return r;
+}
+
+
+/* the cell kept for Z: what it borrows from its notebook's file copied, Z may put it in another */
+static void cell_unborrow (Cell *c) {
+  size_t i;
+  if (c->meta && c->meta_own == NULL) c->meta = c->meta_own = json_copy(c->meta);
+  for (i = 0; i < c->nout; i++) {
+    Out *o = &c->out[i];
+    if (o->type == OT_STREAM) o->j = NULL;	/* its text is its own: j is not read */
+    else if (o->j && o->own == NULL) o->j = o->own = json_copy(o->j);
+  }
+}
+
+
 static void delete_cell (Nb *nb, size_t i) {
   if (i >= nb->n) return;
   if (g_deleted) cell_free(g_deleted);
   g_deleted = nb->cell[i];
   g_deleted_at = i;
+  cell_unborrow(g_deleted);
   if (g_deleted->state) g_deleted->state = 0;
   memmove(nb->cell + i, nb->cell + i + 1, (nb->n - i - 1) * sizeof(Cell *));
   nb->n--;

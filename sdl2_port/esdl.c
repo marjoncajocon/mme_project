@@ -1678,7 +1678,7 @@ void scr_flush (void) {
   W.ccx = S.cx;
   W.ccy = S.cy;
   caret_sync();
-  if (strcmp(ui_title, W.title) != 0) {	/* the title bar says what mme's does */
+  if (strncmp(ui_title, W.title, sizeof(W.title) - 1) != 0) {	/* the title bar says what mme's does (kept cut short) */
     snprintf(W.title, sizeof(W.title), "%s", ui_title);
     SDL_SetWindowTitle(W.win, W.title[0] ? W.title : "mme");
   }
@@ -1919,7 +1919,8 @@ static void font_settings (void) {
     W.line_h = lh;
     again = 1;
   }
-  if ((size != W.font_size || strcmp(fam, W.font_fam) != 0) && ed_font_make(fam, size) == 0) again = 1;
+  if ((size != W.font_size || strncmp(fam, W.font_fam, sizeof(W.font_fam) - 1) != 0) &&	/* kept cut short: a long one is the same */
+      ed_font_make(fam, size) == 0) again = 1;
   if (ui != W.ui_size && ui_font_make(ui) == 0) again = 1;
   if (!again) return;
   font_sizes();

@@ -708,7 +708,8 @@ typedef struct Prob {
 } Prob;
 
 static Prob *g_prob;
-static size_t g_nprob;
+static size_t g_nprob, g_cprob;
+#define PROB_MAX	10000	/* more is a flood, not a list */
 
 
 static void matcher_free (Matcher *m) {
@@ -867,6 +868,7 @@ typedef struct Job {
   Matcher *m;
   int nm;
   Buf line;
+  int cr;	/* a \r came: the line starts over unless \n follows */
   int exited, exit_code, ready;	/* what its terminal said, for task_poll */
   int told;	/* the one asked for: cb was told */
   TaskCb cb;
@@ -1287,6 +1289,7 @@ static void add_problem (int j, const Matcher *m, const char *path, size_t ln, s
   const char *base = m && m->base ? m->base : m && m->builtin == PM_NONE ? side_root() : g_job[j].cwd;
   int abs = path_is_sep(path[0]) || (path[0] && path[1] == ':');
   size_t i;
+  if (g_nprob >= PROB_MAX) return;
   if (m && m->loc == 1) full = xstrdup(path);	/* absolute */
   else if (abs) full = xstrdup(path);
   else full = path_join(base, path);
@@ -1306,7 +1309,10 @@ static void add_problem (int j, const Matcher *m, const char *path, size_t ln, s
       free(real);
       return;
     }
-  g_prob = (Prob *)xrealloc(g_prob, (g_nprob + 1) * sizeof(Prob));
+  if (g_nprob == g_cprob) {
+    g_cprob = g_cprob ? g_cprob * 2 : 64;
+    g_prob = (Prob *)xrealloc(g_prob, g_cprob * sizeof(Prob));
+  }
   g_prob[g_nprob].path = real;
   g_prob[g_nprob].serial = g_job[j].serial;
   g_prob[g_nprob].label = xstrdup(g_job[j].label);
@@ -1531,14 +1537,20 @@ void task_output (int id, const char *s, size_t n) {
       else i++;
       continue;
     }
-    if (c == '\r') continue;
+    if (c == '\r') {	/* progress painted over: known at the next byte */
+      x->cr = 1;
+      continue;
+    }
     if (c == '\n') {
       buf_putc(&x->line, '\0');
       one_line(j, x->line.s);
       x = &g_job[j];
       x->line.len = 0;
+      x->cr = 0;
       continue;
     }
+    if (x->cr || x->line.len >= 65536) x->line.len = 0;	/* starts over; too long is no problem line */
+    x->cr = 0;
     buf_putc(&x->line, c);
   }
 }

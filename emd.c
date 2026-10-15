@@ -2116,7 +2116,9 @@ static void blocks (const Doc *d) {
   Cells para = {NULL, 0, 0}, pre1 = {NULL, 0, 0}, pre2 = {NULL, 0, 0};
   while (y < n) {
     const Row *r = &d->row[y];
-    size_t i = skip_ws(r);
+    size_t i;
+    if (!M.counting && M.row >= M.top + (size_t)M.h) break;	/* drawing: the rows under the screen are not laid out each frame */
+    i = skip_ws(r);
     long num;
     size_t mk;
     char fch;

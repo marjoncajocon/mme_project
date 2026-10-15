@@ -126,8 +126,15 @@ static SFound *scan (SJob *J, const Regex *re, const char *rel, const char *s, s
     start = i + 1;
   }
   if (nl > 1 && len > 0 && s[len - 1] == '\n') nl--;	/* the end of the last line is not one more */
-  for (i = 0; i < nl && J->hits + hits < MAX_HITS; i++) {
+  for (i = 0; i < nl && hits < MAX_HITS; i++) {
     size_t a = ls[i], e = i + 1 < nl ? ls[i + 1] - 1 : len, at, ml, n = 0;
+    if ((i & 255) == 255) {	/* a slow pattern in a big file: told to stop, it does not wait for the end */
+      int stop;
+      mx_lock(J->mx);
+      stop = J->cancel || J->hits + hits >= MAX_HITS;
+      mx_unlock(J->mx);
+      if (stop) break;
+    }
     if (e > a && s[e - 1] == '\n') e--;
     if (e > a && s[e - 1] == '\r') e--;
     for (at = search_find(J->q, J->mcase, J->word, re, s + a, e - a, 0, &ml); at < e - a;
@@ -244,6 +251,7 @@ static void worker (void *ud) {
       }
       vec_free(&v);
     }
+    else if (st.is_fifo || st.is_sock || st.is_chr || st.is_blk) ;	/* a pipe, a device: a read of it never ends */
     else if (st.size <= MAX_FILE && !search_skipped(name, 0) && (J->inc[0] == '\0' || search_globs(J->inc, r))) {
       size_t len = 0;
       const char *ot = open_text(J, p, &len);

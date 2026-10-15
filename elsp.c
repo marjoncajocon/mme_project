@@ -59,6 +59,7 @@ typedef struct Srv {
   int utf8;	/* positions in bytes, else in UTF-16 units */
   int dead;
   int told;	/* its end is in the output */
+  int junk;	/* it wrote what is not LSP to its stdout: said once */
   Req req[64];
   int nreq;
   signed char semtok[64];	/* the server's token types (its legend) as T_*, -1: kept as it is */
@@ -276,6 +277,8 @@ static void send_msg (Srv *s, const Buf *body) {
 
 
 /* a request: {"jsonrpc":"2.0","id":n,"method":m,"params":params}; its id */
+static void lens_evicted (const Req *r);
+
 static int request (Srv *s, const char *method, const char *params, int kind, Doc *d) {
   Buf b;
   int id = ++s->id;
@@ -283,8 +286,15 @@ static int request (Srv *s, const char *method, const char *params, int kind, Do
   buf_printf(&b, "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"%s\",\"params\":%s}", id, method, params);
   send_msg(s, &b);
   buf_free(&b);
-  if (s->nreq == 64) {	/* the oldest is forgotten */
-    memmove(s->req, s->req + 1, 63 * sizeof(Req));
+  if (s->nreq == 64) {	/* one is forgotten: a lens's title or an answer nobody reads first, else the oldest */
+    int i, v = -1;
+    for (i = 0; i < s->nreq && v < 0; i++)
+      if (s->req[i].kind == RQ_LENS_RESOLVE) v = i;
+    for (i = 0; i < s->nreq && v < 0; i++)
+      if (s->req[i].kind == RQ_OTHER) v = i;
+    if (v < 0) v = 0;
+    if (s->req[v].kind == RQ_LENS_RESOLVE) lens_evicted(&s->req[v]);
+    memmove(s->req + v, s->req + v + 1, (size_t)(63 - v) * sizeof(Req));
     s->nreq--;
   }
   s->req[s->nreq].id = id;
@@ -551,7 +561,13 @@ static Srv *start (const char *lang) {
     return NULL;
   }
   argv = split_cmd(cmd);
-  if (argv == NULL || os_pipe(to) != 0 || os_pipe(from) != 0) {
+  i = argv != NULL && os_pipe(to) == 0;
+  if (i && os_pipe(from) != 0) {	/* its stdin was made: not kept open for nothing */
+    os_close(to[0]);
+    os_close(to[1]);
+    i = 0;
+  }
+  if (!i) {
     if (strlen(g_failed) + strlen(key) < sizeof(g_failed)) strcat(g_failed, key);
     if (strcmp(lang, EXT_LANG) == 0) toast(1, "Extensions: node was not found (mme.extensions.nodePath)");
     else toast(1, "IntelliSense for %s: '%s' was not found", lang, cmd);
@@ -1017,16 +1033,28 @@ static void progress (Srv *s, const Json *params) {
 }
 
 
+#define QUIT_WAIT	300000	/* us all the servers together get to end by themselves when mme quits */
+
 void lsp_shutdown (void) {
+  long long end;
   int i;
   g_down = 1;
   for (i = 0; i < g_nsrv; i++) {
     Srv *s = g_srv[i];
+    if (s->gone || s->dead) continue;
+    request(s, "shutdown", "null", RQ_OTHER, NULL);
+    notify(s, "exit", "null");
+  }
+  end = os_now_us() + QUIT_WAIT;	/* a moment for the extensions' deactivate, once for all of them */
+  for (i = 0; i < g_nsrv; i++) {
+    Srv *s = g_srv[i];
+    long long left = end - os_now_us();
+    if (s->gone || s->dead || left <= 0) continue;
+    srv_reap(s, left);
+  }
+  for (i = 0; i < g_nsrv; i++) {
+    Srv *s = g_srv[i];
     if (s->gone) continue;	/* stopped already */
-    if (!s->dead) {
-      request(s, "shutdown", "null", RQ_OTHER, NULL);
-      notify(s, "exit", "null");
-    }
     os_close(s->to);
     os_close(s->from);
     if (s->err >= 0) os_close(s->err);
@@ -1438,7 +1466,12 @@ static struct {
   Doc *d;
   char **json;
   size_t n;
+  size_t gen;	/* one more for each set: a title asked for an older one is not this one's */
+  size_t next;	/* the first lens not looked at for its title yet */
+  int asked;	/* the titles asked for that have not come */
 } g_lens;
+
+#define LENS_ASK	16	/* titles (codeLens/resolve) asked for at once: the rest when they come */
 
 
 /* the code lenses of a file that is closing: its Doc must not be used again */
@@ -1446,6 +1479,31 @@ static void lens_forget (const Doc *d) {
   if (g_lens.d == d) {
     g_lens.d = NULL;
     g_lens.s = NULL;
+    g_lens.gen++;
+    g_lens.asked = 0;
+  }
+}
+
+
+/* a title asked for, forgotten (the table was full): it does not hold a place of the LENS_ASK; the next answer asks again */
+static void lens_evicted (const Req *r) {
+  if ((size_t)r->at.y == g_lens.gen && r->d == g_lens.d && g_lens.asked > 0) g_lens.asked--;
+}
+
+
+/* the titles still to come asked for, a few at a time: a file of lenses does not crowd out completion and format */
+static void lens_more (void) {
+  Srv *s = g_lens.s;
+  while (s && !s->dead && g_lens.d && g_lens.asked < LENS_ASK && g_lens.next < g_lens.n) {
+    size_t i = g_lens.next++;
+    Json *j = json_parse(g_lens.json[i], strlen(g_lens.json[i]));
+    if (j && !json_get(j, "command")) {	/* its title comes later */
+      request(s, "codeLens/resolve", g_lens.json[i], RQ_LENS_RESOLVE, g_lens.d);
+      s->req[s->nreq - 1].at.x = i;
+      s->req[s->nreq - 1].at.y = g_lens.gen;
+      g_lens.asked++;
+    }
+    json_free(j);
   }
 }
 
@@ -1483,6 +1541,9 @@ static void lenses (Srv *s, Doc *d, const Json *res) {
   g_lens.n = 0;
   g_lens.s = s;
   g_lens.d = d;
+  g_lens.gen++;
+  g_lens.next = 0;
+  g_lens.asked = 0;
   if (res && res->type == J_ARR && res->n) {
     g_lens.json = (char **)xmalloc(res->n * sizeof(char *));
     for (i = 0; i < res->n; i++) {
@@ -1491,12 +1552,9 @@ static void lenses (Srv *s, Doc *d, const Json *res) {
       json_write(&b, res->kid[i]);
       buf_putc(&b, '\0');
       g_lens.json[g_lens.n++] = buf_take(&b);
-      if (!json_get(res->kid[i], "command") && i < 100) {	/* its title comes later */
-        request(s, "codeLens/resolve", g_lens.json[i], RQ_LENS_RESOLVE, d);
-        s->req[s->nreq - 1].at.x = i;
-      }
     }
   }
+  lens_more();
   lens_tell();
 }
 
@@ -2485,6 +2543,29 @@ void lsp_inline_signout (void) {
 ** ===================================================================
 */
 
+static int g_diag_gaps;	/* a file's problems may have all gone: diag_gc drops it */
+
+/*
+** The files with no problems left go. Only where the table is read from
+** the start (lsp_diag_files, lsp_counts): the Problems panel keeps indexes
+** into it from its last lsp_diag_files, and must not see them move under it.
+*/
+static void diag_gc (void) {
+  size_t i, n = 0;
+  if (!g_diag_gaps) return;
+  g_diag_gaps = 0;
+  for (i = 0; i < g_ndiag; i++) {
+    if (g_diag[i].n == 0) {
+      free(g_diag[i].uri);
+      free(g_diag[i].v);
+      continue;
+    }
+    g_diag[n++] = g_diag[i];	/* in order: the panel's files stay where they were */
+  }
+  g_ndiag = n;
+}
+
+
 static DFile *dfile (const char *uri, int make) {
   size_t i;
   for (i = 0; i < g_ndiag; i++)
@@ -2509,6 +2590,7 @@ static void diag_drop (const char *uri) {
   for (i = 0; i < ns; i++) free(f->v[i].msg);
   memmove(f->v, f->v + ns, (f->nx + f->nt) * sizeof(Diag));
   f->n = f->nx + f->nt;
+  if (f->n == 0) g_diag_gaps = 1;
 }
 
 
@@ -2552,6 +2634,7 @@ static void diag_set (Srv *s, const char *uri, const Json *list) {
     }
   }
   f->n += keep_after;
+  if (f->n == 0) g_diag_gaps = 1;
 }
 
 
@@ -2611,6 +2694,7 @@ void lsp_task_diags (const char *path, const Diag *v, size_t n) {
   }
   f->n += n;
   f->nt = n;
+  if (f->n == 0) g_diag_gaps = 1;
 }
 
 
@@ -2781,6 +2865,7 @@ void lsp_task_clear (void) {
     for (i = f->n - f->nt; i < f->n; i++) free(f->v[i].msg);
     f->n -= f->nt;
     f->nt = 0;
+    if (f->n == 0) g_diag_gaps = 1;
   }
 }
 
@@ -2812,12 +2897,18 @@ const Diag *lsp_diags (const Doc *d, size_t *n) {
 
 
 size_t lsp_diag_files (void) {
+  diag_gc();
   return g_ndiag;
 }
 
 
 /* the problems of file i; *path: malloc'd */
 const Diag *lsp_diag_file (size_t i, char **path, size_t *n) {
+  if (i >= g_ndiag) {	/* an index kept from before the table shrank: nothing there */
+    *path = xstrdup("");
+    *n = 0;
+    return NULL;
+  }
   *path = lsp_path(g_diag[i].uri);
   *n = g_diag[i].n;
   return g_diag[i].v;
@@ -2827,6 +2918,7 @@ const Diag *lsp_diag_file (size_t i, char **path, size_t *n) {
 void lsp_counts (int *errors, int *warnings) {
   size_t i, j;
   *errors = *warnings = 0;
+  diag_gc();
   for (i = 0; i < g_ndiag; i++)
     for (j = 0; j < g_diag[i].n; j++) {
       if (g_diag[i].v[j].sev == 1) (*errors)++;
@@ -3836,14 +3928,18 @@ static void handle (Srv *s, const Json *msg) {
     else if (r.kind == RQ_LENS) lenses(s, r.d, json_get(msg, "result"));
     else if (r.kind == RQ_LENS_RESOLVE) {
       const Json *res = json_get(msg, "result");
-      if (res && r.d == g_lens.d && r.at.x < g_lens.n) {
-        Buf b;
-        buf_init(&b);
-        json_write(&b, res);
-        buf_putc(&b, '\0');
-        free(g_lens.json[r.at.x]);
-        g_lens.json[r.at.x] = buf_take(&b);
-        lens_tell();
+      if (r.at.y == g_lens.gen && r.d == g_lens.d) {	/* not a set that was replaced since */
+        g_lens.asked--;
+        if (res && res->type == J_OBJ && r.at.x < g_lens.n) {
+          Buf b;
+          buf_init(&b);
+          json_write(&b, res);
+          buf_putc(&b, '\0');
+          free(g_lens.json[r.at.x]);
+          g_lens.json[r.at.x] = buf_take(&b);
+          lens_tell();
+        }
+        lens_more();
       }
     }
     else if (r.kind == RQ_BULB) {	/* the source actions (organize imports ...) do not count, as in VS Code */
@@ -4005,21 +4101,55 @@ static size_t hdr_len (const char *s) {
 ** server's messages again (a save that formats waits in lsp_poll), and must
 ** not see the same one again, nor drop the next.
 */
+#define HDR_MAX	8192	/* a header is not longer: past it with no end, what came is not LSP */
+
+/* the first pat in s[0 .. n), its case not minded (header names are not cased); NULL: none */
+static char *find_ci (char *s, size_t n, const char *pat) {
+  size_t i, k = strlen(pat);
+  for (i = 0; i + k <= n; i++)
+    if (m_strnicmp(s + i, pat, k) == 0) return s + i;
+  return NULL;
+}
+
+
+/* the first "\r\n\r\n" in s[0 .. n), NULL: none */
+static char *find_end (char *s, size_t n) {
+  size_t i;
+  for (i = 0; i + 4 <= n; i++)
+    if (s[i] == '\r' && memcmp(s + i, "\r\n\r\n", 4) == 0) return s + i;
+  return NULL;
+}
+
+
 static int messages (Srv *s) {
   int got = 0;
   g_busy++;
   for (;;) {
     char *at, *hdr_end, *cl;
-    size_t body, hlen;
+    size_t body, hlen, have;
     Json *j;
     if (s->off >= s->in.len) break;
     s->in.s[s->in.len] = '\0';
     at = s->in.s + s->off;
-    hdr_end = strstr(at, "\r\n\r\n");
-    if (hdr_end == NULL) break;
+    have = s->in.len - s->off;
+    hdr_end = find_end(at, have < HDR_MAX ? have : HDR_MAX);	/* bounded: a poll does not scan all that waits */
+    if (hdr_end == NULL) {
+      if (have < HDR_MAX) break;	/* the rest of the header is still coming */
+      if (!s->junk) {	/* a print to stdout, not a message: skipped to the next header */
+        out_log(s->chan, "[warning] The server wrote what is not LSP to its stdout: skipped");
+        s->junk = 1;
+      }
+      cl = find_ci(at + 1, have - 1, "Content-Length:");
+      if (cl == NULL) {	/* none: all of it goes but a tail a split "Content-Length:" may start in */
+        s->off = s->in.len - 14;
+        break;
+      }
+      s->off = (size_t)(cl - s->in.s);
+      continue;
+    }
     hlen = (size_t)(hdr_end - at) + 4;
-    cl = strstr(at, "Content-Length:");
-    if (cl == NULL || cl > hdr_end) {	/* no length: drop the header */
+    cl = find_ci(at, (size_t)(hdr_end - at), "Content-Length:");
+    if (cl == NULL) {	/* no length: drop the header */
       s->off += hlen;
       continue;
     }
@@ -4049,16 +4179,20 @@ static int messages (Srv *s) {
 }
 
 
+#define POLL_MAX	((size_t)1 << 20)	/* bytes of one server's (and of its stderr) a poll reads at most: the screen is drawn between */
+
 /* what the server wrote, into s->in */
 static void srv_read (Srv *s) {
   char chunk[65536];
-  while (!s->dead && os_wait_readable(s->from, 0) == 1) {
+  size_t took = 0;
+  while (!s->dead && took < POLL_MAX && os_wait_readable(s->from, 0) == 1) {
     long n = os_read(s->from, chunk, sizeof(chunk));
     if (n <= 0) {
       s->dead = 1;
       break;
     }
     trace("-- read ", "", 0);
+    took += (size_t)n;
     buf_putn(&s->in, chunk, (size_t)n);
     buf_putc(&s->in, '\0');	/* room for the NUL messages() puts */
     s->in.len--;
@@ -4108,16 +4242,18 @@ int lsp_poll (void) {
   for (i = 0; i < g_nsrv; i++) {
     Srv *s = g_srv[i];
     char chunk[65536];
+    size_t took = 0;
     int status;
     if (s->dead) continue;
     srv_read(s);
-    while (s->err >= 0 && os_wait_readable(s->err, 0) == 1) {	/* what it says on stderr: its channel */
+    while (s->err >= 0 && took < POLL_MAX && os_wait_readable(s->err, 0) == 1) {	/* what it says on stderr: its channel */
       long n = os_read(s->err, chunk, sizeof(chunk));
       if (n <= 0) {
         os_close(s->err);
         s->err = -1;
         break;
       }
+      took += (size_t)n;
       out_append(s->chan, chunk, (size_t)n);
     }
     if (!s->reaped && s->pid > 0 && os_poll_proc(s->proc, &status) == 1) s->dead = s->reaped = 1;	/* its handle is closed now */

@@ -392,11 +392,13 @@ static int png_decode (const unsigned char *b, size_t n, Pix *out) {
       inter = d[12];
     }
     else if (memcmp(type, "PLTE", 4) == 0) {
+      free(pal);	/* a second one (no file should have it) replaces the first */
       pal = (unsigned char *)xmalloc(len + 1);
       memcpy(pal, d, len);
       npal = len / 3;
     }
     else if (memcmp(type, "tRNS", 4) == 0) {
+      free(trns);
       trns = (unsigned char *)xmalloc(len + 1);
       memcpy(trns, d, len);
       ntrns = len;

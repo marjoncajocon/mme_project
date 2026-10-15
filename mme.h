@@ -1306,6 +1306,14 @@ int git_key (int k, SideAct *act);
 void git_click (int row, int col, SideAct *act);
 void git_wheel (int d);
 void git_refresh (void);
+void git_refresh_async (void);	/* git_refresh on a worker: the view keeps what it shows until git answers */
+int git_async_idle (void);	/* the main loop's: a refresh read on the worker goes in; 1: it changed */
+int git_busy (void);	/* a refresh or a command on a worker is running */
+typedef struct GitAsync GitAsync;
+GitAsync *git_async (const char *const *args);	/* git args in the repository, on a worker; NULL: it could not */
+int git_async_done (GitAsync *a);	/* 1: it has ended */
+int git_async_take (GitAsync *a, Buf *out);	/* its output (waited for), its exit code; a is freed */
+void git_stop (void);	/* the editor ends: the worker's git first */
 int git_mark (const char *path, int dir);	/* 'M' 'A' 'D' 'U' or 0: for the Explorer */
 const char *git_branch (void);	/* "" outside a repository */
 int git_count (void);	/* changed files: the badge on the activity bar */
@@ -1375,6 +1383,7 @@ void mdiff_fold_all (void *page, int fold);	/* Collapse All, Expand All */
 /* egitlog.c - the Source Control Graph, branches, the git commands, blame */
 void graph_load (void);
 size_t graph_count (void);
+int graph_limit (void);	/* the commits the graph asks git for */
 int graph_more (void);	/* more commits than shown: "Load More..." */
 void graph_load_more (void);
 const char *graph_hash (size_t i);

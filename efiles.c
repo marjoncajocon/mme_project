@@ -59,13 +59,13 @@ int fs_rename (const char *from, const char *to) {
 */
 typedef DWORD (WINAPI *FinalPathFn) (HANDLE, LPWSTR, DWORD, DWORD);
 
-static FinalPathFn final_path (void) {
-  static int tried;
-  static FinalPathFn fn;
+static FinalPathFn final_path (void) {	/* the workers ask too: fn is set before tried says so */
+  static volatile int tried;
+  static FinalPathFn volatile fn;
   if (!tried) {
     HMODULE k = GetModuleHandleW(L"kernel32.dll");
-    tried = 1;
     if (k) fn = (FinalPathFn)(void (*)(void))GetProcAddress(k, "GetFinalPathNameByHandleW");
+    tried = 1;
   }
   return fn;
 }

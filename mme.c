@@ -235,7 +235,9 @@ static struct {
   int open;
   char *path;	/* what the items are for */
   int stale;	/* read them again */
-  int loading;	/* git log has not run for path yet (tl_idle runs it) */
+  int loading;	/* git log has not run for path yet (tl_idle starts it) */
+  GitAsync *job;	/* git log running on a worker */
+  unsigned gen, job_gen;	/* tl_load counts: an answer for items read again since is not kept */
   size_t cap;	/* room in v */
   TItem *v;
   size_t n, sel, top;
@@ -1441,6 +1443,21 @@ static size_t match_at (size_t y, size_t x) {
 }
 
 
+/*
+** Where in line y, from byte x, a match can start: a regex's next one
+** found by a search of the line (not one try at each byte, each running
+** to the end of the line: a long line took seconds); else x itself
+*/
+static size_t find_next_x (size_t y, size_t x) {
+  const Row *r = row_at(y);
+  const Regex *re;
+  size_t a, b;
+  if (!E.find_regex || x >= r->len || (re = find_re()) == NULL) return x;
+  if (!re_find(re, r->s, r->len, x, &a, &b) || a < x) return r->len;
+  return a;
+}
+
+
 /* the next match from p (back: the one before p), round the end; 1 found */
 static int find_from (Pos p, int back, Pos *found) {
   size_t i, y, x;
@@ -1452,7 +1469,7 @@ static int find_from (Pos p, int back, Pos *found) {
     r = row_at(y);
     if (!back) {
       size_t from = (i == 0) ? p.x : 0, to = (i == T->doc->n) ? p.x : r->len;
-      for (x = from; x < to || (x == to && i != T->doc->n && x < r->len); x++)
+      for (x = find_next_x(y, from); x < to || (x == to && i != T->doc->n && x < r->len); x = find_next_x(y, x + 1))
         if (match_at(y, x)) goto hit;
     }
     else {
@@ -1474,14 +1491,18 @@ hit:
 ** at p (0: none). They do not overlap, a regex's or not: what Replace All,
 ** Alt+Enter and the highlight see ("aa" in "aaaa" is 2).
 */
+#define FIND_MAX	19999	/* VS Code's: past it the matches are not counted */
+
 static size_t count_scan (Pos p, int upto, size_t *which) {
   size_t y, x, n = 0;
+  long long t0 = os_now_us();
   *which = 0;
   if (E.find[0] == '\0') return 0;
-  for (y = 0; y < T->doc->n && !(upto && y > p.y); y++) {
+  for (y = 0; y < T->doc->n && !(upto && y > p.y) && n < FIND_MAX; y++) {
     const Row *r = row_at(y);
     if (E.find_insel && (y < E.fsel_a.y || y > E.fsel_b.y)) continue;
-    for (x = 0; x < r->len && !(upto && y == p.y && x > p.x); x++) {
+    if ((y & 1023) == 1023 && os_now_us() - t0 > 300000) break;	/* a slow pattern in a big file: the count stops, the typing does not */
+    for (x = find_next_x(y, 0); x < r->len && !(upto && y == p.y && x > p.x); x = find_next_x(y, x + 1)) {
       size_t m = match_at(y, x);
       if (m) {
         n++;
@@ -6268,9 +6289,14 @@ static void nb_sync (void) {
 
 
 /* tab i goes; the one after it comes to the front, like VS Code */
+static Tab *g_used_tab;
+static void doc_forget (const Doc *d);
+
 static void tab_free (int i) {
   Tab *t = G->tab[i];
   cursor_forget(t);	/* its cursor history, Ctrl+U's */
+  if (t == g_used_tab) g_used_tab = NULL;	/* a tab made where it was is another one */
+  if (SN.t == t) snip_end();
   if (t->page == PAGE_HEX) hex_close(t->pdata);
   else if (t->page == PAGE_IMAGE) img_close(t->pdata);
   else if (t->page == PAGE_SEARCHED) searched_close(t->pdata);
@@ -6279,6 +6305,7 @@ static void tab_free (int i) {
   free(t->ppath);
   if (--t->doc->refs <= 0) {	/* the last tab that shows it */
     lsp_close(t->doc);
+    doc_forget(t->doc);
     doc_free(t->doc);
     free(t->doc);
   }
@@ -6432,15 +6459,12 @@ static int file_is_binary (const char *path) {
 
 static int open_file (const char *path, int preview) {
   int i, r;
-  if (merge_offer(path)) return 0;	/* a conflicted file: the merge editor takes it */
+  char *p, *real;
   if (!opt.preview_tabs) preview = 0;	/* every file in a tab of its own */
-  if (img_is_image(path)) return page_file_open(PAGE_IMAGE, path, preview);	/* its own editor, as VS Code has */
-  if (nb_is_file(path)) return page_file_open(PAGE_NOTEBOOK, path, 0);	/* a Jupyter notebook: the notebook editor */
-  if (file_is_binary(path)) return page_file_open(PAGE_HEX, path, preview);
-  if (searched_is_file(path)) return page_file_open(PAGE_SEARCHED, path, 0);	/* a .code-search: the Search Editor */
-  char *p = xstrdup(path), *real = os_realpath(path);
-  for (i = 0; i < G->ntab; i++)	/* it is open: to the front ("main.go" and its full path are one) */
-    if (!G->tab[i]->md && G->tab[i]->doc->path && (m_fncmp(G->tab[i]->doc->path, p) == 0 ||
+  p = xstrdup(path);
+  real = os_realpath(path);
+  for (i = 0; i < G->ntab; i++)	/* it is open: to the front ("main.go" and its full path are one), the file not read again */
+    if (!G->tab[i]->md && !G->tab[i]->page && G->tab[i]->doc->path && (m_fncmp(G->tab[i]->doc->path, p) == 0 ||
                                  (real && G->tab[i]->real && m_fncmp(G->tab[i]->real, real) == 0))) {
       focus_tab(i);
       if (!preview) T->preview = 0;
@@ -6450,8 +6474,18 @@ static int open_file (const char *path, int preview) {
       return 0;
     }
   free(real);
-  for (i = 0; preview && i < G->ntab; i++)
-    if (G->tab[i]->preview && !G->tab[i]->md && !doc_dirty(G->tab[i]->doc)) break;
+  if (merge_offer(path)) {	/* a conflicted file: the merge editor takes it */
+    free(p);
+    return 0;
+  }
+  r = img_is_image(path) ? PAGE_IMAGE : nb_is_file(path) ? PAGE_NOTEBOOK : file_is_binary(path) ? PAGE_HEX :
+      searched_is_file(path) ? PAGE_SEARCHED : -1;
+  if (r >= 0) {	/* an editor of its own, as VS Code has: a picture, a notebook, the hex view, a .code-search */
+    free(p);
+    return page_file_open(r, path, r == PAGE_IMAGE || r == PAGE_HEX ? preview : 0);
+  }
+  for (i = 0; preview && i < G->ntab; i++)	/* not a page's tab: its picture would stay over the text */
+    if (G->tab[i]->preview && !G->tab[i]->md && !G->tab[i]->page && !doc_dirty(G->tab[i]->doc)) break;
   if (preview && i < G->ntab) {	/* the preview tab takes the new file */
     focus_tab(i);
     if (T->doc->refs > 1) {	/* its text is the other group's too: a text of its own */
@@ -6466,6 +6500,7 @@ static int open_file (const char *path, int preview) {
     if (same) {
       if (--T->doc->refs <= 0) {
         lsp_close(T->doc);	/* a preview tab's old text may have been the server's */
+        doc_forget(T->doc);
         doc_free(T->doc);
         free(T->doc);
       }
@@ -6955,8 +6990,17 @@ static void fi_worker (void *ud) {
       sub = (char **)xmalloc(cap * sizeof(char *));
       subrel = (char **)xmalloc(cap * sizeof(char *));
       for (i = 0; i < v.n; i++) {
-        char *path = path_join(dir, v.v[i]), *r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
+        char *path, *r;
         OsStat st;
+        if ((i & 63) == 63) {	/* a folder of 100k names on a share: a stop does not wait for all of them */
+          int stop;
+          mx_lock(FI.mx);
+          stop = FI.cancel;
+          mx_unlock(FI.mx);
+          if (stop) break;
+        }
+        path = path_join(dir, v.v[i]);
+        r = rel[0] ? xstrcat3(rel, "/", v.v[i]) : xstrdup(v.v[i]);
         if (fi_skip(v.v[i], r, FI.exc)) {
           free(path);
           free(r);
@@ -7084,6 +7128,7 @@ static void fi_stop (void) {
 /* another folder, or the editor is quitting: the workers end */
 void files_index_stop (void) {
   fi_stop();
+  FI.stale = 1;	/* a walk cut short is not the whole folder: read it again when it is asked for */
 }
 
 
@@ -11190,20 +11235,52 @@ static void problems_key (int k) {
 ** ===================================================================
 */
 
-static struct {
+typedef struct SySlot {
   const Doc *d;
   unsigned long at;	/* d->edits + 1 when they were found */
   Sym *v;
   size_t n;
   unsigned long asked_at;	/* the server was asked, for this edit */
   long long asked;
-} SY;
+  long used;	/* the last time a frame wanted it */
+} SySlot;
+
+/*
+** A slot for each text shown: two groups side by side draw both their
+** breadcrumbs each frame, and one slot had them read the two files again
+** every frame, and throw away the server's answer for the other one.
+*/
+#define NSY	4
+static SySlot g_sy[NSY];
+static long g_sy_clock;
+
+static void sym_clear_slot (SySlot *y);
+
+
+/* d's slot; NULL when it has none and make is 0 (else the one used longest ago, emptied) */
+static SySlot *sy_of (const Doc *d, int make) {
+  int i, old = 0;
+  for (i = 0; i < NSY; i++)
+    if (g_sy[i].d == d && d != NULL) return &g_sy[i];
+  if (!make) return NULL;
+  for (i = 1; i < NSY; i++)
+    if (g_sy[i].used < g_sy[old].used) old = i;
+  sym_clear_slot(&g_sy[old]);
+  g_sy[old].d = d;
+  return &g_sy[old];
+}
 
 
 static void sym_clear (Sym *v, size_t n) {
   size_t i;
   for (i = 0; i < n; i++) free(v[i].name);
   free(v);
+}
+
+
+static void sym_clear_slot (SySlot *y) {
+  sym_clear(y->v, y->n);
+  memset(y, 0, sizeof(*y));
 }
 
 
@@ -11379,35 +11456,38 @@ static void scan_symbols (Sym **v, size_t *n, size_t *cap) {
 
 /* the symbols of the file in front */
 static const Sym *symbols (size_t *n) {
+  SySlot *y;
   *n = 0;
   if (!HAS_DOC || T->sx == NULL) return NULL;
-  if (SY.d != T->doc || SY.at != T->doc->edits + 1) {
+  y = sy_of(T->doc, 1);
+  y->used = ++g_sy_clock;
+  if (y->at != T->doc->edits + 1) {
     size_t cap = 0;
-    sym_clear(SY.v, SY.n);
-    SY.v = NULL;
-    SY.n = 0;
-    scan_symbols(&SY.v, &SY.n, &cap);
-    SY.d = T->doc;
-    SY.at = T->doc->edits + 1;
+    sym_clear(y->v, y->n);
+    y->v = NULL;
+    y->n = 0;
+    scan_symbols(&y->v, &y->n, &cap);
+    y->at = T->doc->edits + 1;
   }
-  if (lsp_active(T->doc) && SY.asked_at != T->doc->edits + 1 && os_now_us() - SY.asked > 800000) {
-    SY.asked_at = T->doc->edits + 1;	/* the server's, a little later */
-    SY.asked = os_now_us();
+  if (lsp_active(T->doc) && y->asked_at != T->doc->edits + 1 && os_now_us() - y->asked > 800000) {
+    y->asked_at = T->doc->edits + 1;	/* the server's, a little later */
+    y->asked = os_now_us();
     lsp_symbols(T->doc);
   }
-  *n = SY.n;
-  return SY.v;
+  *n = y->n;
+  return y->v;
 }
 
 
 void on_symbols (Doc *d, Sym *v, size_t n) {
-  if (d != SY.d || n == 0 || SY.asked_at != d->edits + 1) {
+  SySlot *y = sy_of(d, 0);
+  if (y == NULL || n == 0 || y->asked_at != d->edits + 1) {
     sym_clear(v, n);
     return;
   }
-  sym_clear(SY.v, SY.n);
-  SY.v = v;
-  SY.n = n;
+  sym_clear(y->v, y->n);
+  y->v = v;
+  y->n = n;
 }
 
 
@@ -11865,6 +11945,7 @@ static void tl_load (void) {
   TL.path = path ? xstrdup(path) : NULL;
   TL.stale = 0;
   TL.sel = TL.top = 0;
+  TL.gen++;
   if (path == NULL) return;
   nh = history_list(path, &h);
   cap = nh + 64;
@@ -11878,23 +11959,30 @@ static void tl_load (void) {
   }
   history_free(h, nh);
   TL.cap = cap;
-  TL.loading = git_root() != NULL;	/* tl_idle asks git: it takes a quarter of a second */
+  TL.loading = git_root() != NULL;	/* tl_idle asks git, on a worker: it takes a quarter of a second */
   qsort(TL.v, TL.n, sizeof(TItem), cmp_titem);
 }
 
 
-/* the editor is quiet: the file's commits; 1 when git ran */
+/*
+** The editor is quiet: the file's commits, git log --follow on a worker
+** (a switch of the tab does not wait for it); 1 when its answer came in
+*/
 static int tl_idle (void) {
-  const char *path = TL.path;
   size_t cap = TL.cap;
-  if (!TL.loading || path == NULL) return 0;
-  TL.loading = 0;
-  {	/* git log --follow of the file */
-    const char *a[] = {"log", "--follow", "-n", "50", "--format=%h%x09%an%x09%at%x09%s", "--", path, NULL};
+  if (TL.job) {
     Buf b;
     char *line;
+    int rc;
+    if (!git_async_done(TL.job)) return 0;
     buf_init(&b);
-    if (git_exec(&b, 0, a) == 0 && b.s) {
+    rc = git_async_take(TL.job, &b);
+    TL.job = NULL;
+    if (TL.job_gen != TL.gen) {	/* for items since read again: they ask once more */
+      buf_free(&b);
+      return 1;
+    }
+    if (rc == 0 && b.s) {
       buf_putc(&b, '\0');
       for (line = strtok(b.s, "\r\n"); line && TL.n < cap; line = strtok(NULL, "\r\n")) {
         char *f[4];
@@ -11916,9 +12004,16 @@ static int tl_idle (void) {
       }
     }
     buf_free(&b);
+    qsort(TL.v, TL.n, sizeof(TItem), cmp_titem);
+    return 1;
   }
-  qsort(TL.v, TL.n, sizeof(TItem), cmp_titem);
-  return 1;
+  if (!TL.loading || TL.path == NULL) return 0;
+  TL.loading = 0;
+  {
+    const char *a[] = {"log", "--follow", "-n", "50", "--format=%h%x09%an%x09%at%x09%s", "--", TL.path, NULL};
+    if ((TL.job = git_async(a)) != NULL) TL.job_gen = TL.gen;
+  }
+  return 0;
 }
 
 
@@ -12923,10 +13018,11 @@ static const Sym *sticky_symbols (size_t *n) {
   static const Doc *ask_d;
   static unsigned long ask_edits, seen;
   static long long since;
+  SySlot *y;
   if (!HAS_DOC) return NULL;
-  if (SY.d != T->doc || time_to_ask(&ask_d, &ask_edits, &seen, &since, 200000)) return symbols(n);
-  *n = SY.n;	/* still typing: a line or two off at worst */
-  return SY.v;
+  if ((y = sy_of(T->doc, 0)) == NULL || time_to_ask(&ask_d, &ask_edits, &seen, &since, 200000)) return symbols(n);
+  *n = y->n;	/* still typing: a line or two off at worst */
+  return y->v;
 }
 
 
@@ -13688,7 +13784,6 @@ static void tab_menu (int i, int x) {
 
 
 static long g_used;	/* the clock of Tab.used */
-static Tab *g_used_tab;
 
 /* the main loop: the tab in front gets the time it came there */
 static void mru_track (void) {
@@ -15122,7 +15217,7 @@ static int pv_mouse (const Mouse *m, int press) {
 /* what a side bar's view does when it shows: Source Control reads git again ...; the terminal starts */
 static void view_shown_hook (int v) {
   if (v == VIEW_MOVED + MV_TERMINAL && !panel_alive()) panel_start(E.side_w > 12 ? E.side_w - 3 : 10, L.body_h - 2);
-  if (v == VIEW_GIT) git_refresh();
+  if (v == VIEW_GIT) git_refresh_async();	/* git on a worker: the switch does not wait for it */
   if (v == VIEW_EXT) ext_show();
   if (v == VIEW_TEST) test_show();
   if (v == VIEW_FILES && T->real) side_reveal(T->real);
@@ -16117,13 +16212,45 @@ static void after_save (void) {
 
 
 /*
+** A text goes (its last tab closed): what was kept for it goes too. The
+** next Doc may be made where it was, and these know a text by its
+** address: the new file would show the old one's hints, swatches,
+** links, lenses and folds.
+*/
+static void doc_forget (const Doc *d) {
+  if (IH.d == d) IH.d = NULL;
+  if (IH.ask_d == d) IH.ask_d = NULL;
+  if (CD.d == d) CD.d = NULL;
+  if (CD.ask_d == d) CD.ask_d = NULL;
+  if (LK.d == d) LK.d = NULL;
+  if (LK.ask_d == d) LK.ask_d = NULL;
+  if (LN.d == d) LN.d = NULL;
+  if (LN.ask_d == d) LN.ask_d = NULL;
+  if (FRG.d == d) FRG.d = NULL;
+  if (FRG.ask_d == d) FRG.ask_d = NULL;
+  if (GH.d == d) GH.d = NULL;
+  if (GH.ask_d == d) GH.ask_d = NULL;
+  if (SM.d == d) SM.d = NULL;
+  if (SM.ask_d == d) SM.ask_d = NULL;
+  if (HL.d == d) HL.d = NULL;
+  if (SR.d == d) SR.d = NULL;
+  {
+    SySlot *y = sy_of(d, 0);
+    if (y) sym_clear_slot(y);
+  }
+  if (CPK.d == d) CPK.d = NULL;
+  if (PK.d == d) PK.d = NULL;
+}
+
+
+/*
 ** Git's status and the Explorer, looked at again after the saves: not
 ** for each one (auto save, Save All), once 0.4 s after the last.
 */
 static void save_refresh_idle (void) {
   if (g_saved_at == 0 || os_now_us() < g_saved_at) return;
   g_saved_at = 0;
-  git_refresh();
+  git_refresh_async();
   side_refresh();
 }
 
@@ -23524,8 +23651,9 @@ int main (int argc, char **argv) {
       E.side = 0;
       if (E.focus == F_SIDE) E.focus = F_EDITOR;
     }
+    git_async_idle();	/* a refresh git did on the worker */
     draw();
-    k = term_key(search_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
+    k = term_key(search_busy() || git_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
     quickfix_idle();
     if (k == K_NONE) {
       save_refresh_idle();	/* git and the Explorer, after the last save */
@@ -23548,5 +23676,6 @@ int main (int argc, char **argv) {
   }
   search_stop();	/* the workers end before the editor does */
   files_index_stop();
+  git_stop();
   return 0;
 }

@@ -416,8 +416,10 @@ int merge_candidate (const char *path) {
   char *s;
   size_t len = 0;
   int ok;
+  OsStat st;
   if (path == NULL) return 0;
   if (git_conflicted(path)) return 1;
+  if (os_stat(path, &st) != 0 || st.is_dir || st.size > (8 << 20)) return 0;	/* each open reads it: a big log is not a merge */
   s = file_text(path, &len);
   if (s == NULL) return 0;
   ok = !binary(s, len) && has_markers(s, len);

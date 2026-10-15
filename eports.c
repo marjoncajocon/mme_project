@@ -57,6 +57,7 @@ typedef SOCKET Sock;
 #include <sys/time.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <unistd.h>
 typedef int Sock;
 #define NO_SOCK		(-1)
@@ -80,13 +81,25 @@ static int net_init (void) {	/* Windows' sockets started; 0: they cannot be */
 }
 
 
+/* s kept from what is started later (a language server, a terminal): it would hold the port bound */
+static Sock no_inherit (Sock s) {
+  if (s == NO_SOCK) return s;
+#ifdef _WIN32
+  SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+#else
+  fcntl(s, F_SETFD, FD_CLOEXEC);
+#endif
+  return s;
+}
+
+
 /* something listens on 127.0.0.1:port here */
 static int listening (int port) {
   struct sockaddr_in a;
   Sock s;
   int ok;
   if (!net_init()) return 0;
-  s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  s = no_inherit(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
   if (s == NO_SOCK) return 0;
   memset(&a, 0, sizeof(a));
   a.sin_family = AF_INET;
@@ -390,7 +403,7 @@ static void local_stop (int i) {
 static Sock listen_on (int port) {
   struct sockaddr_in a;
   Sock s;
-  if (!net_init() || (s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == NO_SOCK) return NO_SOCK;
+  if (!net_init() || (s = no_inherit(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))) == NO_SOCK) return NO_SOCK;
   memset(&a, 0, sizeof(a));
   a.sin_family = AF_INET;
   a.sin_port = htons((unsigned short)port);
@@ -520,7 +533,7 @@ void ports_osc (const char *text) {
 static void conn_open (int i) {
   char *docker = find_program("docker"), sh[200], *argv[8];
   int in[2], out[2], io[3], null;
-  Sock s = accept(L[i].lsock, NULL, NULL);
+  Sock s = no_inherit(accept(L[i].lsock, NULL, NULL));
   if (s == NO_SOCK) {
     free(docker);
     return;
@@ -677,7 +690,7 @@ int ports_relay_main (const char *spec) {
   Sock s;
   int port = port_of(spec), in_open = 1;
   char buf[16384];
-  if (port == 0 || !net_init() || (s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == NO_SOCK) return 1;
+  if (port == 0 || !net_init() || (s = no_inherit(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))) == NO_SOCK) return 1;
   memset(&a, 0, sizeof(a));
   a.sin_family = AF_INET;
   a.sin_port = htons((unsigned short)port);
