@@ -9616,13 +9616,37 @@ static void hover_text_line (int x, int y, int w, const char *t, int *li) {
 }
 
 
-/* the hover box: text, its links, its code in its language's colors; it scrolls */
+/*
+** Where a line of the hover breaks to fit w columns, from byte o: after the
+** last space (or, in code, comma) that fits, else where it stops fitting.
+** The link marks take no room.
+*/
+static size_t hover_wrap (const char *s, size_t o, int w, int code) {
+  size_t n = strlen(s), i = o, brk = 0, len;
+  int col = 0;
+  while (i < n) {
+    uint32_t cp = utf8_decode(s + i, n - i, &len);
+    int cw = (cp == '\x02' || cp == '\x03') ? 0 : cp == '\t' ? TABW - col % TABW : uc_width(cp);
+    if (col + cw > w && i > o) return brk > o ? brk : i;
+    col += cw;
+    i += len;
+    if (cp == ' ' || (code && cp == ',')) brk = i;
+  }
+  return n;
+}
+
+
+/* the hover box: text, its links, its code in its language's colors; it scrolls; long lines wrap */
 static void draw_hover (int gw) {
   const char *p;
-  int w = 20, h = 0, x, y, ay, ab, i, maxw, in_code = 0, state = 0, li = 0, n = 0;
+  int w = 20, h = 0, x, y, ay, ab, i, maxw, in_code = 0, state = 0, li = 0, n = 0, nr = 0, tw;
   char *lines[256];
   int code[256], lk[256];	/* lk: the number of links before the line */
+  unsigned char *toks[256];
   const Syntax *sx[256], *fence = NULL;
+  short rl[512];	/* a row on the screen: its line, the bytes of it, a link open at its start */
+  size_t ro[512], re[512];
+  char rop[512];
   (void)gw;	/* screen_at knows the gutter */
   HV.qf_y = -1;
   HV.bw = 0;
@@ -9652,6 +9676,7 @@ static void draw_hover (int gw) {
     else if (len == 3 && strncmp(p, "---", 3) == 0) {
       lines[n] = NULL;	/* a line between parts */
       lk[n] = g_nhurl;
+      toks[n] = NULL;
       code[n++] = 0;
     }
     else if (len > 0 || (n > 0 && lines[n - 1] && lines[n - 1][0])) {
@@ -9663,6 +9688,12 @@ static void draw_hover (int gw) {
       lines[n] = buf_take(&b);
       code[n] = in_code;
       sx[n] = in_code ? fence : NULL;
+      toks[n] = NULL;
+      if (in_code) {	/* its colors, the state carried from the line before */
+        size_t cl = strlen(lines[n]);
+        toks[n] = (unsigned char *)xmalloc(cl + 1);
+        state = syntax_scan(sx[n], lines[n], cl, n > 0 && code[n - 1] ? state : 0, toks[n]);
+      }
       {
         int cw = 0;	/* columns without the link marks */
         const char *c;
@@ -9674,18 +9705,44 @@ static void draw_hover (int gw) {
     }
     p += len + (e ? 1 : 0);
   }
-  while (n > 0 && lines[n - 1] && lines[n - 1][0] == '\0') free(lines[--n]);
-  if (w > maxw) w = maxw;
-  h = n < 14 ? n : 14;
-  HV.nlines = n;
-  HV.shown = h;
-  if (h == 0) return;
-  if (HV.top > n - h) HV.top = n - h;
-  if (HV.top < 0) HV.top = 0;
-  if (!screen_ui(HV.at, &x, &ay, &ab)) {
-    for (i = 0; i < n; i++) free(lines[i]);
-    return;
+  while (n > 0 && lines[n - 1] && lines[n - 1][0] == '\0') {
+    free(toks[--n]);
+    free(lines[n]);
   }
+  if (w > maxw) w = maxw;
+  tw = w - 3;
+  for (i = 0; i < n && nr < 512; i++) {	/* the rows: a line too long breaks into more */
+    size_t o = 0, len, j;
+    int open = 0;
+    if (lines[i] == NULL || lines[i][0] == '\x01' || tw < 4) {
+      rl[nr] = (short)i;
+      ro[nr] = 0;
+      re[nr] = lines[i] ? strlen(lines[i]) : 0;
+      rop[nr++] = 0;
+      continue;
+    }
+    len = strlen(lines[i]);
+    do {
+      size_t end = hover_wrap(lines[i], o, tw, code[i]);
+      rl[nr] = (short)i;
+      ro[nr] = o;
+      re[nr] = end;
+      rop[nr++] = (char)open;
+      for (j = o; j < end; j++)
+        if (lines[i][j] == '\x02') open = 1;
+        else if (lines[i][j] == '\x03') open = 0;
+      o = end;
+      if (!code[i])
+        while (o < len && lines[i][o] == ' ') o++;	/* a wrapped line starts at its word */
+    } while (o < len && nr < 512);
+  }
+  h = nr < 14 ? nr : 14;
+  HV.nlines = nr;
+  HV.shown = h;
+  if (h == 0) goto done;
+  if (HV.top > nr - h) HV.top = nr - h;
+  if (HV.top < 0) HV.top = 0;
+  if (!screen_ui(HV.at, &x, &ay, &ab)) goto done;
   if (x + w > L.ed_x + L.ed_w) x = L.ed_x + L.ed_w - w;
   if (x < L.ed_x) x = L.ed_x;
   y = (ay - h >= L.text_y) ? ay - h : ab;	/* above the name, else under it */
@@ -9693,46 +9750,50 @@ static void draw_hover (int gw) {
   HV.by = y;
   HV.bw = w;
   HV.bh = h;
-  for (i = 0; i < HV.top && i < n; i++)	/* the code state of the lines scrolled away */
-    if (code[i] && lines[i]) {
-      size_t len = strlen(lines[i]);
-      unsigned char *tok = (unsigned char *)xmalloc(len + 1);
-      state = syntax_scan(sx[i], lines[i], len, i > 0 && code[i - 1] ? state : 0, tok);
-      free(tok);
-    }
   for (i = 0; i < h; i++) scr_fill(x, y + i, w, S_BOX);
   scr_round(x, y, w, h, RC_ALL, RR_BOX);
   for (i = 0; i < h; i++) {
-    int k = HV.top + i;
+    int r = HV.top + i, k = rl[r];
     if (lines[k] == NULL) {
       int c;
       for (c = 1; c < w - 1; c++) scr_put(x + c, y + i, 0x2500, S_MENU_LINE);
     }
     else if (code[k]) {	/* code: its language's colors on the box */
-      size_t len = strlen(lines[k]);
-      unsigned char *tok = (unsigned char *)xmalloc(len + 1);
-      state = syntax_scan(sx[k], lines[k], len, k > 0 && code[k - 1] ? state : 0, tok);
-      scr_code(x + 1, y + i, w - 3, lines[k], len, 0, tok, B_EDITOR, 0, 0, B_EDITOR);
+      scr_code(x + 1, y + i, tw, lines[k] + ro[r], re[r] - ro[r], 0, toks[k] + ro[r], B_EDITOR, 0, 0, B_EDITOR);
       scr_restyle(x, y + i, 1, S_BOX);
-      free(tok);
     }
     else if (lines[k][0] == '\x01') {	/* Quick Fix...: a link, clicked in on_mouse */
       HV.qf_y = y + i;
       HV.qf_x0 = x + 1;
-      HV.qf_x1 = x + 1 + scr_putsw(x + 1, y + i, w - 3, lines[k] + 1, S_BOX_HIT);
+      HV.qf_x1 = x + 1 + scr_putsw(x + 1, y + i, tw, lines[k] + 1, S_BOX_HIT);
     }
-    else {
-      li = lk[k];
-      hover_text_line(x + 1, y + i, w - 3, lines[k], &li);
+    else {	/* a link cut by the wrap goes on in the row: its mark again, its url the same */
+      Buf b;
+      char *seg;
+      size_t j;
+      li = lk[k] - rop[r];
+      for (j = 0; j < ro[r]; j++)
+        if (lines[k][j] == '\x02') li++;
+      buf_init(&b);
+      if (rop[r]) buf_putc(&b, '\x02');
+      buf_putn(&b, lines[k] + ro[r], re[r] - ro[r]);
+      buf_putc(&b, '\0');
+      seg = buf_take(&b);
+      hover_text_line(x + 1, y + i, tw, seg, &li);
+      free(seg);
     }
   }
-  if (n > h) {	/* it scrolls: its scrollbar on the right */
-    int th = h * h / n, ty;
+  if (nr > h) {	/* it scrolls: its scrollbar on the right */
+    int th = h * h / nr, ty;
     if (th < 1) th = 1;
-    ty = (n - h) ? HV.top * (h - th) / (n - h) : 0;
+    ty = (nr - h) ? HV.top * (h - th) / (nr - h) : 0;
     for (i = 0; i < h; i++) scr_put(x + w - 1, y + i, i >= ty && i < ty + th ? 0x2590 : ' ', S_BOX_DIM);
   }
-  for (i = 0; i < n; i++) free(lines[i]);
+done:
+  for (i = 0; i < n; i++) {
+    free(lines[i]);
+    free(toks[i]);
+  }
 }
 
 
