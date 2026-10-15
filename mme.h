@@ -31,7 +31,7 @@
 #include "mmc.h"
 
 #define MME_NAME	"mme"
-#define MME_VERSION	"0.9.0"	/* also in mme.rc */
+#define MME_VERSION	"1.0.0"	/* also in mme.rc */
 
 #define TABW		(tab_cols())	/* columns a tab goes to: the file's, else editor.tabSize */
 int tab_cols (void);	/* mme.c: the tab in front's */

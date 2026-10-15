@@ -85,7 +85,8 @@ build cross            zig: Linux and macOS (x86_64, aarch64) -> dist\ (they loa
 ./build.sh single      zig, build.sh only: one stand-alone exe, SDL2 linked in and the fonts inside
                        -> dist\mme-sdl-x86_64-windows.exe (single 32: mme-sdl-x86-windows.exe)
 ./build-gpu.sh         build.sh's words (zig, gcc, tcc, 32, 64): mme-sdl-gpu.exe beside mme-sdl.exe,
-                       the picture shown by the GPU (see below)
+                       the picture shown by the GPU (see below); single [32] and cross too
+                       -> dist\mme-sdl-gpu-ARCH-windows.exe, mme-sdl-gpu-ARCH-linux (OpenGL), -macos (Metal)
 build clean
 ```
 

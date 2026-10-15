@@ -67,22 +67,22 @@ fonts_into () {
 }
 
 cross () {
-  CF="-std=c11 -O2 -Wall -Wextra -pedantic -I.. -I$SDL/include -D_REENTRANT"
+  CF="-std=c11 -O2 -Wall -Wextra -pedantic $XCF -I.. -I$SDL/include -D_REENTRANT"
   mkdir -p dist
   for a in x86_64 aarch64; do
     echo "$a-linux"
     mkdir -p obj/$a-linux
     $ZIG cc -target $a-linux-gnu.2.17 -shared -Wl,-soname,libSDL2-2.0.so.0 -o obj/$a-linux/libSDL2.so sdlstub.c || exit 1
-    $ZIG cc $CF -s -target $a-linux-gnu.2.17 -o dist/mme-sdl-$a-linux $SRC -Lobj/$a-linux -lSDL2 -lm -lpthread || exit 1
+    $ZIG cc $CF -s -target $a-linux-gnu.2.17 -o dist/$PROG-$a-linux $SRC -Lobj/$a-linux -lSDL2 -lm -lpthread || exit 1
     echo "$a-macos"
     mkdir -p obj/$a-macos
     $ZIG cc -target $a-macos -shared -Wl,-install_name,@rpath/libSDL2-2.0.0.dylib -o obj/$a-macos/libSDL2.dylib sdlstub.c || exit 1
-    $ZIG cc $CF -target $a-macos -o dist/mme-sdl-$a-macos $SRC -Lobj/$a-macos -lSDL2 -lm -lpthread \
+    $ZIG cc $CF -target $a-macos -o dist/$PROG-$a-macos $SRC -Lobj/$a-macos -lSDL2 -lm -lpthread \
       -Wl,-rpath,@executable_path -Wl,-rpath,/opt/homebrew/lib -Wl,-rpath,/usr/local/lib || exit 1
   done
   rm -f dist/*.pdb
   fonts_into dist/mme-fonts
-  echo "done, see sdl2_port/dist/ (mme-sdl-ARCH-linux, mme-sdl-ARCH-macos, mme-fonts)"
+  echo "done, see sdl2_port/dist/ ($PROG-ARCH-linux, $PROG-ARCH-macos, mme-fonts)"
   exit 0
 }
 
@@ -121,9 +121,9 @@ single () {
     echo "no fonts in $FONTS (JetBrainsMonoNerdFontMono-*.ttf)"
     exit 1
   fi
-  OUTX=dist/mme-sdl-$NAME-windows.exe
+  OUTX=dist/$PROG-$NAME-windows.exe
   rm -f $OUTX 2>/dev/null || mv -f $OUTX $OUTX.old$$
-  $ZIG cc -std=c11 -O2 -s -Wall -Wextra -pedantic -target $TARGET -DMME_SINGLE -I.. -I$SDL/include \
+  $ZIG cc -std=c11 -O2 -s -Wall -Wextra -pedantic $XCF -target $TARGET -DMME_SINGLE -I.. -I$SDL/include \
     -o $OUTX $SRC ../mme.rc $OBJ/fonts.rc $SDL/$SDLARCH/lib/libSDL2.a \
     -lshell32 -lws2_32 -lgdi32 -luser32 -lwinmm -limm32 -lole32 -loleaut32 -lversion -luuid -ladvapi32 -lsetupapi \
     -Wl,--subsystem,windows || exit 1
