@@ -13,11 +13,11 @@
 |                                 │ 10                                       │ 10
 |                                │ 11   int changed_here (void) {           │ 11   int changed_here (void) {
 |                                 │▎12 -     return 3;                       → 12 +     return 33;
-|                                │ 13   }                                   │ 13   }                                   ▌
+|                                │ 13   }                                   │ 13   }                                   ■
 |                                 │ 14                                       │ 14
 |                                 │ 15 - int deleted_below (void) {          → 15 + int added_function (void) {
-|                                 │ 16 -     return 4;                       │ 16 +     return 99;                      ▌
-|                                 │ 17   }                                   │ 17   }                                   ▌
+|                                 │ 16 -     return 4;                       │ 16 +     return 99;                      ■
+|                                 │ 17   }                                   │ 17   }                                   ■
 |                                 │ 18                                       │ 18
 |                                 │ 19   int last (void) {                   │ 19   int last (void) {
 |                                 │ 20       return 5;                       │ 20       return 5;

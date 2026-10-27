@@ -3,8 +3,8 @@
 |      SOURCE CONTROL         │  pair.c (Working Tree)                                                   ¶   
 |      main                     │  pair.c
 |      Message (Ctrl+Enter to co  │ 1   int total (int a, int b) {           │ 1   int total (int a, int b) {
-|     Changes                1  │▎2 -     return added(a, b);              → 2 +     counted(a);                      ▌
-|        pair.c                M │▎╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 3 +     return added(a, c);              ▌
+|     Changes                1  │▎2 -     return added(a, b);              → 2 +     counted(a);                      ■
+|        pair.c                M │▎╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 3 +     return added(a, c);              ■
 |▎    GRAPH                     │ 3   }                                    │ 4   }
 |  1  ◉   main  first commit: pa │
 |                                │

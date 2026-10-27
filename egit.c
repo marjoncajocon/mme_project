@@ -2080,7 +2080,7 @@ typedef struct DState {
   int nw, tcl, tcr;	/* the numbers' width; the text's on the left / right (inline: tcr) */
   int sbw, hsb;	/* the scrollbar's width (1 or 0); the horizontal one shows (under the rows) */
   int hbx[2], hbw[2], nhb;	/* the horizontal ones: one under each side's text */
-  int drag_sb, drag_hsb;	/* a thumb is held: 1 + where it was taken */
+  int drag_sb, drag_hsb;	/* a thumb is held: 1 + where it was taken (drag_sb -1: a click went to a change) */
   size_t wide;	/* the widest line's columns */
   int wide_ok;
   size_t lastrow, lastcol;	/* the caret when last drawn: the view follows it when it moves */
@@ -3547,6 +3547,62 @@ static void draw_fold (int x, int y, int w, size_t hidden) {
 #define DMM_W	10	/* the diff's minimap: columns */
 #define DMM_CH	5	/* characters of a line in one of its dots */
 
+#define SB_ADD	0x2EA043	/* the scrollbar's marks: the editor's overview ruler colors */
+#define SB_MOD	0x0078D4
+#define SB_DEL	0xF85149
+
+static int block_start (size_t k);
+static unsigned row_kinds (size_t k);
+
+
+/* what the block of changes starting at row k does: its color, as the editor's (added, deleted, modified) */
+static uint32_t block_color (size_t k) {
+  size_t n = nrows(), j;
+  unsigned m = 0;
+  for (j = k; j < n && j < k + 100000 && is_change(j); j++) m |= row_kinds(j);
+  return m == 1 ? SB_ADD : m == 2 ? SB_DEL : SB_MOD;
+}
+
+
+/* a mark's color under the mouse: lighter */
+static uint32_t lighter (uint32_t c) {
+  uint32_t r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+  r += (255 - r) * 3 / 10;
+  g += (255 - g) * 3 / 10;
+  b += (255 - b) * 3 / 10;
+  return (r << 16) | (g << 8) | b;
+}
+
+
+/* the first block of changes starting in the rows shown a .. b - 1: its row; (size_t)-1: none */
+static size_t block_in (size_t a, size_t b) {
+  size_t n = vcount(), i;
+  for (i = a; i < b && i < n; i++)
+    if (!(D.nvis && D.vis[i].hidden) && block_start(vk(i))) return vk(i);
+  return (size_t)-1;
+}
+
+
+/* the block of changes the rows shown a .. b - 1 have a change of (the first): the row it starts at; (size_t)-1: none */
+static size_t change_in (size_t a, size_t b) {
+  size_t n = vcount(), i, k;
+  for (i = a; i < b && i < n; i++)
+    if (!(D.nvis && D.vis[i].hidden) && is_change(k = vk(i))) {
+      while (k > 0 && is_change(k - 1)) k--;
+      return k;
+    }
+  return (size_t)-1;
+}
+
+
+/* a click on a change's square (the scrollbar's, the minimap's): the change at the top as F7 has it, the caret on it */
+static void goto_block (size_t k) {
+  D.top = k > 3 ? k - 3 : 0;	/* a little context above, like VS Code */
+  if (D.nvis) D.top = vk(vpos(D.top));
+  D.cur = k;
+  D.crow = k;
+}
+
 /*
 ** The minimap of the diff, like VS Code's: the rows of the diff in small,
 ** green where lines came and red where they went, with the part shown
@@ -3561,7 +3617,7 @@ static void draw_dmap (int x, int y, int h, size_t i0) {
   for (r = 0; (int)r < h; r++) {
     size_t i, kinds = 0;
     uint32_t dot[4][2 * DMM_W], bg;
-    int in_view = (r + 1) * per > i0 && r * per < i0 + (size_t)h, c, k;
+    int in_view = (r + 1) * per > i0 && r * per < i0 + (size_t)h, c, k, sq;
     for (k = 0; k < 4; k++)
       for (c = 0; c < 2 * DMM_W; c++) dot[k][c] = 0xFFFFFFFFu;
     for (k = 0; k < 4; k++) {	/* the lines of this row: one in each quarter */
@@ -3583,7 +3639,17 @@ static void draw_dmap (int x, int y, int h, size_t i0) {
     }
     bg = ui_color(kinds == 1 ? C_DIFF_ADD : kinds ? C_DIFF_DEL : in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG);
     if (in_view && kinds) bg = ui_color(kinds == 1 ? C_DIFF_ADD_HI : C_DIFF_DEL_HI);
-    for (c = 0; c < DMM_W; c++) {
+    sq = 0;
+    {	/* a block of changes starts in this row: its square at the left edge, a click goes to it */
+      size_t bk = block_in(r * per, (r + 1) * per);
+      if (bk != (size_t)-1) {
+        uint32_t sc = block_color(bk);
+        if (mouse_over_text(x, y + (int)r, 1, 1)) sc = lighter(sc);
+        scr_put_rgb(x, y + (int)r, 0x25A0, sc, bg, 0);	/* ■ */
+        sq = 1;
+      }
+    }
+    for (c = sq; c < DMM_W; c++) {
       uint32_t fg = 0xFFFFFFFFu;
       unsigned m = 0;
       for (k = 0; k < 4; k++) {
@@ -3630,10 +3696,6 @@ static int in_current (size_t k) {
 }
 
 
-#define SB_ADD	0x2EA043	/* the scrollbar's marks: the editor's overview ruler colors */
-#define SB_MOD	0x0078D4
-#define SB_DEL	0xF85149
-
 /* what row k changes: 1 a line came, 2 one went, 3 both */
 static unsigned row_kinds (size_t k) {
   unsigned m = 0;
@@ -3670,11 +3732,15 @@ static void draw_vbar (int x, int y, int h) {
     size_t a = all * (size_t)r / (size_t)h, b = all * (size_t)(r + 1) / (size_t)h, i;
     unsigned kinds = 0;
     int on = size < h && r >= pos && r < pos + size;
-    uint32_t bg = ui_color(on ? (D.drag_sb ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    uint32_t bg = ui_color(on ? (D.drag_sb > 0 ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG), c;
     if (b <= a) b = a + 1;
     for (i = a; i < b && i < n; i++)
       if (!(D.nvis && D.vis[i].hidden)) kinds |= row_kinds(vk(i));
-    if (kinds) scr_put_rgb(x, y + r, 0x258C, kinds == 1 ? SB_ADD : kinds == 2 ? SB_DEL : SB_MOD, bg, 0);
+    if (kinds) {	/* a change: its square, as the editor's scrollbar; a click goes to it */
+      c = kinds == 1 ? SB_ADD : kinds == 2 ? SB_DEL : SB_MOD;
+      if (mouse_over_text(x, y + r, 1, 1)) c = lighter(c);
+      scr_put_rgb(x, y + r, 0x25A0, c, bg, 0);	/* ■ */
+    }
     else scr_put_rgb(x, y + r, ' ', bg, bg, 0);
   }
 }
@@ -3860,6 +3926,7 @@ void diff_draw (int x, int y, int w, int h, int wrap) {
 static void vbar_mouse (int my) {
   int pos, size = vthumb(D.h, &pos), ry = my - D.y;
   size_t lt = last_top(), i;
+  if (D.drag_sb < 0) return;	/* a click went to a change: no drag until the button comes up */
   if (lt == 0 || D.h - size <= 0) return;
   if (!D.drag_sb) {
     if (ry >= pos && ry < pos + size) D.drag_sb = 1 + (ry - pos);	/* the thumb is taken */
@@ -3869,6 +3936,32 @@ static void vbar_mouse (int my) {
   if (ry < 0) ry = 0;
   i = (size_t)((double)ry * (double)lt / (double)(D.h - size) + 0.5);
   D.top = vk(i < lt ? i : lt);
+}
+
+
+/*
+** A press on the scrollbar's square of a change at row my: the change, as
+** F7 goes to it; on the thumb only the row clicked, elsewhere the rows next
+** to it too (a square is small). 1 when it went to one.
+*/
+static int vbar_goto (int my) {
+  int pos, size = vthumb(D.h, &pos), ry = my - D.y, d, h = D.h;
+  size_t n = vcount(), all = n > (size_t)h ? n : (size_t)h, k = (size_t)-1;
+  if (h <= 0 || ry < 0 || ry >= h) return 0;
+  for (d = 0; d <= (size < h && ry >= pos && ry < pos + size ? 0 : 1) && k == (size_t)-1; d++) {
+    int r, s;
+    for (s = d ? -1 : 0; s <= (d ? 1 : 0) && k == (size_t)-1; s += 2) {
+      size_t a, b;
+      r = ry + s;
+      if (r < 0 || r >= h) continue;
+      a = all * (size_t)r / (size_t)h;
+      b = all * (size_t)(r + 1) / (size_t)h;
+      k = change_in(a, b > a ? b : a + 1);
+    }
+  }
+  if (k == (size_t)-1) return 0;
+  goto_block(k);
+  return 1;
 }
 
 
@@ -3896,7 +3989,8 @@ int diff_bar_press (int mx, int my) {
   D.drag_sb = D.drag_hsb = 0;
   if (!D.open) return 0;
   if (D.sbw && mx == D.x + D.w - 1 && my >= D.y && my < D.y + D.h) {
-    vbar_mouse(my);
+    if (vbar_goto(my)) D.drag_sb = -1;	/* until the button comes up: no drag */
+    else vbar_mouse(my);
     return 1;
   }
   if (!D.hsb || my != D.y + D.h || mx < D.x || mx >= D.x + D.w) return 0;
@@ -3996,8 +4090,15 @@ int diff_click (int mx, int my) {
   int row = my - D.y;
   if (!D.open || row < 0 || row >= D.h) return DIFF_NO;
   if (D.mmw > 0 && mx >= D.x + D.w - D.sbw - D.mmw && mx < D.x + D.w - D.sbw) {	/* its minimap: the rows there */
-    size_t n = vcount(), per = (n + (size_t)D.h - 1) / (size_t)D.h, want;
+    size_t n = vcount(), per = (n + (size_t)D.h - 1) / (size_t)D.h, want, k;
     if (per == 0) per = 1;
+    k = change_in((size_t)row * per, (size_t)(row + 1) * per);	/* a change there (or a row away): it, as F7 has it */
+    if (k == (size_t)-1 && row > 0) k = change_in((size_t)(row - 1) * per, (size_t)row * per);
+    if (k == (size_t)-1) k = change_in((size_t)(row + 1) * per, (size_t)(row + 2) * per);
+    if (k != (size_t)-1) {
+      goto_block(k);
+      return DIFF_YES;
+    }
     want = (size_t)row * per;
     if (want > last_top()) want = last_top();
     D.top = n ? vk(want) : 0;

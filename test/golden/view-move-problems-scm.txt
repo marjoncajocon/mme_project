@@ -64,7 +64,7 @@
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
 |      PROBLEMS                  │  untracked.txt (Untracked)                                               ¶   
 |     Filter (e.g. text,       │  untracked.txt
-|      No problems have been detec│╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 1 + brand new                            ▌
+|      No problems have been detec│╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 1 + brand new                            ■
 |                                │
 |                                 │
 |                                │
@@ -95,7 +95,7 @@
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
 |      PROBLEMS                                                                                                ¶   
 |     Filter (e  Select Destination
-|      No proble                                                                                                        ▌
+|      No proble                                                                                                        ■
 |                Panel  current
 |                 Primary Side Bar
 | 
@@ -126,7 +126,7 @@
 |   File  Edit  Selection  View  Go  Run  Terminal  Help                         gitrepo
 |      SOURCE CONTROL         │  untracked.txt (Untracked)                                               ¶   
 |      main                     │  untracked.txt
-|      Message (Ctrl+Enter to co  │╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 1 + brand new                            ▌
+|      Message (Ctrl+Enter to co  │╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱│ 1 + brand new                            ■
 |     Changes                2  │
 |        tracked.c             M │
 |▎      untracked.txt         U │

@@ -1491,6 +1491,9 @@ With no file open the editor shows the keys to start with.
   View**), changed lines red and green, the changed words in them brighter
   (VS Code's character diff). Up and Down move the cursor, Enter opens the
   file at its line, F7 / Shift+F7 go from change to change, Esc closes it.
+  Its scrollbar shows the changes as squares (■, green, red, blue), its
+  minimap a square where each block of changes starts; a click on one goes
+  to that change as F7 does (from Source Control, a commit, File History).
   The modified side of a working tree diff is the file itself and is typed
   in, like VS Code's: the keys, undo, the tab's dirty dot and Ctrl+S are the
   editor's own, and the diff is made again a moment after the typing stops.
