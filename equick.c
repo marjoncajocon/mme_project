@@ -5,7 +5,8 @@
 ** its copy in git's index; the changes (hunks of lines) give the bars in
 ** the gutter (added, modified, deleted), the dirty diff peek and Stage /
 ** Revert Change. Staging a change gives the index the whole file with
-** only that change made, as VS Code does.
+** only that change made, as VS Code does. The staged changes (HEAD's copy
+** against the index's) are shown too, on the lines they are on now.
 **
 ** Merge conflicts: the <<<<<<< ======= >>>>>>> blocks git leaves in a file,
 ** each with its current and incoming side (and the base between |||||||
@@ -33,10 +34,17 @@ typedef struct QDoc {
   size_t olen;
   size_t *oline, noline;	/* where each of its lines starts */
   int final_nl, crlf;	/* its last line ends with a newline; its lines end with \r\n */
+  char *head;	/* HEAD's copy ("" when HEAD has none: all of the index's is staged) */
+  size_t hlen;
+  size_t *hline, nhline;
+  int hfinal_nl;
+  QHunk *sh;	/* HEAD -> the index: the staged changes */
+  size_t nsh;
+  QStaged *sv;	/* those on d's lines now */
   unsigned long edits;	/* d->edits when the hunks were made; ~0: not yet */
   QHunk *h;
   size_t nh;
-  unsigned char *mark;	/* QM_* of each line of d */
+  unsigned short *mark;	/* QM_* of each line of d */
   size_t nmark;
   int want;	/* its copy is to be read (quick_idle does it) */
 } QDoc;
@@ -51,6 +59,10 @@ static void qdoc_free (QDoc *q) {
   free(q->path);
   free(q->orig);
   free(q->oline);
+  free(q->head);
+  free(q->hline);
+  free(q->sh);
+  free(q->sv);
   free(q->h);
   free(q->mark);
   memset(q, 0, sizeof(*q));
@@ -71,15 +83,32 @@ void quick_forget (Doc *d) {
 }
 
 
+/* where the lines of s[0..len) start, as text_hunks counts them */
+static size_t *line_starts (const char *s, size_t len, size_t *n) {
+  size_t i, cap = 64, *v = (size_t *)xmalloc(cap * sizeof(size_t));
+  *n = 0;
+  for (i = 0; i <= len; i++) {
+    if (i != 0 && s[i - 1] != '\n') continue;
+    if (i == len && i > 0) break;	/* the newline at the end ends the last line */
+    if (*n == cap) v = (size_t *)xrealloc(v, (cap *= 2) * sizeof(size_t));
+    v[(*n)++] = i;
+  }
+  return v;
+}
+
+
 static void read_orig (QDoc *q) {
   char *rel, *spec;
-  size_t i, cap = 64;
   OsStat st;
   free(q->orig);
   free(q->oline);
-  q->orig = NULL;
-  q->oline = NULL;
-  q->noline = q->olen = 0;
+  free(q->head);
+  free(q->hline);
+  free(q->sh);
+  q->orig = q->head = NULL;
+  q->oline = q->hline = NULL;
+  q->sh = NULL;
+  q->noline = q->olen = q->nhline = q->hlen = q->nsh = 0;
   q->gen = g_gen;
   q->want = 0;
   q->edits = ~0UL;
@@ -89,17 +118,25 @@ static void read_orig (QDoc *q) {
   spec = xstrcat3(":", rel, "");
   q->orig = git_blob(spec, &q->olen);
   free(spec);
-  free(rel);
-  if (q->orig == NULL) return;
-  q->oline = (size_t *)xmalloc(cap * sizeof(size_t));
-  for (i = 0; i <= q->olen; i++) {	/* the lines' starts, as text_hunks counts them */
-    if (i != 0 && q->orig[i - 1] != '\n') continue;
-    if (i == q->olen && i > 0) break;	/* the newline at the end ends the last line */
-    if (q->noline == cap) q->oline = (size_t *)xrealloc(q->oline, (cap *= 2) * sizeof(size_t));
-    q->oline[q->noline++] = i;
+  if (q->orig == NULL) {
+    free(rel);
+    return;
   }
+  q->oline = line_starts(q->orig, q->olen, &q->noline);
   q->final_nl = q->olen > 0 && q->orig[q->olen - 1] == '\n';
   q->crlf = memchr(q->orig, '\r', q->olen) != NULL;
+  spec = xstrcat3("HEAD:", rel, "");	/* and what of it is staged */
+  q->head = git_blob(spec, &q->hlen);
+  free(spec);
+  free(rel);
+  if (q->head == NULL) {	/* added: no commit has it yet */
+    q->head = xstrdup("");
+    q->hlen = 0;
+  }
+  q->hline = line_starts(q->head, q->hlen, &q->nhline);
+  if (q->hlen == 0) q->nhline = 0;
+  q->hfinal_nl = q->hlen > 0 && q->head[q->hlen - 1] == '\n';
+  q->sh = text_hunks(q->head, q->hlen, q->orig, q->olen, &q->nsh);
 }
 
 
@@ -150,19 +187,77 @@ int quick_idle (void) {
 }
 
 
+/*
+** The index's lines on d's lines: q->h (the index -> d) walked once, the
+** lines asked for in order. A line d no longer has: *gone, and the line
+** where it was.
+*/
+typedef struct QMap {
+  const QHunk *h;
+  size_t n, k;
+  long off;	/* d's lines minus the index's, before hunk k */
+} QMap;
+
+static size_t map_line (QMap *m, size_t i, int *gone) {
+  const QHunk *u;
+  *gone = 0;
+  while (m->k < m->n && i >= m->h[m->k].o0 + m->h[m->k].on) {
+    m->off += (long)m->h[m->k].nn - (long)m->h[m->k].on;
+    m->k++;
+  }
+  if (m->k < m->n && i >= (u = &m->h[m->k])->o0) {	/* changed since it was staged */
+    if (u->nn == 0) {
+      *gone = 1;
+      return u->n0;
+    }
+    return u->n0 + (i - u->o0 < u->nn ? i - u->o0 : u->nn - 1);
+  }
+  return (size_t)((long)i + m->off);
+}
+
+
 static void make_marks (QDoc *q) {
   size_t i, y;
+  QMap m;
   q->nmark = q->d->n;
-  q->mark = (unsigned char *)xrealloc(q->mark, q->nmark + 1);
-  memset(q->mark, 0, q->nmark + 1);
+  q->mark = (unsigned short *)xrealloc(q->mark, (q->nmark + 1) * sizeof(unsigned short));
+  memset(q->mark, 0, (q->nmark + 1) * sizeof(unsigned short));
   for (i = 0; i < q->nh; i++) {
     const QHunk *h = &q->h[i];
-    if (h->nn == 0) {	/* lines went: the triangle between two lines */
-      if (h->n0 > 0 && h->n0 - 1 < q->nmark) q->mark[h->n0 - 1] |= QM_DEL;
-      else if (q->nmark) q->mark[0] |= QM_DEL_TOP;
+    if (h->nn == 0) {	/* lines went: the mark between two lines */
+      if (h->n0 > 0 && h->n0 - 1 < q->nmark) q->mark[h->n0 - 1] |= QM_DEL | QM_HEAD;
+      else if (q->nmark) q->mark[0] |= QM_DEL_TOP | QM_HEAD;
       continue;
     }
     for (y = h->n0; y < h->n0 + h->nn && y < q->nmark; y++) q->mark[y] |= h->on == 0 ? QM_ADD : QM_MOD;
+    if (h->n0 < q->nmark) q->mark[h->n0] |= QM_HEAD;
+  }
+  q->sv = (QStaged *)xrealloc(q->sv, (q->nsh + 1) * sizeof(QStaged));
+  memset(&m, 0, sizeof(m));
+  m.h = q->h;
+  m.n = q->nh;
+  for (i = 0; i < q->nsh; i++) {	/* the staged ones, where they are now */
+    const QHunk *h = &q->sh[i];
+    QStaged *s = &q->sv[i];
+    int gone, any = 0;
+    s->h = *h;
+    if (h->nn == 0) {	/* lines went (from HEAD's): before the index's line n0 */
+      y = map_line(&m, h->n0, &gone);
+      s->y = s->last = y ? y - 1 : 0;
+      if (s->y < q->nmark) q->mark[s->y] |= (y ? QM_S_DEL : QM_S_DEL_TOP) | QM_S_HEAD;
+      continue;
+    }
+    s->y = s->last = 0;
+    for (y = 0; y < h->nn; y++) {
+      size_t at = map_line(&m, h->n0 + y, &gone);
+      if (!any) s->y = at;
+      s->last = at;
+      any = 1;
+      if (!gone && at < q->nmark) q->mark[at] |= h->on == 0 ? QM_S_ADD : QM_S_MOD;
+    }
+    if (s->last < s->y) s->last = s->y;
+    if (s->y >= q->nmark && q->nmark) s->y = s->last = q->nmark - 1;
+    if (s->y < q->nmark) q->mark[s->y] |= QM_S_HEAD;
   }
 }
 
@@ -195,6 +290,14 @@ const QHunk *quick_hunks (Doc *d, const char *path, size_t *n) {
 }
 
 
+/* the staged changes of d (HEAD -> the index), on its lines now; NULL: no quick diff */
+const QStaged *quick_staged (Doc *d, const char *path, size_t *n) {
+  QDoc *q = fresh(d, path);
+  *n = q && q->sv ? q->nsh : 0;
+  return q ? q->sv : NULL;
+}
+
+
 /* the gutter's decoration of line y: QM_* */
 int quick_mark (Doc *d, const char *path, size_t y) {
   QDoc *q = fresh(d, path);
@@ -203,16 +306,30 @@ int quick_mark (Doc *d, const char *path, size_t y) {
 }
 
 
+/* line i of a copy s (no newline, no \r); NULL: none */
+static const char *copy_line (const char *s, size_t slen, const size_t *at, size_t n, int final_nl, size_t i,
+                              size_t *len) {
+  size_t e;
+  if (s == NULL || i >= n) return NULL;
+  e = i + 1 < n ? at[i + 1] - 1 : slen;
+  if (i + 1 >= n && final_nl && e > at[i]) e--;
+  if (e > at[i] && s[e - 1] == '\r') e--;
+  *len = e - at[i];
+  return s + at[i];
+}
+
+
 /* line i of the index's copy (no newline, no \r); NULL: none */
 const char *quick_old (Doc *d, const char *path, size_t i, size_t *len) {
   QDoc *q = entry(d, path, 0);
-  size_t e;
-  if (q == NULL || q->orig == NULL || i >= q->noline) return NULL;
-  e = i + 1 < q->noline ? q->oline[i + 1] - 1 : q->olen;
-  if (i + 1 >= q->noline && q->final_nl && e > q->oline[i]) e--;
-  if (e > q->oline[i] && q->orig[e - 1] == '\r') e--;
-  *len = e - q->oline[i];
-  return q->orig + q->oline[i];
+  return q ? copy_line(q->orig, q->olen, q->oline, q->noline, q->final_nl, i, len) : NULL;
+}
+
+
+/* line i of HEAD's copy; NULL: none */
+const char *quick_head (Doc *d, const char *path, size_t i, size_t *len) {
+  QDoc *q = entry(d, path, 0);
+  return q ? copy_line(q->head, q->hlen, q->hline, q->nhline, q->hfinal_nl, i, len) : NULL;
 }
 
 

@@ -186,10 +186,12 @@ case "$CC" in
     ;;
   gcc)
     if [ "$ARCH" = 64 ]; then
+      MGW=/d/env/mingw64/bin	# where this PC has MinGW-w64 (an older one: /d/env/mingw/MinGW/bin)
+      [ -f "$MGW/gcc.exe" ] || MGW=/d/env/mingw/MinGW/bin
       GCC=gcc
-      command -v gcc >/dev/null 2>&1 || GCC=/d/env/mingw/MinGW/bin/gcc.exe
+      command -v gcc >/dev/null 2>&1 || GCC=$MGW/gcc.exe
       WINDRES=windres
-      command -v windres >/dev/null 2>&1 || WINDRES=/d/env/mingw/MinGW/bin/windres.exe
+      command -v windres >/dev/null 2>&1 || WINDRES=$MGW/windres.exe
     else
       GCC=${GCC32:-i686-w64-mingw32-gcc}
       WINDRES=$(dirname "$GCC")/windres.exe

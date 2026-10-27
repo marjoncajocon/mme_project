@@ -355,6 +355,28 @@ static int draw_block (Frame *f, uint32_t cp, int x, int y, int w, int h, uint32
 }
 
 
+/* ■ □ (U+25A0, U+25A1): a square as wide as the cell (a pixel apart from the next), in the row's middle; the gutter's
+** change marks, so they are the same size whatever the font has */
+static int draw_square (Frame *f, uint32_t cp, int x, int y, int w, int h, uint32_t fg) {
+  int s = w > 5 ? w - 1 : w, t, x0, y0;
+  if (s > h * 3 / 4) s = h * 3 / 4;
+  if (s < 3) s = 3;
+  x0 = x + (w - s) / 2;
+  y0 = y + (h - s) / 2;
+  if (cp == 0x25A0) {
+    fill(f, x0, y0, s, s, fg);
+    return 1;
+  }
+  t = (s + 3) / 5;
+  if (t < 1) t = 1;
+  fill(f, x0, y0, s, t, fg);
+  fill(f, x0, y0 + s - t, s, t, fg);
+  fill(f, x0, y0 + t, t, s - 2 * t, fg);
+  fill(f, x0 + s - t, y0 + t, t, s - 2 * t, fg);
+  return 1;
+}
+
+
 /*
 ** Powerline separators (U+E0B0..E0BF), a shell prompt's, as geometry: they
 ** fill their cell exactly, so the colored parts join without seams (tdraw.c)
@@ -553,6 +575,7 @@ static void paint_fg (const Fm *m, const ECell *c, int px, int py, int wide, uin
     }
     else if (ch >= 0x2500 && ch <= 0x257F) drawn = draw_box(f, ch, px, py, w, m->ch, fg);
     else if (ch >= 0x2580 && ch <= 0x259F) drawn = draw_block(f, ch, px, py, w, m->ch, fg);
+    else if (ch == 0x25A0 || ch == 0x25A1) drawn = draw_square(f, ch, px, py, w, m->ch, fg);
     else if (ch >= 0xE0B0 && ch <= 0xE0BF) drawn = draw_powerline(f, ch, px, py, w, m->ch, fg);
     if (!drawn)
       blit_glyph(f, m->glyph(ch, (at & RGB_BOLD) != 0, (at & RGB_ITALIC) != 0, brightness(fg) < brightness(bg)),

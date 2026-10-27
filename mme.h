@@ -1568,7 +1568,15 @@ typedef struct QHunk {	/* a change: old lines o0 .. o0 + on became new n0 .. n0 
 QHunk *text_hunks (const char *a, size_t na, const char *b, size_t nb, size_t *n);	/* free it */
 
 /* equick.c - quick diff (the gutter's changes against the index) and merge conflicts */
-enum { QM_ADD = 1, QM_MOD = 2, QM_DEL = 4, QM_DEL_TOP = 8 };	/* DEL: lines went after this one */
+enum { QM_ADD = 1, QM_MOD = 2, QM_DEL = 4, QM_DEL_TOP = 8,	/* DEL: lines went after this one */
+       QM_S_ADD = 16, QM_S_MOD = 32, QM_S_DEL = 64, QM_S_DEL_TOP = 128,	/* the same, staged (HEAD -> the index) */
+       QM_HEAD = 256, QM_S_HEAD = 512,	/* the first line of a change, of a staged one: its square */
+       QM_NOW = 15, QM_STAGED = 240 };
+
+typedef struct QStaged {	/* a staged change: h is HEAD's lines -> the index's; y .. last: d's lines it is on */
+  QHunk h;
+  size_t y, last;
+} QStaged;
 
 void quick_clear (void);	/* git refreshed: the index's copies are read again */
 void quick_forget (Doc *d);
@@ -1576,6 +1584,8 @@ int quick_idle (void);	/* git's copy of a file, read when nothing else is to do 
 const QHunk *quick_hunks (Doc *d, const char *path, size_t *n);	/* NULL: no quick diff */
 int quick_mark (Doc *d, const char *path, size_t y);	/* QM_* */
 const char *quick_old (Doc *d, const char *path, size_t i, size_t *len);	/* the index's line i */
+const char *quick_head (Doc *d, const char *path, size_t i, size_t *len);	/* HEAD's line i */
+const QStaged *quick_staged (Doc *d, const char *path, size_t *n);	/* the staged changes */
 int quick_stage (Doc *d, const char *path, const QHunk *h, size_t nh);	/* 0 done */
 int quick_unstage (const char *path, size_t lo, size_t hi);	/* 0 done, 1 nothing there */
 

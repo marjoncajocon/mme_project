@@ -16,4 +16,8 @@ case "$1" in
   xp) echo "build-gpu.sh: no GPU build for Windows XP (tcc's, SDL's Direct3D 9 at best): build.sh xp"; exit 2 ;;
   clean) echo "build-gpu.sh: build.sh clean removes both"; exit 2 ;;
 esac
-MME_PROG=mme-sdl-gpu MME_CFLAGS="${MME_CFLAGS-} -DMME_GPU" exec ./build.sh "$@"
+# exported, not "VAR=x exec": mmc's exec drops assignments put before it
+MME_PROG=mme-sdl-gpu
+MME_CFLAGS="${MME_CFLAGS-} -DMME_GPU"
+export MME_PROG MME_CFLAGS
+exec ./build.sh "$@"

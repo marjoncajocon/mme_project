@@ -96,7 +96,7 @@ typedef struct Ed {
   int resizing_panel;	/* dragging its top (1), or its side's edge (2) */
   int minimap;	/* VS Code's minimap on the right of the text */
   int drag_mm;	/* dragging in it */
-  int drag_sb;	/* dragging the scrollbar's thumb: 1 + where in it it was taken */
+  int drag_sb;	/* dragging the scrollbar's thumb: 1 + where in it it was taken; -1: a click went to a change */
   int drag_hsb;	/* the same for the horizontal one */
   int panel_view;	/* the panel shows: 0 the terminal, 1 the problems, 2 the output */
   int panel_max;	/* the panel has the whole editor area (View: Toggle Maximized Panel) */
@@ -346,7 +346,9 @@ static int conflict_click (Mouse *m);
 static void conflict_reset (void);
 static long hunk_at (const QHunk *h, size_t n, size_t y);
 static const QHunk *qhunks (size_t *n);
-static void dirty_show (long i);
+static void dirty_show (int staged, long i);
+static void unstage_peek (void);
+static int qm_staged (int qm);
 static void quick_cmd (int cmd);
 static void merge_cmd (int cmd);
 static int peek_is_open (void);
@@ -4318,6 +4320,21 @@ static void mm_mark (uint32_t *tint, unsigned char *pri, size_t top, size_t y, s
 #define MM_MOD	0x0078D4
 #define MM_DEL	0xF85149
 
+/* a line's git change (QM_*) on the minimap and the scrollbar: the color; a staged one fainter; MM_NONE: none */
+static uint32_t git_mark_color (int qm, uint32_t bg) {
+  if (qm & QM_NOW) return qm & QM_MOD ? MM_MOD : qm & QM_ADD ? MM_ADD : MM_DEL;
+  if (qm & QM_STAGED) return blend(qm & QM_S_MOD ? MM_MOD : qm & QM_S_ADD ? MM_ADD : MM_DEL, bg, 50);
+  return MM_NONE;
+}
+
+
+/* how much a line's git change shows on a minimap row of several lines: the strongest wins */
+static int git_mark_rank (int qm) {
+  if (qm & QM_NOW) return qm & QM_MOD ? 6 : qm & QM_ADD ? 5 : 4;
+  if (qm & QM_STAGED) return qm & QM_S_MOD ? 3 : qm & QM_S_ADD ? 2 : 1;
+  return 0;
+}
+
 /*
 ** The pixel minimap's lines, kept per document: each character column's
 ** token (+1, 0: blank) and how much ink the character has (MMC_INK: its
@@ -4604,8 +4621,8 @@ static void draw_minimap_px (const MmPx *p) {
   for (y = top; y < last; y++) {
     const unsigned char *t = mmc_line(c, y);
     int py = (int)(y - top) * p->lh, k = 0, qm = qmv[y - top];
-    if (qm)	/* the git changes: the strip on the left */
-      mm_fill(px, pw, ph, 0, py, p->gut - 1, p->lh, qm & QM_MOD ? MM_MOD : qm & QM_ADD ? MM_ADD : MM_DEL, 100);
+    if (qm && git_mark_color(qm, bg) != MM_NONE)	/* the git changes: the strip on the left */
+      mm_fill(px, pw, ph, 0, py, p->gut - 1, p->lh, git_mark_color(qm, bg), 100);
     while (k < cols) {	/* runs of one token: a word is one fill */
       int e = k + 1;
       if (t[k] == 0) {
@@ -4643,6 +4660,30 @@ static void draw_minimap_px (const MmPx *p) {
           size_t x1 = dv[d].b.y == dv[d].a.y ? dv[d].b.x : row_at(dv[d].a.y)->len;
           mm_mark_px(p, px, pw, ph, top, dv[d].a.y, dv[d].a.x, x1, ui_color(i == 1 ? C_ERROR : C_WARNING), 90);
         }
+  }
+  {	/* a git change's first line: its square at the left edge, as the gutter has (staged: an outline), over the text */
+    int s = p->cw * 3 / 4, t;
+    if (s < 5) s = 5;
+    t = s >= 8 ? 2 : 1;
+    for (y = top; y < last; y++) {
+      int qm = qmv[y - top], st, head, k, sx = 0, sy;
+      uint32_t c;
+      if (!(qm & (QM_HEAD | QM_S_HEAD))) continue;
+      st = qm_staged(qm);
+      head = st ? (qm & QM_S_HEAD) != 0 : (qm & QM_HEAD) != 0;
+      if (!head) continue;
+      k = st ? qm >> 4 : qm;
+      c = (k & QM_MOD) ? MM_MOD : (k & QM_ADD) ? MM_ADD : (k & (QM_DEL | QM_DEL_TOP)) ? MM_DEL : MM_MOD;
+      sy = (int)(y - top) * p->lh + p->lh / 2 - s / 2;
+      mm_fill(px, pw, ph, sx, sy - 1, s + 1, s + 2, bg, 100);	/* a pixel of room around it */
+      if (st) {
+        mm_fill(px, pw, ph, sx, sy, s, t, c, 100);
+        mm_fill(px, pw, ph, sx, sy + s - t, s, t, c, 100);
+        mm_fill(px, pw, ph, sx, sy, t, s, c, 100);
+        mm_fill(px, pw, ph, sx + s - t, sy, t, s, c, 100);
+      }
+      else mm_fill(px, pw, ph, sx, sy, s, s, c, 100);
+    }
   }
   scr_bitmap(L.mm_x, L.text_y, mm_width(), L.view_h, px);
 }
@@ -4694,15 +4735,23 @@ static void draw_minimap (void) {
   for (row = 0; row < L.view_h; row++) {
     size_t y0 = top + (size_t)row * lpr;
     int in_view = slider && (y0 + lpr > T->top && y0 < T->top + (size_t)L.text_h);
-    uint32_t bg = ui_color(in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG), git = 0;
+    uint32_t bg = ui_color(in_view ? C_MINIMAP_SLIDER : C_EDITOR_BG), git = 0, gsq = 0, gsc = 0;
     for (k = 0; k < MM_LINES; k++) mm_line(y0 + (size_t)k * lpr / MM_LINES, dot[k]);
     if (opt.scm_decor && T->real && !T->page) {	/* the git changes of its lines: the left edge */
       size_t j;
+      int best = 0, hbest = 0;
       for (j = 0; j < lpr; j++) {
-        int qm = quick_mark(T->doc, T->real, y0 + j);
-        if (qm & QM_MOD) git = MM_MOD;
-        else if ((qm & QM_ADD) && git != MM_MOD) git = MM_ADD;
-        else if (qm && !git) git = MM_DEL;
+        int qm = quick_mark(T->doc, T->real, y0 + j), rk = git_mark_rank(qm), st = qm_staged(qm);
+        if (rk > best) {
+          best = rk;
+          git = git_mark_color(qm, bg);
+        }
+        if ((st ? (qm & QM_S_HEAD) : (qm & QM_HEAD)) && rk > hbest) {	/* a change starts here: its square */
+          int k = st ? qm >> 4 : qm;
+          hbest = rk;
+          gsq = st ? 0x25A1 : 0x25A0;
+          gsc = (k & QM_MOD) ? MM_MOD : (k & QM_ADD) ? MM_ADD : (k & (QM_DEL | QM_DEL_TOP)) ? MM_DEL : MM_MOD;
+        }
       }
     }
     for (i = 0; i < mw; i++) {
@@ -4723,7 +4772,8 @@ static void draw_minimap (void) {
         int up = (m & 0x1B) != 0, down = (m & 0xE4) != 0;
         ch = up && down ? 0x2588 : up ? 0x2580 : down ? 0x2584 : ' ';
       }
-      if (i == 0 && git) scr_put_rgb(x0 + i, L.text_y + row, 0x258E, git, cbg, 0);	/* ▎ */
+      if (i == 0 && gsq) scr_put_rgb(x0 + i, L.text_y + row, gsq, gsc, cbg, 0);	/* ■ □ where a change starts */
+      else if (i == 0 && git) scr_put_rgb(x0 + i, L.text_y + row, 0x258E, git, cbg, 0);	/* ▎ */
       else scr_put_rgb(x0 + i, L.text_y + row, ch, m ? blend(fg, cbg, vopt.mm_chars ? 80 : 45) : cbg, cbg, 0);
     }
   }
@@ -4732,24 +4782,70 @@ static void draw_minimap (void) {
 }
 
 
+static int qc_pick (size_t y, int *staged, long *at);
+static int qc_get (int staged, size_t i, size_t *line, size_t *last, QHunk *h);
+
+/*
+** A click on the marks of lines lo .. hi (a row of the scrollbar, of the
+** minimap): a git change there (staged or not; the nearest to the middle),
+** the cursor goes to its first line, in the middle of the view; 1 when
+** there was one.
+*/
+static int goto_change_in (size_t lo, size_t hi) {
+  size_t mid = lo + (hi - lo) / 2, d, y, line, last;
+  long at;
+  int st, side;
+  QHunk h;
+  Pos p;
+  if (!opt.scm_decor || !HAS_DOC || G->diff || T->page || T->real == NULL || hi < lo) return 0;
+  for (d = 0; d <= hi - lo && d < 100000; d++)
+    for (side = 0; side < 2; side++) {
+      if ((side == 0 && mid < lo + d) || (side == 1 && (d == 0 || mid + d > hi))) continue;
+      y = side == 0 ? mid - d : mid + d;
+      if (y >= T->doc->n || !qc_pick(y, &st, &at) || !qc_get(st, (size_t)at, &line, &last, &h)) continue;
+      p.y = line;
+      p.x = 0;
+      T->sel = 0;
+      T->nmc = 0;
+      move_h(doc_clamp(T->doc, p), 0);
+      center_cursor();
+      E.focus = F_EDITOR;
+      return 1;
+    }
+  return 0;
+}
+
+
 /* a click or a drag on the minimap: the slider taken follows the mouse; elsewhere, that line in the middle */
 static void minimap_mouse (Mouse *m) {
   size_t n = T->doc->n, h = (size_t)L.text_h, lpr = mm_lpr(), top0 = mm_top(), top;
   long ry = m->y - L.text_y, s0, sh, want, units = L.view_h;
+  size_t tol = 0;	/* lines either side a change's mark may be clicked at */
   MmPx p;
   if (mm_px(&p)) {	/* pixels: in lines, not rows */
     long py = (m->fx || m->fy ? (long)m->fy * p.ch / 256 : (long)m->y * p.ch + p.ch / 2) - (long)L.text_y * p.ch;
     ry = py < 0 ? 0 : py / p.lh;
     lpr = 1;
     units = (long)mm_lines();
+    tol = p.lh > 0 ? (size_t)(p.ch / p.lh / 2) : 0;	/* a line is a pixel or two high: half a row's */
+    if (tol < 1) tol = 1;
   }
   sh = (long)((h + lpr - 1) / lpr);
+  s0 = (long)((T->top > top0 ? T->top - top0 : 0) / lpr);
+  if (E.drag_mm < 0) return;	/* a click went to a change: no drag until the button comes up */
+  if (!E.drag_mm && (n <= h || ry < s0 || ry >= s0 + sh || m->x == L.mm_x)) {
+    /* a git change's mark (off the slider; on it, its square at the left edge): its line */
+    size_t lo = top0 + (size_t)(ry < 0 ? 0 : ry) * lpr;
+    if (goto_change_in(lo > tol ? lo - tol : 0, lo + lpr - 1 + tol)) {
+      E.drag_mm = -1;
+      return;
+    }
+  }
   if (n <= h) {
     T->top = 0;
     E.drag_mm = 1;
     return;
   }
-  s0 = (long)((T->top > top0 ? T->top - top0 : 0) / lpr);
   if (!E.drag_mm) {
     if (ry >= s0 && ry < s0 + sh) E.drag_mm = 1 + (int)(ry - s0);	/* the slider is taken */
     else {
@@ -4793,20 +4889,29 @@ static void draw_scrollbar (void) {
   int x = L.ed_x + L.ed_w - 1, row, pos, size = sb_thumb(&pos), hov = mouse_over(x, L.text_y + pos, 1, size);
   size_t n = T->doc->n, nd, i;
   const Diag *dv = lsp_diags(T->doc, &nd);
-  unsigned char *mark = (unsigned char *)calloc((size_t)L.view_h + 1, 1);
-  /* the marks: 1 cursor, 2 3 4 git added, modified, deleted, 5 occurrence, 6 find match, 7 warning, 8 error; the strongest shows */
-#define MARK(line, m)	do { double d_ = (double)(line) * L.view_h / (double)(n > 0 ? n : 1); \
+  unsigned char *mark = (unsigned char *)calloc((size_t)L.view_h + 1, 2), *gm;
+  /* the marks: 1 cursor, 8 occurrence, 9 find match, 10 warning, 11 error, the strongest shows; and in gm the git
+  ** changes, 1 2 3 staged added, deleted, modified, 4 5 6 not yet staged: a square, over all but an error */
+#define MARK_IN(a, line, m)	do { double d_ = (double)(line) * L.view_h / (double)(n > 0 ? n : 1); \
     int r_ = d_ < (double)L.view_h ? (int)d_ : L.view_h - 1;	/* a line past the end (a server's): the last row */ \
-    if (r_ < 0) r_ = 0; if (mark[r_] < (m)) mark[r_] = (unsigned char)(m); } while (0)
+    if (r_ < 0) r_ = 0; if ((a)[r_] < (m)) (a)[r_] = (unsigned char)(m); } while (0)
+#define MARK(line, m)	MARK_IN(mark, line, m)
   if (mark == NULL) return;
+  gm = mark + L.view_h + 1;
   MARK(T->cur.y, 1);
   if (opt.scm_decor && T->real && !T->page) {	/* the git changes, VS Code's left lane */
     size_t nq, q, j;
     const QHunk *qh = quick_hunks(T->doc, T->real, &nq);
+    const QStaged *sv;
     for (q = 0; qh && q < nq; q++) {
-      int kind = qh[q].nn == 0 ? 4 : qh[q].on == 0 ? 2 : 3;
-      if (qh[q].nn == 0) MARK(qh[q].n0 ? qh[q].n0 - 1 : 0, kind);
-      for (j = 0; j < qh[q].nn && j < 100000; j++) MARK(qh[q].n0 + j, kind);
+      int kind = qh[q].nn == 0 ? 5 : qh[q].on == 0 ? 4 : 6;
+      if (qh[q].nn == 0) MARK_IN(gm, qh[q].n0 ? qh[q].n0 - 1 : 0, kind);
+      for (j = 0; j < qh[q].nn && j < 100000; j++) MARK_IN(gm, qh[q].n0 + j, kind);
+    }
+    sv = quick_staged(T->doc, T->real, &nq);
+    for (q = 0; sv && q < nq; q++) {
+      int kind = sv[q].h.nn == 0 ? 2 : sv[q].h.on == 0 ? 1 : 3;
+      for (j = sv[q].y; j <= sv[q].last && j < sv[q].y + 100000; j++) MARK_IN(gm, j, kind);
     }
   }
   if (E.find_open && E.find[0] && n < 20000) {
@@ -4816,7 +4921,7 @@ static void draw_scrollbar (void) {
       size_t xx;
       for (xx = 0; xx < r->len; xx++)
         if (match_at(y, xx)) {
-          MARK(y, 6);
+          MARK(y, 9);
           break;
         }
     }
@@ -4824,25 +4929,32 @@ static void draw_scrollbar (void) {
   {	/* the occurrences of the symbol at the cursor */
     size_t nh, k;
     const Pos *hv = hl_ranges(&nh);
-    for (k = 0; k < nh; k++) MARK(hv[k * 2].y, 5);
+    for (k = 0; k < nh; k++) MARK(hv[k * 2].y, 8);
   }
   for (i = 0; i < nd; i++)
-    if (dv[i].sev <= 2) MARK(dv[i].a.y, dv[i].sev == 1 ? 8 : 7);
+    if (dv[i].sev <= 2) MARK(dv[i].a.y, dv[i].sev == 1 ? 11 : 10);
 #undef MARK
+#undef MARK_IN
   for (row = 0; row < L.view_h; row++) {
     int on = row >= pos && row < pos + size && size < L.view_h;
-    uint32_t bg = ui_color(on ? (E.drag_sb ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
-    uint32_t col[9];
+    uint32_t bg = ui_color(on ? (E.drag_sb > 0 ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    uint32_t col[12];
     col[0] = 0;
     col[1] = ui_color(C_GUTTER_ON);
-    col[2] = MM_ADD;	/* editorOverviewRuler.addedForeground ... */
-    col[3] = MM_MOD;
-    col[4] = MM_DEL;
-    col[5] = 0xA0A0A0u;	/* selectionHighlightForeground */
-    col[6] = 0xD18616u;	/* findMatchForeground */
-    col[7] = ui_color(C_WARNING);
-    col[8] = ui_color(C_ERROR);
-    if (mark[row]) scr_put_rgb(x, L.text_y + row, mark[row] == 1 ? 0x2500 : mark[row] <= 4 ? 0x258C : 0x25AC, col[mark[row]], bg, 0);
+    col[8] = 0xA0A0A0u;	/* selectionHighlightForeground */
+    col[9] = 0xD18616u;	/* findMatchForeground */
+    col[10] = ui_color(C_WARNING);
+    col[11] = ui_color(C_ERROR);
+    if (gm[row] && mark[row] != 11) {	/* a git change: its square (staged: an outline), a click goes to it */
+      static const uint32_t gc[3] = {MM_ADD, MM_DEL, MM_MOD};	/* editorOverviewRuler.addedForeground ... */
+      uint32_t c = gc[(gm[row] - 1) % 3];
+      if (mouse_over(x, L.text_y + row, 1, 1)) {
+        c = blend(c, 0xFFFFFF, 70);
+        tip_want(x, L.text_y + row + 1, gm[row] <= 3 ? "Go to Staged Change" : "Go to Change");
+      }
+      scr_put_rgb(x, L.text_y + row, gm[row] <= 3 ? 0x25A1 : 0x25A0, c, bg, 0);
+    }
+    else if (mark[row]) scr_put_rgb(x, L.text_y + row, mark[row] == 1 ? 0x2500 : 0x25AC, col[mark[row]], bg, 0);
     else scr_put_rgb(x, L.text_y + row, ' ', bg, bg, 0);
   }
   free(mark);
@@ -4894,10 +5006,36 @@ static void hscrollbar_mouse (Mouse *m) {
 }
 
 
+/* the lines whose marks are in row ry of the scrollbar, as draw_scrollbar puts them; 0: none */
+static int sb_row_lines (int ry, size_t *lo, size_t *hi) {
+  size_t n = T->doc->n;
+  if (n == 0 || ry < 0 || ry >= L.view_h) return 0;
+  *lo = (size_t)((double)ry * (double)n / (double)L.view_h);
+  *hi = (size_t)((double)(ry + 1) * (double)n / (double)L.view_h);
+  while (*lo > 0 && (int)((double)(*lo - 1) * L.view_h / (double)n) == ry) (*lo)--;
+  while (*lo < n && (int)((double)*lo * L.view_h / (double)n) < ry) (*lo)++;
+  if (*hi >= n) *hi = n - 1;
+  while (*hi > *lo && (int)((double)*hi * L.view_h / (double)n) > ry) (*hi)--;
+  return *lo < n && (int)((double)*lo * L.view_h / (double)n) == ry;
+}
+
+
 /* a click or a drag on the scrollbar */
 static void scrollbar_mouse (Mouse *m) {
-  int pos, size = sb_thumb(&pos), ry = m->y - L.text_y;
-  size_t n = T->doc->n, h = (size_t)L.text_h, top;
+  int pos, size = sb_thumb(&pos), ry = m->y - L.text_y, d;
+  size_t n = T->doc->n, h = (size_t)L.text_h, top, lo, hi;
+  if (!E.drag_sb && ry >= 0 && ry < L.view_h) {
+    /* a git change's square: its line; on the thumb only the one clicked, elsewhere the row's next to it too */
+    int thumb = n > h && ry >= pos && ry < pos + size;
+    for (d = 0; d <= (thumb ? 0 : 1); d++)
+      if ((sb_row_lines(ry, &lo, &hi) && d == 0 && goto_change_in(lo, hi)) ||
+          (d == 1 && ((sb_row_lines(ry - 1, &lo, &hi) && goto_change_in(lo, hi)) ||
+                      (sb_row_lines(ry + 1, &lo, &hi) && goto_change_in(lo, hi))))) {
+        E.drag_sb = -1;	/* until the button comes up: no drag */
+        return;
+      }
+  }
+  if (E.drag_sb < 0) return;
   if (n <= h) return;
   if (!E.drag_sb) {
     if (ry >= pos && ry < pos + size) E.drag_sb = 1 + (ry - pos);	/* the thumb is taken */
@@ -17291,7 +17429,8 @@ static void show_compare (const char *path, const char *a, size_t na, const char
 
 static struct {
   int open;
-  size_t hi;	/* the change shown */
+  int staged;	/* it shows a staged change (HEAD -> the index): Unstage instead of Stage and Revert */
+  size_t hi;	/* the change shown (of its kind) */
   size_t top;	/* its first line shown: a long one scrolls */
   int x, y, w, h;	/* where it was drawn */
   int stage_x, revert_x, prev_x, next_x, close_x;
@@ -17305,16 +17444,10 @@ static const QHunk *qhunks (size_t *n) {
 }
 
 
-/* the gutter's bar of line y (draw_row calls it for a line's first row) */
-static void draw_quick (int sy, size_t y, int gw, int is_cur) {
-  int qm;
-  uint32_t bg;
-  if (!opt.scm_decor || T->real == NULL || T->page || gw < 3) return;
-  if ((qm = quick_mark(T->doc, T->real, y)) == 0) return;
-  bg = ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG);
-  if (qm & QM_ADD) scr_put_rgb(L.ed_x + gw - 1, sy, 0x258E, QD_ADD, bg, 0);	/* ▎ */
-  else if (qm & QM_MOD) scr_put_rgb(L.ed_x + gw - 1, sy, 0x258E, QD_MOD, bg, 0);
-  else scr_put_rgb(L.ed_x + gw - 1, sy, (qm & QM_DEL) ? 0x25E2 : 0x25E5, QD_DEL, bg, 0);	/* ◢ lines went below, ◥ above */
+static const QStaged *qstaged (size_t *n) {
+  *n = 0;
+  if (!HAS_DOC || G->diff || T->page || T->md || T->real == NULL) return NULL;
+  return quick_staged(T->doc, T->real, n);
 }
 
 
@@ -17337,19 +17470,201 @@ static long hunk_at (const QHunk *h, size_t n, size_t y) {
 }
 
 
-/* the change after (d 1) or before (d -1) the cursor's line, around the ends */
-static long hunk_next (const QHunk *h, size_t n, int d) {
-  size_t y = T->cur.y, i;
-  long at = hunk_at(h, n, y);
-  if (n == 0) return -1;
-  if (d > 0) {
-    for (i = 0; i < n; i++)
-      if (hunk_line(&h[i]) > y && (long)i != at) return (long)i;
-    return 0;
+/*
+** A line's marks show its change not yet staged; a staged one where there
+** is none, or where only a staged change starts (its square shows then).
+*/
+static int qm_staged (int qm) {
+  return !(qm & QM_NOW) || (!(qm & QM_HEAD) && (qm & QM_S_HEAD));
+}
+
+
+static size_t qc_count (int staged) {
+  size_t n;
+  if (staged) qstaged(&n);
+  else qhunks(&n);
+  return n;
+}
+
+
+/* change i of a kind: its lines in the buffer, and what it is (a staged one: HEAD's lines -> the index's) */
+static int qc_get (int staged, size_t i, size_t *line, size_t *last, QHunk *h) {
+  size_t n;
+  if (staged) {
+    const QStaged *s = qstaged(&n);
+    if (s == NULL || i >= n) return 0;
+    *h = s[i].h;
+    *line = s[i].y;
+    *last = s[i].last;
+    return 1;
   }
-  for (i = n; i-- > 0;)
-    if (hunk_line(&h[i]) < y && (long)i != at) return (long)i;
-  return (long)n - 1;
+  else {
+    const QHunk *v = qhunks(&n);
+    if (v == NULL || i >= n) return 0;
+    *h = v[i];
+    *line = hunk_line(&v[i]);
+    *last = hunk_last(&v[i]);
+    return 1;
+  }
+}
+
+
+/* the change line y shows (the one its bar or square is of); 0: none */
+static int qc_pick (size_t y, int *staged, long *at) {
+  int qm = HAS_DOC && T->real ? quick_mark(T->doc, T->real, y) : 0;
+  size_t n, k;
+  if (!(qm & (QM_NOW | QM_STAGED | QM_S_HEAD))) return 0;
+  *staged = qm_staged(qm);
+  if (!*staged) {
+    const QHunk *h = qhunks(&n);
+    *at = h ? hunk_at(h, n, y) : -1;
+    return *at >= 0;
+  }
+  {
+    const QStaged *s = qstaged(&n);
+    for (k = 0; s && k < n; k++)	/* the one starting there first */
+      if (s[k].y == y) {
+        *at = (long)k;
+        return 1;
+      }
+    for (k = 0; s && k < n; k++)
+      if (y >= s[k].y && y <= s[k].last) {
+        *at = (long)k;
+        return 1;
+      }
+  }
+  return 0;
+}
+
+
+/* (line, kind, i) before (< 0), the same as or after (> 0) another */
+static int qc_cmp (size_t l1, int k1, size_t i1, size_t l2, int k2, size_t i2) {
+  if (l1 != l2) return l1 < l2 ? -1 : 1;
+  if (k1 != k2) return k1 < k2 ? -1 : 1;
+  return i1 < i2 ? -1 : i1 > i2 ? 1 : 0;
+}
+
+
+/*
+** Both kinds of changes in the order of their lines: the one after (d 1) or
+** before (d -1) the peek's, or the cursor's line, around the ends; 0: none.
+*/
+static int qc_step (int d, int *staged, long *at) {
+  size_t cl = T->cur.y, ci = d > 0 ? (size_t)-1 : 0, line, last, i, n, bl = 0, bi = 0, wl = 0, wi = 0;
+  int ck = d > 0 ? 2 : -1, k, found = 0, wrap = 0, bk = 0, wk = 0;
+  QHunk h;
+  long here;
+  if (DP.open && qc_get(DP.staged, DP.hi, &line, &last, &h)) {
+    cl = line;
+    ck = DP.staged;
+    ci = DP.hi;
+  }
+  else if (qc_pick(T->cur.y, &k, &here) && qc_get(k, (size_t)here, &line, &last, &h)) {	/* from the change the cursor is on */
+    cl = line;
+    ck = k;
+    ci = (size_t)here;
+  }
+  for (k = 0; k < 2; k++)
+    for (i = 0, n = qc_count(k); i < n; i++) {
+      int c;
+      if (!qc_get(k, i, &line, &last, &h)) continue;
+      c = qc_cmp(line, k, i, cl, ck, ci);
+      if (d > 0 ? c > 0 : c < 0) {	/* on the way: the nearest */
+        if (!found || (d > 0 ? qc_cmp(line, k, i, bl, bk, bi) < 0 : qc_cmp(line, k, i, bl, bk, bi) > 0)) {
+          bl = line, bk = k, bi = i;
+        }
+        found = 1;
+      }
+      if (!wrap || (d > 0 ? qc_cmp(line, k, i, wl, wk, wi) < 0 : qc_cmp(line, k, i, wl, wk, wi) > 0)) {
+        wl = line, wk = k, wi = i;	/* around the end: the first (the last) */
+      }
+      wrap = 1;
+    }
+  if (!found && !wrap) return 0;
+  *staged = found ? bk : wk;
+  *at = (long)(found ? bi : wi);
+  return 1;
+}
+
+
+/* which of all the changes (both kinds, by line) change i of a kind is, from 1; and how many there are */
+static size_t qc_rank (int staged, size_t at, size_t *all) {
+  size_t line, last, i, n, r = 1, l0, la;
+  int k;
+  QHunk h;
+  *all = qc_count(0) + qc_count(1);
+  if (!qc_get(staged, at, &l0, &la, &h)) return 0;
+  for (k = 0; k < 2; k++)
+    for (i = 0, n = qc_count(k); i < n; i++)
+      if (qc_get(k, i, &line, &last, &h) && qc_cmp(line, k, i, l0, staged, at) < 0) r++;
+  return r;
+}
+
+
+/* a click at column x of line y is on its change's bar or square: the bar's column, or the fold's next to it without a chevron */
+static int qc_column (int x, size_t y) {
+  int gw = gutter_width();
+  if (x == L.ed_x + gw - 1) return 1;
+  return gw >= 4 && x == L.ed_x + gw - 2 && !(T->nfold && is_folded(y)) && !(y == T->cur.y && fold_end(y) > y);
+}
+
+
+/* the change under the mouse, on its bar or square: its lines lo .. hi, its kind; worked out once a drawing */
+static int qc_hover (size_t *lo, size_t *hi, int *staged) {
+  static unsigned long gen;
+  static int ok, st;
+  static size_t l, h;
+  if (gen != g_draw_gen) {
+    int g = (int)(G - g_grp), tx, ty, ux, uy;
+    size_t y, from, to, left;
+    long at;
+    QHunk qh;
+    gen = g_draw_gen;
+    ok = 0;
+    if (MH.on && !MH.held && MH.m.x >= L.gx[g] && MH.m.x < L.gx[g] + L.gw[g] && MH.m.y >= L.gy[g] &&
+        MH.m.y < L.gy[g] + L.gh[g]) {
+      scr_zone_pt(g, &MH.m, &tx, &ty);
+      if (ty >= L.text_y && ty < L.text_y + L.text_h && vis_goto(ty - L.text_y, &y, &from, &to, &left) &&
+          qc_column(tx, y) && qc_pick(y, &st, &at) && qc_get(st, (size_t)at, &l, &h, &qh)) {
+        ok = 1;
+        scr_zone_to_ui(g, tx, ty, 0, &ux, &uy);
+        if (!(DP.open && DP.staged == st && DP.hi == (size_t)at))	/* its peek is open: it would cover the title */
+          tip_want(ux + 1, uy + 1, st ? "Show Staged Change (Alt+F3)" : "Show Change (Alt+F3)");
+      }
+    }
+  }
+  *lo = l;
+  *hi = h;
+  *staged = st;
+  return ok;
+}
+
+
+/*
+** The gutter's mark of line y (draw_row calls it for a line's first row): a
+** change's first line a square (lines that went: a red one where they were),
+** its other lines a bar; a staged change's an outline and a fainter bar. The
+** change under the mouse lights up, its bar wider.
+*/
+static void draw_quick (int sy, size_t y, int gw, int is_cur) {
+  int qm, st, k, head, hs, hov;
+  uint32_t bg, fg, cp;
+  size_t lo, hi;
+  if (!opt.scm_decor || T->real == NULL || T->page || gw < 3) return;
+  if (!((qm = quick_mark(T->doc, T->real, y)) & (QM_NOW | QM_STAGED | QM_S_HEAD))) return;
+  st = qm_staged(qm);
+  k = st ? qm >> 4 : qm;	/* QM_ADD ... of the kind shown */
+  head = st ? (qm & QM_S_HEAD) != 0 : (qm & QM_HEAD) != 0;
+  fg = (k & QM_MOD) ? QD_MOD : (k & QM_ADD) ? QD_ADD : (k & (QM_DEL | QM_DEL_TOP)) ? QD_DEL : QD_MOD;
+  bg = ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG);
+  hov = qc_hover(&lo, &hi, &hs) && hs == st && y >= lo && y <= hi;
+  if (hov) fg = blend(fg, 0xFFFFFF, 70);
+  if (head) cp = st ? 0x25A1 : 0x25A0;	/* □ ■ */
+  else {
+    cp = hov ? 0x258C : 0x258D;	/* ▌ ▍ */
+    if (st) fg = blend(fg, bg, 55);
+  }
+  scr_put_rgb(L.ed_x + gw - 1, sy, cp, fg, bg, 0);
 }
 
 
@@ -17364,39 +17679,39 @@ static int peek_height (const QHunk *h) {
 
 /* the change the dirty diff peek is on: its last line and how many rows it takes */
 static int dirty_peek_at (size_t *after, int *rows) {
-  size_t n;
-  const QHunk *h = qhunks(&n);
-  if (!DP.open || h == NULL || n == 0) return 0;
+  size_t n, line, last;
+  QHunk h;
+  if (!DP.open || (n = qc_count(DP.staged)) == 0) return 0;
   if (DP.hi >= n) DP.hi = n - 1;
-  *after = hunk_last(&h[DP.hi]);
-  *rows = peek_height(&h[DP.hi]);
+  if (!qc_get(DP.staged, DP.hi, &line, &last, &h)) return 0;
+  *after = last;
+  *rows = peek_height(&h);
   return 1;
 }
 
 
-/* the dirty diff peek on change i, the cursor on it, room under it */
-static void dirty_show (long i) {
-  size_t n, y, last;
-  const QHunk *h = qhunks(&n);
+/* the dirty diff peek on change i (of the staged ones, or not), the cursor on it, room under it */
+static void dirty_show (int staged, long i) {
+  size_t y, last;
+  QHunk h;
   Pos p;
-  if (h == NULL || n == 0 || i < 0 || (size_t)i >= n) {
+  if (i < 0 || !qc_get(staged, (size_t)i, &y, &last, &h)) {
     DP.open = 0;
     view_block_clear();
     toast(0, "There are no changes in this file");
     return;
   }
   DP.open = 1;
+  DP.staged = staged;
   DP.hi = (size_t)i;
   DP.top = 0;
-  y = hunk_line(&h[i]);
-  last = hunk_last(&h[i]);
   T->sel = 0;
   T->nmc = 0;
   p.y = y;
   p.x = 0;
   move_h(doc_clamp(T->doc, p), 0);
   {	/* the change and the peek under it in the view */
-    size_t ph = (size_t)peek_height(&h[i]), th = (size_t)L.text_h;
+    size_t ph = (size_t)peek_height(&h), th = (size_t)L.text_h;
     if (last + 1 + ph > T->top + th || y < T->top) T->top = last + 1 + ph > th ? last + 1 + ph - th : 0;
     if (T->top > y) T->top = y > 1 ? y - 1 : 0;
   }
@@ -17473,24 +17788,22 @@ static void put_plain (int x, int y, int w, const char *s, size_t n, int st) {
 
 /* VS Code's dirty diff widget: under the change, what it was (red) and is (green) */
 static void draw_dirty_peek (void) {
-  size_t n, total, k;
-  const QHunk *hv, *h;
-  int ph, r, y0, row, nw = 6;
+  size_t n, total, k, line0, last, all, rank;
+  QHunk hc;
+  const QHunk *h = &hc;
+  int ph, r, y0, row, nw = 6, i, g = (int)(G - g_grp);
   char title[400];
-  Pos p;
   if (!DP.open) return;
-  hv = qhunks(&n);
-  if (hv == NULL || n == 0) {
+  n = qc_count(DP.staged);
+  if (n == 0) {
     DP.open = 0;
     view_block_clear();
     return;
   }
   if (DP.hi >= n) DP.hi = n - 1;
-  h = &hv[DP.hi];
+  if (!qc_get(DP.staged, DP.hi, &line0, &last, &hc)) return;
   total = h->on + h->nn;
   ph = peek_height(h);
-  p.y = hunk_last(h);
-  p.x = 0;
   r = vb_start();	/* its block's rows, under the change */
   if (r < 0) return;	/* the change scrolled away */
   y0 = L.text_y + r;
@@ -17502,19 +17815,29 @@ static void draw_dirty_peek (void) {
   DP.h = ph;
   if (DP.top + (size_t)(ph - 2) > total) DP.top = total > (size_t)(ph - 2) ? total - (size_t)(ph - 2) : 0;
   scr_fill(DP.x, y0, DP.w, S_BOX);
-  snprintf(title, sizeof(title), "%s \xE2\x80\x94 %lu of %lu change%s", path_basename(T->real),
-           (unsigned long)DP.hi + 1, (unsigned long)n, n == 1 ? "" : "s");
+  rank = qc_rank(DP.staged, DP.hi, &all);
+  snprintf(title, sizeof(title), "%s \xE2\x80\x94 %lu of %lu change%s%s", path_basename(T->real),
+           (unsigned long)rank, (unsigned long)all, all == 1 ? "" : "s", DP.staged ? " (staged)" : "");
   scr_putsw(DP.x + 2, y0, DP.w - 14, title, S_BOX_TITLE);
   DP.close_x = DP.x + DP.w - 2;
   DP.next_x = DP.close_x - 2;
   DP.prev_x = DP.next_x - 2;
-  DP.revert_x = DP.prev_x - 2;
-  DP.stage_x = DP.revert_x - 2;
-  scr_put(DP.stage_x, y0, 0xEA60, S_BOX);	/* codicon add: Stage Change */
-  scr_put(DP.revert_x, y0, 0xEAE2, S_BOX);	/* discard: Revert Change */
+  DP.revert_x = DP.staged ? -1000 : DP.prev_x - 2;	/* a staged change: Unstage only */
+  DP.stage_x = DP.staged ? DP.prev_x - 2 : DP.revert_x - 2;
+  scr_put(DP.stage_x, y0, DP.staged ? 0xEB3B : 0xEA60, S_BOX);	/* codicon remove: Unstage Change; add: Stage Change */
+  if (!DP.staged) scr_put(DP.revert_x, y0, 0xEAE2, S_BOX);	/* discard: Revert Change */
   scr_put(DP.prev_x, y0, 0xEAA1, S_BOX);	/* arrow-up: Previous Change */
   scr_put(DP.next_x, y0, 0xEA9A, S_BOX);	/* arrow-down: Next Change */
   scr_put(DP.close_x, y0, 0xEA76, S_BOX);	/* close */
+  for (i = 0; i < 5; i++) {	/* the buttons' names */
+    static const char *const tip[5] = {"Stage Change", "Revert Change", "Previous Change (Shift+Alt+F3)",
+                                       "Next Change (Alt+F3)", "Close"};
+    int bx = i == 0 ? DP.stage_x : i == 1 ? DP.revert_x : i == 2 ? DP.prev_x : i == 3 ? DP.next_x : DP.close_x, ux, uy;
+    if (bx < 0 || !mouse_over_text(bx, y0, 1, 1)) continue;
+    scr_hover(bx, y0, 1);
+    scr_zone_to_ui(g, bx, y0 + 1, 0, &ux, &uy);
+    tip_want(ux, uy, i == 0 && DP.staged ? "Unstage Change" : tip[i]);
+  }
   for (row = 0; row < ph - 2; row++) {
     int sy = y0 + 1 + row, st;
     char num[32];
@@ -17525,10 +17848,15 @@ static void draw_dirty_peek (void) {
       scr_fill(DP.x, sy, DP.w, S_TEXT);
       continue;
     }
-    if (k < h->on) {	/* the index's line, gone */
+    if (k < h->on) {	/* the index's line (HEAD's, for a staged change), gone */
       line = h->o0 + k;
-      s = quick_old(T->doc, T->real, line, &len);
+      s = DP.staged ? quick_head(T->doc, T->real, line, &len) : quick_old(T->doc, T->real, line, &len);
       st = S_DIFF_DEL;
+    }
+    else if (DP.staged) {	/* the index's line that came */
+      line = h->n0 + (k - h->on);
+      s = quick_old(T->doc, T->real, line, &len);
+      st = S_DIFF_ADD;
     }
     else {	/* the line as it is now */
       line = h->n0 + (k - h->on);
@@ -17549,15 +17877,14 @@ static void draw_dirty_peek (void) {
 /* a key while the peek is open: 1 when it was the peek's (Esc, scrolling) */
 static int dirty_key (int k) {
   int code = KEY_CODE(k);
-  size_t n, total, body;
-  const QHunk *h;
+  size_t total, body, line, last;
+  QHunk h;
   if (!DP.open) return 0;
-  h = qhunks(&n);
-  if (h == NULL || DP.hi >= n) {
+  if (!qc_get(DP.staged, DP.hi, &line, &last, &h)) {
     DP.open = 0;
     return 0;
   }
-  total = h[DP.hi].on + h[DP.hi].nn;
+  total = h.on + h.nn;
   body = DP.h > 2 ? (size_t)DP.h - 2 : 1;
   switch (code) {
     case K_ESC: DP.open = 0; return 1;
@@ -17580,7 +17907,8 @@ static int dirty_click (Mouse *m) {
     return 1;
   }
   if (!(m->button == 0 && m->press && !m->drag) || m->y != DP.y) return 1;
-  if (m->x == DP.stage_x) run_command(CMD_STAGE_CHANGE);
+  if (m->x == DP.stage_x && DP.staged) unstage_peek();
+  else if (m->x == DP.stage_x) run_command(CMD_STAGE_CHANGE);
   else if (m->x == DP.revert_x) run_command(CMD_REVERT_CHANGE);
   else if (m->x == DP.prev_x) run_command(CMD_DIRTY_PREV);
   else if (m->x == DP.next_x) run_command(CMD_DIRTY_NEXT);
@@ -17675,7 +18003,7 @@ static size_t index_line (const QHunk *h, size_t n, size_t y) {
 
 /* the change at the cursor, the peek's when it is open; -1: none */
 static long hunk_here (const QHunk *h, size_t n) {
-  if (DP.open && DP.hi < n) return (long)DP.hi;
+  if (DP.open && !DP.staged && DP.hi < n) return (long)DP.hi;
   return hunk_at(h, n, T->cur.y);
 }
 
@@ -17684,9 +18012,24 @@ static long hunk_here (const QHunk *h, size_t n) {
 static void dirty_after (size_t was) {
   size_t n;
   if (!DP.open) return;
-  qhunks(&n);
+  n = qc_count(DP.staged);
   if (n == 0) DP.open = 0;
-  else dirty_show((long)(was < n ? was : n - 1));
+  else dirty_show(DP.staged, (long)(was < n ? was : n - 1));
+}
+
+
+/* the staged change the peek shows goes from the index (Unstage Change) */
+static void unstage_peek (void) {
+  size_t line, last;
+  QHunk h;
+  int r;
+  if (!DP.open || !DP.staged || !qc_get(1, DP.hi, &line, &last, &h)) return;
+  r = quick_unstage(T->real, h.n0, h.nn ? h.n0 + h.nn - 1 : h.n0);
+  if (r == 0) {
+    git_refresh();
+    dirty_after(DP.hi);
+  }
+  else toast(1, "Unable to unstage the change");
 }
 
 
@@ -17711,16 +18054,18 @@ static void quick_cmd (int cmd) {
     return;
   }
   switch (cmd) {
-    case CMD_DIRTY_NEXT: case CMD_DIRTY_PREV:
-      if (n == 0) toast(0, "There are no changes in this file");
-      else dirty_show(DP.open ? (long)((DP.hi + (cmd == CMD_DIRTY_NEXT ? 1 : n - 1)) % n)
-                              : hunk_next(h, n, cmd == CMD_DIRTY_NEXT ? 1 : -1));
+    case CMD_DIRTY_NEXT: case CMD_DIRTY_PREV: {	/* the staged changes and the others, by line */
+      int st;
+      if (!qc_step(cmd == CMD_DIRTY_NEXT ? 1 : -1, &st, &at)) toast(0, "There are no changes in this file");
+      else dirty_show(st, at);
       return;
+    }
     case CMD_CHANGE_NEXT: case CMD_CHANGE_PREV: {
       Pos p;
-      if (n == 0) return;
-      at = hunk_next(h, n, cmd == CMD_CHANGE_NEXT ? 1 : -1);
-      p.y = hunk_line(&h[at]);
+      size_t last;
+      int st;
+      QHunk one;
+      if (!qc_step(cmd == CMD_CHANGE_NEXT ? 1 : -1, &st, &at) || !qc_get(st, (size_t)at, &p.y, &last, &one)) return;
       p.x = 0;
       move_h(doc_clamp(T->doc, p), 0);
       if (T->cur.y < T->top || T->cur.y >= T->top + (size_t)L.text_h) center_cursor();
@@ -23731,13 +24076,13 @@ static void on_mouse (void) {
     return;
   }
   if (press && zm.y >= L.text_y && zm.y < L.text_y + L.text_h && HAS_DOC && !G->diff && !T->page &&
-      zm.x == L.ed_x + gutter_width() - 1) {	/* a change's bar: its dirty diff peek */
-    size_t y, from, to, left, n;
-    const QHunk *h = qhunks(&n);
+      zm.x >= L.ed_x + gutter_width() - 2 && zm.x < L.ed_x + gutter_width()) {	/* a change's square or bar: its peek */
+    size_t y, from, to, left;
     long i;
-    if (h && vis_goto(zm.y - L.text_y, &y, &from, &to, &left) && (i = hunk_at(h, n, y)) >= 0) {
-      if (DP.open && DP.hi == (size_t)i) DP.open = 0;
-      else dirty_show(i);
+    int st;
+    if (vis_goto(zm.y - L.text_y, &y, &from, &to, &left) && qc_column(zm.x, y) && qc_pick(y, &st, &i)) {
+      if (DP.open && DP.staged == st && DP.hi == (size_t)i) DP.open = 0;
+      else dirty_show(st, i);
       return;
     }
   }

@@ -1436,12 +1436,23 @@ With no file open the editor shows the keys to start with.
   git.blame.editorDecoration.enabled and git.blame.statusBarItem.enabled turn
   them off; **Git: Toggle Git Blame Editor Decoration** too.
 - **Quick diff** — the gutter shows the lines changed against git's index,
-  like VS Code: a green bar for added lines, blue for modified, a red
-  triangle where lines were deleted (scm.diffDecorations). A click on a bar,
-  or Alt+F3 / Shift+Alt+F3, opens the dirty diff peek under the change: what
+  like VS Code: green for added lines, blue for modified, red where lines
+  were deleted (scm.diffDecorations). A change's first line has a square
+  (■), its other lines a bar; the staged changes (HEAD against the index)
+  show too, on the lines they are on now: an outlined square (□) and a
+  fainter bar, also fainter on the minimap and the scrollbar. Where a line
+  has both, the change not yet staged shows. The squares follow the text as
+  it is typed. A click on a square or a bar (or the column next to it, when
+  no fold chevron is there), or Alt+F3 / Shift+Alt+F3 (both kinds, in the
+  order of their lines), opens the dirty diff peek under the change: what
   it was (red) and is (green), "n of m changes", with Stage Change, Revert
-  Change, previous / next and close. Alt+F5 / Shift+Alt+F5 go to the next /
-  previous change. **Git: Stage Selected Ranges** (Ctrl+K Ctrl+Alt+S),
+  Change, previous / next and close; a staged change's peek has Unstage
+  Change. The change under the mouse lights up, its bar wider. The
+  scrollbar shows the changes as squares too (■, staged □; over every mark
+  but an error), the minimap a square where each starts; a click on one
+  (on the scrollbar's thumb too, on the minimap's slider at its left edge)
+  goes to the change's line, the cursor on it. Alt+F5 /
+  Shift+Alt+F5 go to the next / previous change. **Git: Stage Selected Ranges** (Ctrl+K Ctrl+Alt+S),
   **Unstage Selected Ranges** (Ctrl+K Ctrl+N) and **Revert Selected Ranges**
   (Ctrl+K Ctrl+R) take the changes the selection touches, in the editor or
   in the diff editor (there: the change with the bar, F7 moves it). Staging
