@@ -3913,6 +3913,17 @@ static void status_items (void) {
                T->page == PAGE_HEX ? "The offset, and the byte there" : "Its size, kind and bytes", CMD_NONE);
   }
   if (!HAS_DOC || G->diff || T->page) return;
+  if (T->real) {	/* the file's lines added and deleted since the last commit, as saved (mme.scm.showLineCounts) */
+    long a, d;
+    if (git_line_counts(T->real, 0, &a, &d) && (a != 0 || d != 0)) {
+      if (a < 0) snprintf(t, sizeof(t), "bin");
+      else snprintf(t, sizeof(t), "+%ld -%ld", a, d);
+      if (a < 0) snprintf(tip, sizeof(tip), "A binary file, changed since the last commit - Show Source Control");
+      else snprintf(tip, sizeof(tip), "%ld line%s added, %ld deleted since the last commit (as saved) - Show Source Control",
+                    a, a == 1 ? "" : "s", d);
+      status_add("status.scm.lineCounts", "Source Control Line Counts", 0, 75, t, tip, CMD_GIT);
+    }
+  }
   if (opt.blame_status && T->real && !doc_dirty(T->doc)) {	/* git.blame.statusBarItem */
     const char *bl = git_blame(T->real, T->cur.y, 1);
     if (bl) {

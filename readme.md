@@ -1383,8 +1383,12 @@ With no file open the editor shows the keys to start with.
   deleted, `+12 -3` in green and red before its letter (`git diff --numstat`,
   `--cached` for the staged; an untracked file's lines count as added, a
   binary shows `bin`), and the titles Staged Changes and Changes show their
-  files' sums; a narrow view drops them before the file's name.
-  `mme.scm.showLineCounts` (on) turns them off.
+  files' sums; a narrow view drops them before the file's name. The
+  Explorer has them too, before a changed file's letter: its lines since
+  the last commit (`git diff HEAD --numstat`), a folder the sums of the
+  files changed in it; and the status bar, after the branch, for the file
+  in front (as saved; a click shows Source Control).
+  `mme.scm.showLineCounts` (on) turns them all off.
 - **Repositories** — the workspace's repositories are found as VS Code finds
   them: each folder's own (or the one around it), the ones a folder down
   (git.repositoryScanMaxDepth 1, not node_modules) and their submodules (up

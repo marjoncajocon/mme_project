@@ -1334,6 +1334,7 @@ const char *git_root (void);	/* the repository's folder; NULL: none */
 int git_letter_style (int l);	/* the style of a change's letter M A D U R */
 void git_numstat (const char *s, size_t len, void (*f)(void *ud, const char *path, long add, long del), void *ud);	/* git diff --numstat -z's files */
 int git_counts (int x, int y, long add, long del, int st);	/* "+12 -3" at x, y (x < 0: measured); its columns */
+int git_line_counts (const char *path, int dir, long *add, long *del);	/* since HEAD; a folder: its files'; 0: unchanged */
 int git_commit (int amend);	/* the message box's text; 0: it must be typed first */
 int diff_open_rev (const char *path, const char *rel, const char *old_rel,
                    const char *old, const char *new_, const char *title);

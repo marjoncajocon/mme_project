@@ -1181,6 +1181,8 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
   for (row = 0; row < g_h; row++) {
     Node *n;
     int st, cx, ind, ist, mark, sy = y + HEAD + row, nw, pe, pw, right, sel;
+    long la = 0, ld = 0;
+    int cw = 0;
     uint32_t icon;
     char nbuf[512], badge[32];
     const char *name;
@@ -1243,6 +1245,12 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
     right = badge[0] ? (int)str_cols(badge) + 2 : 1;
     nw = x + w - cx - right;
     name = row_name(k - 1, nbuf, sizeof(nbuf));
+    cw = 0;	/* "+12 -3" before the badge (a folder: its files' sums); a narrow view keeps the name */
+    if (mark && badge[0] && git_line_counts(n->path, n->dir, &la, &ld)) {
+      cw = git_counts(-1, sy, la, ld, st);
+      if (cw > 0 && (int)str_cols(name) + 1 + cw > nw) cw = 0;
+      if (cw > 0) nw -= cw + 1;
+    }
     if (nw < 2) continue;
     if ((int)str_cols(name) > nw) {	/* cut with ... */
       scr_putsw(cx, sy, nw - 1, name, st);
@@ -1264,6 +1272,7 @@ void files_draw (int x, int y, int w, int h, int focus, const char *active) {
       int bx = x + w - 1 - (int)str_cols(badge), ms = st;
       if (!(st == S_SIDE_SEL || st == S_SIDE_CUR || st == S_SIDE_ACTIVE)) ms = mark ? git_style(mark) : st;
       scr_puts(bx, sy, badge, ms);
+      if (cw > 0) git_counts(bx - 1 - cw, sy, la, ld, st);
       if (st != S_SIDE_SEL && pe + pw > 0 && opt.exp_dec_colors) {	/* the count, in the problems' color */
         int i, cl = badge[0] == '\xE2' ? 1 : (int)strcspn(badge, ",");
         uint32_t fg = ui_color(pe ? C_ERROR : C_WARNING);

@@ -573,7 +573,7 @@ typedef struct Change {
   char *rel;	/* from the top, with '/' */
   char *path;	/* native */
   char x, y;	/* git status --porcelain: the index, the tree */
-  long add[2], del[2];	/* [0] staged, [1] not: its lines added and deleted (git diff --numstat); -1 both: binary */
+  long add[3], del[3];	/* [0] staged, [1] not, [2] since HEAD: its lines added and deleted (git diff --numstat); -1 both: binary */
 } Change;
 
 static Change *g_ch;
@@ -993,27 +993,60 @@ static long file_lines (const char *path) {
 }
 
 
-/* the counts of the changes in g_ch: git diff --numstat, and --cached */
+/* the counts of the changes in g_ch: git diff --numstat, --cached, and HEAD (the Explorer's, the status bar's) */
 static void counts_read (void) {
   Buf b;
   size_t i, left = UNTRACKED_COUNT;
-  int k;
-  for (k = 0; k < 2; k++) {
+  int k, head = 0;
+  for (k = 0; k < 3; k++) {
+    int rc;
     buf_init(&b);
-    if ((k ? git(&b, "diff", "--numstat", "-M", "-z", NULL, NULL)
-           : git(&b, "diff", "--cached", "--numstat", "-M", "-z", NULL)) == 0)
-      git_numstat(b.s ? b.s : "", b.len, count_put, &k);
+    rc = k == 2 ? git(&b, "diff", "HEAD", "--numstat", "-M", "-z", NULL)
+       : k ? git(&b, "diff", "--numstat", "-M", "-z", NULL, NULL)
+       : git(&b, "diff", "--cached", "--numstat", "-M", "-z", NULL);
+    if (rc == 0) git_numstat(b.s ? b.s : "", b.len, count_put, &k);
+    head |= k == 2 && rc == 0;
     buf_free(&b);
   }
-  for (i = 0; i < g_nch && left > 0; i++)
-    if (g_ch[i].x == '?') {
-      long n = file_lines(g_ch[i].path);
+  for (i = 0; i < g_nch; i++) {
+    Change *c = &g_ch[i];
+    if (c->x == '?' && left > 0) {
+      long n = file_lines(c->path);
       left--;
       if (n >= -1) {
-        g_ch[i].add[1] = n;
-        g_ch[i].del[1] = n < 0 ? -1 : 0;
+        c->add[1] = c->add[2] = n;
+        c->del[1] = c->del[2] = n < 0 ? -1 : 0;
       }
     }
+    else if (!head) {	/* no commit yet: what is staged and what is not */
+      c->add[2] = c->add[0] < 0 || c->add[1] < 0 ? -1 : c->add[0] + c->add[1];
+      c->del[2] = c->add[2] < 0 ? -1 : c->del[0] + c->del[1];
+    }
+  }
+}
+
+
+/* the lines path's change added and deleted since HEAD (a folder: the sum of its files); 0: not changed */
+int git_line_counts (const char *path, int dir, long *add, long *del) {
+  size_t i, n = strlen(path);
+  int any = 0;
+  *add = *del = 0;
+  if (!opt.scm_counts) return 0;
+  for (i = 0; i < g_nch; i++) {
+    const Change *c = &g_ch[i];
+    if (is_merge(c)) continue;
+    if (dir ? m_fnncmp(c->path, path, n) == 0 && path_is_sep(c->path[n]) : m_fncmp(c->path, path) == 0) {
+      any = 1;
+      if (!dir && c->add[2] < 0) {
+        *add = *del = -1;
+        return 1;
+      }
+      if (c->add[2] > 0) *add += c->add[2];
+      if (c->del[2] > 0) *del += c->del[2];
+      if (!dir) break;
+    }
+  }
+  return any;
 }
 
 
@@ -1028,7 +1061,7 @@ int git_counts (int x, int y, long add, long del, int st) {
   }
   w = (int)strlen(a) + (int)strlen(d) + (a[0] && d[0]);
   if (x >= 0 && w > 0) {
-    int sel = st != S_SIDE;
+    int sel = st == S_SIDE_SEL || st == S_SIDE_CUR || st == S_SIDE_ACTIVE;
     if (a[0]) x += scr_puts(x, y, a, sel ? st : add < 0 ? S_SIDE_DIM : S_GIT_A) + (d[0] != 0);
     if (d[0]) scr_puts(x, y, d, sel ? st : S_GIT_D);
   }
@@ -1110,7 +1143,8 @@ static void git_refresh_now (void) {
       c->y = e[1];
       c->rel = xstrndup(e + 3, len);
       c->path = path_join(g_top, c->rel);
-      c->add[0] = c->add[1] = c->del[0] = c->del[1] = 0;
+      memset(c->add, 0, sizeof(c->add));
+      memset(c->del, 0, sizeof(c->del));
       to_native(c->path);
       i += 3 + len + 1;
       if (e[0] == 'R' || e[0] == 'C') i += strlen(b.s + i) + 1;
@@ -1219,6 +1253,7 @@ static void job_main (void *ud) {
   const char *a_sync[] = {"rev-list", "--left-right", "--count", "@{upstream}...HEAD", NULL};
   const char *a_num[] = {"diff", "--numstat", "-M", "-z", NULL};
   const char *a_cnum[] = {"diff", "--cached", "--numstat", "-M", "-z", NULL};
+  const char *a_hnum[] = {"diff", "HEAD", "--numstat", "-M", "-z", NULL};
   Buf sb;	/* git status' output */
   const char *a_log[] = {"log", "--all", "--date-order", "--decorate=full", num,
                          "--format=%H%x1f%P%x1f%D%x1f%an%x1f%at%x1f%s%x1e", NULL};
@@ -1303,6 +1338,7 @@ static void job_main (void *ud) {
     size_t k, left = UNTRACKED_COUNT;
     job_git(j, top, 0, a_num, &b);
     job_git(j, top, 0, a_cnum, &b);
+    job_git(j, top, 0, a_hnum, &b);
     for (k = 0; k + 3 < sb.len && left > 0;) {
       const char *e = sb.s + k;
       size_t len = strlen(e + 3);
