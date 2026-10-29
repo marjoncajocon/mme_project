@@ -53,6 +53,12 @@ typedef struct QDoc {
 
 static QDoc g_q[NQ];
 static int g_gen = 1, g_next;
+static unsigned long g_ver;	/* quick_version's */
+
+
+unsigned long quick_version (void) {
+  return g_ver;
+}
 
 
 static void qdoc_free (QDoc *q) {
@@ -219,6 +225,7 @@ static size_t map_line (QMap *m, size_t i, int *gone) {
 static void make_marks (QDoc *q) {
   size_t i, y;
   QMap m;
+  g_ver++;
   q->nmark = q->d->n;
   q->mark = (unsigned short *)xrealloc(q->mark, (q->nmark + 1) * sizeof(unsigned short));
   memset(q->mark, 0, (q->nmark + 1) * sizeof(unsigned short));

@@ -173,7 +173,8 @@ static const char *const names[CMD_N] = {
   "View: Move View", "View: Move Focused View", "View: Reset View Locations",
   "Jupyter: Open Variables View",
   "Tasks: Terminate Task", "Open Disassembly View",
-  "Remote-SSH: Add New SSH Host...", "Remote-SSH: Open SSH Configuration File..."
+  "Remote-SSH: Add New SSH Host...", "Remote-SSH: Open SSH Configuration File...",
+  "Git: Toggle Deleted Text"
 };
 
 static const char *const keys[CMD_N] = {
@@ -257,7 +258,8 @@ static const char *const keys[CMD_N] = {
   "", "", "",
   "",
   "", "",
-  "", ""
+  "", "",
+  ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -447,7 +449,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "workbench.action.moveView", "workbench.action.moveFocusedView", "workbench.action.resetViewLocations",
   "jupyter.openVariableView",
   "workbench.action.tasks.terminate", "debug.action.openDisassemblyView",
-  "opensshremotes.addNewSshHost", "opensshremotes.openConfigFile"
+  "opensshremotes.addNewSshHost", "opensshremotes.openConfigFile",
+  "mme.git.toggleDeletedText"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -461,12 +464,12 @@ const char *cmd_name (int cmd) {
 
 const char *cmd_keys (int cmd) {
   if (cmd <= 0 || cmd >= CMD_N) return "";
-  return user_keys[cmd] ? user_keys[cmd] : keys[cmd];
+  return user_keys[cmd] ? user_keys[cmd] : keys[cmd] ? keys[cmd] : "";
 }
 
 
 const char *cmd_default_keys (int cmd) {
-  return (cmd > 0 && cmd < CMD_N) ? keys[cmd] : "";
+  return (cmd > 0 && cmd < CMD_N && keys[cmd]) ? keys[cmd] : "";	/* a command left out of keys: none */
 }
 
 

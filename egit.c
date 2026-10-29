@@ -1094,9 +1094,27 @@ typedef struct CDiff {
   size_t n, nra, nrb;
   int exact;
   size_t ra[2 * CD_RANGES], rb[2 * CD_RANGES];
+  size_t hk[4 * CD_RANGES], nh;	/* the changes as pairs: a's bytes a0 a1 became b's b0 b1 */
 } CDiff;
 
 static CDiff g_cd[CD_SLOTS];
+static CDiff *cd_last;	/* the one chars_diff answered from */
+
+
+/* a change of a's bytes a0 .. a1 into b's b0 .. b1; past CD_RANGES the last one takes the rest */
+static void cd_hunk (CDiff *c, size_t a0, size_t a1, size_t b0, size_t b1) {
+  if (c->nh < CD_RANGES) {
+    size_t *h = &c->hk[4 * c->nh++];
+    h[0] = a0;
+    h[1] = a1;
+    h[2] = b0;
+    h[3] = b1;
+  }
+  else {
+    c->hk[4 * (c->nh - 1) + 1] = a1;
+    c->hk[4 * (c->nh - 1) + 3] = b1;
+  }
+}
 
 
 static void cd_range (size_t *r, size_t *nr, size_t a, size_t b) {
@@ -1159,6 +1177,17 @@ static int cd_lcs (const char *a, size_t na, const char *b, size_t nb, size_t p,
     }
     k = e;
   }
+  for (i = 0, j = 0, k = 0; k <= nm; k++) {	/* the changes between the common characters left */
+    size_t ei = m, ej = n;
+    if (k < nm) {
+      if (am[mi[k]]) continue;	/* made a change above */
+      ei = mi[k];
+      ej = mj[k];
+    }
+    if (i < ei || j < ej) cd_hunk(c, p + oa[i], p + oa[ei], p + ob[j], p + ob[ej]);
+    i = ei + 1;
+    j = ej + 1;
+  }
   for (i = 0; i < m; i++)
     if (am[i]) {
       da++;
@@ -1188,7 +1217,7 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
   for (i = 0; i < na; i++) h = (h ^ (unsigned char)a[i]) * 1099511628211ull;	/* FNV-1a, both lines */
   h = (h ^ 0x1F) * 1099511628211ull;
   for (i = 0; i < nb; i++) h = (h ^ (unsigned char)b[i]) * 1099511628211ull;
-  c = &g_cd[h % CD_SLOTS];
+  c = cd_last = &g_cd[h % CD_SLOTS];
   if (!(c->key == h && c->na == na && c->nb == nb)) {
     memset(c, 0, sizeof(*c));
     c->key = h;
@@ -1203,14 +1232,16 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
     if (na - p - s > 0 && nb - p - s > 0 && !cd_lcs(a + p, na - p - s, b + p, nb - p - s, p, c)) {
       size_t da = utf8_count(a + p, na - p - s), db = utf8_count(b + p, nb - p - s);
       c->exact = 0;
-      c->nra = c->nrb = 0;
+      c->nra = c->nrb = c->nh = 0;
       cd_range(c->ra, &c->nra, p, na - s);
       cd_range(c->rb, &c->nrb, p, nb - s);
+      cd_hunk(c, p, na - s, p, nb - s);
       c->n = da > db ? da : db;
     }
     else if (na - p - s == 0 || nb - p - s == 0) {	/* only taken out, or only put in */
       if (na - p - s) cd_range(c->ra, &c->nra, p, na - s);
       if (nb - p - s) cd_range(c->rb, &c->nrb, p, nb - s);
+      if (na - p - s || nb - p - s) cd_hunk(c, p, na - s, p, nb - s);
       c->n = utf8_count(a + p, na - p - s) + utf8_count(b + p, nb - p - s);
     }
   }
@@ -1224,6 +1255,17 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
     memcpy(rb, c->rb, 2 * *nrb * sizeof(size_t));
   }
   return c->n;
+}
+
+
+/* the changes of line a into line b as pairs of byte ranges: a's hk[4i] .. hk[4i + 1] became b's hk[4i + 2] ..
+   hk[4i + 3]; up to cap of them in *nh */
+void chars_hunks (const char *a, size_t na, const char *b, size_t nb, size_t *hk, size_t *nh, size_t cap) {
+  CDiff *c;
+  chars_diff(a, na, b, nb, NULL, NULL, NULL, NULL, 0, NULL);
+  c = cd_last;
+  *nh = c->nh < cap ? c->nh : cap;
+  memcpy(hk, c->hk, 4 * *nh * sizeof(size_t));
 }
 
 

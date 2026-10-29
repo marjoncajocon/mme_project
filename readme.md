@@ -1469,7 +1469,16 @@ With no file open the editor shows the keys to start with.
   row, the characters left out where they do not fit
   (mme.scm.showChangeCounts, on). The peek paints the characters that
   changed brighter; mme.scm.highlightChangedChars (off) tints them in the
-  editor too, on a changed line not yet staged, as it is typed. The
+  editor too, on a changed line not yet staged, as it is typed. With
+  mme.scm.showDeletedLines a change's deleted lines are red rows over
+  where they were (a staged one's fainter; the characters that changed
+  brighter; a long one's first three and "… 12 more deleted lines", a
+  click on which opens the peek): rows of their own like a code lens's,
+  never in the text, the cursor and a click go past them. With
+  mme.scm.showDeletedChars the characters taken out of a changed line are
+  struck through in red where they were, as inlay hints (with the deleted
+  lines on: only what went without anything in its place). **Git: Toggle
+  Deleted Text** shows or hides both for the session. The
   scrollbar shows the changes as squares too (■, staged □; over every mark
   but an error), the minimap a square where each starts; a click on one
   (on the scrollbar's thumb too, on the minimap's slider at its left edge)
