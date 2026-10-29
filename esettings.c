@@ -264,6 +264,8 @@ static const Setting set[] = {
    "In the editor (and the diff editor): each change's lines added and deleted (+3 -1) at the end of its first line, by its square."},
   {"mme.scm.highlightChangedChars", C_SCM, ST_BOOL, 0, "true", NULL,
    "In the editor: the characters a changed line took (against git's index) on a green tint, as it is typed."},
+  {"mme.scm.peekLayout", C_SCM, ST_ENUM, 0, "\"sideBySide\"", "sideBySide|stacked",
+   "How the peek of a change (a click on its square, Alt+F3) shows it: the old lines and the new side by side, or one over the other (an editor under 80 columns wide always has them one over the other)."},
   {"mme.scm.showDeletedChars", C_SCM, ST_BOOL, 0, "true", NULL,
    "In the editor: the change whose peek is open (its square clicked) has the characters taken out of its lines struck through in red where they were; never in the text, gone when the peek closes. Git: Toggle Deleted Text shows or hides them."},
   {"mme.extensions.useVSCodeExtensions", C_EXT, ST_BOOL, 0, "true", NULL,

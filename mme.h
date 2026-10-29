@@ -158,6 +158,7 @@ typedef struct Opt {
   int change_counts;	/* mme.scm.showChangeCounts: each change's "+3 -1" at the end of its first line */
   int change_chars;	/* mme.scm.highlightChangedChars: a changed line's characters tinted in the editor */
   int del_chars;	/* mme.scm.showDeletedChars: the characters taken out of a line, struck through */
+  int peek_side;	/* mme.scm.peekLayout: "sideBySide" (else "stacked"): the dirty diff peek's old and new */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
   int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */

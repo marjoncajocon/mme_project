@@ -17968,8 +17968,20 @@ static void draw_change_count (int sy, size_t y, int gw, int is_cur) {
 }
 
 
+/* mme.scm.peekLayout: the peek's old and new lines side by side; a narrow editor has them one over the other */
+static int peek_side (void) {
+  return opt.peek_side && wide_w() >= 80;
+}
+
+
+/* the peek's rows of text: a row a line, or a row a pair side by side */
+static size_t dirty_rows (const QHunk *h) {
+  return peek_side() ? (h->on > h->nn ? h->on : h->nn) : h->on + h->nn;
+}
+
+
 static int peek_height (const QHunk *h) {
-  int ph = (int)(h->on + h->nn) + 2, max = L.text_h * 45 / 100;
+  int ph = (int)dirty_rows(h) + 2, max = L.text_h * 45 / 100;
   if (max < 6) max = 6;
   if (ph > max) ph = max;
   if (ph > L.text_h) ph = L.text_h;
@@ -18099,7 +18111,38 @@ static int plain_col (const char *s, size_t off) {
 }
 
 
-/* VS Code's dirty diff widget: under the change, what it was (red) and is (green) */
+/*
+** Line i of the peek's change at x, in w columns: an old one (red: the
+** index's, HEAD's for a staged change) or a new one (green: the buffer's,
+** the index's), its number, its sign when they are one over the other,
+** the characters that changed against the line it was paired with
+** (in order) brighter.
+*/
+static void peek_line (int x, int sy, int w, const QHunk *h, int to_new, size_t i, int nw, int sign) {
+  size_t len = 0, line = (to_new ? h->n0 : h->o0) + i, rr[2 * 16], nr = 0, q;
+  const char *s = change_line(DP.staged, to_new, line, &len);
+  int st = to_new ? S_DIFF_ADD : S_DIFF_DEL, tx = x + nw + (sign ? 2 : 1), tw = x + w - tx - 1;
+  char num[32];
+  scr_fill(x, sy, w, st);
+  snprintf(num, sizeof(num), "%*lu ", nw - 1, (unsigned long)line + 1);
+  scr_puts(x, sy, num, S_DIFF_NUM);
+  if (sign) scr_put(x + nw, sy, to_new ? '+' : '-', st);
+  if (tw <= 0) return;
+  put_plain(tx, sy, tw, s, len, st);
+  if (i < h->on && i < h->nn) {
+    size_t la, lb;
+    const char *a = change_line(DP.staged, 0, h->o0 + i, &la), *b = change_line(DP.staged, 1, h->n0 + i, &lb);
+    if (to_new) chars_diff(a, la, b, lb, NULL, NULL, rr, &nr, 16, NULL);
+    else chars_diff(a, la, b, lb, rr, &nr, NULL, NULL, 16, NULL);
+  }
+  for (q = 0; q < nr; q++) {
+    int c0 = plain_col(s, rr[2 * q] < len ? rr[2 * q] : len), c1 = plain_col(s, rr[2 * q + 1] < len ? rr[2 * q + 1] : len), c;
+    for (c = c0; c < c1 && c < tw; c++) scr_set_bg(tx + c, sy, ui_color(to_new ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
+  }
+}
+
+
+/* VS Code's dirty diff widget: under the change, what it was (red) and is (green); side by side or one over the other */
 static void draw_dirty_peek (void) {
   size_t n, total, k, line0, last, all, rank;
   QHunk hc;
@@ -18115,7 +18158,7 @@ static void draw_dirty_peek (void) {
   }
   if (DP.hi >= n) DP.hi = n - 1;
   if (!qc_get(DP.staged, DP.hi, &line0, &last, &hc)) return;
-  total = h->on + h->nn;
+  total = dirty_rows(h);
   ph = peek_height(h);
   r = vb_start();	/* its block's rows, under the change */
   if (r < 0) return;	/* the change scrolled away */
@@ -18156,50 +18199,24 @@ static void draw_dirty_peek (void) {
     tip_want(ux, uy, i == 0 && DP.staged ? "Unstage Change" : tip[i]);
   }
   for (row = 0; row < ph - 2; row++) {
-    int sy = y0 + 1 + row, st;
-    char num[32];
-    const char *s;
-    size_t len = 0, line;
+    int sy = y0 + 1 + row;
     k = DP.top + (size_t)row;
     if (k >= total) {
       scr_fill(DP.x, sy, DP.w, S_TEXT);
       continue;
     }
-    if (k < h->on) {	/* the index's line (HEAD's, for a staged change), gone */
-      line = h->o0 + k;
-      s = DP.staged ? quick_head(T->doc, T->real, line, &len) : quick_old(T->doc, T->real, line, &len);
-      st = S_DIFF_DEL;
+    if (peek_side()) {	/* the old line on the left, the one it became on the right; none: VS Code's diagonal fill */
+      int hw = (DP.w - 1) / 2, c;
+      if (k < h->on) peek_line(DP.x, sy, hw, h, 0, k, nw, 0);
+      else
+        for (c = 0; c < hw; c++) scr_put(DP.x + c, sy, 0x2571, S_DIFF_FILL);
+      scr_put(DP.x + hw, sy, 0x2502, S_BOX_DIM);
+      if (k < h->nn) peek_line(DP.x + hw + 1, sy, DP.w - hw - 1, h, 1, k, nw, 0);
+      else
+        for (c = hw + 1; c < DP.w; c++) scr_put(DP.x + c, sy, 0x2571, S_DIFF_FILL);
     }
-    else if (DP.staged) {	/* the index's line that came */
-      line = h->n0 + (k - h->on);
-      s = quick_old(T->doc, T->real, line, &len);
-      st = S_DIFF_ADD;
-    }
-    else {	/* the line as it is now */
-      line = h->n0 + (k - h->on);
-      s = line < T->doc->n ? row_at(line)->s : "";
-      len = line < T->doc->n ? row_at(line)->len : 0;
-      st = S_DIFF_ADD;
-    }
-    scr_fill(DP.x, sy, DP.w, st);
-    snprintf(num, sizeof(num), "%*lu ", nw - 1, (unsigned long)line + 1);
-    scr_puts(DP.x, sy, num, S_DIFF_NUM);
-    scr_put(DP.x + nw, sy, k < h->on ? '-' : '+', st);
-    put_plain(DP.x + nw + 2, sy, DP.w - nw - 3, s ? s : "", len, st);
-    {	/* the line with the one it became (or was), in order: the characters that changed, brighter */
-      int to_new = k >= h->on;
-      size_t i = to_new ? k - h->on : k, la, lb, rr[2 * 16], nr = 0, q;
-      if (s && i < h->on && i < h->nn) {
-        const char *a = change_line(DP.staged, 0, h->o0 + i, &la), *b = change_line(DP.staged, 1, h->n0 + i, &lb);
-        if (to_new) chars_diff(a, la, b, lb, NULL, NULL, rr, &nr, 16, NULL);
-        else chars_diff(a, la, b, lb, rr, &nr, NULL, NULL, 16, NULL);
-      }
-      for (q = 0; q < nr; q++) {
-        int c0 = plain_col(s, rr[2 * q] < len ? rr[2 * q] : len), c1 = plain_col(s, rr[2 * q + 1] < len ? rr[2 * q + 1] : len), c;
-        for (c = c0; c < c1 && c < DP.w - nw - 3; c++)
-          scr_set_bg(DP.x + nw + 2 + c, sy, ui_color(to_new ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
-      }
-    }
+    else if (k < h->on) peek_line(DP.x, sy, DP.w, h, 0, k, nw, 1);	/* what went, then what came */
+    else peek_line(DP.x, sy, DP.w, h, 1, k - h->on, nw, 1);
   }
   for (k = 0; k < (size_t)DP.w; k++) scr_put(DP.x + (int)k, y0 + ph - 1, 0x2500, S_BOX_DIM);
 }
@@ -18215,7 +18232,7 @@ static int dirty_key (int k) {
     DP.open = 0;
     return 0;
   }
-  total = h.on + h.nn;
+  total = dirty_rows(&h);
   body = DP.h > 2 ? (size_t)DP.h - 2 : 1;
   switch (code) {
     case K_ESC: DP.open = 0; return 1;

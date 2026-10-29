@@ -1457,7 +1457,11 @@ With no file open the editor shows the keys to start with.
   it is typed. A click on a square or a bar (or the column next to it, when
   no fold chevron is there), or Alt+F3 / Shift+Alt+F3 (both kinds, in the
   order of their lines), opens the dirty diff peek under the change: what
-  it was (red) and is (green), "n of m changes", with Stage Change, Revert
+  it was (red) and is (green), side by side, each old line next to the
+  one it became and a diagonal fill where a side has none
+  (mme.scm.peekLayout "sideBySide"; "stacked": one over the other, as an
+  editor under 80 columns wide always has them), "n of m changes", with
+  Stage Change, Revert
   Change, previous / next and close; a staged change's peek has Unstage
   Change. The change under the mouse lights up, its bar wider. Its first
   line ends with its lines added and deleted, dim in green and red against
