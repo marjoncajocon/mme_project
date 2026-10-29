@@ -154,6 +154,7 @@ typedef struct Opt {
   int md_scroll_preview;	/* markdown.preview.scrollPreviewWithEditor */
   int md_scroll_editor;	/* markdown.preview.scrollEditorWithPreview */
   int merge_editor;	/* git.mergeEditor: a conflicted file opens in the merge editor */
+  int scm_counts;	/* mme.scm.showLineCounts: Source Control's "+12 -3" */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
   int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */
@@ -1331,6 +1332,8 @@ int git_count (void);	/* changed files: the badge on the activity bar */
 int git_exec (Buf *out, int err, const char *const *args);	/* git -C <top> args (NULL ends) */
 const char *git_root (void);	/* the repository's folder; NULL: none */
 int git_letter_style (int l);	/* the style of a change's letter M A D U R */
+void git_numstat (const char *s, size_t len, void (*f)(void *ud, const char *path, long add, long del), void *ud);	/* git diff --numstat -z's files */
+int git_counts (int x, int y, long add, long del, int st);	/* "+12 -3" at x, y (x < 0: measured); its columns */
 int git_commit (int amend);	/* the message box's text; 0: it must be typed first */
 int diff_open_rev (const char *path, const char *rel, const char *old_rel,
                    const char *old, const char *new_, const char *title);
@@ -1405,6 +1408,7 @@ const char *graph_file_path (size_t i, size_t f);
 int graph_diff (size_t i, size_t f);	/* the diff editor: commit i's change of file f */
 void graph_draw (size_t i, int x, int y, int w, int st);
 void graph_draw_file (size_t i, size_t f, int x, int y, int w, int st);
+void graph_tip (size_t i, int load, char *out, size_t n);	/* commit i's tooltip: its hash, author, age, files and lines */
 const char *git_sync_text (void);	/* "1\xE2\x86\x93 2\xE2\x86\x91" behind / ahead, "" */
 int git_has_upstream (void);
 void git_command (int cmd, const char *path, SideAct *act);	/* a CMD_GIT_*; act: what to show */

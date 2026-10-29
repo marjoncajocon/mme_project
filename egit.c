@@ -573,6 +573,7 @@ typedef struct Change {
   char *rel;	/* from the top, with '/' */
   char *path;	/* native */
   char x, y;	/* git status --porcelain: the index, the tree */
+  long add[2], del[2];	/* [0] staged, [1] not: its lines added and deleted (git diff --numstat); -1 both: binary */
 } Change;
 
 static Change *g_ch;
@@ -796,6 +797,7 @@ static void read_state (const char *gd) {
 ** kept for git add -A too.
 */
 #define LINK_LOOK	200000	/* the entries looked at in untracked folders, at most */
+#define UNTRACKED_COUNT	500	/* the untracked files whose lines are counted, at most */
 
 static Vec g_links;	/* the working tree's links back up the tree, from the top with '/' */
 
@@ -927,6 +929,127 @@ static int add_all (Buf *b) {
 /* }================================================================== */
 
 
+/*
+** {==================================================================
+** The lines a change added and deleted
+** ===================================================================
+**
+** Beside each file of Staged Changes and Changes, and the commits of the
+** GRAPH: "+12 -3", from git diff --numstat (git diff --cached for the
+** staged); an untracked file's lines are counted, all added. The groups'
+** titles have their files' sums (mme.scm.showLineCounts).
+*/
+
+/* git diff --numstat -z's "12\t3\tpath\0", a rename's "12\t3\t\0old\0new\0": f(ud, path now, added, deleted), -1 both: binary */
+void git_numstat (const char *s, size_t len, void (*f)(void *, const char *, long, long), void *ud) {
+  const char *p = s, *end = s + len;
+  while (p < end && *p) {
+    const char *t1 = memchr(p, '\t', (size_t)(end - p)), *t2, *path;
+    long a, d;
+    if (t1 == NULL) break;
+    t2 = memchr(t1 + 1, '\t', (size_t)(end - t1 - 1));
+    if (t2 == NULL) break;
+    a = *p == '-' ? -1 : strtol(p, NULL, 10);
+    d = t1[1] == '-' ? -1 : strtol(t1 + 1, NULL, 10);
+    path = t2 + 1;
+    if (path < end && *path == '\0') {	/* a rename: the old name, then the new */
+      path++;
+      if (path >= end) break;
+      path += strlen(path) + 1;
+      if (path >= end) break;
+    }
+    f(ud, path, a < 0 || d < 0 ? -1 : a, a < 0 || d < 0 ? -1 : d);
+    p = path + strlen(path) + 1;
+  }
+}
+
+
+static void count_put (void *ud, const char *rel, long a, long d) {
+  int k = *(int *)ud;
+  Change key, *c;
+  key.rel = (char *)rel;
+  if ((c = (Change *)bsearch(&key, g_ch, g_nch, sizeof(Change), cmp_change)) != NULL) {
+    c->add[k] = a;
+    c->del[k] = d;
+  }
+}
+
+
+/* the lines of an untracked file; -1: binary, -2: too big to read */
+static long file_lines (const char *path) {
+  static char buf[65536];
+  unsigned long long off = 0;
+  long n, lines = 0;
+  char last = '\n';
+  while ((n = fs_read_at(path, off, buf, sizeof(buf))) > 0) {
+    long i;
+    if (off == 0 && memchr(buf, '\0', (size_t)(n < 8000 ? n : 8000))) return -1;	/* git's test of a binary */
+    for (i = 0; i < n; i++) lines += buf[i] == '\n';
+    last = buf[n - 1];
+    off += (unsigned long long)n;
+    if (off > 4u << 20) return -2;
+  }
+  return lines + (last != '\n');
+}
+
+
+/* the counts of the changes in g_ch: git diff --numstat, and --cached */
+static void counts_read (void) {
+  Buf b;
+  size_t i, left = UNTRACKED_COUNT;
+  int k;
+  for (k = 0; k < 2; k++) {
+    buf_init(&b);
+    if ((k ? git(&b, "diff", "--numstat", "-M", "-z", NULL, NULL)
+           : git(&b, "diff", "--cached", "--numstat", "-M", "-z", NULL)) == 0)
+      git_numstat(b.s ? b.s : "", b.len, count_put, &k);
+    buf_free(&b);
+  }
+  for (i = 0; i < g_nch && left > 0; i++)
+    if (g_ch[i].x == '?') {
+      long n = file_lines(g_ch[i].path);
+      left--;
+      if (n >= -1) {
+        g_ch[i].add[1] = n;
+        g_ch[i].del[1] = n < 0 ? -1 : 0;
+      }
+    }
+}
+
+
+/* "+12 -3" at x, y (x < 0: only measured); its columns; nothing for no lines, "bin" for a binary */
+int git_counts (int x, int y, long add, long del, int st) {
+  char a[24] = "", d[24] = "";
+  int w;
+  if (add < 0) snprintf(a, sizeof(a), "bin");
+  else {
+    if (add > 0) snprintf(a, sizeof(a), add >= 100000 ? "+%ldk" : "+%ld", add >= 100000 ? add / 1000 : add);
+    if (del > 0) snprintf(d, sizeof(d), del >= 100000 ? "-%ldk" : "-%ld", del >= 100000 ? del / 1000 : del);
+  }
+  w = (int)strlen(a) + (int)strlen(d) + (a[0] && d[0]);
+  if (x >= 0 && w > 0) {
+    int sel = st != S_SIDE;
+    if (a[0]) x += scr_puts(x, y, a, sel ? st : add < 0 ? S_SIDE_DIM : S_GIT_A) + (d[0] != 0);
+    if (d[0]) scr_puts(x, y, d, sel ? st : S_GIT_D);
+  }
+  return w;
+}
+
+
+/* the sums of a group's files: k 0 the staged, 1 not */
+static void group_counts (int k, long *add, long *del) {
+  size_t i;
+  *add = *del = 0;
+  for (i = 0; i < g_nch; i++)
+    if (k ? is_changed(&g_ch[i]) : is_staged(&g_ch[i])) {
+      if (g_ch[i].add[k] > 0) *add += g_ch[i].add[k];
+      if (g_ch[i].del[k] > 0) *del += g_ch[i].del[k];
+    }
+}
+
+/* }================================================================== */
+
+
 static void git_refresh_now (void) {
   Buf b;
   size_t i;
@@ -987,11 +1110,13 @@ static void git_refresh_now (void) {
       c->y = e[1];
       c->rel = xstrndup(e + 3, len);
       c->path = path_join(g_top, c->rel);
+      c->add[0] = c->add[1] = c->del[0] = c->del[1] = 0;
       to_native(c->path);
       i += 3 + len + 1;
       if (e[0] == 'R' || e[0] == 'C') i += strlen(b.s + i) + 1;
     }
     qsort(g_ch, g_nch, sizeof(Change), cmp_change);
+    if (opt.scm_counts) counts_read();
   }
   buf_free(&b);
   for (i = 0; g_nrepo > 1 && i < (size_t)g_nrepo; i++) {	/* SOURCE CONTROL REPOSITORIES: each one's branch and changes */
@@ -1027,6 +1152,7 @@ typedef struct GJob {
   char *git, *dir;	/* git, where the refresh starts (repo_dir) */
   char **tops;	/* the repositories' */
   int ntop, limit;
+  int counts;	/* mme.scm.showLineCounts: git diff --numstat too */
   Mutex *mx;
   int done;	/* under mx */
   int stale;	/* this thread's: a git_refresh came after it */
@@ -1091,9 +1217,13 @@ static void job_main (void *ud) {
   const char *a_all[] = {"status", "--porcelain=v1", "-z", "-uall", NULL};
   const char *a_repo[] = {"status", "--porcelain=v1", "-b", "-z", NULL};
   const char *a_sync[] = {"rev-list", "--left-right", "--count", "@{upstream}...HEAD", NULL};
+  const char *a_num[] = {"diff", "--numstat", "-M", "-z", NULL};
+  const char *a_cnum[] = {"diff", "--cached", "--numstat", "-M", "-z", NULL};
+  Buf sb;	/* git status' output */
   const char *a_log[] = {"log", "--all", "--date-order", "--decorate=full", num,
                          "--format=%H%x1f%P%x1f%D%x1f%an%x1f%at%x1f%s%x1e", NULL};
   buf_init(&b);
+  buf_init(&sb);
   if (job_git(j, j->dir, 0, a_top, &b) != 0 || b.len == 0) goto out;
   {
     char *nl = strchr(b.s, '\n'), *gd;
@@ -1119,6 +1249,7 @@ static void job_main (void *ud) {
     size_t k, left = LINK_LOOK;
     int dirs = 0;
     if (job_git(j, top, 0, a_normal, &b) == 0) {
+      buf_putn(&sb, b.s, b.len);
       for (k = 0; k + 3 < b.len;) {
         const char *e = b.s + k;
         size_t len = strlen(e + 3);
@@ -1154,13 +1285,40 @@ static void job_main (void *ud) {
         job_git(j, top, 1, a, &b);
         for (k = 5; a[k]; k++) free((char *)a[k]);
         free(a);
+        sb.len = 0;
+        buf_putn(&sb, b.s, b.len);
       }
-      else if (dirs > 0) job_git(j, top, 0, a_all, &b);
+      else if (dirs > 0) {
+        job_git(j, top, 0, a_all, &b);
+        sb.len = 0;
+        buf_putn(&sb, b.s, b.len);
+      }
     }
   }
 #else
   job_git(j, top, 0, a_all, &b);
+  buf_putn(&sb, b.s, b.len);
 #endif
+  if (j->counts) {	/* counts_read's, and the untracked files as they are now (their lines are counted) */
+    size_t k, left = UNTRACKED_COUNT;
+    job_git(j, top, 0, a_num, &b);
+    job_git(j, top, 0, a_cnum, &b);
+    for (k = 0; k + 3 < sb.len && left > 0;) {
+      const char *e = sb.s + k;
+      size_t len = strlen(e + 3);
+      if (e[0] == '?') {
+        char *rel = xstrndup(e + 3, len), *p = path_join(top, rel);
+        OsStat fs;
+        to_native(p);
+        if (os_stat(p, &fs) == 0) buf_printf(&j->finger, "\x1d%s %lld %lld", rel, fs.size, (long long)fs.mtime);
+        free(rel);
+        free(p);
+        left--;
+      }
+      k += 3 + len + 1;
+      if (e[0] == 'R' || e[0] == 'C') k += strlen(sb.s + k) + 1;
+    }
+  }
   for (i = 0; j->ntop > 1 && i < j->ntop; i++)
     if (m_fncmp(j->tops[i], top) != 0) job_git(j, j->tops[i], 0, a_repo, &b);
   snprintf(num, sizeof(num), "-n%d", j->limit + 1);
@@ -1168,6 +1326,7 @@ static void job_main (void *ud) {
   job_git(j, top, 0, a_sync, &b);
 out:
   buf_free(&b);
+  buf_free(&sb);
   free(top);
   buf_putc(&j->finger, '\0');
   mx_lock(j->mx);
@@ -1222,6 +1381,7 @@ void git_refresh_async (void) {
   j->git = xstrdup(g_git);
   j->dir = xstrdup(repo_dir());
   j->limit = graph_limit();
+  j->counts = opt.scm_counts;
   j->ntop = g_nrepo;
   j->tops = (char **)xmalloc((size_t)g_nrepo * sizeof(char *));
   for (i = 0; i < g_nrepo; i++) j->tops[i] = xstrdup(g_repo[i].top);
@@ -1593,6 +1753,19 @@ void git_draw (int x, int y, int w, int h, int focus) {
     }
     if (r->kind == R_COMMIT) {
       graph_draw(r->ch, x + 1, sy, w - 1, st);
+      if (mouse_over_text(x, sy, w, 1)) {	/* its tooltip; its counts read once it is hovered a moment */
+        static size_t hov = (size_t)-1;
+        static long long since;
+        char tip[300];
+        if (hov != r->ch) {
+          hov = r->ch;
+          since = os_now_us();
+        }
+        if (os_now_us() - since > 300000) {
+          graph_tip(r->ch, 1, tip, sizeof(tip));
+          tip_want(x + 3, sy + 1, tip);
+        }
+      }
       continue;
     }
     if (r->kind == R_CFILE) {
@@ -1620,25 +1793,40 @@ void git_draw (int x, int y, int w, int h, int focus) {
       char num[32];
       snprintf(num, sizeof(num), " %lu ", (unsigned long)r->ch);
       scr_put(x + 1, sy, 0xEAB4, st);
-      scr_puts(x + 3, sy, r->kind == R_HEAD ? "Changes" : r->kind == R_MERGE_HEAD ? "Merge Changes" : "Staged Changes",
-               st == S_SIDE ? S_SIDE_TITLE : st);
-      scr_puts(x + w - (int)strlen(num) - 1, sy, num, st == S_SIDE ? S_TOGGLE_ON : st);
+      int tx = x + 3, nx = x + w - (int)strlen(num) - 1;
+      tx += scr_puts(tx, sy, r->kind == R_HEAD ? "Changes" : r->kind == R_MERGE_HEAD ? "Merge Changes" : "Staged Changes",
+                     st == S_SIDE ? S_SIDE_TITLE : st);
+      scr_puts(nx, sy, num, st == S_SIDE ? S_TOGGLE_ON : st);
+      if (opt.scm_counts && r->kind != R_MERGE_HEAD) {	/* the group's sums, before its count of files */
+        long a, d;
+        int cw;
+        group_counts(r->kind == R_HEAD, &a, &d);
+        cw = git_counts(-1, sy, a, d, st);
+        if (cw > 0 && nx - cw - 1 > tx + 1) git_counts(nx - cw - 1, sy, a, d, st);
+      }
     }
     else {
       const Change *c = &g_ch[r->ch];
       const char *base = strrchr(c->rel, '/');
       int l = r->kind == R_MERGE ? '!' : letter(c, r->kind == R_STAGED), ist, cx = x + 3;
+      int k = r->kind == R_CHANGE, right = x + w - 3, cw = 0, lim;
       uint32_t icon;
       base = base ? base + 1 : c->rel;
       icon = file_icon(base, &ist);
       scr_put(cx, sy, icon, st == S_SIDE ? ist : st);
       cx += 2;
-      cx += scr_putsw(cx, sy, x + w - cx - 3, base, st == S_SIDE ? git_letter_style(l) : st);
-      if (base != c->rel && cx + 2 < x + w - 3) {
+      if (opt.scm_counts && r->kind != R_MERGE) {	/* "+12 -3" before the letter; a narrow view keeps the name */
+        cw = git_counts(-1, sy, c->add[k], c->del[k], st);
+        if (cw > 0 && cx + (int)str_cols(base) + 1 + cw > right) cw = 0;
+      }
+      lim = cw > 0 ? right - cw - 1 : right;
+      cx += scr_putsw(cx, sy, lim - cx, base, st == S_SIDE ? git_letter_style(l) : st);
+      if (base != c->rel && cx + 2 < lim) {
         char *dir = xstrndup(c->rel, (size_t)(base - c->rel - 1));
-        scr_putsw(cx + 1, sy, x + w - cx - 4, dir, st == S_SIDE ? S_SIDE_DIM : st);
+        scr_putsw(cx + 1, sy, lim - cx - 1, dir, st == S_SIDE ? S_SIDE_DIM : st);
         free(dir);
       }
+      if (cw > 0) git_counts(right - cw, sy, c->add[k], c->del[k], st);
       scr_put(x + w - 2, sy, (uint32_t)l, st == S_SIDE ? git_letter_style(l) : st);
     }
   }

@@ -107,6 +107,7 @@ typedef struct GFile {
   char st;	/* 'M' 'A' 'D' 'R' ... */
   char *rel, *old;	/* from the top, '/'; old: a rename's old name */
   char *path;	/* native */
+  long add, del;	/* its lines added and deleted (git diff --numstat); -1 both: binary */
 } GFile;
 
 typedef struct Commit {
@@ -125,7 +126,20 @@ typedef struct Commit {
   GFile *file;
   size_t nfile;
   int loaded;
+  int counted;	/* add, del, nfiles known */
+  long add, del;	/* the lines its files added and deleted */
+  size_t nfiles;
 } Commit;
+
+/* the counts of the commits read once (a commit never changes): a graph read again has them */
+typedef struct Counted {
+  char hash[41];
+  long add, del;
+  size_t nfiles;
+} Counted;
+
+static Counted *g_counted;
+static size_t g_ncounted;
 
 static Commit *g_cm;
 static size_t g_ncm, g_capcm;
@@ -364,6 +378,14 @@ void graph_load (void) {
       c->subject = xstrndup(f[5], len[5]);
       for (i = 0; i < nwas; i++)
         if (strcmp(was[i], c->hash) == 0) c->open = 1;
+      for (i = 0; i < g_ncounted; i++)
+        if (strcmp(g_counted[i].hash, c->hash) == 0) {
+          c->counted = 1;
+          c->add = g_counted[i].add;
+          c->del = g_counted[i].del;
+          c->nfiles = g_counted[i].nfiles;
+          break;
+        }
     }
   }
   buf_free(&b);
@@ -406,7 +428,19 @@ int graph_open (size_t i) {
 }
 
 
-/* the files a commit changed, against its first parent (git's empty tree for the first) */
+static void file_count (void *ud, const char *rel, long a, long d) {
+  Commit *c = (Commit *)ud;
+  size_t f;
+  for (f = 0; f < c->nfile; f++)
+    if (strcmp(c->file[f].rel, rel) == 0) {
+      c->file[f].add = a;
+      c->file[f].del = d;
+      return;
+    }
+}
+
+
+/* the files a commit changed, against its first parent (git's empty tree for the first); their lines too */
 static void load_files (Commit *c) {
   Buf b;
   const char *p, *end;
@@ -436,6 +470,7 @@ static void load_files (Commit *c) {
     g->rel = xstrdup(nw);
     g->old = xstrdup(a);
     g->path = path_join(git_root(), nw);
+    g->add = g->del = 0;
 #ifdef _WIN32
     {
       char *q;
@@ -444,6 +479,25 @@ static void load_files (Commit *c) {
     }
 #endif
     p = nw + strlen(nw) + 1;
+  }
+  buf_free(&b);
+  if (!opt.scm_counts) return;
+  buf_init(&b);
+  if (gitv(&b, 0, "diff", "--numstat", "-M", "-z", c->npar ? c->par[0] : empty_tree, c->hash, NULL) == 0) {
+    size_t f;
+    git_numstat(b.s ? b.s : "", b.len, file_count, c);
+    c->add = c->del = 0;
+    for (f = 0; f < c->nfile; f++) {
+      if (c->file[f].add > 0) c->add += c->file[f].add;
+      if (c->file[f].del > 0) c->del += c->file[f].del;
+    }
+    c->nfiles = c->nfile;
+    c->counted = 1;
+    g_counted = (Counted *)xrealloc(g_counted, (g_ncounted + 1) * sizeof(Counted));
+    memcpy(g_counted[g_ncounted].hash, c->hash, sizeof(c->hash));
+    g_counted[g_ncounted].add = c->add;
+    g_counted[g_ncounted].del = c->del;
+    g_counted[g_ncounted++].nfiles = c->nfiles;
   }
   buf_free(&b);
 }
@@ -548,6 +602,13 @@ void graph_draw (size_t i, int x, int y, int w, int st) {
   for (k = 0; k < c->ncell && cx < end - 2; k++)
     cx += scr_put_rgb(cx, y, c->cell[k], lane_rgb[c->ccol[k] % NCOLOR], bg, 0);
   cx += 1;
+  if (opt.scm_counts && c->counted) {	/* "+120 -14" at the end, when there is room for the subject too */
+    int cw = git_counts(-1, y, c->add, c->del, st);
+    if (cw > 0 && end - cw - 1 > cx + 12) {
+      git_counts(end - cw - 1, y, c->add, c->del, st);
+      end -= cw + 2;
+    }
+  }
   cx += draw_refs(c->refs, cx, y, cx + (end - cx) / 2);
   cx += scr_putsw(cx, y, end - cx - 1, c->subject, st);
   git_ago(c->time, ago, sizeof(ago));
@@ -561,7 +622,7 @@ void graph_draw_file (size_t i, size_t f, int x, int y, int w, int st) {
   const Commit *c;
   const GFile *g;
   uint32_t bg = row_bg(st), icon;
-  int k, cx = x, end = x + w, ist, l;
+  int k, cx = x, end = x + w, ist, l, right, cw = 0, lim;
   const char *base;
   if (i >= g_ncm || f >= g_cm[i].nfile) return;
   c = &g_cm[i];
@@ -577,13 +638,43 @@ void graph_draw_file (size_t i, size_t f, int x, int y, int w, int st) {
   icon = file_icon(base, &ist);
   cx += scr_put(cx, y, icon, st == S_SIDE ? ist : st) + 1;
   l = g->st == 'R' ? 'R' : g->st;
-  cx += scr_putsw(cx, y, end - cx - 3, base, st == S_SIDE ? git_letter_style(l) : st);
-  if (base != g->rel && cx + 2 < end - 3) {
+  right = end - 3;
+  if (opt.scm_counts) {	/* "+12 -3" before the letter; a narrow view keeps the name */
+    cw = git_counts(-1, y, g->add, g->del, st);
+    if (cw > 0 && cx + (int)str_cols(base) + 1 + cw > right) cw = 0;
+  }
+  lim = cw > 0 ? right - cw - 1 : right;
+  cx += scr_putsw(cx, y, lim - cx, base, st == S_SIDE ? git_letter_style(l) : st);
+  if (base != g->rel && cx + 2 < lim) {
     char *dir = xstrndup(g->rel, (size_t)(base - g->rel - 1));
-    scr_putsw(cx + 1, y, end - cx - 4, dir, st == S_SIDE ? S_SIDE_DIM : st);
+    scr_putsw(cx + 1, y, lim - cx - 1, dir, st == S_SIDE ? S_SIDE_DIM : st);
     free(dir);
   }
+  if (cw > 0) git_counts(right - cw, y, g->add, g->del, st);
   scr_put(end - 2, y, (uint32_t)l, st == S_SIDE ? git_letter_style(l) : st);
+}
+
+
+/* commit i's tooltip: "1a2b3c4 · author · 2 days ago · 3 files changed, 120 insertions(+), 14 deletions(-)";
+   load: its counts read (git diff) when not known yet */
+void graph_tip (size_t i, int load, char *out, size_t n) {
+  Commit *c;
+  char ago[48];
+  size_t len;
+  out[0] = '\0';
+  if (i >= g_ncm) return;
+  c = &g_cm[i];
+  if (load && opt.scm_counts && !c->counted) load_files(c);
+  git_ago(c->time, ago, sizeof(ago));
+  snprintf(out, n, "%.7s \xC2\xB7 %s \xC2\xB7 %s", c->hash, c->author, ago);
+  if (opt.scm_counts && c->counted) {
+    len = strlen(out);
+    snprintf(out + len, n - len, " \xC2\xB7 %lu file%s changed", (unsigned long)c->nfiles, c->nfiles == 1 ? "" : "s");
+    len = strlen(out);
+    if (c->add > 0) snprintf(out + len, n - len, ", %ld insertion%s(+)", c->add, c->add == 1 ? "" : "s");
+    len = strlen(out);
+    if (c->del > 0) snprintf(out + len, n - len, ", %ld deletion%s(-)", c->del, c->del == 1 ? "" : "s");
+  }
 }
 
 

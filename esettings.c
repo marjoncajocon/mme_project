@@ -258,6 +258,8 @@ static const Setting set[] = {
    "Open merge conflicts in the merge editor: Incoming and Current above, the Result below."},
   {"scm.diffDecorations", C_SCM, ST_ENUM, 0, "\"all\"", "all|gutter|none",
    "Controls diff decorations in the editor."},
+  {"mme.scm.showLineCounts", C_SCM, ST_BOOL, 0, "true", NULL,
+   "Show the lines each change added and deleted (+12 -3) in Source Control: its files, the groups' titles and the commits of the graph."},
   {"mme.extensions.useVSCodeExtensions", C_EXT, ST_BOOL, 0, "true", NULL,
    "Use the color themes, snippets and languages of the extensions VS Code has installed (~/.vscode/extensions); they are only read, never changed."},
   {"files.autoSave", C_FILES, ST_ENUM, 1, "\"off\"", "off|afterDelay|onFocusChange|onWindowChange",

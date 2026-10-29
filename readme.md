@@ -1379,7 +1379,12 @@ With no file open the editor shows the keys to start with.
   diff; `s` / `+` stages, `u` / `-` unstages, `o` opens the file. The message
   box on top commits with Ctrl+Enter. The title's buttons commit, refresh and
   open More Actions (pull, push, sync, fetch, branches, stash, undo last
-  commit, amend ...).
+  commit, amend ...). Each file shows the lines its change added and
+  deleted, `+12 -3` in green and red before its letter (`git diff --numstat`,
+  `--cached` for the staged; an untracked file's lines count as added, a
+  binary shows `bin`), and the titles Staged Changes and Changes show their
+  files' sums; a narrow view drops them before the file's name.
+  `mme.scm.showLineCounts` (on) turns them off.
 - **Repositories** — the workspace's repositories are found as VS Code finds
   them: each folder's own (or the one around it), the ones a folder down
   (git.repositoryScanMaxDepth 1, not node_modules) and their submodules (up
@@ -1411,7 +1416,10 @@ With no file open the editor shows the keys to start with.
   them, the branches, remote branches and tags as badges, the subject, the
   author and when. Enter, a click or Right opens a commit to its files (Left
   closes it); a file opens its change in the diff editor, side by side,
-  titled like VS Code's `f.c (abc1234^ ↔ abc1234)`. "Load More..." shows
+  titled like VS Code's `f.c (abc1234^ ↔ abc1234)`; an open commit's files
+  have their `+12 -3`, and the commit its sums at the end of its row.
+  Hovering a commit shows its hash, author, age and "3 files changed, 120
+  insertions(+), 14 deletions(-)" (read then, once). "Load More..." shows
   older ones. **Git: View File History** lists the commits of the file in
   front; one opens its change.
 - **Branches** — the branch in the status bar opens **Git: Checkout to...**:
