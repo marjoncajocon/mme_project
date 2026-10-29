@@ -157,7 +157,6 @@ typedef struct Opt {
   int scm_counts;	/* mme.scm.showLineCounts: Source Control's "+12 -3" */
   int change_counts;	/* mme.scm.showChangeCounts: each change's "+3 -1" at the end of its first line */
   int change_chars;	/* mme.scm.highlightChangedChars: a changed line's characters tinted in the editor */
-  int del_lines;	/* mme.scm.showDeletedLines: a change's deleted lines as red rows over it */
   int del_chars;	/* mme.scm.showDeletedChars: the characters taken out of a line, struck through */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
@@ -1345,7 +1344,8 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
                    size_t *rb, size_t *nrb, size_t cap, int *exact);	/* and where they are: byte ranges of each */
 void chars_hunks (const char *a, size_t na, const char *b, size_t nb, size_t *hk, size_t *nh, size_t cap);	/* a0 a1 -> b0 b1 */
 unsigned long quick_version (void);	/* another number each time a file's quick diff is made again */
-void chars_text (size_t n, int known, char *out, size_t sz);	/* " · 12 chars", "" for none */
+void chars_text (size_t add, size_t del, int known, char *out, size_t sz);	/* " · +12 -3 chars", "" for none */
+void chars_split (const char *a, size_t na, const char *b, size_t nb, size_t *del, size_t *add);	/* taken out, put in */
 int git_commit (int amend);	/* the message box's text; 0: it must be typed first */
 int diff_open_rev (const char *path, const char *rel, const char *old_rel,
                    const char *old, const char *new_, const char *title);

@@ -1095,6 +1095,7 @@ typedef struct CDiff {
   int exact;
   size_t ra[2 * CD_RANGES], rb[2 * CD_RANGES];
   size_t hk[4 * CD_RANGES], nh;	/* the changes as pairs: a's bytes a0 a1 became b's b0 b1 */
+  size_t del, add;	/* the characters taken out of a, put into b */
 } CDiff;
 
 static CDiff g_cd[CD_SLOTS];
@@ -1199,6 +1200,8 @@ static int cd_lcs (const char *a, size_t na, const char *b, size_t nb, size_t p,
       cd_range(c->rb, &c->nrb, p + ob[j], p + ob[j + 1]);
     }
   c->n = da > db ? da : db;
+  c->del = da;
+  c->add = db;
   return 1;
 }
 
@@ -1237,12 +1240,16 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
       cd_range(c->rb, &c->nrb, p, nb - s);
       cd_hunk(c, p, na - s, p, nb - s);
       c->n = da > db ? da : db;
+      c->del = da;
+      c->add = db;
     }
     else if (na - p - s == 0 || nb - p - s == 0) {	/* only taken out, or only put in */
       if (na - p - s) cd_range(c->ra, &c->nra, p, na - s);
       if (nb - p - s) cd_range(c->rb, &c->nrb, p, nb - s);
       if (na - p - s || nb - p - s) cd_hunk(c, p, na - s, p, nb - s);
-      c->n = utf8_count(a + p, na - p - s) + utf8_count(b + p, nb - p - s);
+      c->del = utf8_count(a + p, na - p - s);
+      c->add = utf8_count(b + p, nb - p - s);
+      c->n = c->del + c->add;
     }
   }
   if (exact) *exact = c->exact;
@@ -1269,6 +1276,14 @@ void chars_hunks (const char *a, size_t na, const char *b, size_t nb, size_t *hk
 }
 
 
+/* the characters taken out of line a (*del) and put into b (*add) */
+void chars_split (const char *a, size_t na, const char *b, size_t nb, size_t *del, size_t *add) {
+  chars_diff(a, na, b, nb, NULL, NULL, NULL, NULL, 0, NULL);
+  *del = cd_last->del;
+  *add = cd_last->add;
+}
+
+
 /* the count alone */
 size_t chars_changed (const char *a, size_t na, const char *b, size_t nb) {
   return chars_diff(a, na, b, nb, NULL, NULL, NULL, NULL, 0, NULL);
@@ -1277,10 +1292,12 @@ size_t chars_changed (const char *a, size_t na, const char *b, size_t nb) {
 /* }================================================================== */
 
 
-/* " · 12 chars" after a change's counts; "" none or not worked out */
-void chars_text (size_t n, int known, char *out, size_t sz) {
-  if (!known || n == 0) out[0] = '\0';
-  else snprintf(out, sz, " \xC2\xB7 %lu char%s", (unsigned long)n, n == 1 ? "" : "s");
+/* " · +12 -3 chars" after a change's counts (a side with none left out); "" none or not worked out */
+void chars_text (size_t add, size_t del, int known, char *out, size_t sz) {
+  if (!known || (add == 0 && del == 0)) out[0] = '\0';
+  else if (add && del) snprintf(out, sz, " \xC2\xB7 +%lu -%lu chars", (unsigned long)add, (unsigned long)del);
+  else if (add) snprintf(out, sz, " \xC2\xB7 +%lu char%s", (unsigned long)add, add == 1 ? "" : "s");
+  else snprintf(out, sz, " \xC2\xB7 -%lu char%s", (unsigned long)del, del == 1 ? "" : "s");
 }
 
 
@@ -4196,35 +4213,31 @@ static size_t line_chars (const DLine *l) {
 }
 
 
-/* the characters the block from row k changed: its lines one with another, in order, those left over whole;
-   kept for the block until the diff is drawn from other lines; *known 0: too big to count */
-static size_t block_chars (size_t k, int *known) {
+/* the characters the block from row k took out (*del, its old lines') and put in (*add): what the view paints
+   (a line without a partner: all of it); kept for the block until the diff is drawn from other lines; *known 0:
+   too big to count */
+static void block_chars (size_t k, size_t *add, size_t *del, int *known) {
   static const void *was_line, *was_tb;
-  static size_t was_k = (size_t)-1, was_n, was_nline, was_tnb;
+  static size_t was_k = (size_t)-1, was_add, was_del, was_nline, was_tnb;
   static int was_split, was_known;
   static const DLine *o[CHARS_MAX], *nw[CHARS_MAX];
-  size_t no, nn, i, n = 0;
-  if (was_k == k && was_line == (const void *)D.line && was_nline == D.nline && was_tb == (const void *)D.tb &&
-      was_tnb == D.tnb && was_split == D.split_now) {
-    *known = was_known;
-    return was_n;
+  size_t no, nn, i;
+  if (!(was_k == k && was_line == (const void *)D.line && was_nline == D.nline && was_tb == (const void *)D.tb &&
+        was_tnb == D.tnb && was_split == D.split_now)) {
+    was_known = block_lines(k, o, &no, nw, &nn, CHARS_MAX) <= CHARS_MAX;
+    was_add = was_del = 0;
+    for (i = 0; was_known && i < no; i++) was_del += line_chars(o[i]);
+    for (i = 0; was_known && i < nn; i++) was_add += line_chars(nw[i]);
+    was_k = k;
+    was_line = (const void *)D.line;
+    was_nline = D.nline;
+    was_tb = (const void *)D.tb;
+    was_tnb = D.tnb;
+    was_split = D.split_now;
   }
-  *known = block_lines(k, o, &no, nw, &nn, CHARS_MAX) <= CHARS_MAX;
-  {	/* the changed characters the view paints (a line without a partner: all of it), the more of the two sides */
-    size_t sa = 0, sb = 0;
-    for (i = 0; *known && i < no; i++) sa += line_chars(o[i]);
-    for (i = 0; *known && i < nn; i++) sb += line_chars(nw[i]);
-    n = sa > sb ? sa : sb;
-  }
-  was_k = k;
-  was_line = (const void *)D.line;
-  was_nline = D.nline;
-  was_tb = (const void *)D.tb;
-  was_tnb = D.tnb;
-  was_split = D.split_now;
-  was_known = *known;
-  was_n = n;
-  return n;
+  *add = was_add;
+  *del = was_del;
+  *known = was_known;
 }
 
 
@@ -4235,11 +4248,11 @@ static size_t block_chars (size_t k, int *known) {
 */
 static void block_count (int x, int y, int w, size_t k, int cur) {
   size_t n = nrows(), a = 0, d = 0, j;
-  char t[64], *mid, *dot;
+  char t[80];
   size_t lines;
   const char *p;
   int tw, cx, i, kind = ' ';
-  uint32_t bg;
+  uint32_t bg, fg;
   if (!opt.change_counts || D.kind == DK_OTHER) return;
   for (j = k; j < n && is_change(j); j++) {
     unsigned m = row_kinds(j);
@@ -4252,10 +4265,11 @@ static void block_count (int x, int y, int w, size_t k, int cur) {
   else return;
   lines = strlen(t);
   {
-    char c[40];
+    char c[48];
     int known;
-    size_t nc = block_chars(k, &known);
-    chars_text(nc, known, c, sizeof(c));
+    size_t ca, cd;
+    block_chars(k, &ca, &cd, &known);
+    chars_text(ca, cd, known, c, sizeof(c));
     strncat(t, c, sizeof(t) - strlen(t) - 1);
   }
   if (D.split_now) {	/* the pane it goes in */
@@ -4282,14 +4296,12 @@ static void block_count (int x, int y, int w, size_t k, int cur) {
     t[lines] = '\0';
   }
   bg = ui_color(kind == '+' ? C_DIFF_ADD : kind == '-' ? C_DIFF_DEL : cur ? C_LINE_BG : C_EDITOR_BG);
-  mid = strchr(t, ' ');
-  dot = strstr(t, "\xC2\xB7");
-  for (p = t; *p;) {	/* on a line's green or red: lighter, to be read on it; the characters' count gray */
+  for (p = t, fg = 0; *p;) {	/* "+" green, "-" red (on a line's green or red: lighter), the rest gray */
     size_t len;
-    uint32_t cp = utf8_decode(p, strlen(p), &len), fg;
-    int del = t[0] == '-' || (mid && p > mid);
-    if (dot && p >= dot - 1) fg = kind == ' ' ? 0x8B949E : 0xD0D7DE;
-    else fg = kind == ' ' ? (del ? SB_DEL : SB_ADD) : del ? 0xFFA198 : 0x7EE787;
+    uint32_t cp = utf8_decode(p, strlen(p), &len);
+    if (p == t || p[-1] == ' ')	/* a word: its color */
+      fg = *p == '+' ? (kind == ' ' ? SB_ADD : 0x7EE787) : *p == '-' ? (kind == ' ' ? SB_DEL : 0xFFA198)
+         : (kind == ' ' ? 0x8B949E : 0xD0D7DE);
     cx += scr_put_rgb(cx, y, cp, fg, bg, 0);
     p += len ? len : 1;
   }

@@ -317,12 +317,9 @@ static const Sym *symbols (size_t *n);
 static void draw_rulers (int sy, int gw, size_t left);
 static int lens_row_at (size_t y);	/* editor.codeLens: a row of its own over line y */
 static size_t lens_rows_in (size_t y0, size_t y1);
-static int vrows_at (size_t y);	/* the rows over line y: the deleted lines shown there, its code lens */
-static size_t vrows_in (size_t y0, size_t y1);
-static int vrow_kind (size_t y, int vi);
-static const QStaged *qstaged (size_t *n);
 static void dc_hints (void);
-static unsigned long g_draw_gen;
+static int dc_open (int *staged, size_t *hi);
+static const QStaged *qstaged (size_t *n);
 static size_t g_dc_n;	/* how many of the inlay hints are deleted characters (mme.scm.showDeletedChars) */
 #define IH_DEL	((size_t)-1)	/* an inlay hint's color: the characters taken out of a changed line */
 static int uni_flag_of (uint32_t cp);	/* editor.unicodeHighlight, for the width of what is invisible */
@@ -1998,16 +1995,16 @@ static int vb_start (void) {
   if (!VB.on || !HAS_DOC || VB.after >= T->doc->n || VB.after < T->top) return -1;
   if (T->nfold && hidden_in(VB.after) != (size_t)-1) return -1;
   if (!E.wrap) {
-    if (T->nfold == 0) return (int)(VB.after - T->top + vrows_in(T->top, VB.after + 1)) + 1;
-    for (y = T->top; y < VB.after; y = line_next(y)) rows += 1 + (size_t)vrows_at(y);
-    return (int)(rows + (size_t)vrows_at(VB.after)) + 1;
+    if (T->nfold == 0) return (int)(VB.after - T->top + lens_rows_in(T->top, VB.after + 1)) + 1;
+    for (y = T->top; y < VB.after; y = line_next(y)) rows += 1 + (size_t)lens_row_at(y);
+    return (int)(rows + (size_t)lens_row_at(VB.after)) + 1;
   }
   for (y = T->top; y < VB.after; y = line_next(y)) rows += wrap_segs(y, &st, NULL);
   rows += wrap_segs(VB.after, &st, NULL);
   if (rows < T->sub) return -1;
   rows -= T->sub;
   for (y = T->top; y <= VB.after; y = line_next(y)) {
-    if (y != T->top || T->sub == 0) rows += (size_t)vrows_at(y);
+    if (lens_row_at(y) && (y != T->top || T->sub == 0)) rows++;
     if (y >= VB.after) break;
   }
   return (int)rows;
@@ -2047,15 +2044,16 @@ static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *l
     }
   }
   if (!E.wrap) {
-    if (T->nfold || vrows_in(T->top, T->doc->n) > 0) {	/* folded regions, rows over lines: line by line */
+    if (T->nfold || lens_rows_in(T->top, T->doc->n) > 0) {	/* folded regions, lens rows: line by line */
       size_t yy = T->top;
       while (yy < T->doc->n) {
-        int v = vrows_at(yy);
-        if (sy < v) {	/* a row over the line comes first: a deleted line's, the lens's */
-          *lens = vrow_kind(yy, sy);
-          break;
+        if (lens_row_at(yy)) {	/* the lens's own row comes first */
+          if (sy == 0) {
+            *lens = 1;
+            break;
+          }
+          sy--;
         }
-        sy -= v;
         if (sy == 0) break;
         sy--;
         yy = line_next(yy);
@@ -2074,35 +2072,31 @@ static int vis_goto_k (int sy, size_t *line, size_t *from, size_t *to, size_t *l
     *left = T->left;
     return 1;
   }
-  if (T->sub == 0 && vrows_at(y)) {	/* the rows over the top line */
-    int v = vrows_at(y);
-    if (sy < v) {
-      *lens = vrow_kind(y, sy);
+  if (T->sub == 0 && lens_row_at(y)) {	/* the top line's own lens row */
+    if (sy == 0) {
+      *lens = 1;
       *line = y;
       *from = 0;
       *to = row_at(y)->len;
       *left = 0;
       return 1;
     }
-    sy -= v;
+    sy--;
   }
   n = wrap_segs(y, &st, &sc);
   k = T->sub < n ? T->sub : n - 1;
   while (sy > 0) {
     if (++k >= n) {
       if ((y = line_next(y)) >= T->doc->n) return 0;
-      {	/* the rows over the line */
-        int v = vrows_at(y), vi;
-        for (vi = 0; vi < v; vi++) {
-          sy--;
-          if (sy == 0) {
-            *lens = vrow_kind(y, vi);
-            *line = y;
-            *from = 0;
-            *to = row_at(y)->len;
-            *left = 0;
-            return 1;
-          }
+      if (lens_row_at(y)) {
+        sy--;
+        if (sy == 0) {
+          *lens = 1;
+          *line = y;
+          *from = 0;
+          *to = row_at(y)->len;
+          *left = 0;
+          return 1;
         }
       }
       n = wrap_segs(y, &st, &sc);
@@ -2677,49 +2671,20 @@ static int lens_row_at (size_t y) {
 
 /*
 ** {==================================================================
-** The deleted text, shown (mme.scm.showDeletedLines / showDeletedChars)
+** The deleted text, shown (mme.scm.showDeletedChars)
 ** ===================================================================
 **
-** A change's lines that went (against git's index; a staged one's against
-** HEAD) are rows of their own over the line where they were, red, like
-** the dirty diff peek's but always there and without its buttons: the
-** first DL_SHOW of a long one and "... 12 more deleted lines", a click on
-** which opens the peek. They are rows over a line as a code lens's is
-** (vrows_at), so the cursor, a click and the scrolling go past them. The
-** characters taken out of a changed line are inlay hints instead, struck
-** through where they were (ih_swatches puts them in). Git: Toggle Deleted
-** Text shows or hides both for the session.
+** The characters taken out of a changed line (against git's index) are
+** inlay hints, struck through in red where they were: never in the text,
+** the cursor and a click go past them; ih_swatches puts them in with the
+** others. A change whose lines went shows them in the peek (its square's
+** tooltip has the first one). Git: Toggle Deleted Text shows or hides them
+** for the session.
 */
 
-#define DL_SHOW	3	/* the deleted lines of a change shown; one more is shown rather than "1 more" */
-#define DL_CHARS_LINES	2000	/* the lines of the changes whose characters are looked at, at most */
+#define DC_LINES	2000	/* the lines of the changes whose characters are looked at, at most */
 
-typedef struct DLEnt {
-  size_t y;	/* over this line */
-  int staged;
-  size_t hi;	/* the change: its index (of the staged ones, or not) */
-  size_t o0, n0, nn;	/* its old lines from o0; its new ones (the buffer's; the index's for a staged one) */
-  size_t show, more;	/* the old lines shown, those left out ("... more") */
-} DLEnt;
-
-static struct {
-  const Doc *d;
-  unsigned long edits, qv, gen;
-  int on;
-  DLEnt *v;
-  size_t n, cap;
-  size_t *cum;	/* cum[i]: the rows of v[0 .. i) */
-  int hy[64];	/* the "... more" rows drawn: their screen rows, for a click */
-  size_t hk[64];
-  int nhit;
-} DL;
-
-static int g_del_ovr = -1;	/* Git: Toggle Deleted Text: 1 shown, 0 hidden; -1 as the settings say */
-
-
-static int del_lines_on (void) {
-  return g_del_ovr >= 0 ? g_del_ovr : opt.del_lines;
-}
+static int g_del_ovr = -1;	/* Git: Toggle Deleted Text: 1 shown, 0 hidden; -1 as the setting says */
 
 
 static int del_chars_on (void) {
@@ -2727,211 +2692,43 @@ static int del_chars_on (void) {
 }
 
 
-static int cmp_dlent (const void *a, const void *b) {
-  const DLEnt *x = (const DLEnt *)a, *y = (const DLEnt *)b;
-  if (x->y != y->y) return x->y < y->y ? -1 : 1;
-  return x->staged == y->staged ? 0 : x->staged ? -1 : 1;	/* the staged (older) first */
-}
-
-
-static void dl_add (size_t y, int staged, size_t hi, const QHunk *h) {
-  DLEnt *e;
-  if (h->on == 0) return;
-  if (DL.n == DL.cap) {
-    DL.cap = DL.cap ? DL.cap * 2 : 32;
-    DL.v = (DLEnt *)xrealloc(DL.v, DL.cap * sizeof(DLEnt));
-  }
-  e = &DL.v[DL.n++];
-  e->y = y;
-  e->staged = staged;
-  e->hi = hi;
-  e->o0 = h->o0;
-  e->n0 = h->n0;
-  e->nn = h->nn;
-  e->show = h->on <= DL_SHOW + 1 ? h->on : DL_SHOW;
-  e->more = h->on - e->show;
-}
-
-
-/* the rows made again when the text, its changes or the setting is another */
-static void dl_sync (void) {
-  int on = del_lines_on() && opt.scm_decor && HAS_DOC && !G->diff && !T->page && !T->md && T->real && git_root();
-  size_t n, i;
-  const QHunk *h;
-  const QStaged *s;
-  if (DL.gen == g_draw_gen + 1 && DL.d == (on ? T->doc : NULL) && (!on || DL.edits == T->doc->edits)) return;
-  h = on ? qhunks(&n) : NULL;	/* the quick diff made again first, if it is due */
-  if (on == DL.on && DL.d == (on ? T->doc : NULL) && (!on || (DL.edits == T->doc->edits && DL.qv == quick_version()))) {
-    DL.gen = g_draw_gen + 1;
-    return;
-  }
-  DL.on = on;
-  DL.d = on ? T->doc : NULL;
-  DL.edits = on ? T->doc->edits : 0;
-  DL.qv = quick_version();
-  DL.gen = g_draw_gen + 1;
-  DL.n = 0;
-  if (on) {
-    for (i = 0; h && i < n; i++)	/* the lines went from before the buffer's line n0 */
-      if (h[i].n0 < T->doc->n) dl_add(h[i].n0, 0, i, &h[i]);
-    s = qstaged(&n);
-    for (i = 0; s && i < n; i++) {	/* a staged one: over its first line now; lines that only went: under its line */
-      size_t y = s[i].h.nn ? s[i].y : s[i].y + (s[i].h.n0 ? 1 : 0);
-      if (y < T->doc->n) dl_add(y, 1, i, &s[i].h);
-    }
-    qsort(DL.v, DL.n, sizeof(DLEnt), cmp_dlent);
-  }
-  DL.cum = (size_t *)xrealloc(DL.cum, (DL.n + 1) * sizeof(size_t));
-  DL.cum[0] = 0;
-  for (i = 0; i < DL.n; i++) DL.cum[i + 1] = DL.cum[i] + DL.v[i].show + (DL.v[i].more ? 1 : 0);
-  g_ih_gen++;	/* word wrap and the rows go again */
-}
-
-
-/* the first entry at line y or after it */
-static size_t dl_first (size_t y) {
-  size_t lo = 0, hi = DL.n;
-  while (lo < hi) {
-    size_t mid = (lo + hi) / 2;
-    if (DL.v[mid].y < y) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
-}
-
-
-static size_t dl_rows_in (size_t y0, size_t y1) {
-  dl_sync();
-  if (!DL.on || DL.n == 0) return 0;
-  return DL.cum[dl_first(y1)] - DL.cum[dl_first(y0)];
-}
-
-
-static int vrows_at (size_t y) {
-  return (int)dl_rows_in(y, y + 1) + lens_row_at(y);
-}
-
-
-static size_t vrows_in (size_t y0, size_t y1) {
-  return dl_rows_in(y0, y1) + lens_rows_in(y0, y1);
-}
-
-
-/* row vi of those over line y: a deleted line's (2 + vi) or, last, the code lens's (1) */
-static int vrow_kind (size_t y, int vi) {
-  return (size_t)vi < dl_rows_in(y, y + 1) ? 2 + vi : 1;
-}
-
-
-/* row k of the deleted lines over line y: its entry, which of its lines (*more: the "... more" row) */
-static const DLEnt *dl_row (size_t y, int k, size_t *i, int *more) {
-  size_t e = dl_first(y);
-  for (; e < DL.n && DL.v[e].y == y; e++) {
-    size_t rows = DL.v[e].show + (DL.v[e].more ? 1 : 0);
-    if ((size_t)k < rows) {
-      *more = (size_t)k == DL.v[e].show;
-      *i = (size_t)k;
-      return &DL.v[e];
-    }
-    k -= (int)rows;
-  }
-  return NULL;
-}
-
-
-/* old line i of a change, or new line i (the buffer's; the index's for a staged one) */
-static const char *dl_line (const DLEnt *e, int new_side, size_t i, size_t *len) {
-  const char *s;
-  *len = 0;
-  if (!new_side) s = e->staged ? quick_head(T->doc, T->real, e->o0 + i, len) : quick_old(T->doc, T->real, e->o0 + i, len);
-  else if (e->staged) s = quick_old(T->doc, T->real, e->n0 + i, len);
-  else if (e->n0 + i < T->doc->n) {
-    *len = row_at(e->n0 + i)->len;
-    s = row_at(e->n0 + i)->s;
-  }
-  else s = NULL;
-  return s ? s : "";
-}
-
-
-/*
-** Row k of the deleted lines over line y at screen row sy: "┊" in the
-** gutter, "- " and the line, red (a staged change's fainter), the
-** characters that changed in it brighter; or "... 12 more deleted lines".
-*/
-static void draw_del_row (int sy, size_t y, int k, int gw) {
-  size_t i, len, la = 0, rr[2 * 16], nr = 0, q, b = 0, left = E.wrap ? 0 : T->left;
-  int more, tw = text_cols(), c, x = L.ed_x + gw;
-  const DLEnt *e = dl_row(y, k, &i, &more);
-  const char *s;
-  uint32_t bg, hi, fg = ui_color(C_EDITOR_FG), ed = ui_color(C_EDITOR_BG);
-  scr_fill(L.ed_x, sy, gw, S_GUTTER);
-  if (e == NULL) return;
-  bg = e->staged ? blend(ui_color(C_DIFF_DEL), ed, 55) : ui_color(C_DIFF_DEL);
-  hi = e->staged ? blend(ui_color(C_DIFF_DEL_HI), ed, 55) : ui_color(C_DIFF_DEL_HI);
-  scr_put_rgb(L.ed_x + gw - 1, sy, 0x250A, blend(0xF85149, ed, e->staged ? 50 : 85), ed, 0);	/* ┊ in QD_DEL */
-  for (c = 0; c < tw; c++) scr_put_rgb(x + c, sy, ' ', fg, more ? ed : bg, 0);
-  if (more) {
-    char t[96];
-    size_t hit = (size_t)(e - DL.v);
-    snprintf(t, sizeof(t), "\xE2\x80\xA6 %lu more deleted line%s (click to show)", (unsigned long)e->more, e->more == 1 ? "" : "s");
-    scr_putsw(x + 2, sy, tw - 2, t, S_TEXT);
-    for (c = 0; c < (int)str_cols(t) && c + 2 < tw; c++) scr_set_fg(x + 2 + c, sy, ui_color(C_DIM));
-    if (DL.nhit < 64) {
-      DL.hy[DL.nhit] = sy;
-      DL.hk[DL.nhit++] = hit;
-    }
-    return;
-  }
-  s = dl_line(e, 0, i, &len);
-  if (i < e->nn) {	/* the line it became: what changed in it, brighter */
-    size_t lb;
-    const char *nb = dl_line(e, 1, i, &lb);
-    chars_diff(s, len, nb, lb, rr, &nr, NULL, NULL, 16, NULL);
-  }
-  (void)la;
-  scr_put_rgb(x, sy, '-', blend(0xF85149, bg, 90), bg, 0);
-  {	/* the text, its tabs to their stops, from column left on */
-    size_t col = 0, n;
-    while (b < len) {
-      uint32_t cp = utf8_decode(s + b, len - b, &n);
-      int w = cp == '\t' ? TABW - (int)(col % (size_t)TABW) : uc_width(cp), j, lit = 0;
-      if (w < 1) w = 1;
-      for (q = 0; q < nr; q++)
-        if (b >= rr[2 * q] && b < rr[2 * q + 1]) lit = 1;
-      for (j = 0; j < w; j++) {
-        size_t cc = col + (size_t)j;
-        if (cc >= left && (int)(cc - left) + 2 < tw)
-          scr_put_rgb(x + 2 + (int)(cc - left), sy, cp == '\t' || j > 0 ? ' ' : cp, fg, lit ? hi : bg, 0);
-      }
-      col += (size_t)w;
-      b += n ? n : 1;
-    }
-  }
-}
-
-
 /* the characters taken out of the changed lines not staged, as struck-through hints where they were */
 static void dc_hints (void) {
-  size_t n, i, k, looked = 0;
-  const QHunk *h;
-  int lines = del_lines_on();
+  size_t n, i, hi, y0;
+  QHunk one;
+  int staged;
   g_dc_n = 0;
-  if (!del_chars_on() || !opt.scm_decor || !HAS_DOC || G->diff || T->page || T->md || !T->real || IH.d != T->doc) return;
-  h = qhunks(&n);
-  for (k = 0; h && k < n; k++)
-    for (i = 0; i < h[k].on && i < h[k].nn && looked < DL_CHARS_LINES; i++, looked++) {
-      size_t la, hk[4 * 16], nh, j, y = h[k].n0 + i;
-      const char *a = quick_old(T->doc, T->real, h[k].o0 + i, &la);
+  if (!del_chars_on() || !opt.scm_decor || !HAS_DOC || G->diff || T->page || T->md || !T->real || IH.d != T->doc ||
+      !dc_open(&staged, &hi))
+    return;	/* only the change whose peek is open: the struck-through text is not in the way of the typing */
+  if (staged) {	/* HEAD's lines, on the index's (where they are now) */
+    const QStaged *sv = qstaged(&n);
+    if (sv == NULL || hi >= n) return;
+    one = sv[hi].h;
+    y0 = sv[hi].y;
+  }
+  else {
+    const QHunk *h = qhunks(&n);
+    if (h == NULL || hi >= n) return;
+    one = h[hi];
+    y0 = one.n0;
+  }
+  {
+    for (i = 0; i < one.on && i < one.nn && i < DC_LINES; i++) {
+      size_t la, lx, hk[4 * 16], nh, j, y = y0 + i;
+      const char *a = staged ? quick_head(T->doc, T->real, one.o0 + i, &la) : quick_old(T->doc, T->real, one.o0 + i, &la);
       const Row *r;
       if (a == NULL || y >= T->doc->n) continue;
       r = row_at(y);
+      if (staged) {	/* the index's line as the buffer has it, else it changed again since: the peek has that */
+        const char *x = quick_old(T->doc, T->real, one.n0 + i, &lx);
+        if (x == NULL || lx != r->len || memcmp(x, r->s, lx) != 0) continue;
+      }
       chars_hunks(a, la, r->s, r->len, hk, &nh, 16);
       for (j = 0; j < nh; j++) {
         Buf lb;
         size_t q, c = 0;
         if (hk[4 * j + 1] <= hk[4 * j]) continue;	/* only put in */
-        if (lines && hk[4 * j + 3] > hk[4 * j + 2]) continue;	/* the old line shows over it: only what just went */
         buf_init(&lb);
         for (q = hk[4 * j]; q < hk[4 * j + 1] && c < 60; q++) {
           if (((unsigned char)a[q] & 0xC0) != 0x80) c++;
@@ -2949,6 +2746,7 @@ static void dc_hints (void) {
         g_dc_n++;
       }
     }
+  }
 }
 
 
@@ -2956,16 +2754,22 @@ static void dc_hints (void) {
 static void dc_sync (void) {
   static const Doc *d;
   static unsigned long edits, qv;
-  static int was = -1;
-  int on = del_chars_on() * 2 + del_lines_on();
-  size_t n;
+  static int was = -1, was_st = -1;
+  static size_t was_hi = (size_t)-1;
+  int st = -1, on = del_chars_on();
+  size_t n, hi = (size_t)-1;
   if (HAS_DOC && T->real && !G->diff && !T->page) qhunks(&n);	/* made again first, if due */
-  if (HAS_DOC && d == T->doc && edits == T->doc->edits && qv == quick_version() && was == on) return;
+  if (!dc_open(&st, &hi)) st = -1;	/* the peek opened, moved to another change, closed */
+  if (HAS_DOC && d == T->doc && edits == T->doc->edits && qv == quick_version() && was == on && was_st == st &&
+      was_hi == hi)
+    return;
   if (!HAS_DOC) return;
   d = T->doc;
   edits = T->doc->edits;
   qv = quick_version();
   was = on;
+  was_st = st;
+  was_hi = hi;
   if (!del_chars_on() && g_dc_n == 0) return;
   if (IH.d != T->doc) {	/* another file's hints go: these are this one's */
     size_t i;
@@ -2979,7 +2783,7 @@ static void dc_sync (void) {
 
 /* Git: Toggle Deleted Text */
 static void del_toggle (void) {
-  g_del_ovr = (del_lines_on() || del_chars_on()) ? 0 : 1;
+  g_del_ovr = del_chars_on() ? 0 : 1;
   toast(0, g_del_ovr ? "Showing the deleted text of the changes" : "Hiding the deleted text of the changes");
   scr_redraw();
 }
@@ -3115,18 +2919,18 @@ static int vis_row (Pos p) {
   if (T->nfold && hidden_in(p.y) != (size_t)-1) return -1;
   if (p.y < T->top) return -1;
   if (!E.wrap && T->nfold == 0) {
-    size_t lr = vrows_in(T->top, p.y + 1);	/* the rows over the lines above it, and its own */
+    size_t lr = lens_rows_in(T->top, p.y + 1);	/* the lens rows over the lines above it, and its own */
     rows = p.y - T->top + lr + shift;
     return rows < (size_t)L.text_h ? (int)rows : -1;
   }
   if (!E.wrap) {
-    for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y)) rows += 1 + (size_t)vrows_at(y);
-    rows += (size_t)vrows_at(p.y) + shift;
+    for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y)) rows += 1 + (size_t)lens_row_at(y);
+    rows += (size_t)lens_row_at(p.y) + shift;
     return (y == p.y && rows < (size_t)L.text_h) ? (int)rows : -1;
   }
   for (y = T->top; y < p.y && rows < (size_t)L.text_h; y = line_next(y))
-    rows += wrap_segs(y, &st, NULL) + (size_t)(y == T->top ? (T->sub == 0 ? vrows_at(y) : 0) : vrows_at(y));
-  if (p.y != T->top || T->sub == 0) rows += (size_t)vrows_at(p.y);
+    rows += wrap_segs(y, &st, NULL) + (size_t)(y == T->top ? (T->sub == 0 && lens_row_at(y)) : lens_row_at(y));
+  if (lens_row_at(p.y) && (p.y != T->top || T->sub == 0)) rows++;
   rows += seg_of(p.y, p.x);
   if (rows < T->sub) return -1;
   rows -= T->sub;
@@ -5740,17 +5544,12 @@ static void draw_group (int other) {
       int lit = !other && cursor_brackets(&ba, &bb);
       if (!other) conflict_reset();	/* the conflicts' links, drawn again */
       LN.nhit = 0;
-      DL.nhit = 0;
       NE.row = -1;	/* draw_row sets it when the next edit's line is drawn */
       for (sy = 0; sy < L.text_h; sy++) {
         size_t y, from, to, left;
         int lens;
         if (vb_at(sy)) continue;	/* a peek's own row: it draws there */
         if (!vis_goto_k(sy, &y, &from, &to, &left, &lens)) break;
-        if (lens >= 2) {	/* a deleted line's row over the line (mme.scm.showDeletedLines) */
-          draw_del_row(L.text_y + sy, y, lens - 2, gw);
-          continue;
-        }
         if (lens) {	/* editor.codeLens: its own row over the line */
           draw_lens_row(L.text_y + sy, y, gw);
           continue;
@@ -17811,6 +17610,15 @@ static struct {
 } DP;
 
 
+/* the change whose peek is open (the deleted characters show only on it) */
+static int dc_open (int *staged, size_t *hi) {
+  if (!DP.open) return 0;
+  *staged = DP.staged;
+  *hi = DP.hi;
+  return 1;
+}
+
+
 static const QHunk *qhunks (size_t *n) {
   *n = 0;
   if (!HAS_DOC || G->diff || T->page || T->md || T->real == NULL) return NULL;
@@ -18008,34 +17816,40 @@ static const char *change_line (int staged, int new_side, size_t i, size_t *len)
 }
 
 
-/* the counts with the characters the change took after them: "+1 -1 · 2 chars" (its lines one with another,
-   in order, those left over whole); kept until the buffer or the change is another */
+/* the counts with the characters the change took out and put in after them: "+1 -1 lines · +2 -2 chars" (its
+   lines one with another, in order, those left over whole); kept until the buffer or the change is another */
 static void change_count_chars (int staged, const QHunk *h, char *out, size_t n) {
   static const Doc *d;
   static unsigned long edits;
   static QHunk was;
   static int was_staged = -1;
-  static size_t chars;
+  static size_t add, del;
   static int known;
-  char c[40];
+  char c[48];
   change_count(h, out, n);
+  strncat(out, h->nn + h->on == 1 ? " line" : " lines", n - strlen(out) - 1);
   if (d != T->doc || edits != T->doc->edits || was_staged != staged || memcmp(&was, h, sizeof(was)) != 0) {
     size_t i, la, lb;
     d = T->doc;
     edits = T->doc->edits;
     was = *h;
     was_staged = staged;
-    chars = 0;
+    add = del = 0;
     known = h->on <= CHARS_MAX && h->nn <= CHARS_MAX;
     for (i = 0; known && (i < h->on || i < h->nn); i++) {
       const char *a = i < h->on ? change_line(staged, 0, h->o0 + i, &la) : NULL;
       const char *b = i < h->nn ? change_line(staged, 1, h->n0 + i, &lb) : NULL;
-      if (a && b) chars += chars_changed(a, la, b, lb);
-      else if (a) chars += utf8_count(a, la);
-      else chars += utf8_count(b, lb);
+      if (a && b) {
+        size_t dd, aa;
+        chars_split(a, la, b, lb, &dd, &aa);
+        del += dd;
+        add += aa;
+      }
+      else if (a) del += utf8_count(a, la);
+      else add += utf8_count(b, lb);
     }
   }
-  chars_text(chars, known, c, sizeof(c));
+  chars_text(add, del, known, c, sizeof(c));
   strncat(out, c, n - strlen(out) - 1);
 }
 
@@ -18060,9 +17874,29 @@ static int qc_hover (size_t *lo, size_t *hi, int *staged) {
         ok = 1;
         scr_zone_to_ui(g, tx, ty, 0, &ux, &uy);
         if (!(DP.open && DP.staged == st && DP.hi == (size_t)at)) {	/* its peek is open: it would cover the title */
-          char tip[120], c[80];
+          char tip[200], c[80], first[64] = "";
           change_count_chars(st, &qh, c, sizeof(c));
-          snprintf(tip, sizeof(tip), "%s (Alt+F3) \xC2\xB7 %s", st ? "Show Staged Change" : "Show Change", c);
+          if (qh.nn == 0 && qh.on > 0) {	/* lines that went (a red square): the first of them, to be seen without a click */
+            size_t len, i = 0, k = 0, cn = 0;
+            const char *s = change_line(st, 0, qh.o0, &len);
+            while (i < len && (s[i] == ' ' || s[i] == '\t')) i++;
+            first[k++] = ' ';
+            first[k++] = '\xC2';
+            first[k++] = '\xB7';
+            first[k++] = ' ';
+            for (; i < len && k + 4 < sizeof(first) && cn < 40; i++) {
+              if (((unsigned char)s[i] & 0xC0) != 0x80) cn++;
+              first[k++] = s[i] == '\t' ? ' ' : s[i];
+            }
+            while (i < len && ((unsigned char)s[i] & 0xC0) == 0x80 && k + 4 < sizeof(first)) first[k++] = s[i++];
+            if (i < len) {
+              memcpy(first + k, "\xE2\x80\xA6", 3);	/* ... */
+              k += 3;
+            }
+            first[k] = '\0';
+            if (k == 4) first[0] = '\0';	/* a blank line */
+          }
+          snprintf(tip, sizeof(tip), "%s (Alt+F3) \xC2\xB7 %s%s", st ? "Show Staged Change" : "Show Change", c, first);
           tip_want(ux + 1, uy + 1, tip);
         }
       }
@@ -24118,15 +23952,6 @@ static void on_mouse (void) {
   if (press && SG.row >= 0 && m->y == SG.row && SG.label && (m->x == SG.up_x || m->x == SG.down_x)) {
     sig_key(m->x == SG.up_x ? K_UP : K_DOWN);	/* the hints' arrows */
     return;
-  }
-  if (press && HAS_DOC && !G->diff && DL.on && DL.d == T->doc) {	/* "... 12 more deleted lines": the peek */
-    int k;
-    for (k = 0; k < DL.nhit; k++)
-      if (zm.y == DL.hy[k] && DL.hk[k] < DL.n) {
-        hover_close();
-        dirty_show(DL.v[DL.hk[k]].staged, (long)DL.v[DL.hk[k]].hi);
-        return;
-      }
   }
   if (press && HAS_DOC && !G->diff && LN.d == T->doc) {	/* a code lens: its command */
     int k;
