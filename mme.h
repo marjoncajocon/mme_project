@@ -155,6 +155,7 @@ typedef struct Opt {
   int md_scroll_editor;	/* markdown.preview.scrollEditorWithPreview */
   int merge_editor;	/* git.mergeEditor: a conflicted file opens in the merge editor */
   int scm_counts;	/* mme.scm.showLineCounts: Source Control's "+12 -3" */
+  int change_counts;	/* mme.scm.showChangeCounts: each change's "+3 -1" at the end of its first line */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
   int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */

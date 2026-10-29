@@ -338,6 +338,7 @@ static int mm_cols (int ed_w);
 static void draw_peek (void);
 static void view_blocks_update (int other);
 static void draw_quick (int sy, size_t y, int gw, int is_cur);
+static void draw_change_count (int sy, size_t y, int gw, int is_cur);
 static void draw_dirty_peek (void);
 static void conflict_row (int sy, size_t y, int gw, size_t from, int other);
 static int dirty_key (int k);
@@ -3304,6 +3305,7 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     cc = vcol(r, y, c->cur.x);
     if (cc >= left && cc < right) scr_restyle(x0 + gw + (int)(cc - left), sy, 1, S_MCURSOR);
   }
+  if (from == 0) draw_change_count(sy, y, gw, is_cur);	/* mme.scm.showChangeCounts: "+3 -1" at the end */
 }
 
 
@@ -17620,6 +17622,14 @@ static int qc_column (int x, size_t y) {
 }
 
 
+/* a change's lines added and deleted: "+3 -1", "+2", "-5" */
+static void change_count (const QHunk *h, char *out, size_t n) {
+  if (h->nn && h->on) snprintf(out, n, "+%lu -%lu", (unsigned long)h->nn, (unsigned long)h->on);
+  else if (h->nn) snprintf(out, n, "+%lu", (unsigned long)h->nn);
+  else snprintf(out, n, "-%lu", (unsigned long)h->on);
+}
+
+
 /* the change under the mouse, on its bar or square: its lines lo .. hi, its kind; worked out once a drawing */
 static int qc_hover (size_t *lo, size_t *hi, int *staged) {
   static unsigned long gen;
@@ -17639,8 +17649,12 @@ static int qc_hover (size_t *lo, size_t *hi, int *staged) {
           qc_column(tx, y) && qc_pick(y, &st, &at) && qc_get(st, (size_t)at, &l, &h, &qh)) {
         ok = 1;
         scr_zone_to_ui(g, tx, ty, 0, &ux, &uy);
-        if (!(DP.open && DP.staged == st && DP.hi == (size_t)at))	/* its peek is open: it would cover the title */
-          tip_want(ux + 1, uy + 1, st ? "Show Staged Change (Alt+F3)" : "Show Change (Alt+F3)");
+        if (!(DP.open && DP.staged == st && DP.hi == (size_t)at)) {	/* its peek is open: it would cover the title */
+          char tip[96], c[48];
+          change_count(&qh, c, sizeof(c));
+          snprintf(tip, sizeof(tip), "%s (Alt+F3) \xC2\xB7 %s", st ? "Show Staged Change" : "Show Change", c);
+          tip_want(ux + 1, uy + 1, tip);
+        }
       }
     }
   }
@@ -17676,6 +17690,37 @@ static void draw_quick (int sy, size_t y, int gw, int is_cur) {
     if (st) fg = blend(fg, bg, 55);
   }
   scr_put_rgb(L.ed_x + gw - 1, sy, cp, fg, bg, 0);
+}
+
+
+/*
+** At the end of a change's first line (the one with its square), right
+** against the text's edge: its lines added and deleted, "+3 -1", dim, in
+** the gutter's green and red; a staged change's fainter. Only where the
+** row is empty there: the code (and what is after it) wins.
+*/
+static void draw_change_count (int sy, size_t y, int gw, int is_cur) {
+  int st, i, cw, x, ok = 1;
+  long at;
+  size_t line, last;
+  QHunk h;
+  char c[48], *mid;
+  uint32_t bg, fa, fd;
+  if (!opt.change_counts || !opt.scm_decor || T->real == NULL || T->page || gw < 3) return;
+  if (!qc_pick(y, &st, &at) || !qc_get(st, (size_t)at, &line, &last, &h) || line != y) return;
+  change_count(&h, c, sizeof(c));
+  cw = (int)strlen(c);
+  x = L.ed_x + gw + text_cols() - cw - 1;
+  if (x < L.ed_x + gw + 2) return;
+  for (i = -2; i < cw && ok; i++)	/* two cells free before it */
+    if (scr_ch(x + i, sy) != ' ') ok = 0;
+  if (!ok) return;
+  bg = ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG);
+  fa = blend(QD_ADD, bg, st ? 45 : 75);
+  fd = blend(QD_DEL, bg, st ? 45 : 75);
+  mid = strchr(c, ' ');
+  for (i = 0; c[i]; i++)
+    scr_put_rgb(x + i, sy, (uint32_t)(unsigned char)c[i], (c[0] == '-' || (mid && c + i > mid)) ? fd : fa, bg, 0);
 }
 
 
@@ -17827,8 +17872,12 @@ static void draw_dirty_peek (void) {
   if (DP.top + (size_t)(ph - 2) > total) DP.top = total > (size_t)(ph - 2) ? total - (size_t)(ph - 2) : 0;
   scr_fill(DP.x, y0, DP.w, S_BOX);
   rank = qc_rank(DP.staged, DP.hi, &all);
-  snprintf(title, sizeof(title), "%s \xE2\x80\x94 %lu of %lu change%s%s", path_basename(T->real),
-           (unsigned long)rank, (unsigned long)all, all == 1 ? "" : "s", DP.staged ? " (staged)" : "");
+  {
+    char c[48];
+    change_count(h, c, sizeof(c));
+    snprintf(title, sizeof(title), "%s \xE2\x80\x94 %lu of %lu change%s%s \xC2\xB7 %s", path_basename(T->real),
+             (unsigned long)rank, (unsigned long)all, all == 1 ? "" : "s", DP.staged ? " (staged)" : "", c);
+  }
   scr_putsw(DP.x + 2, y0, DP.w - 14, title, S_BOX_TITLE);
   DP.close_x = DP.x + DP.w - 2;
   DP.next_x = DP.close_x - 2;

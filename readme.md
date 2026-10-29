@@ -1459,7 +1459,12 @@ With no file open the editor shows the keys to start with.
   order of their lines), opens the dirty diff peek under the change: what
   it was (red) and is (green), "n of m changes", with Stage Change, Revert
   Change, previous / next and close; a staged change's peek has Unstage
-  Change. The change under the mouse lights up, its bar wider. The
+  Change. The change under the mouse lights up, its bar wider. Its first
+  line ends with its lines added and deleted, dim in green and red against
+  the text's right edge (`+3 -1`, `-5` at a red square; staged fainter),
+  only where the line leaves room; they follow the typing. The square's
+  tooltip and the peek's title say them too; the diff editor has them at
+  the end of each block's first row (mme.scm.showChangeCounts, on). The
   scrollbar shows the changes as squares too (■, staged □; over every mark
   but an error), the minimap a square where each starts; a click on one
   (on the scrollbar's thumb too, on the minimap's slider at its left edge)

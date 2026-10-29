@@ -260,6 +260,8 @@ static const Setting set[] = {
    "Controls diff decorations in the editor."},
   {"mme.scm.showLineCounts", C_SCM, ST_BOOL, 0, "true", NULL,
    "Show the lines each change added and deleted (+12 -3) in Source Control: its files, the groups' titles and the commits of the graph."},
+  {"mme.scm.showChangeCounts", C_SCM, ST_BOOL, 0, "true", NULL,
+   "In the editor (and the diff editor): each change's lines added and deleted (+3 -1) at the end of its first line, by its square."},
   {"mme.extensions.useVSCodeExtensions", C_EXT, ST_BOOL, 0, "true", NULL,
    "Use the color themes, snippets and languages of the extensions VS Code has installed (~/.vscode/extensions); they are only read, never changed."},
   {"files.autoSave", C_FILES, ST_ENUM, 1, "\"off\"", "off|afterDelay|onFocusChange|onWindowChange",

@@ -3934,6 +3934,54 @@ static unsigned row_kinds (size_t k) {
 }
 
 
+/*
+** At the end of a block's first row (the side with a line there: the
+** modified one, else the original): its lines added and deleted, "+3 -1",
+** as the editor shows them by its squares; only where the row is empty.
+*/
+static void block_count (int x, int y, int w, size_t k, int cur) {
+  size_t n = nrows(), a = 0, d = 0, j;
+  char t[48], *mid;
+  int tw, cx, i, kind = ' ';
+  uint32_t bg;
+  if (!opt.change_counts || D.kind == DK_OTHER) return;
+  for (j = k; j < n && is_change(j); j++) {
+    unsigned m = row_kinds(j);
+    a += (m & 1) != 0;
+    d += (m & 2) != 0;
+  }
+  if (a && d) snprintf(t, sizeof(t), "+%lu -%lu", (unsigned long)a, (unsigned long)d);
+  else if (a) snprintf(t, sizeof(t), "+%lu", (unsigned long)a);
+  else if (d) snprintf(t, sizeof(t), "-%lu", (unsigned long)d);
+  else return;
+  if (D.split_now) {	/* the pane it goes in */
+    const SRow *r = &D.row[k];
+    if (r->r >= 0) {
+      x += D.hw + 1;
+      w -= D.hw + 1;
+      kind = D.line[r->r].kind;
+    }
+    else {
+      w = D.hw;
+      if (r->l >= 0) kind = D.line[r->l].kind;
+    }
+  }
+  else if (k < D.nline) kind = D.line[k].kind;
+  tw = (int)strlen(t);
+  cx = x + w - tw - 1;
+  if (cx < x + 8) return;
+  for (i = -2; i < tw; i++)	/* two cells free before it */
+    if (scr_ch(cx + i, y) != ' ') return;
+  bg = ui_color(kind == '+' ? C_DIFF_ADD : kind == '-' ? C_DIFF_DEL : cur ? C_LINE_BG : C_EDITOR_BG);
+  mid = strchr(t, ' ');
+  for (i = 0; t[i]; i++) {	/* on a line's green or red: lighter, to be read on it */
+    int del = t[0] == '-' || (mid && t + i > mid);
+    uint32_t fg = kind == ' ' ? (del ? SB_DEL : SB_ADD) : del ? 0xFFA198 : 0x7EE787;
+    scr_put_rgb(cx + i, y, (uint32_t)(unsigned char)t[i], fg, bg, 0);
+  }
+}
+
+
 /* the vertical scrollbar's thumb in h rows: its size, and where it is */
 static int vthumb (int h, int *pos) {
   size_t lt = last_top(), i0 = vpos(D.top);
@@ -4119,6 +4167,7 @@ void diff_draw (int x, int y, int w, int h, int wrap) {
           }
         }
       }
+      if (seg == 0 && block_start(k)) block_count(x, sy, w, k, cur);	/* mme.scm.showChangeCounts */
     }
   }
   if (D.mmw > 0) draw_dmap(x + w, y, h, i0);
