@@ -975,21 +975,97 @@ static void count_put (void *ud, const char *rel, long a, long d) {
 }
 
 
-/* the lines of an untracked file; -1: binary, -2: too big to read */
-static long file_lines (const char *path) {
-  static char buf[65536];
+#define UNTRACKED_BYTES	(4u << 20)	/* a bigger untracked file's lines are not counted */
+#define LINES_BUF	65536
+
+/* the lines of an untracked file (read through buf, LINES_BUF bytes); -1: binary, -2: too big to read */
+static long file_lines (const char *path, char *buf) {
   unsigned long long off = 0;
   long n, lines = 0;
   char last = '\n';
-  while ((n = fs_read_at(path, off, buf, sizeof(buf))) > 0) {
+  while ((n = fs_read_at(path, off, buf, LINES_BUF)) > 0) {
     long i;
     if (off == 0 && memchr(buf, '\0', (size_t)(n < 8000 ? n : 8000))) return -1;	/* git's test of a binary */
     for (i = 0; i < n; i++) lines += buf[i] == '\n';
     last = buf[n - 1];
     off += (unsigned long long)n;
-    if (off > 4u << 20) return -2;
+    if (off > UNTRACKED_BYTES) return -2;
   }
   return lines + (last != '\n');
+}
+
+
+/*
+** The untracked files' lines, kept by name with their size and time: a
+** refresh reads only those that changed. The worker counts them (it has
+** looked at them for its fingerprint anyway) and its answers come in here
+** before the main thread looks; what it did not count, the main thread
+** reads, a file not bigger than UNTRACKED_BYTES.
+*/
+typedef struct ULines {
+  char *rel;
+  long long size, mtime;
+  long lines;
+} ULines;
+
+static ULines *g_ul;	/* by rel */
+static size_t g_nul, g_capul;
+static ULines *g_said_ul;	/* the worker's, while its refresh is read */
+static size_t g_nsaid_ul;
+
+
+static int cmp_str (const void *a, const void *b) {
+  return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+
+static int cmp_ul (const void *a, const void *b) {
+  return strcmp(((const ULines *)a)->rel, ((const ULines *)b)->rel);
+}
+
+
+static ULines *ul_find (const char *rel) {
+  ULines key;
+  key.rel = (char *)rel;
+  return g_nul ? (ULines *)bsearch(&key, g_ul, g_nul, sizeof(ULines), cmp_ul) : NULL;
+}
+
+
+static void ul_set (const char *rel, long long size, long long mtime, long lines) {
+  ULines *e = ul_find(rel);
+  size_t lo = 0, hi = g_nul;
+  if (e == NULL) {	/* in its place by name */
+    while (lo < hi) {
+      size_t mid = (lo + hi) / 2;
+      if (strcmp(g_ul[mid].rel, rel) < 0) lo = mid + 1;
+      else hi = mid;
+    }
+    if (g_nul == g_capul) {
+      g_capul = g_capul ? g_capul * 2 : 64;
+      g_ul = (ULines *)xrealloc(g_ul, g_capul * sizeof(ULines));
+    }
+    memmove(g_ul + lo + 1, g_ul + lo, (g_nul - lo) * sizeof(ULines));
+    g_nul++;
+    e = &g_ul[lo];
+    e->rel = xstrdup(rel);
+  }
+  e->size = size;
+  e->mtime = mtime;
+  e->lines = lines;
+}
+
+
+/* an untracked file's lines, read again only when its size or time is another; -2: not known */
+static long untracked_lines (const char *rel, const char *path) {
+  static char buf[LINES_BUF];
+  OsStat st;
+  ULines *e;
+  long n;
+  if (os_stat(path, &st) != 0 || !st.exists) return -2;
+  if ((e = ul_find(rel)) != NULL && e->size == st.size && e->mtime == (long long)st.mtime) return e->lines;
+  n = (unsigned long long)st.size > UNTRACKED_BYTES ? -2 : file_lines(path, buf);
+  ul_set(rel, st.size, (long long)st.mtime, n);
+  return n;
 }
 
 
@@ -1008,10 +1084,12 @@ static void counts_read (void) {
     head |= k == 2 && rc == 0;
     buf_free(&b);
   }
-  for (i = 0; i < g_nch; i++) {
+  for (i = 0; i < g_nsaid_ul; i++)	/* what the worker counted */
+    ul_set(g_said_ul[i].rel, g_said_ul[i].size, g_said_ul[i].mtime, g_said_ul[i].lines);
+  for (i = 0; i < g_nch; i++) {	/* in the order of their names, as the worker took them */
     Change *c = &g_ch[i];
     if (c->x == '?' && left > 0) {
-      long n = file_lines(c->path);
+      long n = untracked_lines(c->rel, c->path);
       left--;
       if (n >= -1) {
         c->add[1] = c->add[2] = n;
@@ -1027,11 +1105,44 @@ static void counts_read (void) {
 
 
 /* the lines path's change added and deleted since HEAD (a folder: the sum of its files); 0: not changed */
+static int line_counts_now (const char *path, int dir, long *add, long *del);
+
+
 int git_line_counts (const char *path, int dir, long *add, long *del) {
+  static struct {
+    char *path;
+    unsigned gen;
+    int dir, any;
+    long add, del;
+  } lc[512];
+  unsigned long long h = 1469598103934665603ull;
+  const char *q;
+  size_t k;
+  *add = *del = 0;
+  if (!opt.scm_counts) return 0;
+  for (q = path; *q; q++) {	/* by the name as the file system compares it: case and separators aside */
+    unsigned char ch = (unsigned char)(*q == '\\' ? '/' : *q);
+    if (ch >= 'A' && ch <= 'Z') ch = (unsigned char)(ch - 'A' + 'a');
+    h = (h ^ ch) * 1099511628211ull;
+  }
+  k = (size_t)((h ^ (unsigned long long)dir) % 512);
+  if (!(lc[k].path && lc[k].gen == g_status_gen && lc[k].dir == dir && m_fncmp(lc[k].path, path) == 0)) {
+    free(lc[k].path);
+    lc[k].path = xstrdup(path);
+    lc[k].gen = g_status_gen;
+    lc[k].dir = dir;
+    lc[k].any = line_counts_now(path, dir, &lc[k].add, &lc[k].del);
+  }
+  *add = lc[k].add;
+  *del = lc[k].del;
+  return lc[k].any;
+}
+
+
+static int line_counts_now (const char *path, int dir, long *add, long *del) {
   size_t i, n = strlen(path);
   int any = 0;
   *add = *del = 0;
-  if (!opt.scm_counts) return 0;
   for (i = 0; i < g_nch; i++) {
     const Change *c = &g_ch[i];
     if (is_merge(c)) continue;
@@ -1086,7 +1197,8 @@ int git_counts (int x, int y, long add, long del, int st) {
 
 #define CD_MAX	512	/* the middle's characters, of each line, at most for the LCS */
 #define CD_RANGES	16	/* the ranges kept of a side; more: the last one goes to the end */
-#define CD_SLOTS	256
+#define CD_SLOTS	1024	/* the answers kept: a change's lines and the lines drawn do not push each other out */
+#define CD_LINE_MAX	10000	/* a longer line (a minified file's) is changed as a whole: not even hashed */
 
 typedef struct CDiff {
   unsigned long long key;
@@ -1148,7 +1260,20 @@ static int cd_lcs (const char *a, size_t na, const char *b, size_t nb, size_t p,
     cb[n++] = utf8_decode(b + i, nb - i, &len);
   }
   ob[n] = nb;
-  if ((t = (unsigned short *)calloc((m + 1) * (n + 1), sizeof(unsigned short))) == NULL) return 0;
+  {	/* one table for all (grown, never given back): its last row and column are the zeros the walk starts from */
+    static unsigned short *tab;
+    static size_t tcap;
+    size_t need = (m + 1) * (n + 1);
+    if (need > tcap) {
+      unsigned short *g = (unsigned short *)realloc(tab, need * sizeof(unsigned short));
+      if (g == NULL) return 0;
+      tab = g;
+      tcap = need;
+    }
+    t = tab;
+    for (j = 0; j <= n; j++) t[m * (n + 1) + j] = 0;
+    for (i = 0; i <= m; i++) t[i * (n + 1) + n] = 0;
+  }
 #define T_(x, y)	t[(x) * (n + 1) + (y)]
   for (i = m; i-- > 0;)
     for (j = n; j-- > 0;)
@@ -1165,7 +1290,6 @@ static int cd_lcs (const char *a, size_t na, const char *b, size_t nb, size_t p,
     else j++;
   }
 #undef T_
-  free(t);
   for (k = 0; k < nm;) {	/* a lone common character between two changes: changed too */
     size_t e = k + 1, x0 = mi[k], y0 = mj[k], x1, y1;
     while (e < nm && mi[e] == mi[e - 1] + 1 && mj[e] == mj[e - 1] + 1) e++;
@@ -1217,6 +1341,18 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
   unsigned long long h = 1469598103934665603ull;
   size_t i, p = 0, s = 0;
   CDiff *c;
+  if (na > CD_LINE_MAX || nb > CD_LINE_MAX) {	/* a minified line: all of it changed, in bytes, as it is drawn often */
+    static CDiff big;
+    memset(&big, 0, sizeof(big));
+    c = cd_last = &big;
+    if (na) cd_range(c->ra, &c->nra, 0, na);
+    if (nb) cd_range(c->rb, &c->nrb, 0, nb);
+    cd_hunk(c, 0, na, 0, nb);
+    c->del = na;
+    c->add = nb;
+    c->n = na > nb ? na : nb;
+    goto answer;
+  }
   for (i = 0; i < na; i++) h = (h ^ (unsigned char)a[i]) * 1099511628211ull;	/* FNV-1a, both lines */
   h = (h ^ 0x1F) * 1099511628211ull;
   for (i = 0; i < nb; i++) h = (h ^ (unsigned char)b[i]) * 1099511628211ull;
@@ -1252,6 +1388,7 @@ size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *r
       c->n = c->del + c->add;
     }
   }
+answer:
   if (exact) *exact = c->exact;
   if (ra && nra) {
     *nra = c->nra < cap ? c->nra : cap;
@@ -1315,9 +1452,32 @@ static void group_counts (int k, long *add, long *del) {
 /* }================================================================== */
 
 
+/* the counts of the changes before a refresh not read on the worker: they show until its counts come */
+typedef struct OldCount {
+  char *rel;
+  long add[3], del[3];
+} OldCount;
+
+
+static int cmp_oldcount (const void *a, const void *b) {
+  return strcmp(((const OldCount *)a)->rel, ((const OldCount *)b)->rel);
+}
+
+
 static void git_refresh_now (void) {
   Buf b;
-  size_t i;
+  size_t i, nold = 0;
+  int from_worker = g_nsaid > 0;	/* git's answers read on the worker: the counts' too */
+  OldCount *old = NULL;
+  if (!from_worker && opt.scm_counts && g_nch) {	/* three git diffs more here would slow every stage and commit */
+    old = (OldCount *)xmalloc(g_nch * sizeof(OldCount));
+    for (i = 0; i < g_nch; i++) {
+      old[nold].rel = xstrdup(g_ch[i].rel);
+      memcpy(old[nold].add, g_ch[i].add, sizeof(old[nold].add));
+      memcpy(old[nold].del, g_ch[i].del, sizeof(old[nold].del));
+      nold++;
+    }
+  }
   lsp_watch_nudge();	/* a checkout, a pull, a stash: the servers watching files hear of them soon */
   blame_clear();	/* read again when it is asked for */
   quick_clear();
@@ -1333,6 +1493,8 @@ static void git_refresh_now (void) {
     graph_load();
     build_rows();
     g_status_gen++;
+    for (i = 0; i < nold; i++) free(old[i].rel);
+    free(old);
     return;
   }
   {	/* the top, and the git folder: what git is in the middle of */
@@ -1382,7 +1544,17 @@ static void git_refresh_now (void) {
       if (e[0] == 'R' || e[0] == 'C') i += strlen(b.s + i) + 1;
     }
     qsort(g_ch, g_nch, sizeof(Change), cmp_change);
-    if (opt.scm_counts) counts_read();
+    if (opt.scm_counts && from_worker) counts_read();
+    else if (old) {	/* as they were, by name (sorted as g_ch was) */
+      for (i = 0; i < g_nch; i++) {
+        OldCount key, *o;
+        key.rel = g_ch[i].rel;
+        if ((o = (OldCount *)bsearch(&key, old, nold, sizeof(OldCount), cmp_oldcount)) != NULL) {
+          memcpy(g_ch[i].add, o->add, sizeof(o->add));
+          memcpy(g_ch[i].del, o->del, sizeof(o->del));
+        }
+      }
+    }
   }
   buf_free(&b);
   for (i = 0; g_nrepo > 1 && i < (size_t)g_nrepo; i++) {	/* SOURCE CONTROL REPOSITORIES: each one's branch and changes */
@@ -1396,6 +1568,16 @@ static void git_refresh_now (void) {
   graph_load();
   build_rows();
   g_status_gen++;
+  for (i = 0; i < nold; i++) free(old[i].rel);
+  free(old);
+  if (!from_worker && opt.scm_counts && g_top && have_git() && g_nrepo > 0) {
+    static int asking;	/* a worker that cannot start refreshes here again: not over and over */
+    if (!asking) {
+      asking = 1;
+      git_refresh_async();	/* the counts, read on the worker: they come in a moment */
+      asking = 0;
+    }
+  }
 }
 
 
@@ -1419,6 +1601,8 @@ typedef struct GJob {
   char **tops;	/* the repositories' */
   int ntop, limit;
   int counts;	/* mme.scm.showLineCounts: git diff --numstat too */
+  ULines *ul;	/* the untracked files it counted */
+  size_t nul;
   Mutex *mx;
   int done;	/* under mx */
   int stale;	/* this thread's: a git_refresh came after it */
@@ -1566,26 +1750,40 @@ static void job_main (void *ud) {
   job_git(j, top, 0, a_all, &b);
   buf_putn(&sb, b.s, b.len);
 #endif
-  if (j->counts) {	/* counts_read's, and the untracked files as they are now (their lines are counted) */
-    size_t k, left = UNTRACKED_COUNT;
+  if (j->counts) {	/* counts_read's, and the untracked files as they are now: their lines counted here */
+    size_t k;
+    Vec un;
+    char *lbuf = (char *)xmalloc(LINES_BUF);
     job_git(j, top, 0, a_num, &b);
     job_git(j, top, 0, a_cnum, &b);
     job_git(j, top, 0, a_hnum, &b);
-    for (k = 0; k + 3 < sb.len && left > 0;) {
+    vec_init(&un);
+    for (k = 0; k + 3 < sb.len;) {
       const char *e = sb.s + k;
       size_t len = strlen(e + 3);
-      if (e[0] == '?') {
-        char *rel = xstrndup(e + 3, len), *p = path_join(top, rel);
-        OsStat fs;
-        to_native(p);
-        if (os_stat(p, &fs) == 0) buf_printf(&j->finger, "\x1d%s %lld %lld", rel, fs.size, (long long)fs.mtime);
-        free(rel);
-        free(p);
-        left--;
-      }
+      if (e[0] == '?') vec_push(&un, xstrndup(e + 3, len));
       k += 3 + len + 1;
       if (e[0] == 'R' || e[0] == 'C') k += strlen(sb.s + k) + 1;
     }
+    qsort(un.v, un.n, sizeof(char *), cmp_str);	/* the order counts_read takes them in */
+    for (k = 0; k < un.n && k < UNTRACKED_COUNT; k++) {
+      char *p = path_join(top, un.v[k]);
+      OsStat fs;
+      to_native(p);
+      if (os_stat(p, &fs) == 0 && fs.exists) {
+        ULines *u;
+        buf_printf(&j->finger, "\x1d%s %lld %lld", un.v[k], fs.size, (long long)fs.mtime);
+        j->ul = (ULines *)xrealloc(j->ul, (j->nul + 1) * sizeof(ULines));
+        u = &j->ul[j->nul++];
+        u->rel = xstrdup(un.v[k]);
+        u->size = fs.size;
+        u->mtime = (long long)fs.mtime;
+        u->lines = (unsigned long long)fs.size > UNTRACKED_BYTES ? -2 : file_lines(p, lbuf);
+      }
+      free(p);
+    }
+    vec_free(&un);
+    free(lbuf);
   }
   for (i = 0; j->ntop > 1 && i < j->ntop; i++)
     if (m_fncmp(j->tops[i], top) != 0) job_git(j, j->tops[i], 0, a_repo, &b);
@@ -1617,6 +1815,8 @@ static void job_free (GJob *j) {
   free(j->dir);
   vec_free(&j->links);
   buf_free(&j->finger);
+  for (i = 0; i < j->nul; i++) free(j->ul[i].rel);
+  free(j->ul);
   mx_free(j->mx);
   free(j);
 }
@@ -1779,7 +1979,11 @@ int git_async_idle (void) {
     g_said = j->said;
     g_nsaid = j->nsaid;
     g_said_links = &j->links;
+    g_said_ul = j->ul;
+    g_nsaid_ul = j->nul;
     git_refresh_now();	/* as it always reads it, git's answers already here */
+    g_said_ul = NULL;
+    g_nsaid_ul = 0;
     g_said_links = NULL;
     g_said = NULL;
     g_nsaid = 0;
@@ -1928,8 +2132,12 @@ int git_letter_style (int l) {
 }
 
 
+static size_t g_tip_row = (size_t)-1;	/* the commit hovered, since when */
+static long long g_tip_since;
+
+
 void git_draw (int x, int y, int w, int h, int focus) {
-  int row;
+  int row, seen = 0;
   scr_box(x, y, w, h, S_SIDE);
   if (h <= 3) return;
   scr_puts(x + 2, y, "SOURCE CONTROL", S_SIDE_HEAD);
@@ -2006,7 +2214,7 @@ void git_draw (int x, int y, int w, int h, int focus) {
     if (k < g_top_row) g_top_row = k;
     if (k >= g_top_row + (size_t)g_h) g_top_row = k - (size_t)g_h + 1;
   }
-  for (row = 0; row < g_h; row++) {
+  for (row = 0, seen = 0; row < g_h; row++) {
     size_t k = g_top_row + (size_t)row;
     const GRow *r;
     int sy = y + 3 + row, st;
@@ -2021,15 +2229,14 @@ void git_draw (int x, int y, int w, int h, int focus) {
     }
     if (r->kind == R_COMMIT) {
       graph_draw(r->ch, x + 1, sy, w - 1, st);
-      if (mouse_over_text(x, sy, w, 1)) {	/* its tooltip; its counts read once it is hovered a moment */
-        static size_t hov = (size_t)-1;
-        static long long since;
+      if (mouse_over_text(x, sy, w, 1)) {	/* its tooltip; its counts asked for once it is hovered a moment */
         char tip[300];
-        if (hov != r->ch) {
-          hov = r->ch;
-          since = os_now_us();
+        seen = 1;
+        if (g_tip_row != r->ch) {
+          g_tip_row = r->ch;
+          g_tip_since = os_now_us();
         }
-        if (os_now_us() - since > 300000) {
+        if (os_now_us() - g_tip_since > 300000) {
           graph_tip(r->ch, 1, tip, sizeof(tip));
           tip_want(x + 3, sy + 1, tip);
         }
@@ -2098,6 +2305,7 @@ void git_draw (int x, int y, int w, int h, int focus) {
       scr_put(x + w - 2, sy, (uint32_t)l, st == S_SIDE ? git_letter_style(l) : st);
     }
   }
+  if (!seen) g_tip_row = (size_t)-1;	/* the mouse left the commits: the next one hovered waits its moment */
   side_bar(x, y + 3, w, g_h, g_nrow, g_top_row, (size_t)g_h);
 }
 
@@ -2537,6 +2745,7 @@ typedef struct DState {
   int sbw, hsb;	/* the scrollbar's width (1 or 0); the horizontal one shows (under the rows) */
   int hbx[2], hbw[2], nhb;	/* the horizontal ones: one under each side's text */
   int drag_sb, drag_hsb;	/* a thumb is held: 1 + where it was taken (drag_sb -1: a click went to a change) */
+  unsigned long gen;	/* one more each time its lines are made again (rebuild): block_info's counts go */
   size_t wide;	/* the widest line's columns */
   int wide_ok;
   size_t lastrow, lastcol;	/* the caret when last drawn: the view follows it when it moves */
@@ -2611,6 +2820,7 @@ static void pair (DLine *a, DLine *b) {
   while (p < a->len && p < b->len && a->s[p] == b->s[p]) p++;
   while (s < a->len - p && s < b->len - p && a->s[a->len - 1 - s] == b->s[b->len - 1 - s]) s++;
   while (p > 0 && ((unsigned char)a->s[p] & 0xC0) == 0x80) p--;	/* whole characters */
+  while (s > 0 && (((unsigned char)a->s[a->len - s] & 0xC0) == 0x80 || ((unsigned char)b->s[b->len - s] & 0xC0) == 0x80)) s--;
   a->h0 = b->h0 = p;
   a->h1 = a->len - s;
   b->h1 = b->len - s;
@@ -2673,10 +2883,12 @@ static void word_pair (DLine *a, DLine *b) {
   {	/* the characters that changed, when the middle is short enough; else the words */
     size_t ra[2 * 16], rb[2 * 16], nra, nrb;
     int exact;
-    if ((long long)(a->h1 - a->h0) * (long long)(b->h1 - b->h0) <= g_wcells) {
+    size_t ca = utf8_count(a->s + a->h0, a->h1 - a->h0), cb = utf8_count(b->s + b->h0, b->h1 - b->h0);
+    long long cost = (long long)(ca < CD_MAX ? ca : CD_MAX) * (long long)(cb < CD_MAX ? cb : CD_MAX);	/* its LCS, in characters */
+    if (cost <= g_wcells) {
       chars_diff(a->s, a->len, b->s, b->len, ra, &nra, rb, &nrb, 16, &exact);
       if (exact) {
-        g_wcells -= (long long)(a->h1 - a->h0) * (long long)(b->h1 - b->h0);
+        g_wcells -= cost;
         a->hr = (size_t *)xrealloc(a->hr, (2 * nra + 2) * sizeof(size_t));
         b->hr = (size_t *)xrealloc(b->hr, (2 * nrb + 2) * sizeof(size_t));
         memcpy(a->hr, ra, 2 * nra * sizeof(size_t));
@@ -3379,6 +3591,7 @@ static void vis_build (void);
 
 /* the rows, the words changed, the colors: again from D.line */
 static void rebuild (void) {
+  D.gen++;
   build_split();
   color_lines(D.path);
   D.vis_split = -1;	/* vis again when it is drawn */
@@ -4025,14 +4238,20 @@ static void draw_fold (int x, int y, int w, size_t hidden) {
 #define SB_DEL	0xF85149
 
 static int block_start (size_t k);
+/* what a block of changes is: its rows' kinds, the lines it adds and deletes, the characters (worked out once) */
+typedef struct BInfo {
+  int done, known;
+  unsigned kinds;	/* row_kinds of its rows, or'd */
+  size_t add, del, cadd, cdel;
+} BInfo;
+
+static const BInfo *block_info (size_t k);
 static unsigned row_kinds (size_t k);
 
 
 /* what the block of changes starting at row k does: its color, as the editor's (added, deleted, modified) */
 static uint32_t block_color (size_t k) {
-  size_t n = nrows(), j;
-  unsigned m = 0;
-  for (j = k; j < n && j < k + 100000 && is_change(j); j++) m |= row_kinds(j);
+  unsigned m = block_info(k)->kinds;
   return m == 1 ? SB_ADD : m == 2 ? SB_DEL : SB_MOD;
 }
 
@@ -4057,13 +4276,13 @@ static size_t block_in (size_t a, size_t b) {
 
 
 /* the block of changes the rows shown a .. b - 1 have a change of (the first): the row it starts at; (size_t)-1: none */
+/* the view rows a .. b - 1: where a block starts there, else the first changed row there; -1 none (a long block's
+   middle is gone to where it is clicked, not back to its start) */
 static size_t change_in (size_t a, size_t b) {
-  size_t n = vcount(), i, k;
+  size_t n = vcount(), i, k = block_in(a, b);
+  if (k != (size_t)-1) return k;
   for (i = a; i < b && i < n; i++)
-    if (!(D.nvis && D.vis[i].hidden) && is_change(k = vk(i))) {
-      while (k > 0 && is_change(k - 1)) k--;
-      return k;
-    }
+    if (!(D.nvis && D.vis[i].hidden) && is_change(vk(i))) return vk(i);
   return (size_t)-1;
 }
 
@@ -4207,37 +4426,46 @@ static size_t block_lines (size_t k, const DLine **o, size_t *no, const DLine **
 /* the characters of l the view paints as changed: its ranges, else all of it */
 static size_t line_chars (const DLine *l) {
   size_t r, n = 0;
-  if (l->nhr == 0) return utf8_count(l->s, l->len);
+  if (l->nhr == 0)	/* no ranges: its changed middle (all of a line without a partner, h0 0 and h1 its end) */
+    return l->h1 > l->h0 && l->h1 <= l->len ? utf8_count(l->s + l->h0, l->h1 - l->h0) : 0;
   for (r = 0; r < l->nhr; r++) n += utf8_count(l->s + l->hr[2 * r], l->hr[2 * r + 1] - l->hr[2 * r]);
   return n;
 }
 
 
-/* the characters the block from row k took out (*del, its old lines') and put in (*add): what the view paints
-   (a line without a partner: all of it); kept for the block until the diff is drawn from other lines; *known 0:
-   too big to count */
-static void block_chars (size_t k, size_t *add, size_t *del, int *known) {
-  static const void *was_line, *was_tb;
-  static size_t was_k = (size_t)-1, was_add, was_del, was_nline, was_tnb;
-  static int was_split, was_known;
+
+
+static BInfo *g_bi;
+static size_t g_nbi;
+static unsigned long g_bi_gen;
+static int g_bi_split = -1;
+
+
+static const BInfo *block_info (size_t k) {
   static const DLine *o[CHARS_MAX], *nw[CHARS_MAX];
-  size_t no, nn, i;
-  if (!(was_k == k && was_line == (const void *)D.line && was_nline == D.nline && was_tb == (const void *)D.tb &&
-        was_tnb == D.tnb && was_split == D.split_now)) {
-    was_known = block_lines(k, o, &no, nw, &nn, CHARS_MAX) <= CHARS_MAX;
-    was_add = was_del = 0;
-    for (i = 0; was_known && i < no; i++) was_del += line_chars(o[i]);
-    for (i = 0; was_known && i < nn; i++) was_add += line_chars(nw[i]);
-    was_k = k;
-    was_line = (const void *)D.line;
-    was_nline = D.nline;
-    was_tb = (const void *)D.tb;
-    was_tnb = D.tnb;
-    was_split = D.split_now;
+  size_t n = nrows(), j, no, nn;
+  BInfo *b;
+  if (g_bi_gen != D.gen || g_bi_split != D.split_now || g_nbi != n) {	/* the diff is another: all again */
+    g_bi = (BInfo *)xrealloc(g_bi, (n + 1) * sizeof(BInfo));
+    memset(g_bi, 0, (n + 1) * sizeof(BInfo));
+    g_nbi = n;
+    g_bi_gen = D.gen;
+    g_bi_split = D.split_now;
   }
-  *add = was_add;
-  *del = was_del;
-  *known = was_known;
+  if (k >= n) return &g_bi[n];
+  b = &g_bi[k];
+  if (b->done) return b;
+  b->done = 1;
+  for (j = k; j < n && is_change(j); j++) {
+    unsigned m = row_kinds(j);
+    b->kinds |= m;
+    b->add += (m & 1) != 0;
+    b->del += (m & 2) != 0;
+  }
+  b->known = block_lines(k, o, &no, nw, &nn, CHARS_MAX) <= CHARS_MAX;
+  for (j = 0; b->known && j < no; j++) b->cdel += line_chars(o[j]);
+  for (j = 0; b->known && j < nn; j++) b->cadd += line_chars(nw[j]);
+  return b;
 }
 
 
@@ -4247,18 +4475,17 @@ static void block_chars (size_t k, size_t *add, size_t *del, int *known) {
 ** as the editor shows them by its squares; only where the row is empty.
 */
 static void block_count (int x, int y, int w, size_t k, int cur) {
-  size_t n = nrows(), a = 0, d = 0, j;
+  const BInfo *bi;
+  size_t a, d;
   char t[80];
   size_t lines;
   const char *p;
   int tw, cx, i, kind = ' ';
   uint32_t bg, fg;
   if (!opt.change_counts || D.kind == DK_OTHER) return;
-  for (j = k; j < n && is_change(j); j++) {
-    unsigned m = row_kinds(j);
-    a += (m & 1) != 0;
-    d += (m & 2) != 0;
-  }
+  bi = block_info(k);
+  a = bi->add;
+  d = bi->del;
   if (a && d) snprintf(t, sizeof(t), "+%lu -%lu", (unsigned long)a, (unsigned long)d);
   else if (a) snprintf(t, sizeof(t), "+%lu", (unsigned long)a);
   else if (d) snprintf(t, sizeof(t), "-%lu", (unsigned long)d);
@@ -4266,10 +4493,7 @@ static void block_count (int x, int y, int w, size_t k, int cur) {
   lines = strlen(t);
   {
     char c[48];
-    int known;
-    size_t ca, cd;
-    block_chars(k, &ca, &cd, &known);
-    chars_text(ca, cd, known, c, sizeof(c));
+    chars_text(bi->cadd, bi->cdel, bi->known, c, sizeof(c));
     strncat(t, c, sizeof(t) - strlen(t) - 1);
   }
   if (D.split_now) {	/* the pane it goes in */
@@ -4546,8 +4770,9 @@ static void vbar_mouse (int my) {
 static int vbar_goto (int my) {
   int pos, size = vthumb(D.h, &pos), ry = my - D.y, d, h = D.h;
   size_t n = vcount(), all = n > (size_t)h ? n : (size_t)h, k = (size_t)-1;
+  int thumb = size < h && ry >= pos && ry < pos + size;
   if (h <= 0 || ry < 0 || ry >= h) return 0;
-  for (d = 0; d <= (size < h && ry >= pos && ry < pos + size ? 0 : 1) && k == (size_t)-1; d++) {
+  for (d = 0; d <= (thumb ? 0 : 1) && k == (size_t)-1; d++) {
     int r, s;
     for (s = d ? -1 : 0; s <= (d ? 1 : 0) && k == (size_t)-1; s += 2) {
       size_t a, b;
@@ -4555,7 +4780,7 @@ static int vbar_goto (int my) {
       if (r < 0 || r >= h) continue;
       a = all * (size_t)r / (size_t)h;
       b = all * (size_t)(r + 1) / (size_t)h;
-      k = change_in(a, b > a ? b : a + 1);
+      k = thumb ? block_in(a, b > a ? b : a + 1) : change_in(a, b > a ? b : a + 1);	/* the thumb: only a square there */
     }
   }
   if (k == (size_t)-1) return 0;

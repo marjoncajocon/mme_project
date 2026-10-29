@@ -1484,8 +1484,10 @@ With no file open the editor shows the keys to start with.
   **Git: Toggle Deleted Text** shows or hides them for the session. The
   scrollbar shows the changes as squares too (■, staged □; over every mark
   but an error), the minimap a square where each starts; a click on one
-  (on the scrollbar's thumb too, on the minimap's slider at its left edge)
-  goes to the change's line, the cursor on it. Alt+F5 /
+  goes to the changed line there, the cursor on it (the middle of a long
+  change too); on the scrollbar's thumb, and on the minimap's slider at
+  its left edge, only a change's first line's square does, so the thumb
+  is dragged anywhere else. Alt+F5 /
   Shift+Alt+F5 go to the next / previous change. **Git: Stage Selected Ranges** (Ctrl+K Ctrl+Alt+S),
   **Unstage Selected Ranges** (Ctrl+K Ctrl+N) and **Revert Selected Ranges**
   (Ctrl+K Ctrl+R) take the changes the selection touches, in the editor or
@@ -1527,7 +1529,9 @@ With no file open the editor shows the keys to start with.
   file at its line, F7 / Shift+F7 go from change to change, Esc closes it.
   Its scrollbar shows the changes as squares (■, green, red, blue), its
   minimap a square where each block of changes starts; a click on one goes
-  to that change as F7 does (from Source Control, a commit, File History).
+  to that change as F7 does, a click in a long block's middle to the row
+  clicked; on the thumb only a block's start does, so it is dragged
+  anywhere else (from Source Control, a commit, File History).
   The modified side of a working tree diff is the file itself and is typed
   in, like VS Code's: the keys, undo, the tab's dirty dot and Ctrl+S are the
   editor's own, and the diff is made again a moment after the typing stops.

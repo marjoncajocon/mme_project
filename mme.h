@@ -1421,7 +1421,8 @@ const char *graph_file_path (size_t i, size_t f);
 int graph_diff (size_t i, size_t f);	/* the diff editor: commit i's change of file f */
 void graph_draw (size_t i, int x, int y, int w, int st);
 void graph_draw_file (size_t i, size_t f, int x, int y, int w, int st);
-void graph_tip (size_t i, int load, char *out, size_t n);	/* commit i's tooltip: its hash, author, age, files and lines */
+void graph_tip (size_t i, int load, char *out, size_t n);
+void graph_idle (void);	/* the hovered commit's counts, read on a worker, taken when they are there */	/* commit i's tooltip: its hash, author, age, files and lines */
 const char *git_sync_text (void);	/* "1\xE2\x86\x93 2\xE2\x86\x91" behind / ahead, "" */
 int git_has_upstream (void);
 void git_command (int cmd, const char *path, SideAct *act);	/* a CMD_GIT_*; act: what to show */

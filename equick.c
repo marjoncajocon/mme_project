@@ -264,6 +264,7 @@ static void make_marks (QDoc *q) {
     }
     if (s->last < s->y) s->last = s->y;
     if (s->y >= q->nmark && q->nmark) s->y = s->last = q->nmark - 1;
+    if (s->last >= q->nmark && q->nmark) s->last = q->nmark - 1;	/* its last lines went at the end: up to the last line */
     if (s->y < q->nmark) q->mark[s->y] |= QM_S_HEAD;
   }
 }

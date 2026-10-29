@@ -138,8 +138,44 @@ typedef struct Counted {
   size_t nfiles;
 } Counted;
 
-static Counted *g_counted;
-static size_t g_ncounted;
+static Counted *g_counted;	/* by hash */
+static size_t g_ncounted, g_capcounted;
+
+
+static int cmp_counted (const void *a, const void *b) {
+  return strcmp(((const Counted *)a)->hash, ((const Counted *)b)->hash);
+}
+
+
+static const Counted *counted_find (const char *hash) {
+  Counted key;
+  snprintf(key.hash, sizeof(key.hash), "%s", hash);
+  return g_ncounted ? (const Counted *)bsearch(&key, g_counted, g_ncounted, sizeof(Counted), cmp_counted) : NULL;
+}
+
+
+/* a commit's counts, once: in their place by hash */
+static void counted_put (const char *hash, long add, long del, size_t nfiles) {
+  size_t lo = 0, hi = g_ncounted;
+  Counted *c;
+  if (counted_find(hash)) return;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (strcmp(g_counted[mid].hash, hash) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  if (g_ncounted == g_capcounted) {
+    g_capcounted = g_capcounted ? g_capcounted * 2 : 64;
+    g_counted = (Counted *)xrealloc(g_counted, g_capcounted * sizeof(Counted));
+  }
+  memmove(g_counted + lo + 1, g_counted + lo, (g_ncounted - lo) * sizeof(Counted));
+  g_ncounted++;
+  c = &g_counted[lo];
+  snprintf(c->hash, sizeof(c->hash), "%s", hash);
+  c->add = add;
+  c->del = del;
+  c->nfiles = nfiles;
+}
 
 static Commit *g_cm;
 static size_t g_ncm, g_capcm;
@@ -315,23 +351,57 @@ static void load_sync (void) {
 
 
 /* git log --all: the commits, newest first; the ones that were open stay open */
+/* an open commit's files, kept over a graph_load: a commit never changes, they are not read again */
+typedef struct Kept {
+  char hash[41];
+  GFile *file;
+  size_t nfile;
+  int loaded;
+} Kept;
+
+
+static void files_free (GFile *file, size_t n) {
+  size_t f;
+  for (f = 0; f < n; f++) {
+    free(file[f].rel);
+    free(file[f].old);
+    free(file[f].path);
+  }
+  free(file);
+}
+
+
 void graph_load (void) {
   Buf b;
-  char num[32], **was = NULL;
+  char num[32];
+  Kept *was = NULL;
   size_t i, nwas = 0;
   const char *p;
+  const char *root = git_root();
+  static char *was_root;	/* another repository's files are not this one's */
+  int same = root && was_root && strcmp(root, was_root) == 0;
   for (i = 0; i < g_ncm; i++)
     if (g_cm[i].open) {
-      was = (char **)xrealloc(was, (nwas + 1) * sizeof(char *));
-      was[nwas++] = xstrdup(g_cm[i].hash);
+      was = (Kept *)xrealloc(was, (nwas + 1) * sizeof(Kept));
+      memcpy(was[nwas].hash, g_cm[i].hash, sizeof(was[nwas].hash));
+      was[nwas].file = same ? g_cm[i].file : NULL;
+      was[nwas].nfile = same ? g_cm[i].nfile : 0;
+      was[nwas].loaded = same && g_cm[i].loaded;
+      if (same) {	/* they move to the commit read again */
+        g_cm[i].file = NULL;
+        g_cm[i].nfile = 0;
+      }
+      nwas++;
     }
   for (i = 0; i < g_ncm; i++) commit_free(&g_cm[i]);
+  free(was_root);
+  was_root = root ? xstrdup(root) : NULL;
   g_ncm = 0;
   g_more = 0;
   g_sync[0] = '\0';
   g_upstream = 0;
   if (git_root() == NULL) {
-    for (i = 0; i < nwas; i++) free(was[i]);
+    for (i = 0; i < nwas; i++) files_free(was[i].file, was[i].nfile);
     free(was);
     return;
   }
@@ -377,19 +447,27 @@ void graph_load (void) {
       c->time = strtoll(f[4], NULL, 10);
       c->subject = xstrndup(f[5], len[5]);
       for (i = 0; i < nwas; i++)
-        if (strcmp(was[i], c->hash) == 0) c->open = 1;
-      for (i = 0; i < g_ncounted; i++)
-        if (strcmp(g_counted[i].hash, c->hash) == 0) {
-          c->counted = 1;
-          c->add = g_counted[i].add;
-          c->del = g_counted[i].del;
-          c->nfiles = g_counted[i].nfiles;
-          break;
+        if (strcmp(was[i].hash, c->hash) == 0) {
+          c->open = 1;
+          c->file = was[i].file;	/* its files as they were read */
+          c->nfile = was[i].nfile;
+          c->loaded = was[i].loaded;
+          was[i].file = NULL;
+          was[i].nfile = 0;
         }
+      {
+        const Counted *k = counted_find(c->hash);
+        if (k) {
+          c->counted = 1;
+          c->add = k->add;
+          c->del = k->del;
+          c->nfiles = k->nfiles;
+        }
+      }
     }
   }
   buf_free(&b);
-  for (i = 0; i < nwas; i++) free(was[i]);
+  for (i = 0; i < nwas; i++) files_free(was[i].file, was[i].nfile);	/* a commit no longer shown */
   free(was);
   graph_lanes();
   load_sync();
@@ -428,15 +506,25 @@ int graph_open (size_t i) {
 }
 
 
+typedef struct FileIdx {	/* a commit's files by name, for numstat's answers */
+  GFile **v;
+  size_t n;
+} FileIdx;
+
+
+static int cmp_gfile (const void *a, const void *b) {
+  return strcmp((*(GFile *const *)a)->rel, (*(GFile *const *)b)->rel);
+}
+
+
 static void file_count (void *ud, const char *rel, long a, long d) {
-  Commit *c = (Commit *)ud;
-  size_t f;
-  for (f = 0; f < c->nfile; f++)
-    if (strcmp(c->file[f].rel, rel) == 0) {
-      c->file[f].add = a;
-      c->file[f].del = d;
-      return;
-    }
+  FileIdx *x = (FileIdx *)ud;
+  GFile key, *kp = &key, **g;
+  key.rel = (char *)rel;
+  if ((g = (GFile **)bsearch(&kp, x->v, x->n, sizeof(GFile *), cmp_gfile)) != NULL) {
+    (*g)->add = a;
+    (*g)->del = d;
+  }
 }
 
 
@@ -485,7 +573,13 @@ static void load_files (Commit *c) {
   buf_init(&b);
   if (gitv(&b, 0, "diff", "--numstat", "-M", "-z", c->npar ? c->par[0] : empty_tree, c->hash, NULL) == 0) {
     size_t f;
-    git_numstat(b.s ? b.s : "", b.len, file_count, c);
+    FileIdx x;
+    x.n = c->nfile;
+    x.v = (GFile **)xmalloc((x.n + 1) * sizeof(GFile *));
+    for (f = 0; f < c->nfile; f++) x.v[f] = &c->file[f];
+    qsort(x.v, x.n, sizeof(GFile *), cmp_gfile);
+    git_numstat(b.s ? b.s : "", b.len, file_count, &x);
+    free(x.v);
     c->add = c->del = 0;
     for (f = 0; f < c->nfile; f++) {
       if (c->file[f].add > 0) c->add += c->file[f].add;
@@ -493,11 +587,7 @@ static void load_files (Commit *c) {
     }
     c->nfiles = c->nfile;
     c->counted = 1;
-    g_counted = (Counted *)xrealloc(g_counted, (g_ncounted + 1) * sizeof(Counted));
-    memcpy(g_counted[g_ncounted].hash, c->hash, sizeof(c->hash));
-    g_counted[g_ncounted].add = c->add;
-    g_counted[g_ncounted].del = c->del;
-    g_counted[g_ncounted++].nfiles = c->nfiles;
+    counted_put(c->hash, c->add, c->del, c->nfiles);
   }
   buf_free(&b);
 }
@@ -594,6 +684,7 @@ static int draw_refs (const char *refs, int x, int y, int end) {
 /* a commit's row: the graph, its refs, the subject, then (dim, as VS Code's description) the author and when */
 void graph_draw (size_t i, int x, int y, int w, int st) {
   const Commit *c;
+  graph_idle();
   uint32_t bg = row_bg(st);
   int k, cx = x, end = x + w;
   char right[160], ago[48];
@@ -657,16 +748,85 @@ void graph_draw_file (size_t i, size_t f, int x, int y, int w, int st) {
 
 /* commit i's tooltip: "1a2b3c4 · author · 2 days ago · 3 files changed, 120 insertions(+), 14 deletions(-)";
    load: its counts read (git diff) when not known yet */
+/* the commit hovered: its counts asked of git on a worker (git diff --numstat), taken when it has answered */
+static GitAsync *g_tip_job;
+static char g_tip_hash[41];
+
+typedef struct TipSum {
+  long add, del;
+  size_t n;
+} TipSum;
+
+
+static void tip_add (void *ud, const char *rel, long a, long d) {
+  TipSum *t = (TipSum *)ud;
+  (void)rel;
+  t->n++;
+  if (a > 0) t->add += a;
+  if (d > 0) t->del += d;
+}
+
+
+/* the worker's answer, if it is there: the counts go to the cache and to the commit */
+void graph_idle (void) {
+  Buf b;
+  size_t i;
+  if (g_tip_job == NULL || !git_async_done(g_tip_job)) return;
+  buf_init(&b);
+  if (git_async_take(g_tip_job, &b) == 0) {
+    TipSum t;
+    memset(&t, 0, sizeof(t));
+    git_numstat(b.s ? b.s : "", b.len, tip_add, &t);
+    counted_put(g_tip_hash, t.add, t.del, t.n);
+    for (i = 0; i < g_ncm; i++)
+      if (strcmp(g_cm[i].hash, g_tip_hash) == 0 && !g_cm[i].counted) {
+        g_cm[i].counted = 1;
+        g_cm[i].add = t.add;
+        g_cm[i].del = t.del;
+        g_cm[i].nfiles = t.n;
+      }
+  }
+  g_tip_job = NULL;
+  buf_free(&b);
+}
+
+
+/* s into out (n bytes), cut at a whole character */
+static void copy_chars (char *out, size_t n, const char *s) {
+  size_t k = strlen(s);
+  if (k >= n) {
+    k = n - 1;
+    while (k > 0 && ((unsigned char)s[k] & 0xC0) == 0x80) k--;	/* s[k] starts a character: it is left out */
+  }
+  memcpy(out, s, k);
+  out[k] = '\0';
+}
+
+
 void graph_tip (size_t i, int load, char *out, size_t n) {
+  static const char empty_tree[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
   Commit *c;
-  char ago[48];
+  char ago[48], au[64];
   size_t len;
   out[0] = '\0';
   if (i >= g_ncm) return;
+  graph_idle();
   c = &g_cm[i];
-  if (load && opt.scm_counts && !c->counted) load_files(c);
+  if (load && opt.scm_counts && !c->counted && g_tip_job == NULL) {	/* asked on a worker: the hover does not wait */
+    const char *a[8];
+    int k = 0;
+    a[k++] = "diff";
+    a[k++] = "--numstat";
+    a[k++] = "-M";
+    a[k++] = "-z";
+    a[k++] = c->npar ? c->par[0] : empty_tree;
+    a[k++] = c->hash;
+    a[k] = NULL;
+    if ((g_tip_job = git_async(a)) != NULL) memcpy(g_tip_hash, c->hash, sizeof(g_tip_hash));
+  }
   git_ago(c->time, ago, sizeof(ago));
-  snprintf(out, n, "%.7s \xC2\xB7 %s \xC2\xB7 %s", c->hash, c->author, ago);
+  copy_chars(au, sizeof(au), c->author);
+  snprintf(out, n, "%.7s \xC2\xB7 %s \xC2\xB7 %s", c->hash, au, ago);
   if (opt.scm_counts && c->counted) {
     len = strlen(out);
     snprintf(out + len, n - len, " \xC2\xB7 %lu file%s changed", (unsigned long)c->nfiles, c->nfiles == 1 ? "" : "s");

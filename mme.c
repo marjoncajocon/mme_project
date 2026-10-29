@@ -2303,9 +2303,12 @@ static struct {
 
 static int cmp_hint (const void *a, const void *b) {
   const InlayHint *x = (const InlayHint *)a, *y = (const InlayHint *)b;
-  int c = pos_cmp(x->at, y->at);
-  if (c == 0 && x->color != y->color) return x->color ? 1 : -1;	/* a swatch right before its color */
-  return c;
+  int c = pos_cmp(x->at, y->at), kx, ky;
+  if (c != 0 || x->color == y->color) return c;
+  kx = x->color == 0 ? 0 : x->color == IH_DEL ? 1 : 2;	/* a hint, the deleted characters, a swatch (right before its color) */
+  ky = y->color == 0 ? 0 : y->color == IH_DEL ? 1 : 2;
+  if (kx != ky) return kx < ky ? -1 : 1;
+  return x->color < y->color ? -1 : 1;
 }
 
 
@@ -2682,7 +2685,7 @@ static int lens_row_at (size_t y) {
 ** for the session.
 */
 
-#define DC_LINES	2000	/* the lines of the changes whose characters are looked at, at most */
+#define DC_LINES	256	/* the lines of the open change whose characters are looked at (each an LCS), at most */
 
 static int g_del_ovr = -1;	/* Git: Toggle Deleted Text: 1 shown, 0 hidden; -1 as the setting says */
 
@@ -2730,8 +2733,8 @@ static void dc_hints (void) {
         size_t q, c = 0;
         if (hk[4 * j + 1] <= hk[4 * j]) continue;	/* only put in */
         buf_init(&lb);
-        for (q = hk[4 * j]; q < hk[4 * j + 1] && c < 60; q++) {
-          if (((unsigned char)a[q] & 0xC0) != 0x80) c++;
+        for (q = hk[4 * j]; q < hk[4 * j + 1]; q++) {
+          if (((unsigned char)a[q] & 0xC0) != 0x80 && c++ == 60) break;	/* the 61st character: not even its first byte */
           buf_putc(&lb, a[q] == '\t' ? ' ' : a[q]);
         }
         if (q < hk[4 * j + 1]) buf_puts(&lb, "\xE2\x80\xA6");
@@ -2770,12 +2773,13 @@ static void dc_sync (void) {
   was = on;
   was_st = st;
   was_hi = hi;
-  if (!del_chars_on() && g_dc_n == 0) return;
-  if (IH.d != T->doc) {	/* another file's hints go: these are this one's */
+  if ((!del_chars_on() || st < 0) && g_dc_n == 0) return;	/* no peek, none shown: the server's hints are left alone */
+  if (IH.d != T->doc) {	/* another file's hints go: these are this one's, the server asked for them again */
     size_t i;
     for (i = 0; i < IH.n; i++) free(IH.v[i].label);
     IH.n = 0;
     IH.d = T->doc;
+    IH.ask_d = NULL;
   }
   ih_swatches();
 }
@@ -4698,7 +4702,7 @@ static void draw_minimap_px (const MmPx *p) {
   static int *qmv;	/* the git mark of each line shown */
   static size_t qcap;
   uint32_t *px;
-  int pw = mm_width() * p->cw, ph = L.view_h * p->ch, slider = vopt.mm_slider || g_mm_hover || E.drag_mm, i;
+  int pw = mm_width() * p->cw, ph = L.view_h * p->ch, slider = vopt.mm_slider || g_mm_hover || E.drag_mm > 0, i;
   int cols = (pw - p->gut) / p->chw, git = opt.scm_decor && T->real && !T->page;
   size_t n = T->doc->n, top = mm_top(), nl = (size_t)(ph + p->lh - 1) / (size_t)p->lh, last, y, nd, nh, d;
   uint32_t bg = ui_color(C_EDITOR_BG), sl = ui_color(C_MINIMAP_SLIDER);
@@ -4833,7 +4837,7 @@ static void draw_minimap_px (const MmPx *p) {
         }
   }
   {	/* a git change's first line: its square at the left edge, as the gutter has (staged: an outline), over the text */
-    int s = p->cw * 3 / 4, t;
+    int s = p->cw * 3 / 4, t, below = -1000000;	/* the row under the last square drawn */
     if (s < 5) s = 5;
     t = s >= 8 ? 2 : 1;
     for (y = top; y < last; y++) {
@@ -4846,6 +4850,8 @@ static void draw_minimap_px (const MmPx *p) {
       k = st ? qm >> 4 : qm;
       c = (k & QM_MOD) ? MM_MOD : (k & QM_ADD) ? MM_ADD : (k & (QM_DEL | QM_DEL_TOP)) ? MM_DEL : MM_MOD;
       sy = (int)(y - top) * p->lh + p->lh / 2 - s / 2;
+      if (sy - 1 < below) continue;	/* it would cover the one above (changes a line or two apart): that one shows */
+      below = sy + s + 1;
       mm_fill(px, pw, ph, sx, sy - 1, s + 1, s + 2, bg, 100);	/* a pixel of room around it */
       if (st) {
         mm_fill(px, pw, ph, sx, sy, s, t, c, 100);
@@ -4865,7 +4871,7 @@ static void draw_minimap (void) {
   static const unsigned char bit[MM_LINES][2] = {{0x01, 0x08}, {0x02, 0x10}, {0x04, 0x20}, {0x40, 0x80}};
   int row, i, k, x0 = L.mm_x, mw = mm_width();
   size_t top = mm_top(), lpr = mm_lpr(), last = top + (size_t)L.view_h * lpr, y;
-  int slider = vopt.mm_slider || g_mm_hover || E.drag_mm;
+  int slider = vopt.mm_slider || g_mm_hover || E.drag_mm > 0;
   uint32_t dot[MM_LINES][2 * MM_W];
   uint32_t *tint;
   unsigned char *pri;
@@ -4963,7 +4969,7 @@ static int qc_get (int staged, size_t i, size_t *line, size_t *last, QHunk *h);
 ** the cursor goes to its first line, in the middle of the view; 1 when
 ** there was one.
 */
-static int goto_change_in (size_t lo, size_t hi) {
+static int goto_change_in (size_t lo, size_t hi, int heads) {
   size_t mid = lo + (hi - lo) / 2, d, y, line, last;
   long at;
   int st, side;
@@ -4975,7 +4981,8 @@ static int goto_change_in (size_t lo, size_t hi) {
       if ((side == 0 && mid < lo + d) || (side == 1 && (d == 0 || mid + d > hi))) continue;
       y = side == 0 ? mid - d : mid + d;
       if (y >= T->doc->n || !qc_pick(y, &st, &at) || !qc_get(st, (size_t)at, &line, &last, &h)) continue;
-      p.y = line;
+      if (heads && line != y) continue;	/* only where a change starts: its square */
+      p.y = y;	/* the changed line clicked, not its change's first: the middle of a long one can be gone to */
       p.x = 0;
       T->sel = 0;
       T->nmc = 0;
@@ -5006,9 +5013,10 @@ static void minimap_mouse (Mouse *m) {
   s0 = (long)((T->top > top0 ? T->top - top0 : 0) / lpr);
   if (E.drag_mm < 0) return;	/* a click went to a change: no drag until the button comes up */
   if (!E.drag_mm && (n <= h || ry < s0 || ry >= s0 + sh || m->x == L.mm_x)) {
-    /* a git change's mark (off the slider; on it, its square at the left edge): its line */
+    /* a git change's mark (off the slider; on it, only its square at the left edge): the line */
     size_t lo = top0 + (size_t)(ry < 0 ? 0 : ry) * lpr;
-    if (goto_change_in(lo > tol ? lo - tol : 0, lo + lpr - 1 + tol)) {
+    int on_slider = n > h && ry >= s0 && ry < s0 + sh;
+    if (goto_change_in(lo > tol ? lo - tol : 0, lo + lpr - 1 + tol, on_slider)) {
       E.drag_mm = -1;
       return;
     }
@@ -5057,35 +5065,52 @@ static int sb_thumb (int *pos) {
 }
 
 
+static unsigned char *g_sbq;	/* each scrollbar row: 1 a change's square drawn there, 2 one starts there */
+static size_t g_sbq_n;
+
+
 static void draw_scrollbar (void) {
   int x = L.ed_x + L.ed_w - 1, row, pos, size = sb_thumb(&pos), hov = mouse_over(x, L.text_y + pos, 1, size);
   size_t n = T->doc->n, nd, i;
   const Diag *dv = lsp_diags(T->doc, &nd);
-  unsigned char *mark = (unsigned char *)calloc((size_t)L.view_h + 1, 2), *gm;
+  unsigned char *mark = (unsigned char *)calloc((size_t)L.view_h + 1, 3), *gm, *gh;
   /* the marks: 1 cursor, 8 occurrence, 9 find match, 10 warning, 11 error, the strongest shows; and in gm the git
   ** changes, 1 2 3 staged added, deleted, modified, 4 5 6 not yet staged: a square, over all but an error */
 #define MARK_IN(a, line, m)	do { double d_ = (double)(line) * L.view_h / (double)(n > 0 ? n : 1); \
     int r_ = d_ < (double)L.view_h ? (int)d_ : L.view_h - 1;	/* a line past the end (a server's): the last row */ \
     if (r_ < 0) r_ = 0; if ((a)[r_] < (m)) (a)[r_] = (unsigned char)(m); } while (0)
 #define MARK(line, m)	MARK_IN(mark, line, m)
+#define ROW_OF(line)	((double)(line) * L.view_h / (double)(n > 0 ? n : 1) < (double)L.view_h ? \
+                       (int)((double)(line) * L.view_h / (double)(n > 0 ? n : 1)) : L.view_h - 1)
   if (mark == NULL) return;
   gm = mark + L.view_h + 1;
+  gh = gm + L.view_h + 1;	/* the rows where a change starts */
   MARK(T->cur.y, 1);
-  if (opt.scm_decor && T->real && !T->page) {	/* the git changes, VS Code's left lane */
-    size_t nq, q, j;
+  if (opt.scm_decor && T->real && !T->page) {	/* the git changes, VS Code's left lane: a change's rows, not each line */
+    size_t nq, q;
     const QHunk *qh = quick_hunks(T->doc, T->real, &nq);
     const QStaged *sv;
+    int r, r0, r1;
     for (q = 0; qh && q < nq; q++) {
       int kind = qh[q].nn == 0 ? 5 : qh[q].on == 0 ? 4 : 6;
-      if (qh[q].nn == 0) MARK_IN(gm, qh[q].n0 ? qh[q].n0 - 1 : 0, kind);
-      for (j = 0; j < qh[q].nn && j < 100000; j++) MARK_IN(gm, qh[q].n0 + j, kind);
+      size_t a = qh[q].nn == 0 ? (qh[q].n0 ? qh[q].n0 - 1 : 0) : qh[q].n0, b = qh[q].nn ? qh[q].n0 + qh[q].nn - 1 : a;
+      r0 = ROW_OF(a);
+      r1 = ROW_OF(b);
+      gh[r0 < 0 ? 0 : r0] = 1;
+      for (r = r0 < 0 ? 0 : r0; r <= r1; r++)
+        if (gm[r] < kind) gm[r] = (unsigned char)kind;
     }
     sv = quick_staged(T->doc, T->real, &nq);
     for (q = 0; sv && q < nq; q++) {
       int kind = sv[q].h.nn == 0 ? 2 : sv[q].h.on == 0 ? 1 : 3;
-      for (j = sv[q].y; j <= sv[q].last && j < sv[q].y + 100000; j++) MARK_IN(gm, j, kind);
+      r0 = ROW_OF(sv[q].y);
+      r1 = ROW_OF(sv[q].last);
+      gh[r0 < 0 ? 0 : r0] = 1;
+      for (r = r0 < 0 ? 0 : r0; r <= r1; r++)
+        if (gm[r] < kind) gm[r] = (unsigned char)kind;
     }
   }
+#undef ROW_OF
   if (E.find_open && E.find[0] && n < 20000) {
     size_t y;
     for (y = 0; y < n; y++) {
@@ -5107,9 +5132,15 @@ static void draw_scrollbar (void) {
     if (dv[i].sev <= 2) MARK(dv[i].a.y, dv[i].sev == 1 ? 11 : 10);
 #undef MARK
 #undef MARK_IN
+  if (g_sbq_n < (size_t)L.view_h) {
+    g_sbq = (unsigned char *)xrealloc(g_sbq, (size_t)L.view_h);
+    g_sbq_n = (size_t)L.view_h;
+  }
+  memset(g_sbq, 0, g_sbq_n);
   for (row = 0; row < L.view_h; row++) {
     int on = row >= pos && row < pos + size && size < L.view_h;
     uint32_t bg = ui_color(on ? (E.drag_sb > 0 ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB) : C_EDITOR_BG);
+    if (gm[row] && mark[row] != 11) g_sbq[row] = (unsigned char)(1 | (gh[row] ? 2 : 0));	/* for a click: what shows */
     uint32_t col[12];
     col[0] = 0;
     col[1] = ui_color(C_GUTTER_ON);
@@ -5193,19 +5224,26 @@ static int sb_row_lines (int ry, size_t *lo, size_t *hi) {
 
 
 /* a click or a drag on the scrollbar */
+/* is a change's square drawn on scrollbar row r (what: 1 any, 2 where a change starts)? */
+static int sb_square (int r, int what) {
+  return r >= 0 && (size_t)r < g_sbq_n && (g_sbq[r] & what) != 0;
+}
+
+
 static void scrollbar_mouse (Mouse *m) {
   int pos, size = sb_thumb(&pos), ry = m->y - L.text_y, d;
   size_t n = T->doc->n, h = (size_t)L.text_h, top, lo, hi;
   if (!E.drag_sb && ry >= 0 && ry < L.view_h) {
-    /* a git change's square: its line; on the thumb only the one clicked, elsewhere the row's next to it too */
+    /* a git change's square: the changed line there (the next rows' too); on the thumb only where a change starts,
+       so the thumb is dragged anywhere else */
     int thumb = n > h && ry >= pos && ry < pos + size;
-    for (d = 0; d <= (thumb ? 0 : 1); d++)
-      if ((sb_row_lines(ry, &lo, &hi) && d == 0 && goto_change_in(lo, hi)) ||
-          (d == 1 && ((sb_row_lines(ry - 1, &lo, &hi) && goto_change_in(lo, hi)) ||
-                      (sb_row_lines(ry + 1, &lo, &hi) && goto_change_in(lo, hi))))) {
+    for (d = 0; d < (thumb ? 1 : 3); d++) {
+      int r = ry + (d == 0 ? 0 : d == 1 ? -1 : 1);
+      if (sb_square(r, thumb ? 2 : 1) && sb_row_lines(r, &lo, &hi) && goto_change_in(lo, hi, thumb)) {
         E.drag_sb = -1;	/* until the button comes up: no drag */
         return;
       }
+    }
   }
   if (E.drag_sb < 0) return;
   if (n <= h) return;
@@ -5537,7 +5575,7 @@ static void draw_group (int other) {
     draw_crumbs_full();
     scr_zone_hole(zg);	/* the window's cells under the text: what is drawn over them later shows over it */
     scr_zone_use(zg);	/* the gutter and the text in cells of their own size */
-    dc_sync();	/* mme.scm.showDeletedChars: the hints made again for the text as it is */
+    if (!other) dc_sync();	/* mme.scm.showDeletedChars: the focused file's hints (another group's are not taken) */
     sel_range(&sa, &sb);
     {
       Pos ba, bb;
@@ -17645,9 +17683,14 @@ static size_t hunk_last (const QHunk *h) {
 
 /* the change at line y (on it, or lines went just after it); -1: none */
 static long hunk_at (const QHunk *h, size_t n, size_t y) {
-  size_t i;
-  for (i = 0; i < n; i++)
-    if (y >= hunk_line(&h[i]) && y <= hunk_last(&h[i])) return (long)i;
+  size_t lo = 0, hi = n;
+  while (lo < hi) {	/* the first change that ends at y or after it */
+    size_t mid = lo + (hi - lo) / 2;
+    if (hunk_last(&h[mid]) < y) lo = mid + 1;
+    else hi = mid;
+  }
+  for (; lo < n && hunk_line(&h[lo]) <= y; lo++)	/* a line went after a change's end: the next may start on it too */
+    if (y >= hunk_line(&h[lo]) && y <= hunk_last(&h[lo])) return (long)lo;
   return -1;
 }
 
@@ -17692,7 +17735,33 @@ static int qc_get (int staged, size_t i, size_t *line, size_t *last, QHunk *h) {
 
 
 /* the change line y shows (the one its bar or square is of); 0: none */
+static int qc_pick_now (size_t y, int *staged, long *at);
+
+
 static int qc_pick (size_t y, int *staged, long *at) {
+  static unsigned long gen, edits, qv;
+  static const Doc *d;
+  static size_t wy = (size_t)-1;
+  static int ok, st;
+  static long w;
+  if (HAS_DOC && gen == g_draw_gen && d == T->doc && edits == T->doc->edits && qv == quick_version() && wy == y) {
+    *staged = st;
+    *at = w;
+    return ok;
+  }
+  ok = qc_pick_now(y, &st, &w);
+  gen = g_draw_gen;
+  d = HAS_DOC ? T->doc : NULL;
+  edits = HAS_DOC ? T->doc->edits : 0;
+  qv = quick_version();
+  wy = y;
+  *staged = st;
+  *at = w;
+  return ok;
+}
+
+
+static int qc_pick_now (size_t y, int *staged, long *at) {
   int qm = HAS_DOC && T->real ? quick_mark(T->doc, T->real, y) : 0;
   size_t n, k;
   if (!(qm & (QM_NOW | QM_STAGED | QM_S_HEAD))) return 0;
@@ -17800,6 +17869,7 @@ static void change_count (const QHunk *h, char *out, size_t n) {
 
 
 #define CHARS_MAX	2000	/* the lines of a change whose characters are counted, at most */
+#define CHARS_PAIRS	256	/* and the lines of it diffed one with another (each an LCS), at most */
 
 /* line i of a change's old side (the index's; HEAD's for a staged one) or its new one (the buffer's; the index's) */
 static const char *change_line (int staged, int new_side, size_t i, size_t *len) {
@@ -17819,37 +17889,47 @@ static const char *change_line (int staged, int new_side, size_t i, size_t *len)
 /* the counts with the characters the change took out and put in after them: "+1 -1 lines · +2 -2 chars" (its
    lines one with another, in order, those left over whole); kept until the buffer or the change is another */
 static void change_count_chars (int staged, const QHunk *h, char *out, size_t n) {
-  static const Doc *d;
-  static unsigned long edits;
-  static QHunk was;
-  static int was_staged = -1;
-  static size_t add, del;
-  static int known;
+  static struct {	/* the last few asked (the peek's, the hovered one's): each kept until its text or index is another */
+    const Doc *d;
+    unsigned long edits, qv;
+    QHunk h;
+    int staged, known;
+    size_t add, del;
+  } c4[4];
+  static int next;
   char c[48];
+  int e;
   change_count(h, out, n);
   strncat(out, h->nn + h->on == 1 ? " line" : " lines", n - strlen(out) - 1);
-  if (d != T->doc || edits != T->doc->edits || was_staged != staged || memcmp(&was, h, sizeof(was)) != 0) {
-    size_t i, la, lb;
-    d = T->doc;
-    edits = T->doc->edits;
-    was = *h;
-    was_staged = staged;
-    add = del = 0;
-    known = h->on <= CHARS_MAX && h->nn <= CHARS_MAX;
-    for (i = 0; known && (i < h->on || i < h->nn); i++) {
+  for (e = 0; e < 4; e++)
+    if (c4[e].d == T->doc && c4[e].edits == T->doc->edits && c4[e].qv == quick_version() && c4[e].staged == staged &&
+        memcmp(&c4[e].h, h, sizeof(QHunk)) == 0)
+      break;
+  if (e == 4) {	/* worked out: its lines one with another, in order, those left over whole */
+    size_t i, la, lb, pairs = h->on < h->nn ? h->on : h->nn;
+    e = next;
+    next = (next + 1) % 4;
+    c4[e].d = T->doc;
+    c4[e].edits = T->doc->edits;
+    c4[e].qv = quick_version();
+    c4[e].h = *h;
+    c4[e].staged = staged;
+    c4[e].add = c4[e].del = 0;
+    c4[e].known = pairs <= CHARS_PAIRS && h->on <= CHARS_MAX && h->nn <= CHARS_MAX;
+    for (i = 0; c4[e].known && (i < h->on || i < h->nn); i++) {
       const char *a = i < h->on ? change_line(staged, 0, h->o0 + i, &la) : NULL;
       const char *b = i < h->nn ? change_line(staged, 1, h->n0 + i, &lb) : NULL;
       if (a && b) {
         size_t dd, aa;
         chars_split(a, la, b, lb, &dd, &aa);
-        del += dd;
-        add += aa;
+        c4[e].del += dd;
+        c4[e].add += aa;
       }
-      else if (a) del += utf8_count(a, la);
-      else add += utf8_count(b, lb);
+      else if (a) c4[e].del += utf8_count(a, la);
+      else c4[e].add += utf8_count(b, lb);
     }
   }
-  chars_text(add, del, known, c, sizeof(c));
+  chars_text(c4[e].add, c4[e].del, c4[e].known, c, sizeof(c));
   strncat(out, c, n - strlen(out) - 1);
 }
 
@@ -18421,6 +18501,10 @@ static void quick_cmd (int cmd) {
     }
     case CMD_STAGE_CHANGE: {
       QHunk one;
+      if (DP.open && DP.staged) {	/* the peek is on a staged change: its button is Unstage, so is the key */
+        unstage_peek();
+        return;
+      }
       if ((at = hunk_here(h, n)) < 0) {
         toast(0, "There is no change at the cursor");
         return;
@@ -18433,6 +18517,10 @@ static void quick_cmd (int cmd) {
       return;
     }
     case CMD_REVERT_CHANGE:
+      if (DP.open && DP.staged) {	/* not the change at the cursor: the one shown is staged */
+        toast(0, "Unstage the change to revert it");
+        return;
+      }
       if ((at = hunk_here(h, n)) < 0) {
         toast(0, "There is no change at the cursor");
         return;
