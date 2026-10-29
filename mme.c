@@ -339,6 +339,9 @@ static void draw_peek (void);
 static void view_blocks_update (int other);
 static void draw_quick (int sy, size_t y, int gw, int is_cur);
 static void draw_change_count (int sy, size_t y, int gw, int is_cur);
+static int qc_pick (size_t y, int *staged, long *at);
+static uint32_t blend (uint32_t c, uint32_t bg, int pct);
+static int qc_get (int staged, size_t i, size_t *line, size_t *last, QHunk *h);
 static void draw_dirty_peek (void);
 static void conflict_row (int sy, size_t y, int gw, size_t from, int other);
 static int dirty_key (int k);
@@ -3265,6 +3268,28 @@ static void draw_row (int sy, size_t y, int gw, Pos sa, Pos sb, size_t from, siz
     if (from == 0 && y == NE.a.y)	/* the gutter arrow points at the line it is on */
       scr_put_rgb(x0, sy, 0xEA9C, ui_color(C_ACCENT), ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG), 0);
   }
+  if (opt.change_chars && opt.scm_decor && T->real && !T->page && !T->sel) {	/* mme.scm.highlightChangedChars */
+    int ks;
+    long at;
+    size_t line, last;
+    QHunk h;
+    if (qc_pick(y, &ks, &at) && !ks && qc_get(0, (size_t)at, &line, &last, &h) && y >= h.n0 && y < h.n0 + h.nn &&
+        y - h.n0 < h.on) {	/* a line of a change not staged, with the index's line it was: the characters it took */
+      size_t la = 0, rr[2 * 16], nr = 0, q;
+      const char *a = quick_old(T->doc, T->real, h.o0 + (y - h.n0), &la);
+      uint32_t tint = blend(0x2EA043, ui_color(is_cur ? C_LINE_BG : C_EDITOR_BG), 30);	/* QD_ADD, faint */
+      if (a) chars_diff(a, la, r->s, r->len, NULL, NULL, rr, &nr, 16, NULL);
+      for (q = 0; q < nr; q++) {
+        size_t xa = rr[2 * q] < r->len ? rr[2 * q] : r->len, xb = rr[2 * q + 1] < r->len ? rr[2 * q + 1] : r->len, ca, cb;
+        int i;
+        if (xb <= xa) continue;
+        ca = vcol(r, y, xa);
+        cb = vcol(r, y, xb);
+        for (i = (int)ca; i < (int)cb; i++)
+          if ((size_t)i >= left && (size_t)i < right) scr_set_bg(x0 + gw + i - (int)left, sy, tint);
+      }
+    }
+  }
   if (from == 0 && gw >= 4) {	/* the fold's chevron: folded, or where the cursor is */
     if (T->nfold && is_folded(y)) scr_put(x0 + gw - 2, sy, 0xEAB6, S_GUTTER_CUR);
     else if (y == T->cur.y && fold_end(y) > y) scr_put(x0 + gw - 2, sy, 0xEAB4, S_GUTTER);
@@ -4796,6 +4821,7 @@ static void draw_minimap (void) {
 
 
 static int qc_pick (size_t y, int *staged, long *at);
+static uint32_t blend (uint32_t c, uint32_t bg, int pct);
 static int qc_get (int staged, size_t i, size_t *line, size_t *last, QHunk *h);
 
 /*
@@ -17630,6 +17656,55 @@ static void change_count (const QHunk *h, char *out, size_t n) {
 }
 
 
+#define CHARS_MAX	2000	/* the lines of a change whose characters are counted, at most */
+
+/* line i of a change's old side (the index's; HEAD's for a staged one) or its new one (the buffer's; the index's) */
+static const char *change_line (int staged, int new_side, size_t i, size_t *len) {
+  const char *s;
+  *len = 0;
+  if (!new_side) s = staged ? quick_head(T->doc, T->real, i, len) : quick_old(T->doc, T->real, i, len);
+  else if (staged) s = quick_old(T->doc, T->real, i, len);
+  else if (i < T->doc->n) {
+    *len = row_at(i)->len;
+    s = row_at(i)->s;
+  }
+  else s = "";
+  return s ? s : "";
+}
+
+
+/* the counts with the characters the change took after them: "+1 -1 · 2 chars" (its lines one with another,
+   in order, those left over whole); kept until the buffer or the change is another */
+static void change_count_chars (int staged, const QHunk *h, char *out, size_t n) {
+  static const Doc *d;
+  static unsigned long edits;
+  static QHunk was;
+  static int was_staged = -1;
+  static size_t chars;
+  static int known;
+  char c[40];
+  change_count(h, out, n);
+  if (d != T->doc || edits != T->doc->edits || was_staged != staged || memcmp(&was, h, sizeof(was)) != 0) {
+    size_t i, la, lb;
+    d = T->doc;
+    edits = T->doc->edits;
+    was = *h;
+    was_staged = staged;
+    chars = 0;
+    known = h->on <= CHARS_MAX && h->nn <= CHARS_MAX;
+    for (i = 0; known && (i < h->on || i < h->nn); i++) {
+      const char *a = i < h->on ? change_line(staged, 0, h->o0 + i, &la) : NULL;
+      const char *b = i < h->nn ? change_line(staged, 1, h->n0 + i, &lb) : NULL;
+      if (a && b) chars += chars_changed(a, la, b, lb);
+      else if (a) chars += utf8_count(a, la);
+      else chars += utf8_count(b, lb);
+    }
+  }
+  chars_text(chars, known, c, sizeof(c));
+  strncat(out, c, n - strlen(out) - 1);
+}
+
+
 /* the change under the mouse, on its bar or square: its lines lo .. hi, its kind; worked out once a drawing */
 static int qc_hover (size_t *lo, size_t *hi, int *staged) {
   static unsigned long gen;
@@ -17650,8 +17725,8 @@ static int qc_hover (size_t *lo, size_t *hi, int *staged) {
         ok = 1;
         scr_zone_to_ui(g, tx, ty, 0, &ux, &uy);
         if (!(DP.open && DP.staged == st && DP.hi == (size_t)at)) {	/* its peek is open: it would cover the title */
-          char tip[96], c[48];
-          change_count(&qh, c, sizeof(c));
+          char tip[120], c[80];
+          change_count_chars(st, &qh, c, sizeof(c));
           snprintf(tip, sizeof(tip), "%s (Alt+F3) \xC2\xB7 %s", st ? "Show Staged Change" : "Show Change", c);
           tip_want(ux + 1, uy + 1, tip);
         }
@@ -17842,6 +17917,19 @@ static void put_plain (int x, int y, int w, const char *s, size_t n, int st) {
 }
 
 
+/* the column put_plain draws byte off of s at */
+static int plain_col (const char *s, size_t off) {
+  size_t i = 0, len;
+  int c = 0;
+  while (i < off) {
+    uint32_t cp = utf8_decode(s + i, off - i, &len);
+    c += cp == '\t' ? TABW : uc_width(cp);
+    i += len ? len : 1;
+  }
+  return c;
+}
+
+
 /* VS Code's dirty diff widget: under the change, what it was (red) and is (green) */
 static void draw_dirty_peek (void) {
   size_t n, total, k, line0, last, all, rank;
@@ -17873,8 +17961,8 @@ static void draw_dirty_peek (void) {
   scr_fill(DP.x, y0, DP.w, S_BOX);
   rank = qc_rank(DP.staged, DP.hi, &all);
   {
-    char c[48];
-    change_count(h, c, sizeof(c));
+    char c[80];
+    change_count_chars(DP.staged, h, c, sizeof(c));
     snprintf(title, sizeof(title), "%s \xE2\x80\x94 %lu of %lu change%s%s \xC2\xB7 %s", path_basename(T->real),
              (unsigned long)rank, (unsigned long)all, all == 1 ? "" : "s", DP.staged ? " (staged)" : "", c);
   }
@@ -17929,6 +18017,20 @@ static void draw_dirty_peek (void) {
     scr_puts(DP.x, sy, num, S_DIFF_NUM);
     scr_put(DP.x + nw, sy, k < h->on ? '-' : '+', st);
     put_plain(DP.x + nw + 2, sy, DP.w - nw - 3, s ? s : "", len, st);
+    {	/* the line with the one it became (or was), in order: the characters that changed, brighter */
+      int to_new = k >= h->on;
+      size_t i = to_new ? k - h->on : k, la, lb, rr[2 * 16], nr = 0, q;
+      if (s && i < h->on && i < h->nn) {
+        const char *a = change_line(DP.staged, 0, h->o0 + i, &la), *b = change_line(DP.staged, 1, h->n0 + i, &lb);
+        if (to_new) chars_diff(a, la, b, lb, NULL, NULL, rr, &nr, 16, NULL);
+        else chars_diff(a, la, b, lb, rr, &nr, NULL, NULL, 16, NULL);
+      }
+      for (q = 0; q < nr; q++) {
+        int c0 = plain_col(s, rr[2 * q] < len ? rr[2 * q] : len), c1 = plain_col(s, rr[2 * q + 1] < len ? rr[2 * q + 1] : len), c;
+        for (c = c0; c < c1 && c < DP.w - nw - 3; c++)
+          scr_set_bg(DP.x + nw + 2 + c, sy, ui_color(to_new ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
+      }
+    }
   }
   for (k = 0; k < (size_t)DP.w; k++) scr_put(DP.x + (int)k, y0 + ph - 1, 0x2500, S_BOX_DIM);
 }

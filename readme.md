@@ -1463,8 +1463,13 @@ With no file open the editor shows the keys to start with.
   line ends with its lines added and deleted, dim in green and red against
   the text's right edge (`+3 -1`, `-5` at a red square; staged fainter),
   only where the line leaves room; they follow the typing. The square's
-  tooltip and the peek's title say them too; the diff editor has them at
-  the end of each block's first row (mme.scm.showChangeCounts, on). The
+  tooltip and the peek's title say them too, with the characters it took
+  (`+1 -1 · 2 chars`: the line and the one it became, character by
+  character); the diff editor has them at the end of each block's first
+  row, the characters left out where they do not fit
+  (mme.scm.showChangeCounts, on). The peek paints the characters that
+  changed brighter; mme.scm.highlightChangedChars (off) tints them in the
+  editor too, on a changed line not yet staged, as it is typed. The
   scrollbar shows the changes as squares too (■, staged □; over every mark
   but an error), the minimap a square where each starts; a click on one
   (on the scrollbar's thumb too, on the minimap's slider at its left edge)
@@ -1505,8 +1510,8 @@ With no file open the editor shows the keys to start with.
   (git.enableSmartCommit), Never (git.suggestSmartCommit).
 - **Diff editor** — the whole file, old on the left and new on the right
   (one above the other when it is narrow, or with `i` / **Toggle Inline
-  View**), changed lines red and green, the changed words in them brighter
-  (VS Code's character diff). Up and Down move the cursor, Enter opens the
+  View**), changed lines red and green, the changed characters in them
+  brighter (VS Code's character diff; a very long line: its words). Up and Down move the cursor, Enter opens the
   file at its line, F7 / Shift+F7 go from change to change, Esc closes it.
   Its scrollbar shows the changes as squares (■, green, red, blue), its
   minimap a square where each block of changes starts; a click on one goes

@@ -1069,6 +1069,179 @@ int git_counts (int x, int y, long add, long del, int st) {
 }
 
 
+/*
+** {==================================================================
+** The characters a line's change took
+** ===================================================================
+**
+** A line and the line it became, character by character: their common
+** start and end left out, the longest common run of characters of what is
+** left (an LCS) stays plain, the rest is what changed, as byte ranges of
+** each. A lone character the same between two changes is taken as changed
+** too ("teh" -> "the": "eh" and "he", not three bits). Its count is the
+** more of the two sides' changed characters. A middle too long for the
+** table is changed as a whole. Answers are kept by the two lines' text, so
+** drawing the same lines again costs a hash.
+*/
+
+#define CD_MAX	512	/* the middle's characters, of each line, at most for the LCS */
+#define CD_RANGES	16	/* the ranges kept of a side; more: the last one goes to the end */
+#define CD_SLOTS	256
+
+typedef struct CDiff {
+  unsigned long long key;
+  size_t na, nb;
+  size_t n, nra, nrb;
+  int exact;
+  size_t ra[2 * CD_RANGES], rb[2 * CD_RANGES];
+} CDiff;
+
+static CDiff g_cd[CD_SLOTS];
+
+
+static void cd_range (size_t *r, size_t *nr, size_t a, size_t b) {
+  if (*nr > 0 && r[2 * *nr - 1] == a) r[2 * *nr - 1] = b;	/* joins the one before */
+  else if (*nr < CD_RANGES) {
+    r[2 * *nr] = a;
+    r[2 * *nr + 1] = b;
+    (*nr)++;
+  }
+  else r[2 * *nr - 1] = b;
+}
+
+
+/* the middle a[0..na), b[0..nb) (at byte p of the lines): its LCS, its ranges into c; 0: too long for it */
+static int cd_lcs (const char *a, size_t na, const char *b, size_t nb, size_t p, CDiff *c) {
+  uint32_t ca[CD_MAX], cb[CD_MAX];
+  size_t oa[CD_MAX + 1], ob[CD_MAX + 1], m = 0, n = 0, i, j, k, len, nm = 0, da = 0, db = 0;
+  unsigned short *t;
+  unsigned char am[CD_MAX], bm[CD_MAX];
+  size_t mi[CD_MAX], mj[CD_MAX];
+  for (i = 0; i < na; i += len ? len : 1) {
+    if (m == CD_MAX) return 0;
+    oa[m] = i;
+    ca[m++] = utf8_decode(a + i, na - i, &len);
+  }
+  oa[m] = na;
+  for (i = 0; i < nb; i += len ? len : 1) {
+    if (n == CD_MAX) return 0;
+    ob[n] = i;
+    cb[n++] = utf8_decode(b + i, nb - i, &len);
+  }
+  ob[n] = nb;
+  if ((t = (unsigned short *)calloc((m + 1) * (n + 1), sizeof(unsigned short))) == NULL) return 0;
+#define T_(x, y)	t[(x) * (n + 1) + (y)]
+  for (i = m; i-- > 0;)
+    for (j = n; j-- > 0;)
+      T_(i, j) = ca[i] == cb[j] ? (unsigned short)(T_(i + 1, j + 1) + 1) : T_(i + 1, j) > T_(i, j + 1) ? T_(i + 1, j) : T_(i, j + 1);
+  memset(am, 1, m);
+  memset(bm, 1, n);
+  for (i = 0, j = 0; i < m && j < n;) {	/* the common characters, walked */
+    if (ca[i] == cb[j]) {
+      am[i] = bm[j] = 0;
+      mi[nm] = i++;
+      mj[nm++] = j++;
+    }
+    else if (T_(i + 1, j) >= T_(i, j + 1)) i++;
+    else j++;
+  }
+#undef T_
+  free(t);
+  for (k = 0; k < nm;) {	/* a lone common character between two changes: changed too */
+    size_t e = k + 1, x0 = mi[k], y0 = mj[k], x1, y1;
+    while (e < nm && mi[e] == mi[e - 1] + 1 && mj[e] == mj[e - 1] + 1) e++;
+    x1 = mi[e - 1] + 1;
+    y1 = mj[e - 1] + 1;
+    if (e - k < 2 && ((x0 > 0 && am[x0 - 1]) || (y0 > 0 && bm[y0 - 1])) &&
+        ((x1 < m && am[x1]) || (y1 < n && bm[y1]))) {
+      size_t q;
+      for (q = k; q < e; q++) am[mi[q]] = bm[mj[q]] = 1;
+    }
+    k = e;
+  }
+  for (i = 0; i < m; i++)
+    if (am[i]) {
+      da++;
+      cd_range(c->ra, &c->nra, p + oa[i], p + oa[i + 1]);
+    }
+  for (j = 0; j < n; j++)
+    if (bm[j]) {
+      db++;
+      cd_range(c->rb, &c->nrb, p + ob[j], p + ob[j + 1]);
+    }
+  c->n = da > db ? da : db;
+  return 1;
+}
+
+
+/*
+** The characters the change of line a into line b took (the count), and
+** where they are: up to cap ranges of each (byte pairs in ra / rb, their
+** counts in *nra / *nrb; NULL: not wanted). *exact 0: the middle was too
+** long, changed as a whole.
+*/
+size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *ra, size_t *nra,
+                   size_t *rb, size_t *nrb, size_t cap, int *exact) {
+  unsigned long long h = 1469598103934665603ull;
+  size_t i, p = 0, s = 0;
+  CDiff *c;
+  for (i = 0; i < na; i++) h = (h ^ (unsigned char)a[i]) * 1099511628211ull;	/* FNV-1a, both lines */
+  h = (h ^ 0x1F) * 1099511628211ull;
+  for (i = 0; i < nb; i++) h = (h ^ (unsigned char)b[i]) * 1099511628211ull;
+  c = &g_cd[h % CD_SLOTS];
+  if (!(c->key == h && c->na == na && c->nb == nb)) {
+    memset(c, 0, sizeof(*c));
+    c->key = h;
+    c->na = na;
+    c->nb = nb;
+    while (p < na && p < nb && a[p] == b[p]) p++;
+    while (p > 0 && p < na && ((unsigned char)a[p] & 0xC0) == 0x80) p--;	/* not inside a character */
+    while (p > 0 && p < nb && ((unsigned char)b[p] & 0xC0) == 0x80) p--;
+    while (s < na - p && s < nb - p && a[na - 1 - s] == b[nb - 1 - s]) s++;
+    while (s > 0 && (((unsigned char)a[na - s] & 0xC0) == 0x80 || ((unsigned char)b[nb - s] & 0xC0) == 0x80)) s--;
+    c->exact = 1;
+    if (na - p - s > 0 && nb - p - s > 0 && !cd_lcs(a + p, na - p - s, b + p, nb - p - s, p, c)) {
+      size_t da = utf8_count(a + p, na - p - s), db = utf8_count(b + p, nb - p - s);
+      c->exact = 0;
+      c->nra = c->nrb = 0;
+      cd_range(c->ra, &c->nra, p, na - s);
+      cd_range(c->rb, &c->nrb, p, nb - s);
+      c->n = da > db ? da : db;
+    }
+    else if (na - p - s == 0 || nb - p - s == 0) {	/* only taken out, or only put in */
+      if (na - p - s) cd_range(c->ra, &c->nra, p, na - s);
+      if (nb - p - s) cd_range(c->rb, &c->nrb, p, nb - s);
+      c->n = utf8_count(a + p, na - p - s) + utf8_count(b + p, nb - p - s);
+    }
+  }
+  if (exact) *exact = c->exact;
+  if (ra && nra) {
+    *nra = c->nra < cap ? c->nra : cap;
+    memcpy(ra, c->ra, 2 * *nra * sizeof(size_t));
+  }
+  if (rb && nrb) {
+    *nrb = c->nrb < cap ? c->nrb : cap;
+    memcpy(rb, c->rb, 2 * *nrb * sizeof(size_t));
+  }
+  return c->n;
+}
+
+
+/* the count alone */
+size_t chars_changed (const char *a, size_t na, const char *b, size_t nb) {
+  return chars_diff(a, na, b, nb, NULL, NULL, NULL, NULL, 0, NULL);
+}
+
+/* }================================================================== */
+
+
+/* " · 12 chars" after a change's counts; "" none or not worked out */
+void chars_text (size_t n, int known, char *out, size_t sz) {
+  if (!known || n == 0) out[0] = '\0';
+  else snprintf(out, sz, " \xC2\xB7 %lu char%s", (unsigned long)n, n == 1 ? "" : "s");
+}
+
+
 /* the sums of a group's files: k 0 the staged, 1 not */
 static void group_counts (int k, long *add, long *del) {
   size_t i;
@@ -2438,6 +2611,23 @@ static void word_pair (DLine *a, DLine *b) {
   unsigned char *ka, *kb;
   pair(a, b);	/* the fallback, and h0 / h1 for the old way of drawing */
   if (a->len > WORD_LINE_MAX || b->len > WORD_LINE_MAX) return;
+  {	/* the characters that changed, when the middle is short enough; else the words */
+    size_t ra[2 * 16], rb[2 * 16], nra, nrb;
+    int exact;
+    if ((long long)(a->h1 - a->h0) * (long long)(b->h1 - b->h0) <= g_wcells) {
+      chars_diff(a->s, a->len, b->s, b->len, ra, &nra, rb, &nrb, 16, &exact);
+      if (exact) {
+        g_wcells -= (long long)(a->h1 - a->h0) * (long long)(b->h1 - b->h0);
+        a->hr = (size_t *)xrealloc(a->hr, (2 * nra + 2) * sizeof(size_t));
+        b->hr = (size_t *)xrealloc(b->hr, (2 * nrb + 2) * sizeof(size_t));
+        memcpy(a->hr, ra, 2 * nra * sizeof(size_t));
+        memcpy(b->hr, rb, 2 * nrb * sizeof(size_t));
+        a->nhr = nra;
+        b->nhr = nrb;
+        return;
+      }
+    }
+  }
   wa = (size_t *)xmalloc((a->len + 2) * sizeof(size_t));
   wb = (size_t *)xmalloc((b->len + 2) * sizeof(size_t));
   na = words(a->s, a->len, wa);
@@ -3934,6 +4124,68 @@ static unsigned row_kinds (size_t k) {
 }
 
 
+#define CHARS_MAX	2000	/* the lines of a change whose characters are counted, at most */
+
+/* the lines of the block from row k: the old side's (o) and the new side's (n), in order */
+static size_t block_lines (size_t k, const DLine **o, size_t *no, const DLine **nw, size_t *nn, size_t cap) {
+  size_t n = nrows(), j, rows = 0;
+  *no = *nn = 0;
+  for (j = k; j < n && is_change(j); j++, rows++) {
+    if (D.split_now) {
+      const SRow *r = &D.row[j];
+      if (r->l >= 0 && D.line[r->l].kind == '-' && *no < cap) o[(*no)++] = &D.line[r->l];
+      if (r->r >= 0 && D.line[r->r].kind == '+' && *nn < cap) nw[(*nn)++] = &D.line[r->r];
+    }
+    else if (j < D.nline) {
+      if (D.line[j].kind == '-' && *no < cap) o[(*no)++] = &D.line[j];
+      if (D.line[j].kind == '+' && *nn < cap) nw[(*nn)++] = &D.line[j];
+    }
+  }
+  return rows;
+}
+
+
+/* the characters of l the view paints as changed: its ranges, else all of it */
+static size_t line_chars (const DLine *l) {
+  size_t r, n = 0;
+  if (l->nhr == 0) return utf8_count(l->s, l->len);
+  for (r = 0; r < l->nhr; r++) n += utf8_count(l->s + l->hr[2 * r], l->hr[2 * r + 1] - l->hr[2 * r]);
+  return n;
+}
+
+
+/* the characters the block from row k changed: its lines one with another, in order, those left over whole;
+   kept for the block until the diff is drawn from other lines; *known 0: too big to count */
+static size_t block_chars (size_t k, int *known) {
+  static const void *was_line, *was_tb;
+  static size_t was_k = (size_t)-1, was_n, was_nline, was_tnb;
+  static int was_split, was_known;
+  static const DLine *o[CHARS_MAX], *nw[CHARS_MAX];
+  size_t no, nn, i, n = 0;
+  if (was_k == k && was_line == (const void *)D.line && was_nline == D.nline && was_tb == (const void *)D.tb &&
+      was_tnb == D.tnb && was_split == D.split_now) {
+    *known = was_known;
+    return was_n;
+  }
+  *known = block_lines(k, o, &no, nw, &nn, CHARS_MAX) <= CHARS_MAX;
+  {	/* the changed characters the view paints (a line without a partner: all of it), the more of the two sides */
+    size_t sa = 0, sb = 0;
+    for (i = 0; *known && i < no; i++) sa += line_chars(o[i]);
+    for (i = 0; *known && i < nn; i++) sb += line_chars(nw[i]);
+    n = sa > sb ? sa : sb;
+  }
+  was_k = k;
+  was_line = (const void *)D.line;
+  was_nline = D.nline;
+  was_tb = (const void *)D.tb;
+  was_tnb = D.tnb;
+  was_split = D.split_now;
+  was_known = *known;
+  was_n = n;
+  return n;
+}
+
+
 /*
 ** At the end of a block's first row (the side with a line there: the
 ** modified one, else the original): its lines added and deleted, "+3 -1",
@@ -3941,7 +4193,9 @@ static unsigned row_kinds (size_t k) {
 */
 static void block_count (int x, int y, int w, size_t k, int cur) {
   size_t n = nrows(), a = 0, d = 0, j;
-  char t[48], *mid;
+  char t[64], *mid, *dot;
+  size_t lines;
+  const char *p;
   int tw, cx, i, kind = ' ';
   uint32_t bg;
   if (!opt.change_counts || D.kind == DK_OTHER) return;
@@ -3954,6 +4208,14 @@ static void block_count (int x, int y, int w, size_t k, int cur) {
   else if (a) snprintf(t, sizeof(t), "+%lu", (unsigned long)a);
   else if (d) snprintf(t, sizeof(t), "-%lu", (unsigned long)d);
   else return;
+  lines = strlen(t);
+  {
+    char c[40];
+    int known;
+    size_t nc = block_chars(k, &known);
+    chars_text(nc, known, c, sizeof(c));
+    strncat(t, c, sizeof(t) - strlen(t) - 1);
+  }
   if (D.split_now) {	/* the pane it goes in */
     const SRow *r = &D.row[k];
     if (r->r >= 0) {
@@ -3967,17 +4229,27 @@ static void block_count (int x, int y, int w, size_t k, int cur) {
     }
   }
   else if (k < D.nline) kind = D.line[k].kind;
-  tw = (int)strlen(t);
-  cx = x + w - tw - 1;
-  if (cx < x + 8) return;
-  for (i = -2; i < tw; i++)	/* two cells free before it */
-    if (scr_ch(cx + i, y) != ' ') return;
+  for (;;) {	/* where it fits, two cells free before it; else only the lines' counts */
+    int ok = 1;
+    tw = (int)str_cols(t);
+    cx = x + w - tw - 1;
+    for (i = -2; ok && i < tw; i++)
+      if (cx < x + 8 || scr_ch(cx + i, y) != ' ') ok = 0;
+    if (ok) break;
+    if (strlen(t) == lines) return;
+    t[lines] = '\0';
+  }
   bg = ui_color(kind == '+' ? C_DIFF_ADD : kind == '-' ? C_DIFF_DEL : cur ? C_LINE_BG : C_EDITOR_BG);
   mid = strchr(t, ' ');
-  for (i = 0; t[i]; i++) {	/* on a line's green or red: lighter, to be read on it */
-    int del = t[0] == '-' || (mid && t + i > mid);
-    uint32_t fg = kind == ' ' ? (del ? SB_DEL : SB_ADD) : del ? 0xFFA198 : 0x7EE787;
-    scr_put_rgb(cx + i, y, (uint32_t)(unsigned char)t[i], fg, bg, 0);
+  dot = strstr(t, "\xC2\xB7");
+  for (p = t; *p;) {	/* on a line's green or red: lighter, to be read on it; the characters' count gray */
+    size_t len;
+    uint32_t cp = utf8_decode(p, strlen(p), &len), fg;
+    int del = t[0] == '-' || (mid && p > mid);
+    if (dot && p >= dot - 1) fg = kind == ' ' ? 0x8B949E : 0xD0D7DE;
+    else fg = kind == ' ' ? (del ? SB_DEL : SB_ADD) : del ? 0xFFA198 : 0x7EE787;
+    cx += scr_put_rgb(cx, y, cp, fg, bg, 0);
+    p += len ? len : 1;
   }
 }
 

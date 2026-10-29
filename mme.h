@@ -156,6 +156,7 @@ typedef struct Opt {
   int merge_editor;	/* git.mergeEditor: a conflicted file opens in the merge editor */
   int scm_counts;	/* mme.scm.showLineCounts: Source Control's "+12 -3" */
   int change_counts;	/* mme.scm.showChangeCounts: each change's "+3 -1" at the end of its first line */
+  int change_chars;	/* mme.scm.highlightChangedChars: a changed line's characters tinted in the editor */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
   int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */
@@ -1336,6 +1337,10 @@ int git_letter_style (int l);	/* the style of a change's letter M A D U R */
 void git_numstat (const char *s, size_t len, void (*f)(void *ud, const char *path, long add, long del), void *ud);	/* git diff --numstat -z's files */
 int git_counts (int x, int y, long add, long del, int st);	/* "+12 -3" at x, y (x < 0: measured); its columns */
 int git_line_counts (const char *path, int dir, long *add, long *del);	/* since HEAD; a folder: its files'; 0: unchanged */
+size_t chars_changed (const char *a, size_t na, const char *b, size_t nb);	/* the characters a line's change took */
+size_t chars_diff (const char *a, size_t na, const char *b, size_t nb, size_t *ra, size_t *nra,
+                   size_t *rb, size_t *nrb, size_t cap, int *exact);	/* and where they are: byte ranges of each */
+void chars_text (size_t n, int known, char *out, size_t sz);	/* " · 12 chars", "" for none */
 int git_commit (int amend);	/* the message box's text; 0: it must be typed first */
 int diff_open_rev (const char *path, const char *rel, const char *old_rel,
                    const char *old, const char *new_, const char *title);
