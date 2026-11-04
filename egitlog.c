@@ -129,6 +129,8 @@ typedef struct Commit {
   int counted;	/* add, del, nfiles known */
   long add, del;	/* the lines its files added and deleted */
   size_t nfiles;
+  char *fnow, *fwas;	/* File History: the file's name in it and in its parent ('/', from the top) */
+  long fadd, fdel;	/* and its lines it added and deleted; -1 both: binary */
 } Commit;
 
 /* the counts of the commits read once (a commit never changes): a graph read again has them */
@@ -180,6 +182,8 @@ static void counted_put (const char *hash, long add, long del, size_t nfiles) {
 static Commit *g_cm;
 static size_t g_ncm, g_capcm;
 static int g_limit = 300, g_more;
+static char *g_frel;	/* File History: the graph has this file's commits only ('/', from the top); NULL: all */
+static size_t g_hist_at = (size_t)-1;	/* the commit whose change of it the diff shows */
 static char g_sync[64];	/* "1↓ 2↑" against the upstream, "" none */
 static int g_upstream;
 
@@ -196,6 +200,8 @@ static void commit_free (Commit *c) {
   free(c->refs);
   free(c->author);
   free(c->subject);
+  free(c->fnow);
+  free(c->fwas);
   free(c->cell);
   free(c->ccol);
   free(c->pass);
@@ -269,10 +275,13 @@ static void graph_lanes (void) {
   for (c = 0; c < g_ncm; c++) {
     Commit *cm = &g_cm[c];
     int i = lane_find(&l, cm->hash, -1), j, p, w;
+    /* File History: one lane, each commit on to the next shown (its parents are not all there) */
+    int npar = g_frel ? (c + 1 < g_ncm) : cm->npar;
+    const char *p0 = g_frel ? (c + 1 < g_ncm ? g_cm[c + 1].hash : NULL) : cm->npar > 0 ? cm->par[0] : NULL;
     uint32_t cell[256];
     unsigned char ccol[256];
     if (i < 0) i = lane_new(&l, -1);	/* a branch's tip */
-    w = l.n + cm->npar + 1;
+    w = l.n + npar + 1;
     if (w > 127) w = 127;
     for (j = 0; j < 2 * w; j++) {
       cell[j] = ' ';
@@ -293,8 +302,8 @@ static void graph_lanes (void) {
         ccol[2 * j] = l.col[j];
       }
     free(l.want[i]);
-    l.want[i] = cm->npar > 0 ? xstrdup(cm->par[0]) : NULL;
-    for (p = 1; p < cm->npar; p++) {	/* a merge: its other parents */
+    l.want[i] = p0 ? xstrdup(p0) : NULL;
+    for (p = 1; p < npar; p++) {	/* a merge: its other parents */
       int m = lane_find(&l, cm->par[p], i);
       if (i >= w) break;
       if (m >= 0 && m < w) {	/* one that is waited for already: into it */
@@ -371,15 +380,79 @@ static void files_free (GFile *file, size_t n) {
 }
 
 
+/*
+** git log's arguments for the graph (the refresh's worker runs the same):
+** every branch's commits; File History's (frel): the file's, back over its
+** renames, each with its numstat (-z: "\n12\t3\tname\0", "\n1\t0\t\0old\0new\0")
+*/
+int graph_log_args (const char **a, char *num, size_t nn, int limit, const char *frel) {
+  int k = 0;
+  snprintf(num, nn, "-n%d", limit + 1);
+  a[k++] = "log";
+  if (frel) a[k++] = "--follow";
+  else {
+    a[k++] = "--all";
+    a[k++] = "--date-order";
+  }
+  a[k++] = "--decorate=full";
+  a[k++] = num;
+  if (frel) {
+    a[k++] = "--numstat";
+    a[k++] = "-z";
+  }
+  a[k++] = "--format=%H%x1f%P%x1f%D%x1f%an%x1f%at%x1f%s%x1e";
+  if (frel) {
+    a[k++] = "--";
+    a[k++] = frel;
+  }
+  a[k] = NULL;
+  return k;
+}
+
+
+const char *graph_file (void) {
+  return g_frel;
+}
+
+
+/* File History's numstat line at p: its counts, its name in the commit and in the parent; past it */
+static const char *numstat_one (const char *p, const char *end, long *a, long *d, const char **was, const char **now) {
+  const char *t1 = (const char *)memchr(p, '\t', (size_t)(end - p)), *t2, *e;
+  if (t1 == NULL || (t2 = (const char *)memchr(t1 + 1, '\t', (size_t)(end - t1 - 1))) == NULL) return end;
+  *a = *p == '-' ? -1 : strtol(p, NULL, 10);
+  *d = t1[1] == '-' ? -1 : strtol(t1 + 1, NULL, 10);
+  if (*a < 0 || *d < 0) *a = *d = -1;
+  p = t2 + 1;
+  if (p < end && *p == '\0') {	/* a rename: old, new */
+    *was = p + 1;
+    if (*was >= end) return end;
+    *now = *was + strlen(*was) + 1;
+    if (*now >= end) return end;
+  }
+  else *was = *now = p;
+  e = *now + strlen(*now) + 1;
+  return e < end ? e : end;
+}
+
+
 void graph_load (void) {
   Buf b;
   char num[32];
   Kept *was = NULL;
   size_t i, nwas = 0;
-  const char *p;
+  const char *p, *end, *la[16];
   const char *root = git_root();
   static char *was_root;	/* another repository's files are not this one's */
   int same = root && was_root && strcmp(root, was_root) == 0;
+  char *cur = NULL;	/* File History: the file's name in the commits still to come (older) */
+  char at[41];	/* File History: the commit whose change the diff shows, found again */
+  at[0] = '\0';
+  if (g_frel && g_hist_at < g_ncm) memcpy(at, g_cm[g_hist_at].hash, sizeof(at));
+  g_hist_at = (size_t)-1;
+  if (was_root && !same && g_frel) {	/* another repository: its history is not this file's */
+    free(g_frel);
+    g_frel = NULL;
+  }
   for (i = 0; i < g_ncm; i++)
     if (g_cm[i].open) {
       was = (Kept *)xrealloc(was, (nwas + 1) * sizeof(Kept));
@@ -405,17 +478,17 @@ void graph_load (void) {
     free(was);
     return;
   }
-  snprintf(num, sizeof(num), "-n%d", g_limit + 1);
+  graph_log_args(la, num, sizeof(num), g_limit, g_frel);
+  cur = g_frel ? xstrdup(g_frel) : NULL;
   buf_init(&b);
-  if (gitv(&b, 0, "log", "--all", "--date-order", "--decorate=full", num,
-           "--format=%H%x1f%P%x1f%D%x1f%an%x1f%at%x1f%s%x1e", NULL) == 0) {
-    for (p = b.s ? b.s : ""; *p;) {
-      const char *f[6], *e = strchr(p, 0x1e);
+  if (git_exec(&b, 0, la) == 0) {
+    for (p = b.s ? b.s : "", end = p + b.len; p < end;) {
+      const char *f[6], *e;
       size_t len[6];
       int k;
       Commit *c;
-      if (e == NULL) break;
-      while (*p == '\n' || *p == '\r') p++;
+      while (p < end && (*p == '\n' || *p == '\r' || *p == '\0')) p++;
+      if (p >= end || (e = (const char *)memchr(p, 0x1e, (size_t)(end - p))) == NULL) break;
       for (k = 0; k < 6; k++) {	/* the fields */
         const char *q = memchr(p, k < 5 ? 0x1f : 0x1e, (size_t)(e - p + 1));
         if (q == NULL || q > e) q = e;
@@ -424,6 +497,25 @@ void graph_load (void) {
         p = q < e ? q + 1 : e;
       }
       p = e + 1;
+      if (g_frel) {	/* its numstat: the file's lines, and its names */
+        long fa = 0, fd = 0;
+        const char *fw = NULL, *fn = NULL;
+        if (p < end && *p == '\0') p++;
+        if (p < end && *p == '\n') p = numstat_one(p + 1, end, &fa, &fd, &fw, &fn);
+        if (len[0] == 40 && g_ncm < (size_t)g_limit) {
+          if (g_ncm == g_capcm) {
+            g_capcm = g_capcm ? g_capcm * 2 : 256;
+            g_cm = (Commit *)xrealloc(g_cm, g_capcm * sizeof(Commit));
+          }
+          memset(&g_cm[g_ncm], 0, sizeof(Commit));
+          g_cm[g_ncm].fnow = xstrdup(fn ? fn : cur);
+          g_cm[g_ncm].fwas = xstrdup(fw ? fw : cur);
+          g_cm[g_ncm].fadd = fa;
+          g_cm[g_ncm].fdel = fd;
+          free(cur);
+          cur = xstrdup(g_cm[g_ncm].fwas);
+        }
+      }
       if (len[0] != 40) continue;
       if (g_ncm == (size_t)g_limit) {
         g_more = 1;
@@ -434,7 +526,7 @@ void graph_load (void) {
         g_cm = (Commit *)xrealloc(g_cm, g_capcm * sizeof(Commit));
       }
       c = &g_cm[g_ncm++];
-      memset(c, 0, sizeof(*c));
+      if (!g_frel) memset(c, 0, sizeof(*c));	/* File History's: its file's names set */
       memcpy(c->hash, f[0], 40);
       c->hash[40] = '\0';
       for (k = 0; (size_t)k + 40 <= len[1];) {	/* "p1 p2" */
@@ -467,6 +559,9 @@ void graph_load (void) {
     }
   }
   buf_free(&b);
+  free(cur);
+  for (i = 0; at[0] && g_frel && i < g_ncm; i++)
+    if (strcmp(g_cm[i].hash, at) == 0) g_hist_at = i;
   for (i = 0; i < nwas; i++) files_free(was[i].file, was[i].nfile);	/* a commit no longer shown */
   free(was);
   graph_lanes();
@@ -612,6 +707,86 @@ const char *graph_file_path (size_t i, size_t f) {
 }
 
 
+/* path from the repository's top with '/', NULL: not in it */
+static char *top_rel (const char *path) {
+  const char *top = git_root();
+  size_t tl;
+  char *rel, *q;
+  if (top == NULL || path == NULL) return NULL;
+  tl = strlen(top);
+  if (m_fnncmp(path, top, tl) != 0 || !path_is_sep(path[tl]) || path[tl + 1] == '\0') return NULL;
+  rel = xstrdup(path + tl + 1);
+  for (q = rel; *q; q++)
+    if (*q == '\\') *q = '/';
+  return rel;
+}
+
+
+/* File History: the graph has path's commits only (NULL: every commit again); -1 not in the repository */
+int graph_set_file (const char *path) {
+  char *rel = NULL;
+  if (path && (rel = top_rel(path)) == NULL) return -1;
+  if (rel == NULL && g_frel == NULL) return 0;
+  free(g_frel);
+  g_frel = rel;
+  g_limit = 300;
+  graph_load();
+  return 0;
+}
+
+
+/* File History: the diff editor with commit i's change of the file */
+int graph_file_diff (size_t i) {
+  Commit *c;
+  char title[512], a[64], *path;
+  int r;
+  static const char empty_tree[] = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+  if (g_frel == NULL || i >= g_ncm || git_root() == NULL) return -1;
+  c = &g_cm[i];
+  path = path_join(git_root(), c->fnow);
+#ifdef _WIN32
+  {
+    char *q;
+    for (q = path; *q; q++)
+      if (*q == '/') *q = '\\';
+  }
+#endif
+  snprintf(title, sizeof(title), "%s (%.7s) \xE2\x80\x94 %lu of %lu%s", path_basename(path), c->hash,	/* — */
+           (unsigned long)(i + 1), (unsigned long)g_ncm, g_more ? "+" : "");
+  snprintf(a, sizeof(a), "%s", c->npar ? c->par[0] : empty_tree);
+  r = diff_open_rev(path, c->fnow, c->fwas, a, c->hash, title);
+  free(path);
+  if (r == 0) {
+    g_hist_at = i;
+    diff_set_history(1);
+  }
+  return r;
+}
+
+
+/* the diff of File History shown: the commit an older (d 1) or newer (d -1) one's; 0 when it moved */
+int graph_hist_step (int d) {
+  size_t i = g_hist_at;
+  if (g_frel == NULL || i >= g_ncm) return -1;
+  if (d < 0 && i == 0) {
+    toast(0, "This is the newest commit of the file");
+    return -1;
+  }
+  if (d > 0 && i + 1 >= g_ncm) {
+    if (!g_more) {
+      toast(0, "This is the first commit of the file");
+      return -1;
+    }
+    graph_load_more();	/* the next ones */
+    if (i + 1 >= g_ncm) return -1;
+  }
+  i = d > 0 ? i + 1 : i - 1;
+  if (graph_file_diff(i) != 0) return -1;
+  git_select_commit(i);
+  return 0;
+}
+
+
 /* the diff editor: the commit's change of its file f */
 int graph_diff (size_t i, size_t f) {
   Commit *c;
@@ -693,12 +868,17 @@ void graph_draw (size_t i, int x, int y, int w, int st) {
   for (k = 0; k < c->ncell && cx < end - 2; k++)
     cx += scr_put_rgb(cx, y, c->cell[k], lane_rgb[c->ccol[k] % NCOLOR], bg, 0);
   cx += 1;
-  if (opt.scm_counts && c->counted) {	/* "+120 -14" at the end, when there is room for the subject too */
-    int cw = git_counts(-1, y, c->add, c->del, st);
+  if (opt.scm_counts && (c->counted || g_frel)) {	/* "+120 -14" at the end, when there is room for the subject too */
+    long a = g_frel ? c->fadd : c->add, d = g_frel ? c->fdel : c->del;	/* File History: the file's */
+    int cw = git_counts(-1, y, a, d, st);
     if (cw > 0 && end - cw - 1 > cx + 12) {
-      git_counts(end - cw - 1, y, c->add, c->del, st);
+      git_counts(end - cw - 1, y, a, d, st);
       end -= cw + 2;
     }
+  }
+  if (g_frel && c->fnow && c->fwas && strcmp(c->fnow, c->fwas) != 0 && cx + 2 < end) {	/* renamed in it */
+    cx += scr_put(cx, y, 'R', st == S_SIDE ? git_letter_style('R') : st);
+    cx += 1;
   }
   cx += draw_refs(c->refs, cx, y, cx + (end - cx) / 2);
   cx += scr_putsw(cx, y, end - cx - 1, c->subject, st);
@@ -1431,6 +1611,105 @@ static void stash_apply (int pop) {
 }
 
 
+/*
+** Pick a Commit of the File: File History's commits in a quick pick, what
+** is typed matching the subject, the hash, the author; the one taken is
+** selected in the graph and its change shown (act). -1: none taken.
+*/
+static int hist_pick (SideAct *act) {
+  const char *fb = g_frel ? strrchr(g_frel, '/') : NULL;
+  char title[300];
+  int start = g_hist_at < g_ncm ? (int)g_hist_at : 0;
+  if (g_frel == NULL || g_ncm == 0) return -1;
+  snprintf(title, sizeof(title), "Select a commit of %s (type a message, a hash or an author)", fb ? fb + 1 : g_frel);
+  for (;;) {
+    Pick p;
+    size_t i;
+    int r, more = g_more;
+    pick_init(&p, title);
+    for (i = 0; i < g_ncm; i++) {
+      const Commit *c = &g_cm[i];
+      char det[400], ago[48], num[48];
+      git_ago(c->time, ago, sizeof(ago));
+      if (c->fadd < 0) snprintf(num, sizeof(num), "binary");
+      else snprintf(num, sizeof(num), "+%ld -%ld", c->fadd, c->fdel);
+      snprintf(det, sizeof(det), "%.7s \xE2\x80\xA2 %s, %s  %s%s%s", c->hash, c->author ? c->author : "", ago, num,	/* • */
+               c->fnow && c->fwas && strcmp(c->fnow, c->fwas) != 0 ? "  renamed from " : "",
+               c->fnow && c->fwas && strcmp(c->fnow, c->fwas) != 0 ? c->fwas : "");
+      pick_add(&p, c->subject ? c->subject : "", det, 0xEAFC);	/* git-commit */
+    }
+    if (more) pick_add(&p, "Load More Commits...", NULL, 0xEB17);
+    p.match_detail = 1;	/* nothing typed: newest first; typed: the best match first */
+    p.start = start;
+    r = pick_run(&p);
+    pick_free(&p);
+    if (r < 0) return -1;
+    if (more && (size_t)r == g_ncm) {	/* the next ones, and the list again on the first of them */
+      size_t had = g_ncm;
+      graph_load_more();
+      start = (int)had;
+      continue;
+    }
+    if (graph_file_diff((size_t)r) != 0) return -1;
+    git_select_commit((size_t)r);
+    act->what = SA_SHOW_DIFF;
+    act->go = 1;
+    return 0;
+  }
+}
+
+
+/* the diff's list button: Pick a Commit of the File, the diff shown already */
+void graph_hist_pick (void) {
+  SideAct a;
+  memset(&a, 0, sizeof(a));
+  hist_pick(&a);
+}
+
+
+/*
+** File History in the graph: the file's commits; the first one's change
+** shown (mme.git.fileHistory.previewOnSelect) in act, or (pick) the commit
+** picked from a list. Path NULL, or the file shown already, with pick: the
+** graph as it is. -1: nothing to show.
+*/
+int git_file_history (const char *path, int pick, SideAct *act) {
+  int same = 0;
+  act->what = SA_NONE;
+  if (git_root() == NULL) {
+    toast(1, "The folder currently open doesn't have a git repository.");
+    return -1;
+  }
+  if (pick && g_frel) {
+    char *rel = path ? top_rel(path) : NULL;
+    same = path == NULL || (rel && strcmp(rel, g_frel) == 0);
+    free(rel);
+  }
+  if (!same) {
+    if (path == NULL) {
+      toast(0, "Open a file of the repository to see its history");
+      return -1;
+    }
+    if (graph_set_file(path) != 0) {
+      toast(0, "The file is not in the repository");
+      return -1;
+    }
+    if (g_ncm == 0) {
+      toast(0, "No history for %s", path_basename(path));
+      graph_set_file(NULL);
+      return -1;
+    }
+    git_history_shown();
+  }
+  if (pick) hist_pick(act);
+  else if (opt.fh_preview && graph_file_diff(0) == 0) {
+    act->what = SA_SHOW_DIFF;
+    act->go = 0;
+  }
+  return 0;
+}
+
+
 /* Git: View File History: the file's commits; one opens its change */
 static void file_history (const char *path, SideAct *act) {
   Buf b;
@@ -1933,7 +2212,13 @@ void git_command (int cmd, const char *path, SideAct *act) {
     }
     case CMD_GIT_COMMIT: if (!git_commit(0)) { act->what = SA_FOCUS_SCM; } break;
     case CMD_GIT_AMEND: git_commit(1); on_disk_changed(); break;
-    case CMD_GIT_FILE_HISTORY: file_history(path, act); break;
+    case CMD_GIT_FILE_HISTORY:	/* mme.git.fileHistory.view: in the graph, or the quick pick */
+      if (opt.fh_graph) {
+        act->what = SA_FILE_HISTORY;
+        act->path = path;
+      }
+      else file_history(path, act);
+      break;
     case CMD_GIT_MORE: more_actions(act); break;
     case CMD_GIT_WT_CREATE: wt_create(act); break;
     case CMD_GIT_WT_OPEN: {
@@ -2152,6 +2437,12 @@ const char *git_blame (const char *path, size_t y, int short_form) {
   else snprintf(out, sizeof(out), "%s, %s \xE2\x80\xA2 %s", c->author ? c->author : "?", ago,
                 c->summary ? c->summary : "");
   return out;
+}
+
+
+/* a blame is asked for or running */
+int git_blame_busy (void) {
+  return g_bl_job != NULL || g_bl_want != NULL;
 }
 
 

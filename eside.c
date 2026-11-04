@@ -1811,6 +1811,9 @@ void files_cmd (int what, SideAct *act) {
     case FC_OPEN_SIDE:
       if (n && !n->dir) act_path(act, SA_OPEN_SIDE, n->path, NULL);
       return;
+    case FC_FILE_HISTORY:
+      if (n && !n->dir) act_path(act, SA_FILE_HISTORY, n->path, NULL);
+      return;
     case FC_FIND_FOLDER: {
       Node *d = n && n->dir ? n : target_dir();
       if (d->path) act_path(act, SA_FIND_FOLDER, d == &g_root ? "" : rel_of(d->path), NULL);
@@ -2025,10 +2028,11 @@ void files_mods (int mods) {
 */
 void files_menu (int row, int x, int y, SideAct *act) {
   enum { M_NEW_FILE, M_NEW_FOLDER, M_REVEAL, M_TERM, M_CUT, M_COPY, M_PASTE, M_DUP, M_PATH,
-         M_REL, M_RENAME, M_DELETE, M_SEL_CMP, M_CMP_SEL, M_SIDE, M_FIND, M_N };
+         M_REL, M_RENAME, M_DELETE, M_SEL_CMP, M_CMP_SEL, M_SIDE, M_FIND, M_HISTORY, M_N };
   static const int fc[M_N] = {FC_NEW_FILE, FC_NEW_FOLDER, FC_REVEAL, FC_TERMINAL, FC_CUT, FC_COPY,
                               FC_PASTE, FC_DUPLICATE, FC_COPY_PATH, FC_COPY_REL, FC_RENAME, FC_DELETE,
-                              -CMD_SELECT_COMPARE, -CMD_COMPARE_SELECTED, FC_OPEN_SIDE, FC_FIND_FOLDER};	/* < 0: a command */
+                              -CMD_SELECT_COMPARE, -CMD_COMPARE_SELECTED, FC_OPEN_SIDE, FC_FIND_FOLDER,
+                              FC_FILE_HISTORY};	/* < 0: a command */
 #ifdef _WIN32
   static const char *const reveal = "Reveal in File Explorer";
 #else
@@ -2076,6 +2080,10 @@ void files_menu (int row, int x, int y, SideAct *act) {
     ITEM(M_PATH, "Copy Path", "Shift+Alt+C");
     ITEM(M_REL, "Copy Relative Path", "Ctrl+K Ctrl+Shift+C");
     LINE();
+    if (!g_vis[g_sel]->dir && git_root()) {	/* its commits in the graph */
+      ITEM(M_HISTORY, "Open File History", "");
+      LINE();
+    }
     ITEM(M_RENAME, "Rename...", "F2");
     ITEM(M_DELETE, "Delete", "Delete");
   }

@@ -174,7 +174,7 @@ static const char *const names[CMD_N] = {
   "Jupyter: Open Variables View",
   "Tasks: Terminate Task", "Open Disassembly View",
   "Remote-SSH: Add New SSH Host...", "Remote-SSH: Open SSH Configuration File...",
-  "Git: Toggle Deleted Text"
+  "Git: Toggle Deleted Text", "Git: Pick a Commit of the File..."
 };
 
 static const char *const keys[CMD_N] = {
@@ -259,7 +259,7 @@ static const char *const keys[CMD_N] = {
   "",
   "", "",
   "", "",
-  ""
+  "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -450,7 +450,7 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "jupyter.openVariableView",
   "workbench.action.tasks.terminate", "debug.action.openDisassemblyView",
   "opensshremotes.addNewSshHost", "opensshremotes.openConfigFile",
-  "mme.git.toggleDeletedText"
+  "mme.git.toggleDeletedText", "mme.git.pickFileCommit"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */

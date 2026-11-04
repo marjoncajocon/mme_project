@@ -1424,8 +1424,27 @@ With no file open the editor shows the keys to start with.
   have their `+12 -3`, and the commit its sums at the end of its row.
   Hovering a commit shows its hash, author, age and "3 files changed, 120
   insertions(+), 14 deletions(-)" (read then, once). "Load More..." shows
-  older ones. **Git: View File History** lists the commits of the file in
-  front; one opens its change.
+  older ones.
+- **File History** — **Open File History** on a file's right-click menu (the
+  Explorer, a change in Source Control, an editor tab) or **Git: View File
+  History** (and a click on the blame in the status bar) shows the Graph
+  with that file's commits only (`git log --follow`, back over its renames),
+  titled "GRAPH History: f.c", each commit with the file's own `+12 -3` and
+  an R where it was renamed. Up and Down (PgUp, PgDn, a click) show the
+  commit moved to's change of the file in the diff editor at once, the list
+  keeping the keys (mme.git.fileHistory.previewOnSelect; off: Enter opens
+  it); Enter opens it and gives it the keys, Right still opens the commit to
+  all its files. The diff is titled `f.c (abc1234) — 3 of 12`, and its title
+  bar has Older and Newer (← →, or Alt+Left / Alt+Right in it, in place of
+  Go Back there), stepping through the file's commits with the list's
+  selection following (Load More's on its own past the last). The list
+  button (☰) in the GRAPH's title and in the diff's, Ctrl+F in either, or
+  **Git: Pick a Commit of the File...** opens the file's commits in a quick
+  pick: what is typed matches the subject, the hash or the author (the best
+  match first), each with its `+12 -3`; the one taken is selected in the
+  graph and its change opens. The title's X or Escape in the list shows
+  every commit again. mme.git.fileHistory.view
+  "quickPick" has the older quick pick of the commits instead.
 - **Branches** — the branch in the status bar opens **Git: Checkout to...**:
   Create new branch..., Create new branch from..., Checkout detached..., the
   branches, remote branches (checked out as a local branch that tracks it)

@@ -159,6 +159,8 @@ typedef struct Opt {
   int change_chars;	/* mme.scm.highlightChangedChars: a changed line's characters tinted in the editor */
   int del_chars;	/* mme.scm.showDeletedChars: the characters taken out of a line, struck through */
   int peek_side;	/* mme.scm.peekLayout: "sideBySide" (else "stacked"): the dirty diff peek's old and new */
+  int fh_graph;	/* mme.git.fileHistory.view: "graph" (else "quickPick"): Open File History in the graph */
+  int fh_preview;	/* mme.git.fileHistory.previewOnSelect: a commit moved to in it shows its change */
   int inline_suggest;	/* editor.inlineSuggest.enabled: the server's ghost text at the cursor */
   int inline_toolbar;	/* editor.inlineSuggest.showToolbar: not "never" (the toolbar itself is not drawn) */
   int next_edit;	/* github.copilot.nextEditSuggestions.enabled: the edit offered away from the cursor */
@@ -811,6 +813,7 @@ enum {
   CMD_TASK_TERMINATE, CMD_DEBUG_DISASM,	/* Tasks: Terminate Task (etask.c), Open Disassembly View (edebug.c) */
   CMD_SSH_ADD_HOST, CMD_SSH_OPEN_CONFIG,	/* Remote-SSH: Add New SSH Host..., Open SSH Configuration File... (eremote.c) */
   CMD_GIT_TOGGLE_DELETED,	/* Git: Toggle Deleted Text (mme.c: the deleted lines and characters shown) */
+  CMD_GIT_PICK_COMMIT,	/* Git: Pick a Commit of the File... (File History's commits in a list) */
   CMD_N
 };
 
@@ -1110,7 +1113,8 @@ typedef struct SideAct {
 enum { SA_NONE, SA_OPEN, SA_GO, SA_DIFF, SA_SHOW_DIFF, SA_CMD, SA_FOCUS_SCM,
        SA_RENAMED, SA_DELETED,	/* path (to path2) was renamed / deleted: its tabs follow */
        SA_TERMINAL, SA_CLIP,	/* a terminal in folder path; path to the clipboard */
-       SA_OPEN_SIDE, SA_FIND_FOLDER, SA_OPEN_FOLDER };	/* path opened in the group beside; Search in folder path (from the root) */
+       SA_OPEN_SIDE, SA_FIND_FOLDER, SA_OPEN_FOLDER,
+       SA_FILE_HISTORY, SA_FILE_PICK };	/* Open File History: path's commits in the graph; and one picked from a list */	/* path opened in the group beside; Search in folder path (from the root) */
 
 void side_bar (int x, int y, int w, int h, size_t total, size_t top, size_t shown);	/* a pane's scrollbar */
 int side_bar_hit (int x, int y);	/* eside.c: on the scrollbar of the view shown (not the Explorer's) */
@@ -1249,7 +1253,7 @@ void files_click (int row, int col, SideAct *act);
 void files_menu (int row, int x, int y, SideAct *act);	/* the right button: its context menu */
 enum { FC_NEW_FILE, FC_NEW_FOLDER, FC_RENAME, FC_DELETE, FC_COPY, FC_CUT, FC_PASTE, FC_DUPLICATE,
        FC_COPY_PATH, FC_COPY_REL, FC_REVEAL, FC_TERMINAL, FC_COLLAPSE, FC_REFRESH,
-       FC_SELECT_ALL, FC_OPEN_SIDE, FC_FIND_FOLDER };
+       FC_SELECT_ALL, FC_OPEN_SIDE, FC_FIND_FOLDER, FC_FILE_HISTORY };
 void files_cmd (int what, SideAct *act);	/* on the selection */
 const char *compare_selected (void);	/* mme.c: Select for Compare's file, NULL: none */
 const char *files_selected (void);	/* its path, NULL: none */
@@ -1419,6 +1423,17 @@ void graph_toggle (size_t i);
 size_t graph_nfiles (size_t i);
 const char *graph_file_path (size_t i, size_t f);
 int graph_diff (size_t i, size_t f);	/* the diff editor: commit i's change of file f */
+int graph_log_args (const char **a, char *num, size_t nn, int limit, const char *frel);	/* the graph's git log (a[16]) */
+const char *graph_file (void);	/* File History: the file the graph shows the commits of ('/', from the top), NULL: all */
+int graph_set_file (const char *path);	/* path's commits only, NULL: all again; -1: not in the repository */
+int graph_file_diff (size_t i);	/* File History: commit i's change of the file, in the diff editor */
+int graph_hist_step (int d);	/* the diff of File History: an older (1) / newer (-1) commit's; 0 moved */
+int git_file_history (const char *path, int pick, SideAct *act);	/* Open File History: the graph, its first change (pick: the one picked) in act */
+void graph_hist_pick (void);	/* the diff of File History: Pick a Commit of the File */
+void git_history_shown (void);	/* egit.c: the GRAPH open on File History's first commit */
+void git_select_commit (size_t i);	/* egit.c: the graph's commit i selected */
+void diff_set_history (int on);	/* egit.c: the diff shown is File History's: Older / Newer in its title */
+int diff_is_history (void);
 void graph_draw (size_t i, int x, int y, int w, int st);
 void graph_draw_file (size_t i, size_t f, int x, int y, int w, int st);
 void graph_tip (size_t i, int load, char *out, size_t n);
@@ -1434,6 +1449,8 @@ void git_ago (long long t, char *out, size_t n);	/* "3 days ago" */
 const char *git_blame (const char *path, size_t y, int short_form);	/* NULL: none */
 void blame_clear (void);
 int git_blame_idle (void);	/* the blame git was asked for, read when nothing else is to do */
+int git_blame_busy (void);	/* one is asked for or running */
+int git_counts_idle (void);	/* egit.c: the Source Control counts a refresh left out, asked for when all else is read; 1 started */
 void on_disk_changed (void);	/* mme.c: git changed files; the open ones are read again */
 
 /* eext.c - the Extensions view, and what extensions contribute */

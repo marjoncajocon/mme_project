@@ -32,6 +32,7 @@ Opt opt = {4, 1, 1, 1, 1, 1, 0, 0, 1, 0, "Dark Modern", 1, 1, "", "", 0, 1, 1, 1
            1, "", 0, 0,	/* command_center, win_title, panel_loc, panel_justify */
            1, 1,	/* markdown.preview.scroll* */
            1, 1, 1, 1, 1, 1,	/* merge_editor, scm_counts, change_counts, change_chars, del_chars, peek_side */
+           1, 1,	/* fh_graph, fh_preview */
            1, 1, 1,	/* inline_suggest, inline_toolbar, next_edit */
            1, 1,	/* color_decorators, links */
            1, 1, 0};	/* search_on_type, se_context, se_reuse */
@@ -1292,6 +1293,8 @@ static void read_opts (const Json *j) {
   opt.change_chars = json_bool(json_get(j, "mme\\.scm\\.highlightChangedChars"), 1);
   opt.del_chars = json_bool(json_get(j, "mme\\.scm\\.showDeletedChars"), 1);
   opt.peek_side = strcmp(json_str(json_get(j, "mme\\.scm\\.peekLayout"), "sideBySide"), "stacked") != 0;
+  opt.fh_graph = strcmp(json_str(json_get(j, "mme\\.git\\.fileHistory\\.view"), "graph"), "quickPick") != 0;
+  opt.fh_preview = json_bool(json_get(j, "mme\\.git\\.fileHistory\\.previewOnSelect"), 1);
   opt.suggest_smart_commit = json_bool(json_get(j, "git\\.suggestSmartCommit"), 1);
   opt.scm_decor = strcmp(json_str(json_get(j, "scm\\.diffDecorations"), "all"), "none") != 0;
   opt.guides = json_bool(json_get(j, "editor\\.guides\\.indentation"), 1);

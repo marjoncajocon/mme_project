@@ -1464,6 +1464,8 @@ static int cmp_oldcount (const void *a, const void *b) {
 }
 
 
+static int g_counts_want;	/* git_refresh_now left out the counts: git_counts_idle asks for them */
+
 static void git_refresh_now (void) {
   Buf b;
   size_t i, nold = 0;
@@ -1574,7 +1576,7 @@ static void git_refresh_now (void) {
     static int asking;	/* a worker that cannot start refreshes here again: not over and over */
     if (!asking) {
       asking = 1;
-      git_refresh_async();	/* the counts, read on the worker: they come in a moment */
+      g_counts_want = 1;	/* the counts, read on the worker once the blame and the quick diffs are in (git_counts_idle) */
       asking = 0;
     }
   }
@@ -1600,12 +1602,15 @@ typedef struct GJob {
   char *git, *dir;	/* git, where the refresh starts (repo_dir) */
   char **tops;	/* the repositories' */
   int ntop, limit;
+  char *frel;	/* File History's file (graph_file), NULL: every commit */
   int counts;	/* mme.scm.showLineCounts: git diff --numstat too */
   ULines *ul;	/* the untracked files it counted */
   size_t nul;
   Mutex *mx;
   int done;	/* under mx */
   int stale;	/* this thread's: a git_refresh came after it */
+  char *ctop;	/* git_counts_async's: the counts only, of this repository's top */
+  Vec cun;	/* and its untracked files (from the top, sorted) */
   Thread *th;
   Said *said;
   size_t nsaid;
@@ -1656,6 +1661,36 @@ static void job_state (GJob *j, const char *gd) {
 }
 
 
+/* counts_read's git diffs, and the lines of the untracked files un (sorted) as they are now */
+static void job_counts (GJob *j, const char *top, const Vec *un, Buf *b) {
+  const char *a_num[] = {"diff", "--numstat", "-M", "-z", NULL};
+  const char *a_cnum[] = {"diff", "--cached", "--numstat", "-M", "-z", NULL};
+  const char *a_hnum[] = {"diff", "HEAD", "--numstat", "-M", "-z", NULL};
+  char *lbuf = (char *)xmalloc(LINES_BUF);
+  size_t k;
+  job_git(j, top, 0, a_num, b);
+  job_git(j, top, 0, a_cnum, b);
+  job_git(j, top, 0, a_hnum, b);
+  for (k = 0; k < un->n && k < UNTRACKED_COUNT; k++) {
+    char *p = path_join(top, (const char *)un->v[k]);
+    OsStat fs;
+    to_native(p);
+    if (os_stat(p, &fs) == 0 && fs.exists) {
+      ULines *u;
+      buf_printf(&j->finger, "\x1d%s %lld %lld", (const char *)un->v[k], fs.size, (long long)fs.mtime);
+      j->ul = (ULines *)xrealloc(j->ul, (j->nul + 1) * sizeof(ULines));
+      u = &j->ul[j->nul++];
+      u->rel = xstrdup((const char *)un->v[k]);
+      u->size = fs.size;
+      u->mtime = (long long)fs.mtime;
+      u->lines = (unsigned long long)fs.size > UNTRACKED_BYTES ? -2 : file_lines(p, lbuf);
+    }
+    free(p);
+  }
+  free(lbuf);
+}
+
+
 /* the worker: the programs git_refresh_now runs, in its order, with its arguments */
 static void job_main (void *ud) {
   GJob *j = (GJob *)ud;
@@ -1667,14 +1702,14 @@ static void job_main (void *ud) {
   const char *a_all[] = {"status", "--porcelain=v1", "-z", "-uall", NULL};
   const char *a_repo[] = {"status", "--porcelain=v1", "-b", "-z", NULL};
   const char *a_sync[] = {"rev-list", "--left-right", "--count", "@{upstream}...HEAD", NULL};
-  const char *a_num[] = {"diff", "--numstat", "-M", "-z", NULL};
-  const char *a_cnum[] = {"diff", "--cached", "--numstat", "-M", "-z", NULL};
-  const char *a_hnum[] = {"diff", "HEAD", "--numstat", "-M", "-z", NULL};
   Buf sb;	/* git status' output */
-  const char *a_log[] = {"log", "--all", "--date-order", "--decorate=full", num,
-                         "--format=%H%x1f%P%x1f%D%x1f%an%x1f%at%x1f%s%x1e", NULL};
+  const char *a_log[16];
   buf_init(&b);
   buf_init(&sb);
+  if (j->ctop) {	/* git_counts_async: the counts only */
+    job_counts(j, j->ctop, &j->cun, &b);
+    goto out;
+  }
   if (job_git(j, j->dir, 0, a_top, &b) != 0 || b.len == 0) goto out;
   {
     char *nl = strchr(b.s, '\n'), *gd;
@@ -1753,10 +1788,6 @@ static void job_main (void *ud) {
   if (j->counts) {	/* counts_read's, and the untracked files as they are now: their lines counted here */
     size_t k;
     Vec un;
-    char *lbuf = (char *)xmalloc(LINES_BUF);
-    job_git(j, top, 0, a_num, &b);
-    job_git(j, top, 0, a_cnum, &b);
-    job_git(j, top, 0, a_hnum, &b);
     vec_init(&un);
     for (k = 0; k + 3 < sb.len;) {
       const char *e = sb.s + k;
@@ -1766,28 +1797,12 @@ static void job_main (void *ud) {
       if (e[0] == 'R' || e[0] == 'C') k += strlen(sb.s + k) + 1;
     }
     qsort(un.v, un.n, sizeof(char *), cmp_str);	/* the order counts_read takes them in */
-    for (k = 0; k < un.n && k < UNTRACKED_COUNT; k++) {
-      char *p = path_join(top, un.v[k]);
-      OsStat fs;
-      to_native(p);
-      if (os_stat(p, &fs) == 0 && fs.exists) {
-        ULines *u;
-        buf_printf(&j->finger, "\x1d%s %lld %lld", un.v[k], fs.size, (long long)fs.mtime);
-        j->ul = (ULines *)xrealloc(j->ul, (j->nul + 1) * sizeof(ULines));
-        u = &j->ul[j->nul++];
-        u->rel = xstrdup(un.v[k]);
-        u->size = fs.size;
-        u->mtime = (long long)fs.mtime;
-        u->lines = (unsigned long long)fs.size > UNTRACKED_BYTES ? -2 : file_lines(p, lbuf);
-      }
-      free(p);
-    }
+    job_counts(j, top, &un, &b);
     vec_free(&un);
-    free(lbuf);
   }
   for (i = 0; j->ntop > 1 && i < j->ntop; i++)
     if (m_fncmp(j->tops[i], top) != 0) job_git(j, j->tops[i], 0, a_repo, &b);
-  snprintf(num, sizeof(num), "-n%d", j->limit + 1);
+  graph_log_args(a_log, num, sizeof(num), j->limit, j->frel);
   job_git(j, top, 0, a_log, &b);
   job_git(j, top, 0, a_sync, &b);
 out:
@@ -1813,6 +1828,9 @@ static void job_free (GJob *j) {
   free(j->tops);
   free(j->git);
   free(j->dir);
+  free(j->frel);
+  free(j->ctop);
+  vec_free(&j->cun);
   vec_free(&j->links);
   buf_free(&j->finger);
   for (i = 0; i < j->nul; i++) free(j->ul[i].rel);
@@ -1849,6 +1867,7 @@ void git_refresh_async (void) {
   j->git = xstrdup(g_git);
   j->dir = xstrdup(repo_dir());
   j->limit = graph_limit();
+  j->frel = graph_file() ? xstrdup(graph_file()) : NULL;
   j->counts = opt.scm_counts;
   j->ntop = g_nrepo;
   j->tops = (char **)xmalloc((size_t)g_nrepo * sizeof(char *));
@@ -1963,6 +1982,69 @@ int git_busy (void) {
 }
 
 
+/*
+** The counts only, on a worker: what a refresh read here (git status, the
+** graph) stays, with the blame and the quick diffs it had; the three git
+** diffs a refresh here leaves out come in a moment.
+*/
+static void git_counts_async (void) {
+  GJob *j;
+  size_t i;
+  if (g_job) {	/* a refresh reads them too */
+    g_again = 1;
+    return;
+  }
+  j = (GJob *)xmalloc(sizeof(GJob));
+  memset(j, 0, sizeof(*j));
+  j->git = xstrdup(g_git);
+  j->dir = xstrdup(g_top);
+  j->ctop = xstrdup(g_top);
+  j->counts = 1;
+  vec_init(&j->cun);
+  for (i = 0; i < g_nch; i++)	/* g_ch is sorted by name: counts_read's order */
+    if (g_ch[i].x == '?') vec_push(&j->cun, xstrdup(g_ch[i].rel));
+  j->mx = mx_new();
+  vec_init(&j->links);
+  buf_init(&j->finger);
+  if ((j->th = th_start(job_main, j)) == NULL) {
+    job_free(j);
+    return;
+  }
+  g_job = j;
+}
+
+
+/* the main loop's, when the blame and the quick diffs have nothing to do: the counts asked for; 1 started */
+int git_counts_idle (void) {
+  if (!g_counts_want) return 0;
+  g_counts_want = 0;
+  if (!opt.scm_counts || g_top == NULL) return 0;
+  git_counts_async();
+  return 1;
+}
+
+
+/* the counts-only job's answers into g_ch, as counts_read reads them in a refresh */
+static void counts_take (GJob *j) {
+  size_t i;
+  if (j->stale || g_top == NULL || strcmp(g_top, j->ctop) != 0) return;	/* a refresh came after it, or another repository */
+  g_said = j->said;
+  g_nsaid = j->nsaid;
+  g_said_ul = j->ul;
+  g_nsaid_ul = j->nul;
+  for (i = 0; i < g_nch; i++) {
+    memset(g_ch[i].add, 0, sizeof(g_ch[i].add));
+    memset(g_ch[i].del, 0, sizeof(g_ch[i].del));
+  }
+  counts_read();
+  g_said_ul = NULL;
+  g_nsaid_ul = 0;
+  g_said = NULL;
+  g_nsaid = 0;
+  g_status_gen++;	/* the counts drawn from them are read again */
+}
+
+
 /* the main loop's: a worker's refresh done goes in; 1: what shows changed */
 int git_async_idle (void) {
   GJob *j = g_job;
@@ -1974,13 +2056,18 @@ int git_async_idle (void) {
   if (!done) return 0;
   th_join(j->th);
   g_job = NULL;
-  if (!j->stale && (g_finger == NULL || strcmp(g_finger, j->finger.s) != 0)) {
+  if (j->ctop) {	/* the counts only */
+    counts_take(j);
+    changed = 1;
+  }
+  else if (!j->stale && (g_finger == NULL || strcmp(g_finger, j->finger.s) != 0)) {
     char *finger = xstrdup(j->finger.s);
     g_said = j->said;
     g_nsaid = j->nsaid;
     g_said_links = &j->links;
     g_said_ul = j->ul;
     g_nsaid_ul = j->nul;
+    g_counts_want = 0;	/* its counts are in it */
     git_refresh_now();	/* as it always reads it, git's answers already here */
     g_said_ul = NULL;
     g_nsaid_ul = 0;
@@ -2225,6 +2312,22 @@ void git_draw (int x, int y, int w, int h, int focus) {
     if (r->kind == R_GRAPH) {	/* the GRAPH section's title */
       scr_put(x + 1, sy, g_graph_open ? 0xEAB4 : 0xEAB6, st == S_SIDE ? S_SIDE_HEAD : st);
       scr_puts(x + 3, sy, "GRAPH", st == S_SIDE ? S_SIDE_HEAD : st);
+      if (graph_file()) {	/* File History: "History: egit.c", and X back to every commit */
+        const char *fb = strrchr(graph_file(), '/');
+        char t[300];
+        snprintf(t, sizeof(t), "History: %s", fb ? fb + 1 : graph_file());
+        scr_putsw(x + 9, sy, w - 15, t, st == S_SIDE ? S_SIDE_DIM : st);
+        scr_put(x + w - 5, sy, 0xEB17, st == S_SIDE ? S_SIDE_HEAD : st);	/* codicon list-unordered */
+        scr_put(x + w - 3, sy, 0xEA76, st == S_SIDE ? S_SIDE_HEAD : st);	/* codicon close */
+        if (mouse_over(x + w - 5, sy, 2, 1)) {
+          scr_hover(x + w - 5, sy, 1);
+          tip_want(x + w - 5, sy + 1, "Pick a Commit of the File (Ctrl+F)");
+        }
+        if (mouse_over(x + w - 3, sy, 2, 1)) {
+          scr_hover(x + w - 3, sy, 1);
+          tip_want(x + w - 3, sy + 1, "Show All Commits (Escape)");
+        }
+      }
       continue;
     }
     if (r->kind == R_COMMIT) {
@@ -2414,6 +2517,59 @@ static void stage (const Change *c, int on) {
 }
 
 
+/* File History: the graph's commit i's change of the file in the diff editor; go: it gets the keys */
+static void hist_open (size_t i, int go, SideAct *act) {
+  if (graph_file_diff(i) == 0) {
+    act->what = SA_SHOW_DIFF;
+    act->go = go;
+  }
+}
+
+
+/* File History: the commit moved to shows its change, the list keeping the keys (mme.git.fileHistory.previewOnSelect) */
+static void hist_follow (SideAct *act) {
+  if (graph_file() && opt.fh_preview && g_sel > 0 && g_sel <= g_nrow && g_row[g_sel - 1].kind == R_COMMIT)
+    hist_open(g_row[g_sel - 1].ch, 0, act);
+}
+
+
+/* File History: every commit again */
+static void hist_close (void) {
+  size_t k;
+  graph_set_file(NULL);
+  diff_set_history(0);	/* the diff shown stays, without Older / Newer */
+  build_rows();
+  if (g_sel > g_nrow) g_sel = g_nrow;
+  for (k = 0; k < g_nrow; k++)
+    if (g_row[k].kind == R_GRAPH) g_sel = k + 1;	/* on the GRAPH's title */
+}
+
+
+void git_history_shown (void) {
+  size_t k;
+  g_graph_open = 1;
+  g_rfocus = -1;
+  build_rows();
+  for (k = 0; k < g_nrow; k++)
+    if (g_row[k].kind == R_GRAPH) {	/* its first commit selected, the title on the screen */
+      g_top_row = k + 2 <= (size_t)g_h ? 0 : k;
+      g_sel = k + 2;
+      break;
+    }
+}
+
+
+void git_select_commit (size_t i) {
+  size_t k;
+  build_rows();	/* Load More may have come */
+  for (k = 0; k < g_nrow; k++)
+    if (g_row[k].kind == R_COMMIT && g_row[k].ch == i) {
+      g_sel = k + 1;
+      return;
+    }
+}
+
+
 /* Enter or a click on a GRAPH row: open / close, a file's diff, more commits */
 static int graph_row (size_t k, int go, SideAct *act) {
   const GRow *r = &g_row[k];
@@ -2423,6 +2579,10 @@ static int graph_row (size_t k, int go, SideAct *act) {
       build_rows();
       return 1;
     case R_COMMIT:
+      if (graph_file()) {	/* File History: its change of the file (Right opens it to its files) */
+        hist_open(r->ch, go, act);
+        return 1;
+      }
       graph_toggle(r->ch);
       build_rows();
       return 1;
@@ -2503,10 +2663,12 @@ int git_key (int k, SideAct *act) {
   }
   if (code == K_UP) {
     if (g_sel > 0) g_sel--;
+    hist_follow(act);
     return 1;
   }
   if (code == K_DOWN) {
     if (g_sel < g_nrow) g_sel++;
+    hist_follow(act);
     return 1;
   }
   if (g_sel == 0) {	/* the message box */
@@ -2537,17 +2699,30 @@ int git_key (int k, SideAct *act) {
     const GRow *r = &g_row[g_sel - 1];
     const Change *c = (r->kind == R_STAGED || r->kind == R_CHANGE) ? &g_ch[r->ch] : NULL;
     switch (code) {
-      case K_PGUP: g_sel = g_sel > (size_t)g_h ? g_sel - (size_t)g_h : 1; return 1;
+      case K_PGUP:
+        g_sel = g_sel > (size_t)g_h ? g_sel - (size_t)g_h : 1;
+        hist_follow(act);
+        return 1;
       case K_PGDN:
         g_sel += (size_t)g_h;
         if (g_sel > g_nrow) g_sel = g_nrow;
+        hist_follow(act);
         return 1;
+      case K_ESC:	/* File History: every commit again */
+        if (graph_file() && (r->kind == R_GRAPH || r->kind == R_COMMIT || r->kind == R_CFILE || r->kind == R_MORE)) {
+          hist_close();
+          return 1;
+        }
+        return 0;
       case K_ENTER: open_row(g_sel - 1, 1, act); return 1;
       case ' ':
         if (r->kind != R_COMMIT && r->kind != R_GRAPH) open_row(g_sel - 1, 0, act);
         return 1;
       case K_RIGHT:	/* a commit opens, Left closes it (from its files too) */
-        if (r->kind == R_COMMIT && !graph_open(r->ch)) open_row(g_sel - 1, 0, act);
+        if (r->kind == R_COMMIT && !graph_open(r->ch)) {
+          graph_toggle(r->ch);
+          build_rows();
+        }
         else if (r->kind == R_GRAPH && !g_graph_open) open_row(g_sel - 1, 0, act);
         return 1;
       case K_LEFT:
@@ -2555,8 +2730,11 @@ int git_key (int k, SideAct *act) {
           while (g_sel > 1 && g_row[g_sel - 1].kind != R_COMMIT) g_sel--;
           return 1;
         }
-        if ((r->kind == R_COMMIT && graph_open(r->ch)) || (r->kind == R_GRAPH && g_graph_open))
-          open_row(g_sel - 1, 0, act);
+        if (r->kind == R_COMMIT && graph_open(r->ch)) {
+          graph_toggle(r->ch);
+          build_rows();
+        }
+        else if (r->kind == R_GRAPH && g_graph_open) open_row(g_sel - 1, 0, act);
         return 1;
       case 's': case '+':	/* VS Code's + button; on a conflict: marked resolved */
         if (r->kind == R_MERGE) stage(&g_ch[r->ch], 1);
@@ -2629,6 +2807,14 @@ void git_click (int row, int col, SideAct *act) {
   k = g_top_row + (size_t)(row - head_rows());
   if (k >= g_nrow) return;
   g_sel = k + 1;
+  if (g_row[k].kind == R_GRAPH && graph_file() && col >= side_width() - 4) {	/* File History's X */
+    hist_close();
+    return;
+  }
+  if (g_row[k].kind == R_GRAPH && graph_file() && col >= side_width() - 6) {	/* and its list */
+    git_file_history(NULL, 1, act);
+    return;
+  }
   open_row(k, 0, act);
 }
 
@@ -2642,6 +2828,22 @@ static void git_menu_at (size_t k, int x, int y, SideAct *act) {
                                       "Cherry Pick", NULL, "Copy Commit ID", "Copy Commit Message"};
   static const int what[] = {GA_CHECKOUT, -1, GA_BRANCH, GA_TAG, GA_CHERRY_PICK, -1, GA_COPY_ID, GA_COPY_MESSAGE};
   int flags[8], i, r;
+  if (k < g_nrow && (g_row[k].kind == R_CHANGE || g_row[k].kind == R_STAGED || g_row[k].kind == R_MERGE)) {
+    static const char *const cl[] = {"Open Changes", "Open File", NULL, "Open File History"};
+    int cf[4] = {0, 0, MF_LINE, 0};
+    const Change *c = &g_ch[g_row[k].ch];
+    r = popup_list(x, y, cl, cf, 4);
+    if (r == 0) open_row(k, 1, act);
+    else if (r == 1 && c->y != 'D') {
+      act->what = SA_GO;
+      act->path = c->path;
+    }
+    else if (r == 3) {
+      act->what = SA_FILE_HISTORY;
+      act->path = c->path;
+    }
+    return;
+  }
   if (k >= g_nrow || g_row[k].kind != R_COMMIT) return;
   for (i = 0; i < 8; i++) flags[i] = label[i] ? 0 : MF_LINE;
   r = popup_list(x, y, label, flags, 8);
@@ -2739,7 +2941,8 @@ typedef struct DState {
   int edit;	/* the new side is the file in the working tree: it can be typed in */
   int cx, cy;	/* where the caret was drawn, -1 none */
   int x, y, w, hw, arrow_x, mmw;	/* where it was drawn: for the mouse */
-  int act_x[6], nact;	/* the title's icons */
+  int act_x[9], nact;	/* the title's icons (6, 7, 8: File History's Older, Newer, Pick a Commit) */
+  int hist;	/* File History's: Older / Newer step through the file's commits */
   int wrap;	/* editor.wordWrap: a long line goes on in the rows under it */
   int nw, tcl, tcr;	/* the numbers' width; the text's on the left / right (inline: tcr) */
   int sbw, hsb;	/* the scrollbar's width (1 or 0); the horizontal one shows (under the rows) */
@@ -4849,27 +5052,40 @@ void diff_bar_up (void) {
 ** hidden unchanged regions, inline / side by side, open the file.
 */
 int diff_title_draw (int x1, int y) {
-  static const uint32_t icon[6] = {0xEAA1, 0xEA9A, 0x00B6, 0xEAC5, 0xEB56, 0xEA94};
-  int i, x = x1 - 2 * 6 - 1;
+  static const uint32_t icon[9] = {0xEAA1, 0xEA9A, 0x00B6, 0xEAC5, 0xEB56, 0xEA94, 0xEA9B, 0xEA9C, 0xEB17};	/* 6-8: arrow-left / right, list */
+  int i, n = D.hist ? 9 : 6, x = x1 - 2 * n - 1;
   if (!D.open || x < 0) {
     D.nact = 0;
     return x1;
   }
   scr_fill(x, y, x1 - x, S_TABS);
-  for (i = 0; i < 6; i++) {
-    int on = (i == 2 && !vopt.diff_trim) || (i == 3 && vopt.diff_hide) || (i == 4 && !D.split_now);
-    D.act_x[i] = x + 1 + 2 * i;
-    scr_put(D.act_x[i], y, icon[i], on ? S_TOGGLE_ON : S_TABS);
-    if (mouse_over(D.act_x[i], y, 2, 1)) {
-      static const char *const tip[6] = {"Previous Change (Shift+F7)", "Next Change (F7)",
+  for (i = 0; i < n; i++) {
+    int a = D.hist ? (i < 3 ? 6 + i : i - 3) : i;	/* File History's three first */
+    int on = (a == 2 && !vopt.diff_trim) || (a == 3 && vopt.diff_hide) || (a == 4 && !D.split_now);
+    D.act_x[a] = x + 1 + 2 * i;
+    scr_put(D.act_x[a], y, icon[a], on ? S_TOGGLE_ON : S_TABS);
+    if (mouse_over(D.act_x[a], y, 2, 1)) {
+      static const char *const tip[9] = {"Previous Change (Shift+F7)", "Next Change (F7)",
                                          "Show Leading/Trailing Whitespace Differences", "Collapse Unchanged Regions",
-                                         "Toggle Inline View (Alt+I)", "Open File (Alt+O)"};
-      scr_hover(D.act_x[i], y, 1);
-      tip_want(D.act_x[i], y + 1, tip[i]);
+                                         "Toggle Inline View (Alt+I)", "Open File (Alt+O)",
+                                         "Older Commit of the File (Alt+Left)", "Newer Commit of the File (Alt+Right)",
+                                         "Pick a Commit of the File (Ctrl+F)"};
+      scr_hover(D.act_x[a], y, 1);
+      tip_want(D.act_x[a], y + 1, tip[a]);
     }
   }
-  D.nact = 6;
+  D.nact = n;
   return x;
+}
+
+
+void diff_set_history (int on) {
+  D.hist = on;
+}
+
+
+int diff_is_history (void) {
+  return D.open && D.hist;
 }
 
 
@@ -4900,6 +5116,9 @@ int diff_title_click (int x) {
         case 2: diff_toggle_trim(); break;
         case 3: diff_toggle_hide(); break;
         case 4: D.inline_mode = !D.inline_mode; break;
+        case 6: graph_hist_step(1); break;	/* File History: Older, Newer */
+        case 7: graph_hist_step(-1); break;
+        case 8: graph_hist_pick(); break;
         default: return DIFF_EDIT;
       }
       return DIFF_YES;

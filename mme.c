@@ -14510,13 +14510,15 @@ static void close_many (int what) {
 
 /* the right-click menu of tab i (at column x) */
 static void tab_menu (int i, int x) {
-  static const int cmd[] = {CMD_CLOSE, CMD_CLOSE_OTHERS, CMD_CLOSE_RIGHT, CMD_CLOSE_SAVED, CMD_CLOSE_GROUP_ALL, 0,
-                            CMD_COPY_PATH, CMD_REVEAL, 0, CMD_KEEP_OPEN, CMD_PIN, 0, CMD_SPLIT, -1};
+  int cmd[] = {CMD_CLOSE, CMD_CLOSE_OTHERS, CMD_CLOSE_RIGHT, CMD_CLOSE_SAVED, CMD_CLOSE_GROUP_ALL, 0,
+               CMD_COPY_PATH, CMD_REVEAL, 0, CMD_KEEP_OPEN, CMD_PIN, 0, CMD_SPLIT, 0, CMD_GIT_FILE_HISTORY, -1};
   const char *label[] = {"Close", "Close Others", "Close to the Right", "Close Saved", "Close All", NULL,
-                         "Copy Path", "Reveal in Explorer View", NULL, "Keep Open", "Pin", NULL, "Split Right"};
+                         "Copy Path", "Reveal in Explorer View", NULL, "Keep Open", "Pin", NULL, "Split Right",
+                         NULL, "Open File History"};
   int c;
   focus_tab(i);
   if (T->pinned) label[10] = "Unpin";
+  if (git_root() == NULL || T->real == NULL) cmd[13] = -1;	/* a file of no repository: no File History */
   c = menu_popup(x, L.ed_y + 1, cmd, label);
   if (c == CMD_PIN && T->pinned) c = CMD_UNPIN;
   if (c != CMD_NONE) run_command(c);
@@ -17608,7 +17610,8 @@ static void work_idle (void) {
   backup_idle();
   if (tl_idle()) return;	/* git takes a tenth of a second: one thing at a time */
   if (git_blame_idle()) return;
-  quick_idle();
+  if (quick_idle() || git_blame_busy()) return;
+  git_counts_idle();	/* the counts last: the gutter and the blame show first */
 }
 
 
@@ -20022,6 +20025,15 @@ static void run_command (int cmd) {
     case CMD_ENCODING: change_encoding(); break;
     case CMD_REVERT: revert_file(); break;
     case CMD_GIT_TOGGLE_DELETED: del_toggle(); break;
+    case CMD_GIT_PICK_COMMIT: {	/* File History's commits in a list: the history shown, else the file in front's */
+      SideAct a;
+      int here = graph_file() && ((E.focus == F_SIDE && E.side && E.view == VIEW_GIT) || (G->diff && HAS_DIFF && diff_is_history()));
+      memset(&a, 0, sizeof(a));
+      a.what = SA_FILE_PICK;
+      a.path = here ? NULL : G->diff && HAS_DIFF ? diff_path() : HAS_DOC ? T->real : NULL;
+      apply_act(&a);
+      break;
+    }
     case CMD_DIRTY_NEXT: case CMD_DIRTY_PREV: case CMD_CHANGE_NEXT: case CMD_CHANGE_PREV:
     case CMD_STAGE_CHANGE: case CMD_REVERT_CHANGE: case CMD_STAGE_RANGES: case CMD_UNSTAGE_RANGES:
     case CMD_REVERT_RANGES:
@@ -21259,6 +21271,15 @@ static void apply_act (const SideAct *act) {
     case SA_CMD: run_command(act->cmd); break;
     case SA_OPEN_FOLDER: open_folder(act->path); break;	/* a worktree */
     case SA_FOCUS_SCM: show_view(VIEW_GIT); break;
+    case SA_FILE_HISTORY:	/* Open File History: the file's commits in the graph, the first one's change beside */
+    case SA_FILE_PICK: {	/* or the one picked from their list */
+      SideAct a;
+      memset(&a, 0, sizeof(a));
+      if (git_file_history(act->path, act->what == SA_FILE_PICK, &a) != 0) break;
+      show_view(VIEW_GIT);
+      if (a.what != SA_NONE) apply_act(&a);
+      break;
+    }
     case SA_OPEN_SIDE: {	/* Open to the Side: the group on the right (a new one when there is none) */
       int ng = g_gcur + 1 < g_ngrp ? g_gcur + 1 : group_add(g_gcur, DROP_RIGHT);
       focus_group(ng >= 0 ? ng : g_gcur);
@@ -23625,6 +23646,16 @@ static void on_key (int k) {
     goto done;
   }
   if (vim_key(k)) goto done;	/* vim.enable: Normal mode's keys, before VS Code's */
+  if (E.focus == F_EDITOR && G->diff && HAS_DIFF && diff_is_history() &&
+      (k == (K_LEFT | KM_ALT) || k == (K_RIGHT | KM_ALT))) {	/* File History's diff: an older / newer commit's, not Go Back */
+    graph_hist_step(k == (K_LEFT | KM_ALT) ? 1 : -1);
+    goto done;
+  }
+  if (k == CTRL('f') && graph_file() && ((E.focus == F_SIDE && E.side && E.view == VIEW_GIT) ||
+                                         (E.focus == F_EDITOR && G->diff && HAS_DIFF && diff_is_history()))) {
+    run_command(CMD_GIT_PICK_COMMIT);	/* File History: Pick a Commit of the File, not Find */
+    goto done;
+  }
   if (global_key(k)) goto done;
   if (E.focus == F_SIDE && E.side && E.view < VIEW_MOVED) {	/* a side bar's view */
     vw_host(0);
