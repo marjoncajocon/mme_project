@@ -61,12 +61,12 @@ int run_capture (char **argv, Buf *out) {
   long pid;
   char chunk[8192];
   long n;
+  if (os_pipe(fds) != 0) return -1;
 #ifdef _WIN32
   null = os_open("NUL", OS_WRITE);
 #else
   null = os_open("/dev/null", OS_WRITE);
 #endif
-  if (os_pipe(fds) != 0) return -1;
   io[0] = -1;
   io[1] = fds[1];
   io[2] = null;
@@ -402,18 +402,34 @@ static void repos_free (void) {
 }
 
 
-/* the top of the repository dir is in, native; NULL: none */
+/*
+** The top of the repository dir is in, native; NULL: none. It is found as
+** git finds it, the first folder up with a .git in it (a folder, or a
+** worktree's or a submodule's file), without running git: a git takes a
+** fifth of a second or more on Windows, and the window waited for it.
+*/
 static char *toplevel_of (const char *dir) {
-  Buf b;
-  const char *a[] = {"rev-parse", "--show-toplevel", NULL};
-  buf_init(&b);
-  if (git_exec_in(dir, &b, 0, a) != 0 || b.len == 0) {
-    buf_free(&b);
-    return NULL;
+  char *d = os_realpath(dir), *up, *dotgit;
+  int guard;
+  if (d == NULL) d = xstrdup(dir);
+  for (guard = 0; guard < 256; guard++) {
+    OsStat st;
+    dotgit = path_join(d, ".git");
+    if (os_stat(dotgit, &st) == 0 && st.exists) {
+      free(dotgit);
+      return d;
+    }
+    free(dotgit);
+    up = path_dirname(d);
+    if (strcmp(up, d) == 0 || strcmp(up, ".") == 0) {	/* the top of the disk */
+      free(up);
+      break;
+    }
+    free(d);
+    d = up;
   }
-  chomp(b.s);
-  to_native(b.s);
-  return buf_take(&b);
+  free(d);
+  return NULL;
 }
 
 
@@ -606,6 +622,13 @@ static int g_state;
 static char g_head_name[128];	/* GS_REBASING: the branch being rebased */
 static int g_vx, g_vy;	/* where the view was drawn: its menus open there */
 
+/* a row's buttons (row_buttons) */
+enum { RB_OPEN, RB_DISCARD, RB_STAGE, RB_UNSTAGE, RB_STAGE_ALL, RB_DISCARD_ALL, RB_UNSTAGE_ALL };
+static int row_buttons (const GRow *r, int w, int *pos, int *what);
+static uint32_t row_button_icon (int what);
+static const char *row_button_tip (int what, const Change *c);
+static int row_button_run (const GRow *r, int what, SideAct *act);
+
 
 /* the rows of SOURCE CONTROL REPOSITORIES: its title and the repositories; 0 with one */
 static int repo_rows (void) {
@@ -729,6 +752,24 @@ static int is_there (const char *dir, const char *name) {
   int r = os_stat(p, &st) == 0 && st.exists;
   free(p);
   return r;
+}
+
+
+/*
+** The branch checked out, from the git folder gd's HEAD ("ref: refs/heads/
+** main"), as git branch --show-current says it: none when HEAD is detached.
+** (The fingerprint of a refresh on the worker has HEAD's time in it.)
+*/
+static void head_branch (const char *gd) {
+  char *p = path_join(gd, "HEAD"), *s;
+  size_t n;
+  g_branch[0] = '\0';
+  if ((s = read_file(p, &n)) != NULL) {
+    chomp(s);
+    if (strncmp(s, "ref: refs/heads/", 16) == 0) snprintf(g_branch, sizeof(g_branch), "%s", s + 16);
+    free(s);
+  }
+  free(p);
 }
 
 
@@ -1515,13 +1556,8 @@ static void git_refresh_now (void) {
       gd = a;
     }
     read_state(gd);
+    head_branch(gd);
     free(gd);
-  }
-  buf_free(&b);
-  buf_init(&b);
-  if (git(&b, "branch", "--show-current", NULL, NULL, NULL, NULL) == 0) {
-    chomp(b.s);
-    snprintf(g_branch, sizeof(g_branch), "%s", b.s);
   }
   buf_free(&b);
   buf_init(&b);
@@ -1698,7 +1734,6 @@ static void job_main (void *ud) {
   char *top = NULL, num[32];
   int i;
   const char *a_top[] = {"rev-parse", "--show-toplevel", "--git-dir", NULL};
-  const char *a_branch[] = {"branch", "--show-current", NULL};
   const char *a_all[] = {"status", "--porcelain=v1", "-z", "-uall", NULL};
   const char *a_repo[] = {"status", "--porcelain=v1", "-b", "-z", NULL};
   const char *a_sync[] = {"rev-list", "--left-right", "--count", "@{upstream}...HEAD", NULL};
@@ -1728,7 +1763,6 @@ static void job_main (void *ud) {
     job_state(j, gd);
     free(gd);
   }
-  job_git(j, top, 0, a_branch, &b);
 #ifdef _WIN32
   {	/* status_all's: -unormal, the links in the untracked folders, then -uall without them */
     const char *a_normal[] = {"status", "--porcelain=v1", "-z", "-unormal", NULL};
@@ -1990,10 +2024,7 @@ int git_busy (void) {
 static void git_counts_async (void) {
   GJob *j;
   size_t i;
-  if (g_job) {	/* a refresh reads them too */
-    g_again = 1;
-    return;
-  }
+  if (g_job) return;	/* git_counts_idle waits for it */
   j = (GJob *)xmalloc(sizeof(GJob));
   memset(j, 0, sizeof(*j));
   j->git = xstrdup(g_git);
@@ -2016,7 +2047,7 @@ static void git_counts_async (void) {
 
 /* the main loop's, when the blame and the quick diffs have nothing to do: the counts asked for; 1 started */
 int git_counts_idle (void) {
-  if (!g_counts_want) return 0;
+  if (!g_counts_want || g_job) return 0;	/* a refresh running: it reads them, or they are asked for after it */
   g_counts_want = 0;
   if (!opt.scm_counts || g_top == NULL) return 0;
   git_counts_async();
@@ -2203,8 +2234,6 @@ static int letter (const Change *c, int staged) {
 ** ===================================================================
 */
 
-#define S_BUTTON	S_STATUS	/* VS Code's blue button.background, as the dialogs' */
-#define S_BUTTON_ON	S_STATUS_ITEM
 
 
 int git_letter_style (int l) {
@@ -2224,7 +2253,7 @@ static long long g_tip_since;
 
 
 void git_draw (int x, int y, int w, int h, int focus) {
-  int row, seen = 0;
+  int row, seen = 0, bpos[4], bwhat[4];
   scr_box(x, y, w, h, S_SIDE);
   if (h <= 3) return;
   scr_puts(x + 2, y, "SOURCE CONTROL", S_SIDE_HEAD);
@@ -2375,7 +2404,17 @@ void git_draw (int x, int y, int w, int h, int focus) {
       tx += scr_puts(tx, sy, r->kind == R_HEAD ? "Changes" : r->kind == R_MERGE_HEAD ? "Merge Changes" : "Staged Changes",
                      st == S_SIDE ? S_SIDE_TITLE : st);
       scr_puts(nx, sy, num, st == S_SIDE ? S_TOGGLE_ON : st);
-      if (opt.scm_counts && r->kind != R_MERGE_HEAD) {	/* the group's sums, before its count of files */
+      if ((mouse_over_text(x, sy, w, 1) || (k + 1 == g_sel && focus)) && row_buttons(r, w, bpos, bwhat) > 0) {
+        int nb = row_buttons(r, w, bpos, bwhat), b;	/* its buttons, where the sums were */
+        for (b = 0; b < nb; b++) {
+          scr_put(x + bpos[b], sy, row_button_icon(bwhat[b]), st == S_SIDE ? S_SIDE_HEAD : st);
+          if (mouse_over(x + bpos[b], sy, 2, 1)) {
+            scr_hover(x + bpos[b], sy, 1);
+            tip_want(x + bpos[b], sy + 1, row_button_tip(bwhat[b], NULL));
+          }
+        }
+      }
+      else if (opt.scm_counts && r->kind != R_MERGE_HEAD) {	/* the group's sums, before its count of files */
         long a, d;
         int cw;
         group_counts(r->kind == R_HEAD, &a, &d);
@@ -2387,13 +2426,15 @@ void git_draw (int x, int y, int w, int h, int focus) {
       const Change *c = &g_ch[r->ch];
       const char *base = strrchr(c->rel, '/');
       int l = r->kind == R_MERGE ? '!' : letter(c, r->kind == R_STAGED), ist, cx = x + 3;
-      int k = r->kind == R_CHANGE, right = x + w - 3, cw = 0, lim;
+      int k = r->kind == R_CHANGE, right = x + w - 3, cw = 0, lim, nb = 0, b;
       uint32_t icon;
+      if (mouse_over_text(x, sy, w, 1) || (g_sel > 0 && g_row + (g_sel - 1) == r && focus)) nb = row_buttons(r, w, bpos, bwhat);
+      if (nb > 0) right = x + bpos[nb - 1] - 1;	/* its buttons, where the counts were */
       base = base ? base + 1 : c->rel;
       icon = file_icon(base, &ist);
       scr_put(cx, sy, icon, st == S_SIDE ? ist : st);
       cx += 2;
-      if (opt.scm_counts && r->kind != R_MERGE) {	/* "+12 -3" before the letter; a narrow view keeps the name */
+      if (opt.scm_counts && r->kind != R_MERGE && nb == 0) {	/* "+12 -3" before the letter; a narrow view keeps the name */
         cw = git_counts(-1, sy, c->add[k], c->del[k], st);
         if (cw > 0 && cx + (int)str_cols(base) + 1 + cw > right) cw = 0;
       }
@@ -2405,6 +2446,13 @@ void git_draw (int x, int y, int w, int h, int focus) {
         free(dir);
       }
       if (cw > 0) git_counts(right - cw, sy, c->add[k], c->del[k], st);
+      for (b = 0; b < nb; b++) {
+        scr_put(x + bpos[b], sy, row_button_icon(bwhat[b]), st == S_SIDE ? S_SIDE_HEAD : st);
+        if (mouse_over(x + bpos[b], sy, 2, 1)) {
+          scr_hover(x + bpos[b], sy, 1);
+          tip_want(x + bpos[b], sy + 1, row_button_tip(bwhat[b], c));
+        }
+      }
       scr_put(x + w - 2, sy, (uint32_t)l, st == S_SIDE ? git_letter_style(l) : st);
     }
   }
@@ -2514,6 +2562,219 @@ static void stage (const Change *c, int on) {
     git(&b, "rm", "--cached", "-q", "--", c->rel, NULL);	/* no HEAD yet */
   buf_free(&b);
   git_refresh();
+}
+
+
+/* the change's file name, for the questions */
+static const char *change_name (const Change *c) {
+  const char *b = strrchr(c->rel, '/');
+  return b ? b + 1 : c->rel;
+}
+
+
+/*
+** The working tree's change of rel undone: git restore (older git:
+** checkout), the index's copy kept. rel ":/" (magic): the whole tree.
+*/
+static int restore_tracked (const char *rel) {
+  const char *a[] = {"restore", "--worktree", "--", rel, NULL};
+  const char *c[] = {"checkout", "-q", "--", rel, NULL};
+  int magic = strcmp(rel, ":/") == 0, r;
+  Buf b;
+  buf_init(&b);
+  if ((r = git_run(g_top, &b, 0, magic, a)) != 0) {
+    b.len = 0;
+    r = git_run(g_top, &b, 0, magic, c);
+  }
+  if (r != 0) git_error(&b, "git restore failed");
+  buf_free(&b);
+  return r;
+}
+
+
+/*
+** Discard Changes (VS Code's git.clean): the file as the index has it, or
+** an untracked one deleted; asked first, in VS Code's words.
+*/
+static void discard (const Change *c) {
+  static const char *const bt[] = {"Discard File", "Cancel"};
+  static const char *const bd[] = {"Delete File", "Cancel"};
+  char msg[600];
+  if (c->x == '?') {
+    snprintf(msg, sizeof(msg), "Are you sure you want to DELETE '%s'?", change_name(c));
+    if (dialog(msg, "This is IRREVERSIBLE! This file will be FOREVER LOST if you proceed.", bd, 2) != 0) return;
+    if (os_unlink(c->path) != 0) toast(1, "Unable to delete '%s'", change_name(c));
+  }
+  else {
+    snprintf(msg, sizeof(msg), "Are you sure you want to discard changes in '%s'?", change_name(c));
+    if (dialog(msg, NULL, bt, 2) != 0) return;
+    restore_tracked(c->rel);
+  }
+  git_refresh();
+}
+
+
+/* Git: Discard Changes: the file path's (the one in front) */
+void git_discard_file (const char *path) {
+  size_t i;
+  if (g_top == NULL || path == NULL) return;
+  for (i = 0; i < g_nch; i++)
+    if (is_changed(&g_ch[i]) && m_fncmp(g_ch[i].path, path) == 0) {
+      Change c = g_ch[i];	/* the list is read again under it */
+      c.rel = xstrdup(c.rel);
+      c.path = xstrdup(c.path);
+      discard(&c);
+      free(c.rel);
+      free(c.path);
+      return;
+    }
+  toast(0, "There are no changes to discard in '%s'", path_basename(path));
+}
+
+
+/* Git: Stage All Changes (on 1) / Unstage All Changes (on 0) */
+void git_stage_all (int on) {
+  Buf b;
+  if (g_top == NULL) return;
+  buf_init(&b);
+  if (on) add_all(&b);
+  else {
+    const char *a[] = {"restore", "--staged", "--", ":/", NULL};
+    const char *c[] = {"rm", "--cached", "-r", "-q", "--", ":/", NULL};
+    if (git_run(g_top, &b, 0, 1, a) != 0) {	/* ":/": the whole tree (pathspec magic) */
+      b.len = 0;
+      git_run(g_top, &b, 0, 1, c);	/* no HEAD yet */
+    }
+  }
+  buf_free(&b);
+  git_refresh();
+}
+
+
+/*
+** Git: Discard All Changes: every change of the working tree undone, the
+** untracked files deleted too when that is asked (VS Code's question).
+*/
+void git_discard_all (void) {
+  static const char *const bt[] = {NULL, NULL, "Cancel"};
+  char msg[200], all[64], tracked[64];
+  const char *bv[3];
+  size_t i, nt = 0, nu = 0;
+  int r, n;
+  if (g_top == NULL) return;
+  for (i = 0; i < g_nch; i++)
+    if (is_changed(&g_ch[i])) {
+      if (g_ch[i].x == '?') nu++;
+      else nt++;
+    }
+  if (nt + nu == 0) {
+    toast(0, "There are no changes to discard.");
+    return;
+  }
+  snprintf(msg, sizeof(msg), "Are you sure you want to discard ALL changes in %lu file%s?", (unsigned long)(nt + nu),
+           nt + nu == 1 ? "" : "s");
+  snprintf(all, sizeof(all), "Discard All %lu File%s", (unsigned long)(nt + nu), nt + nu == 1 ? "" : "s");
+  snprintf(tracked, sizeof(tracked), "Discard %lu Tracked File%s", (unsigned long)nt, nt == 1 ? "" : "s");
+  n = 0;
+  bv[n++] = all;
+  if (nu && nt) bv[n++] = tracked;	/* the untracked ones kept */
+  bv[n++] = bt[2];
+  r = dialog(msg, nu ? "This is IRREVERSIBLE! Your current working set will be FOREVER LOST if you proceed."
+                     : "This is IRREVERSIBLE!", bv, n);
+  if (r < 0 || r == n - 1) return;
+  if (nt) restore_tracked(":/");
+  if (r == 0)
+    for (i = 0; i < g_nch; i++)
+      if (g_ch[i].x == '?' && os_unlink(g_ch[i].path) != 0) toast(1, "Unable to delete '%s'", change_name(&g_ch[i]));
+  git_refresh();
+}
+
+
+/*
+** The buttons a row shows when it is hovered or selected (VS Code's inline
+** actions): a change's Open File, Discard Changes, Stage / Unstage
+** Changes; the groups' Discard All, Stage All, Unstage All. At w - pos.
+*/
+static int row_buttons (const GRow *r, int w, int *pos, int *what) {
+  int n = 0, nx;
+  char num[32];
+  if (r->kind == R_CHANGE || r->kind == R_STAGED || r->kind == R_MERGE) {	/* before the letter */
+    const Change *c = &g_ch[r->ch];
+    int at = w - 4;
+    if (r->kind == R_STAGED) what[n++] = RB_UNSTAGE;
+    else what[n++] = RB_STAGE;
+    if (r->kind == R_CHANGE) what[n++] = RB_DISCARD;
+    if (c->y != 'D') what[n++] = RB_OPEN;
+    for (nx = 0; nx < n; nx++, at -= 2) pos[nx] = at;
+    return n;
+  }
+  if (r->kind != R_HEAD && r->kind != R_STAGED_HEAD) return 0;
+  if (r->ch == 0) return 0;	/* nothing in it */
+  snprintf(num, sizeof(num), " %lu ", (unsigned long)r->ch);
+  nx = w - (int)strlen(num) - 1;	/* before the count of files */
+  if (r->kind == R_STAGED_HEAD) {
+    what[n] = RB_UNSTAGE_ALL;
+    pos[n++] = nx - 2;
+    return n;
+  }
+  what[n] = RB_STAGE_ALL;
+  pos[n++] = nx - 2;
+  what[n] = RB_DISCARD_ALL;
+  pos[n++] = nx - 4;
+  return n;
+}
+
+
+static uint32_t row_button_icon (int what) {
+  switch (what) {
+    case RB_OPEN: return 0xEA94;	/* codicon go-to-file */
+    case RB_DISCARD: case RB_DISCARD_ALL: return 0xEAE2;	/* discard */
+    case RB_STAGE: case RB_STAGE_ALL: return 0xEA60;	/* add */
+    default: return 0xEB3B;	/* remove: Unstage */
+  }
+}
+
+
+static const char *row_button_tip (int what, const Change *c) {
+  switch (what) {
+    case RB_OPEN: return "Open File";
+    case RB_DISCARD: return c && c->x == '?' ? "Delete File" : "Discard Changes";
+    case RB_STAGE: return c && is_merge(c) ? "Stage Changes (Mark as Resolved)" : "Stage Changes";
+    case RB_UNSTAGE: return "Unstage Changes";
+    case RB_STAGE_ALL: return "Stage All Changes";
+    case RB_DISCARD_ALL: return "Discard All Changes";
+    default: return "Unstage All Changes";
+  }
+}
+
+
+/* button what of row r; 1 when it was one (act: what the editor does) */
+static int row_button_run (const GRow *r, int what, SideAct *act) {
+  const Change *c = (r->kind == R_CHANGE || r->kind == R_STAGED || r->kind == R_MERGE) ? &g_ch[r->ch] : NULL;
+  switch (what) {
+    case RB_OPEN:
+      if (c == NULL) return 0;
+      act->what = SA_GO;
+      act->path = c->path;
+      return 1;
+    case RB_DISCARD: {
+      Change cc;
+      if (c == NULL) return 0;
+      cc = *c;	/* the list is read again under it */
+      cc.rel = xstrdup(c->rel);
+      cc.path = xstrdup(c->path);
+      discard(&cc);
+      free(cc.rel);
+      free(cc.path);
+      return 1;
+    }
+    case RB_STAGE: if (c) stage(c, 1); return 1;
+    case RB_UNSTAGE: if (c) stage(c, 0); return 1;
+    case RB_STAGE_ALL: git_stage_all(1); return 1;
+    case RB_UNSTAGE_ALL: git_stage_all(0); return 1;
+    case RB_DISCARD_ALL: git_discard_all(); return 1;
+  }
+  return 0;
 }
 
 
@@ -2736,12 +2997,14 @@ int git_key (int k, SideAct *act) {
         }
         else if (r->kind == R_GRAPH && g_graph_open) open_row(g_sel - 1, 0, act);
         return 1;
-      case 's': case '+':	/* VS Code's + button; on a conflict: marked resolved */
+      case 's': case '+':	/* VS Code's + button; on a conflict: marked resolved; on Changes: all of them */
         if (r->kind == R_MERGE) stage(&g_ch[r->ch], 1);
         else if (c && r->kind == R_CHANGE) stage(c, 1);
+        else if (r->kind == R_HEAD && r->ch > 0) git_stage_all(1);
         return 1;
       case 'u': case '-':	/* and its - button */
         if (c && r->kind == R_STAGED) stage(c, 0);
+        else if (r->kind == R_STAGED_HEAD) git_stage_all(0);
         return 1;
       case K_F10:	/* Shift+F10: the row's menu (a commit's: VS Code's graph menu) */
         if (k & KM_SHIFT) {
@@ -2807,6 +3070,15 @@ void git_click (int row, int col, SideAct *act) {
   k = g_top_row + (size_t)(row - head_rows());
   if (k >= g_nrow) return;
   g_sel = k + 1;
+  {	/* a row's buttons */
+    int bpos[4], bwhat[4], nb = row_buttons(&g_row[k], side_width(), bpos, bwhat), b;
+    for (b = 0; b < nb; b++)
+      if (col == bpos[b] || col == bpos[b] + 1) {
+        row_button_run(&g_row[k], bwhat[b], act);
+        if (g_sel > g_nrow) g_sel = g_nrow;
+        return;
+      }
+  }
   if (g_row[k].kind == R_GRAPH && graph_file() && col >= side_width() - 4) {	/* File History's X */
     hist_close();
     return;
@@ -2829,19 +3101,38 @@ static void git_menu_at (size_t k, int x, int y, SideAct *act) {
   static const int what[] = {GA_CHECKOUT, -1, GA_BRANCH, GA_TAG, GA_CHERRY_PICK, -1, GA_COPY_ID, GA_COPY_MESSAGE};
   int flags[8], i, r;
   if (k < g_nrow && (g_row[k].kind == R_CHANGE || g_row[k].kind == R_STAGED || g_row[k].kind == R_MERGE)) {
-    static const char *const cl[] = {"Open Changes", "Open File", NULL, "Open File History"};
-    int cf[4] = {0, 0, MF_LINE, 0};
+    const char *cl[7];
+    int cf[7], cw[7], n = 0;
     const Change *c = &g_ch[g_row[k].ch];
-    r = popup_list(x, y, cl, cf, 4);
-    if (r == 0) open_row(k, 1, act);
-    else if (r == 1 && c->y != 'D') {
-      act->what = SA_GO;
-      act->path = c->path;
-    }
-    else if (r == 3) {
+    cl[n] = "Open Changes", cw[n++] = -1;
+    cl[n] = "Open File", cw[n++] = RB_OPEN;
+    cl[n] = NULL, cw[n++] = -2;
+    if (g_row[k].kind == R_STAGED) cl[n] = "Unstage Changes", cw[n++] = RB_UNSTAGE;
+    else cl[n] = "Stage Changes", cw[n++] = RB_STAGE;
+    if (g_row[k].kind == R_CHANGE) cl[n] = c->x == '?' ? "Delete File" : "Discard Changes", cw[n++] = RB_DISCARD;
+    cl[n] = NULL, cw[n++] = -2;
+    cl[n] = "Open File History", cw[n++] = -3;
+    for (i = 0; i < n; i++) cf[i] = cl[i] ? 0 : MF_LINE;
+    r = popup_list(x, y, cl, cf, n);
+    if (r < 0) return;
+    if (cw[r] == -1) open_row(k, 1, act);
+    else if (cw[r] == -3) {
       act->what = SA_FILE_HISTORY;
       act->path = c->path;
     }
+    else if (cw[r] == RB_OPEN && c->y == 'D') ;	/* deleted: nothing to open */
+    else if (cw[r] >= 0) row_button_run(&g_row[k], cw[r], act);
+    return;
+  }
+  if (k < g_nrow && (g_row[k].kind == R_HEAD || g_row[k].kind == R_STAGED_HEAD) && g_row[k].ch > 0) {
+    static const char *const hl[] = {"Stage All Changes", "Discard All Changes"};
+    static const char *const sl[] = {"Unstage All Changes"};
+    int hf[2] = {0, 0};
+    if (g_row[k].kind == R_STAGED_HEAD) {
+      if (popup_list(x, y, sl, hf, 1) == 0) git_stage_all(0);
+    }
+    else if ((r = popup_list(x, y, hl, hf, 2)) == 0) git_stage_all(1);
+    else if (r == 1) git_discard_all();
     return;
   }
   if (k >= g_nrow || g_row[k].kind != R_COMMIT) return;
@@ -3262,6 +3553,7 @@ static void color_lines (const char *path) {
   unsigned char *tmp = NULL;
   for (i = 0; i < D.nline; i++) {
     DLine *l = &D.line[i];
+    free(l->tok);	/* made again: the lines kept when the diff could not be made again */
     l->tok = (unsigned char *)xmalloc(l->len + 1);
     if (l->kind == '-') ol = syntax_scan(sx, l->s, l->len, ol, l->tok);
     else {

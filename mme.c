@@ -314,6 +314,7 @@ static void help_page (const char *name, void (*make) (Buf *b));
 static void help_keys_md (Buf *b);
 static void help_tips_md (Buf *b);
 static const Sym *symbols (size_t *n);
+static const Sym *sticky_symbols (size_t *n);
 static void draw_rulers (int sy, int gw, size_t left);
 static int lens_row_at (size_t y);	/* editor.codeLens: a row of its own over line y */
 static size_t lens_rows_in (size_t y0, size_t y1);
@@ -3682,7 +3683,7 @@ static void draw_crumbs (void) {
   free(real);
   if (!G->diff && HAS_DOC) {	/* and the symbols the cursor is in: > struct Ed > ... */
     size_t n, path[16], np, i;
-    const Sym *v = symbols(&n);
+    const Sym *v = sticky_symbols(&n);	/* while typing: the ones from just before (scanning is slow in a long file) */
     np = sym_path(v, n, path, 16);
     for (i = 0; i < np && x < end - 4; i++) {
       int ist;
@@ -20178,6 +20179,15 @@ static void run_command (int cmd) {
     case CMD_ENCODING: change_encoding(); break;
     case CMD_REVERT: revert_file(); break;
     case CMD_GIT_TOGGLE_DELETED: del_toggle(); break;
+    case CMD_GIT_STAGE_ALL: case CMD_GIT_UNSTAGE_ALL: case CMD_GIT_DISCARD_ALL: case CMD_GIT_DISCARD:
+      if (git_root() == NULL) {
+        toast(0, "There is no git repository here.");
+        break;
+      }
+      if (cmd == CMD_GIT_DISCARD_ALL) git_discard_all();
+      else if (cmd == CMD_GIT_DISCARD) git_discard_file(G->diff && HAS_DIFF ? diff_path() : HAS_DOC ? T->real : NULL);
+      else git_stage_all(cmd == CMD_GIT_STAGE_ALL);
+      break;
     case CMD_GIT_PICK_COMMIT: {	/* File History's commits in a list: the history shown, else the file in front's */
       SideAct a;
       int here = graph_file() && ((E.focus == F_SIDE && E.side && E.view == VIEW_GIT) || (G->diff && HAS_DIFF && diff_is_history()));
@@ -24859,6 +24869,7 @@ int main (int argc, char **argv) {
   long line = 0;
   int dup = 0;
   OsStat st;
+  Doc *lsp_doc = NULL;	/* the file given: its language server, after the first frame */
   os_init();
   os_args(&argc, &argv);
   data_init(argv[0]);
@@ -24935,7 +24946,7 @@ int main (int argc, char **argv) {
       }
       T->sx = syntax_detect(argv[1], T->doc);
       set_real();
-      lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
+      lsp_doc = T->doc;	/* its server starts once the window shows (starting node takes a second) */
       recent_file_add(argv[1]);
     }
   }
@@ -24949,7 +24960,7 @@ int main (int argc, char **argv) {
   }
   profile_follow();	/* the profile the folder was last used with */
   apply_settings(0);	/* the folder's .vscode/settings.json, a workspace's settings */
-  git_refresh();
+  git_refresh_async();	/* on a worker: the window does not wait for git (seconds on Windows) */
   if (g_session && !dup && term_can_raise()) {	/* the folder is open in another window: that one comes to the front */
     long other = win_with(ws_active() ? ws_file() : side_root());
     if (other) {
@@ -25013,6 +25024,10 @@ int main (int argc, char **argv) {
     git_async_idle();	/* a refresh git did on the worker */
     draw();
     k = term_key(search_busy() || git_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
+    if (lsp_doc) {	/* the window is there: the file's language server */
+      if (HAS_DOC && T->doc == lsp_doc && !T->page) lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
+      lsp_doc = NULL;
+    }
     quickfix_idle();
     if (k == K_NONE) {
       save_refresh_idle();	/* git and the Explorer, after the last save */

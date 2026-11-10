@@ -174,7 +174,8 @@ static const char *const names[CMD_N] = {
   "Jupyter: Open Variables View",
   "Tasks: Terminate Task", "Open Disassembly View",
   "Remote-SSH: Add New SSH Host...", "Remote-SSH: Open SSH Configuration File...",
-  "Git: Toggle Deleted Text", "Git: Pick a Commit of the File..."
+  "Git: Toggle Deleted Text", "Git: Pick a Commit of the File...",
+  "Git: Stage All Changes", "Git: Unstage All Changes", "Git: Discard All Changes", "Git: Discard Changes"
 };
 
 static const char *const keys[CMD_N] = {
@@ -259,7 +260,8 @@ static const char *const keys[CMD_N] = {
   "",
   "", "",
   "", "",
-  "", ""
+  "", "",
+  "", "", "", ""
 };
 
 static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.json */
@@ -450,7 +452,8 @@ static const char *const ids[CMD_N] = {	/* VS Code's commands, for keybindings.j
   "jupyter.openVariableView",
   "workbench.action.tasks.terminate", "debug.action.openDisassemblyView",
   "opensshremotes.addNewSshHost", "opensshremotes.openConfigFile",
-  "mme.git.toggleDeletedText", "mme.git.pickFileCommit"
+  "mme.git.toggleDeletedText", "mme.git.pickFileCommit",
+  "git.stageAll", "git.unstageAll", "git.cleanAll", "git.clean"
 };
 
 static char *user_keys[CMD_N];	/* keybindings.json's, over keys[] */
@@ -1688,9 +1691,9 @@ int dialog (const char *msg, const char *detail, const char *const *button, int 
         bxx -= 1;
       }
       for (i = 0; i < n; i++) {
-        int st = (i == sel) ? S_STATUS : S_INPUT;
+        int st = (i == sel) ? (mouse_over(bx[i], y + 5, bw[i], 1) ? S_BUTTON_ON : S_BUTTON) : S_INPUT;
         scr_fill(bx[i], y + 5, bw[i], st);
-        if (st == S_STATUS) scr_round(bx[i], y + 5, bw[i], 1, RC_ALL, RR_SMALL);
+        if (st != S_INPUT) scr_round(bx[i], y + 5, bw[i], 1, RC_ALL, RR_SMALL);
         scr_puts(bx[i] + 2, y + 5, button[i], st);
         if (i != sel && mouse_over(bx[i], y + 5, bw[i], 1)) scr_hover(bx[i], y + 5, bw[i]);	/* button.secondaryHoverBackground */
       }
@@ -2020,7 +2023,7 @@ static int note_box (int bottom, int w, int sev, const char *src, const char *ms
     TG.nbtn = a->nact;
     TG.btn_y = y + 1 + nl;
     for (i = a->nact - 1; i >= 0; i--) {
-      int bw = (int)str_cols(a->act[i]) + 2, st = i == 0 ? S_STATUS : S_INPUT;
+      int bw = (int)str_cols(a->act[i]) + 2, st = i == 0 ? S_BUTTON : S_INPUT;
       if (focus && i == sel) st = S_MENU_SEL;
       bx -= bw;
       if (bx < x + 2) {
@@ -2109,9 +2112,9 @@ void note_center (void) {
         for (b = 0; b < a->nact; b++) {	/* its buttons, the first the primary one */
           int bw = (int)str_cols(a->act[b]) + 2;
           if (bx + bw >= x + w - 3) break;
-          scr_fill(bx, ry, bw, b == 0 ? S_STATUS : S_INPUT);
+          scr_fill(bx, ry, bw, b == 0 ? S_BUTTON : S_INPUT);
           if (b == 0) scr_round(bx, ry, bw, 1, RC_ALL, RR_SMALL);
-          scr_puts(bx + 1, ry, a->act[b], b == 0 ? S_STATUS : S_INPUT);
+          scr_puts(bx + 1, ry, a->act[b], b == 0 ? S_BUTTON : S_INPUT);
           bx += bw + 1;
         }
         if (k == sel) scr_put(x + w - 3, ry, 0xEA76, st);

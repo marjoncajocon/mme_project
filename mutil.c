@@ -382,8 +382,13 @@ char *read_file (const char *native, size_t *len) {
   char chunk[4096];
   long n;
   int fd = os_open(native, OS_READ);
+  OsStat st;
   if (fd < 0) return NULL;
   buf_init(&b);
+  if (os_stat(native, &st) == 0 && st.size > 0 && (unsigned long long)st.size <= ((unsigned long long)64 << 20)) {
+    b.cap = (size_t)st.size + 1;	/* its size at once, not doubled up to it */
+    b.s = (char *)xmalloc(b.cap);
+  }
   while ((n = os_read(fd, chunk, sizeof(chunk))) > 0) {
     buf_putn(&b, chunk, (size_t)n);
     if (b.len > ((size_t)64 << 20)) break;	/* be sane */

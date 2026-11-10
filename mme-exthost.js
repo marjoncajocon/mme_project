@@ -1918,11 +1918,13 @@ function createOutputChannel (name, opts) {
 }
 
 let nextBar = 1;
+const freeBars = [];	// the keys of disposed items: mme keeps an item (and its command) a key
 function createStatusBarItem (a, b, c) {
   let id, alignment, priority;
   if (typeof a === 'string') [id, alignment, priority] = [a, b, c];
   else [alignment, priority] = [a, b];
-  const key = 'sb' + nextBar++;
+  const key = freeBars.length ? freeBars.pop() : 'sb' + nextBar++;
+  let disposed = false;
   const state = {text: '', tooltip: '', command: undefined, name: '', color: undefined, backgroundColor: undefined, visible: false};
   let queued = false;
   const push = () => {
@@ -1948,9 +1950,12 @@ function createStatusBarItem (a, b, c) {
       push();
     },
     dispose () {
+      if (disposed) return;
+      disposed = true;
       state.visible = false;
       push();
       bars.delete(key);
+      freeBars.push(key);
     }};
   for (const f of ['text', 'tooltip', 'command', 'name', 'color', 'backgroundColor'])
     Object.defineProperty(item, f, {get: () => state[f], set: (v) => {

@@ -47,6 +47,8 @@ typedef struct QDoc {
   unsigned short *mark;	/* QM_* of each line of d */
   size_t nmark;
   int want;	/* its copy is to be read (quick_idle does it) */
+  GitAsync *ja, *jh;	/* the index's and HEAD's copies being read on workers (the old ones show meanwhile) */
+  int rgen;	/* g_gen when they were asked for */
 } QDoc;
 
 #define NQ	16
@@ -61,7 +63,10 @@ unsigned long quick_version (void) {
 }
 
 
+static void read_drop (QDoc *q);
+
 static void qdoc_free (QDoc *q) {
+  read_drop(q);
   free(q->path);
   free(q->orig);
   free(q->oline);
@@ -103,9 +108,8 @@ static size_t *line_starts (const char *s, size_t len, size_t *n) {
 }
 
 
-static void read_orig (QDoc *q) {
-  char *rel, *spec;
-  OsStat st;
+/* the copies go: none read yet (gen: now) */
+static void orig_reset (QDoc *q) {
   free(q->orig);
   free(q->oline);
   free(q->head);
@@ -118,31 +122,124 @@ static void read_orig (QDoc *q) {
   q->gen = g_gen;
   q->want = 0;
   q->edits = ~0UL;
-  if (os_stat(q->path, &st) == 0 && st.size > (8 << 20)) return;	/* a big file: no bars (reading git's copy takes seconds) */
-  rel = git_rel_of(q->path);
-  if (rel == NULL) return;
-  spec = xstrcat3(":", rel, "");
-  q->orig = git_blob(spec, &q->olen);
-  free(spec);
-  if (q->orig == NULL) {
-    free(rel);
+}
+
+
+/* the index's copy orig (NULL: git has none) and HEAD's head (NULL: none, an added file) are q's */
+static void orig_set (QDoc *q, char *orig, size_t olen, char *head, size_t hlen) {
+  if (orig == NULL) {
+    free(head);
     return;
   }
+  q->orig = orig;
+  q->olen = olen;
   q->oline = line_starts(q->orig, q->olen, &q->noline);
   q->final_nl = q->olen > 0 && q->orig[q->olen - 1] == '\n';
   q->crlf = memchr(q->orig, '\r', q->olen) != NULL;
-  spec = xstrcat3("HEAD:", rel, "");	/* and what of it is staged */
-  q->head = git_blob(spec, &q->hlen);
-  free(spec);
-  free(rel);
-  if (q->head == NULL) {	/* added: no commit has it yet */
-    q->head = xstrdup("");
-    q->hlen = 0;
+  if (head == NULL) {	/* added: no commit has it yet */
+    head = xstrdup("");
+    hlen = 0;
   }
+  q->head = head;
+  q->hlen = hlen;
   q->hline = line_starts(q->head, q->hlen, &q->nhline);
   if (q->hlen == 0) q->nhline = 0;
   q->hfinal_nl = q->hlen > 0 && q->head[q->hlen - 1] == '\n';
-  q->sh = text_hunks(q->head, q->hlen, q->orig, q->olen, &q->nsh);
+  q->sh = text_hunks(q->head, q->hlen, q->orig, q->olen, &q->nsh);	/* what of it is staged */
+}
+
+
+/* the file in git, relative to the top; NULL: not there, or too big for bars (reading git's copy takes seconds) */
+static char *orig_rel (QDoc *q) {
+  OsStat st;
+  if (os_stat(q->path, &st) == 0 && st.size > (8 << 20)) return NULL;
+  return git_rel_of(q->path);
+}
+
+
+/* git's copies read now (a stage, a revert cannot wait) */
+static void read_orig (QDoc *q) {
+  char *rel = orig_rel(q), *spec, *orig = NULL, *head = NULL;
+  size_t olen = 0, hlen = 0;
+  orig_reset(q);
+  if (rel == NULL) return;
+  spec = xstrcat3(":", rel, "");
+  orig = git_blob(spec, &olen);
+  free(spec);
+  if (orig != NULL) {
+    spec = xstrcat3("HEAD:", rel, "");
+    head = git_blob(spec, &hlen);
+    free(spec);
+  }
+  free(rel);
+  orig_set(q, orig, olen, head, hlen);
+}
+
+
+/*
+** The same on two workers at once: git cat-file takes a fifth of a second
+** or more on Windows, twice, and the editor stood still for it (at each
+** file opened, after each save). quick_idle takes them when they are done.
+*/
+static void read_start (QDoc *q) {
+  char *rel = orig_rel(q), *s1, *s2;
+  const char *a[] = {"cat-file", "blob", NULL, NULL};
+  q->want = 0;
+  if (rel == NULL) {
+    orig_reset(q);
+    return;
+  }
+  s1 = xstrcat3(":", rel, "");
+  s2 = xstrcat3("HEAD:", rel, "");
+  free(rel);
+  a[2] = s1;
+  q->ja = git_async(a);
+  a[2] = s2;
+  q->jh = q->ja ? git_async(a) : NULL;
+  free(s1);
+  free(s2);
+  q->rgen = g_gen;
+  if (q->jh == NULL) {	/* no thread: read here */
+    read_drop(q);
+    read_orig(q);
+  }
+}
+
+
+/* the copies the workers read become q's (waited for when they are not done) */
+static void read_end (QDoc *q) {
+  Buf a, h;
+  int ra, rh;
+  size_t olen, hlen;
+  buf_init(&a);
+  buf_init(&h);
+  ra = git_async_take(q->ja, &a);
+  rh = git_async_take(q->jh, &h);
+  q->ja = q->jh = NULL;
+  orig_reset(q);
+  q->gen = q->rgen;	/* git refreshed meanwhile: read again */
+  olen = a.len;
+  hlen = h.len;
+  if (ra != 0) {
+    buf_free(&a);
+    buf_free(&h);
+    return;
+  }
+  orig_set(q, buf_take(&a), olen, rh == 0 ? buf_take(&h) : NULL, hlen);
+  buf_free(&h);
+}
+
+
+/* the workers' copies thrown away (the file closed): waited for, as a git started always is */
+static void read_drop (QDoc *q) {
+  Buf b;
+  if (q->ja == NULL) return;
+  buf_init(&b);
+  git_async_take(q->ja, &b);
+  b.len = 0;
+  git_async_take(q->jh, &b);
+  buf_free(&b);
+  q->ja = q->jh = NULL;
 }
 
 
@@ -169,6 +266,7 @@ static QDoc *entry (Doc *d, const char *path, int sync) {
     q->path = xstrdup(path);
     q->gen = 0;
   }
+  if (sync && q->ja) read_end(q);	/* being read: waited for */
   if (q->gen != g_gen) {
     if (!sync) {
       q->want = 1;
@@ -180,13 +278,19 @@ static QDoc *entry (Doc *d, const char *path, int sync) {
 }
 
 
-/* the editor is quiet: the copy asked for is read; 1 when one was */
+/* the editor is quiet: the copies read are taken, one asked for is started; 1 when one was, or is being read */
 int quick_idle (void) {
-  int i;
+  int i, busy = 0;
+  for (i = 0; i < NQ; i++)
+    if (g_q[i].ja) {
+      if (git_async_done(g_q[i].ja) && git_async_done(g_q[i].jh)) read_end(&g_q[i]);
+      else busy = 1;
+    }
+  if (busy) return 1;
   for (i = 0; i < NQ; i++)
     if (g_q[i].want && g_q[i].path) {
       g_q[i].want = 0;
-      if (g_q[i].gen != g_gen) read_orig(&g_q[i]);
+      if (g_q[i].gen != g_gen) read_start(&g_q[i]);
       return 1;
     }
   return 0;
@@ -270,19 +374,46 @@ static void make_marks (QDoc *q) {
 }
 
 
+/* line i of the index's copy is row r of d (the '\r's left out, as text_hunks leaves them) */
+static int same_line (const QDoc *q, size_t i, const Row *r) {
+  size_t e = i + 1 < q->noline ? q->oline[i + 1] : q->olen, n = r->len;
+  if (e > q->oline[i] && q->orig[e - 1] == '\n') e--;
+  if (e > q->oline[i] && q->orig[e - 1] == '\r') e--;
+  if (n > 0 && r->s[n - 1] == '\r') n--;
+  return e - q->oline[i] == n && memcmp(q->orig + q->oline[i], r->s, n) == 0;
+}
+
+
+/*
+** The changes of d against the index's copy, made again after an edit:
+** the lines the same at the start and at the end are left out first, as
+** VS Code's diff does, so a keystroke in a long file diffs a few lines
+** instead of joining and hashing all of it (tens of milliseconds a key).
+*/
 static QDoc *fresh (Doc *d, const char *path) {
   QDoc *q = entry(d, path, 0);
   Buf b;
-  size_t y;
+  size_t y, k, no, nd, pre = 0, suf = 0, o0, o1;
   if (q == NULL || q->orig == NULL) return NULL;
   if (q->edits == d->edits && q->mark && q->nmark == d->n) return q;
+  no = q->olen > 0 ? q->noline : 0;
+  nd = d->n > 1 && d->row[d->n - 1].len == 0 ? d->n - 1 : d->n;	/* text_hunks' lines: a newline at the end ends the last one */
+  if (d->n == 1 && d->row[0].len == 0) nd = 0;
+  while (pre < no && pre < nd && same_line(q, pre, &d->row[pre])) pre++;
+  while (suf < no - pre && suf < nd - pre && same_line(q, no - 1 - suf, &d->row[nd - 1 - suf])) suf++;
+  o0 = pre < q->noline ? q->oline[pre] : q->olen;
+  o1 = no - suf < q->noline ? q->oline[no - suf] : q->olen;
   buf_init(&b);
-  for (y = 0; y < d->n; y++) {
+  for (y = pre; y < nd - suf; y++) {	/* each line with its newline, as the index's lines between have theirs */
     buf_putn(&b, d->row[y].s, d->row[y].len);
-    if (y + 1 < d->n) buf_putc(&b, '\n');
+    buf_putc(&b, '\n');
   }
   free(q->h);
-  q->h = text_hunks(q->orig, q->olen, b.s ? b.s : "", b.len, &q->nh);
+  q->h = text_hunks(q->orig + o0, o1 - o0, b.s ? b.s : "", b.len, &q->nh);
+  for (k = 0; k < q->nh; k++) {
+    q->h[k].o0 += pre;
+    q->h[k].n0 += pre;
+  }
   buf_free(&b);
   q->edits = d->edits;
   make_marks(q);

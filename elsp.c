@@ -811,6 +811,7 @@ void lsp_yield (const char *lang) {
     free(l->last);
     free(l->uri);
     free(l->langid);
+    free(l->result_id);
     *l = g_doc[--g_ndoc];
     k--;
   }
@@ -841,6 +842,8 @@ void lsp_restart (const char *lang) {
     free(l->last);	/* what the old server had: the new one has nothing */
     l->last = NULL;
     l->nlast = 0;
+    free(l->result_id);	/* its pull diagnostics' id: the new one's are its own */
+    l->result_id = NULL;
     if (ns) {
       l->s = ns;
       l->opened = 0;
@@ -849,6 +852,7 @@ void lsp_restart (const char *lang) {
     else {	/* nothing to talk to: the file is opened again later */
       free(l->uri);
       free(l->langid);
+      free(l->result_id);
       *l = g_doc[--g_ndoc];
       k--;
     }

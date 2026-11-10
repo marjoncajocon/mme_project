@@ -338,10 +338,10 @@ static void draw (void) {
   RP.discard_x = bx - 11;
   RP.apply_x = RP.discard_x - 10;
   for (i = 0; i < 2; i++) {
-    int st = RP.focus == 1 + i || (RP.focus == 0 && i == 0) ? S_STATUS : S_INPUT;
+    int st = RP.focus == 1 + i || (RP.focus == 0 && i == 0) ? S_BUTTON : S_INPUT;
     int bxx = i == 0 ? RP.apply_x : RP.discard_x, bw = i == 0 ? 9 : 11;
     scr_fill(bxx, RP.y + RP.h - 1, bw, st);
-    if (st == S_STATUS) scr_round(bxx, RP.y + RP.h - 1, bw, 1, RC_ALL, RR_SMALL);
+    if (st == S_BUTTON) scr_round(bxx, RP.y + RP.h - 1, bw, 1, RC_ALL, RR_SMALL);
     scr_puts(bxx + 2, RP.y + RP.h - 1, i == 0 ? "Apply" : "Discard", st);
   }
   scr_cursor(0, -1);

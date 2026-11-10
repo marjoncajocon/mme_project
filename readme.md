@@ -1376,7 +1376,13 @@ With no file open the editor shows the keys to start with.
   leaves such links out of `git status` (and of the smart commit's
   `git add -A`): a repository with one opens as any other.
 - **Source Control** — Staged Changes and Changes. Enter or a click opens the
-  diff; `s` / `+` stages, `u` / `-` unstages, `o` opens the file. The message
+  diff; `s` / `+` stages, `u` / `-` unstages (on a group's title: all of
+  it), `o` opens the file. A row under the mouse (or selected) shows VS
+  Code's buttons: Open File, Discard Changes (an untracked file: Delete
+  File, asked first) and Stage / Unstage Changes; the titles Changes and
+  Staged Changes show Discard All, Stage All and Unstage All, also in their
+  right-click menus and in the palette (Git: Stage All Changes, Unstage
+  All Changes, Discard All Changes, Discard Changes). The message
   box on top commits with Ctrl+Enter. The title's buttons commit, refresh and
   open More Actions (pull, push, sync, fetch, branches, stash, undo last
   commit, amend ...). Each file shows the lines its change added and

@@ -202,6 +202,7 @@ void scr_zone_pt (int id, const Mouse *m, int *tx, int *ty) {
 
 typedef struct {
   int x, y, w, h, corners, size;
+  int edge;	/* a popup's: a line around it (scr_box) */
   uint16_t st[4];	/* the corners' cells' styles: top left, top right, bottom left, bottom right */
 } Round;
 
@@ -536,7 +537,12 @@ void scr_fill (int x, int y, int w, int st) {
 void scr_box (int x, int y, int w, int h, int st) {
   int i;
   for (i = 0; i < h; i++) scr_fill(x, y + i, w, st);
-  if ((st == S_BOX || st == S_MENU || st == S_TOAST) && w < S.cols) scr_round(x, y, w, h, RC_ALL, RR_BOX);	/* a popup */
+  if ((st == S_BOX || st == S_MENU || st == S_TOAST) && w < S.cols) {	/* a popup: round, and its edge drawn (it is the editor's color) */
+    scr_round(x, y, w, h, RC_ALL, RR_BOX);
+    if (g_nround > 0 && g_round[g_nround - 1].x == x && g_round[g_nround - 1].y == y && g_round[g_nround - 1].w == w &&
+        g_round[g_nround - 1].size == RR_BOX)
+      g_round[g_nround - 1].edge = 1;
+  }
 }
 
 
@@ -564,6 +570,7 @@ void scr_round (int x, int y, int w, int h, int corners, int size) {
   r->h = h;
   r->corners = corners;
   r->size = size;
+  r->edge = 0;
   for (k = 0; k < 4; k++) {
     int cx = k & 1 ? x + w - 1 : x, cy = k & 2 ? y + h - 1 : y;
     r->st[k] = S.back[(size_t)cy * (size_t)S.cols + (size_t)cx].st;

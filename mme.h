@@ -529,6 +529,7 @@ enum {
   S_INPUT, S_INPUT_ON, S_INPUT_HINT, S_TOGGLE_ON,
   S_BOX, S_BOX_TITLE, S_BOX_SEL, S_BOX_DIM, S_BOX_HIT, S_BOX_HIT_SEL,
   S_TOAST, S_TOAST_WARN,
+  S_BUTTON, S_BUTTON_ON,	/* a primary button (blue), and with the mouse or the focus on it */
   S_GIT_M, S_GIT_A, S_GIT_D, S_GIT_U,
   S_ICON_BLUE, S_ICON_YELLOW, S_ICON_GREEN, S_ICON_RED, S_ICON_PURPLE,
   S_ICON_ORANGE, S_ICON_GREY,
@@ -573,6 +574,7 @@ enum {
   C_TABS_BG, C_TAB_BG, C_TAB_FG, C_TAB_ON_BG, C_TAB_ON_FG, C_CRUMB,
   C_ACCENT, C_MCURSOR, C_LIGHTBULB, C_MINIMAP_SLIDER, C_THUMB, C_THUMB_ON,
   C_THUMB_ACTIVE, C_LIST_HOVER_BG, C_TAB_HOVER_BG, C_TAB_HOVER_FG, C_TOOLBAR_HOVER, C_SASH_HOVER,	/* the mouse over them */
+  C_BUTTON_BG, C_BUTTON_FG, C_BUTTON_HOVER,	/* button.background, .foreground, .hoverBackground: a dialog's, a notification's */
   C_BRACKET1, C_BRACKET2, C_BRACKET3, C_BRACKET_MATCH,
   C_GUIDE, C_GUIDE_ON, C_RULER, C_INLAY_FG, C_INLAY_BG, C_LENS,	/* indent guides, rulers, inlay hints, code lens */
   C_GHOST,	/* editorGhostText.foreground: the inline suggestion drawn in the text */
@@ -814,6 +816,8 @@ enum {
   CMD_SSH_ADD_HOST, CMD_SSH_OPEN_CONFIG,	/* Remote-SSH: Add New SSH Host..., Open SSH Configuration File... (eremote.c) */
   CMD_GIT_TOGGLE_DELETED,	/* Git: Toggle Deleted Text (mme.c: the deleted lines and characters shown) */
   CMD_GIT_PICK_COMMIT,	/* Git: Pick a Commit of the File... (File History's commits in a list) */
+  CMD_GIT_STAGE_ALL, CMD_GIT_UNSTAGE_ALL,	/* Git: Stage All Changes, Unstage All Changes */
+  CMD_GIT_DISCARD_ALL, CMD_GIT_DISCARD,	/* Git: Discard All Changes, Discard Changes (the file in front) */
   CMD_N
 };
 
@@ -1450,7 +1454,10 @@ const char *git_blame (const char *path, size_t y, int short_form);	/* NULL: non
 void blame_clear (void);
 int git_blame_idle (void);	/* the blame git was asked for, read when nothing else is to do */
 int git_blame_busy (void);	/* one is asked for or running */
-int git_counts_idle (void);	/* egit.c: the Source Control counts a refresh left out, asked for when all else is read; 1 started */
+int git_counts_idle (void);
+void git_stage_all (int on);	/* Git: Stage All Changes (1), Unstage All Changes (0) */
+void git_discard_all (void);	/* Git: Discard All Changes (asked first) */
+void git_discard_file (const char *path);	/* Git: Discard Changes of path (asked first) */	/* egit.c: the Source Control counts a refresh left out, asked for when all else is read; 1 started */
 void on_disk_changed (void);	/* mme.c: git changed files; the open ones are read again */
 
 /* eext.c - the Extensions view, and what extensions contribute */

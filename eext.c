@@ -598,6 +598,7 @@ static const struct {
   {"input.background", C_INPUT_BG}, {"input.foreground", C_INPUT_FG},
   {"input.placeholderForeground", C_INPUT_HINT}, {"inputOption.activeBackground", C_TOGGLE_BG},
   {"notifications.background", C_TOAST_BG},
+  {"button.background", C_BUTTON_BG}, {"button.foreground", C_BUTTON_FG}, {"button.hoverBackground", C_BUTTON_HOVER},
   {"editorError.foreground", C_ERROR}, {"editorWarning.foreground", C_WARNING},
   {"editorInfo.foreground", C_INFO},
   {"gitDecoration.modifiedResourceForeground", C_GIT_M}, {"gitDecoration.addedResourceForeground", C_GIT_A},

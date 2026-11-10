@@ -108,7 +108,7 @@ Thread *th_start (void (*fn) (void *), void *ud) {
   t->fn = fn;
   t->ud = ud;
 #ifdef _WIN32
-  t->h = CreateThread(NULL, TH_STACK, run_thread, t, 0, NULL);
+  t->h = CreateThread(NULL, TH_STACK, run_thread, t, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);	/* reserved; committed as it is used */
   if (t->h == NULL) {
     free(t);
     return NULL;

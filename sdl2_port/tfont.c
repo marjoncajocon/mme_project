@@ -61,6 +61,7 @@ typedef struct Face {
   int ok;
 #ifdef _WIN32
   wchar_t family[LF_FACESIZE];	/* name GDI knows the font by */
+  wchar_t *reg;	/* the file AddFontResourceEx was given: removed with the face */
   HFONT hf[4];	/* GDI font per ST_* style, for the current size */
 #endif
 } Face;
@@ -492,8 +493,11 @@ static void face_family (Face *f) {
 /* the font file becomes usable by name, for this program only */
 static void face_register (Face *f, const char *file) {
   wchar_t w[1024];
-  if (MultiByteToWideChar(CP_UTF8, 0, file, -1, w, 1024) > 0)
-    AddFontResourceExW(w, FR_PRIVATE, 0);
+  if (MultiByteToWideChar(CP_UTF8, 0, file, -1, w, 1024) > 0 && AddFontResourceExW(w, FR_PRIVATE, 0) > 0) {
+    size_t n = wcslen(w) + 1;
+    f->reg = (wchar_t *)xmalloc(n * sizeof(wchar_t));
+    memcpy(f->reg, w, n * sizeof(wchar_t));
+  }
   face_family(f);
 }
 
@@ -789,6 +793,10 @@ static void faces_free (void) {
     if (!f->ok) continue;
 #ifdef _WIN32
     face_drop_gdi(f);
+    if (f->reg) {	/* each face registered its file once: the count goes down once */
+      RemoveFontResourceExW(f->reg, FR_PRIVATE, 0);
+      free(f->reg);
+    }
 #endif
     ot_close(&f->ot);
     if (i == 0 || f->data != f_regular.data) free(f->data);

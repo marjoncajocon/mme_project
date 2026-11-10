@@ -1511,8 +1511,18 @@ int os_poll_proc (OsProc proc, int *status) {
 }
 
 
+/* the children let go and still running: each one let go after reaps the ones that ended (no zombies) */
+static pid_t g_loose[64];
+static int g_nloose;
+
 void os_detach (OsProc proc) {
-  (void)proc;
+  int i, k = 0;
+  pthread_mutex_lock(&g_spawn_mx);
+  for (i = 0; i < g_nloose; i++)
+    if (waitpid(g_loose[i], NULL, WNOHANG) == 0) g_loose[k++] = g_loose[i];	/* 0: still running */
+  g_nloose = k;
+  if (g_nloose < (int)(sizeof(g_loose) / sizeof(g_loose[0]))) g_loose[g_nloose++] = (pid_t)proc;
+  pthread_mutex_unlock(&g_spawn_mx);
 }
 
 

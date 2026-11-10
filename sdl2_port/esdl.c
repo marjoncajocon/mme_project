@@ -776,8 +776,12 @@ static void paint_badge (const ECell *b, int x, int e, int y) {
 ** ===================================================================
 */
 
-/* corner k (0 top left, 1 top right, 2 bottom left, 3 bottom right) of pixels x0 .. x1-1, y0 .. y1-1 */
-static void round_corner (int x0, int y0, int x1, int y1, int k, double rad) {
+/*
+** corner k (0 top left, 1 top right, 2 bottom left, 3 bottom right) of
+** pixels x0 .. x1-1, y0 .. y1-1; edge: the popup's line goes round it in
+** that color (0x1000000: none)
+*/
+static void round_corner (int x0, int y0, int x1, int y1, int k, double rad, uint32_t edge) {
   Frame *f = &W.fr;
   int right = k & 1, bottom = (k & 2) != 0, sx = right ? x1 : x0 - 1, px, py;
   double ccx = right ? x1 - rad : x0 + rad, ccy = bottom ? y1 - rad : y0 + rad;
@@ -793,31 +797,60 @@ static void round_corner (int x0, int y0, int x1, int y1, int k, double rad) {
       uint32_t *p;
       if (px < 0 || px >= f->w || (right ? dx <= 0 : dx >= 0) || (bottom ? dy <= 0 : dy >= 0)) continue;
       a = rad + 0.5 - sqrt(dx * dx + dy * dy);	/* how much of the pixel is inside the curve */
-      if (a >= 1.0) continue;
       p = &f->px[(size_t)py * (size_t)f->w + (size_t)px];
+      if (edge <= 0xFFFFFF && a > 0.0 && a < 2.0) {	/* the line: the pixel row just inside the curve */
+        double on = a < 1.0 ? a : 2.0 - a;
+        *p = mix(*p, edge, (int)(on * 255.0));
+      }
+      if (a >= 1.0) continue;
       *p = mix(out, *p, a <= 0.0 ? 0 : (int)(a * 255.0));
     }
   }
 }
 
 
-/* the round corners that are in row y, as grid has it (a corner drawn over since stays square) */
+/*
+** A popup's edge in row y: a pixel's line of menu.border's color down its
+** sides, along its top and bottom, between the corners (round_corner draws
+** them round). Dark Modern gives popups the editor's own color: without
+** it, a menu or the find widget did not stand out from the code.
+*/
+static void paint_edge (const Round *r, int y, double rad, uint32_t c) {
+  Frame *f = &W.fr;
+  int x0 = r->x * W.cw, y0 = r->y * W.ch, x1 = (r->x + r->w) * W.cw, y1 = (r->y + r->h) * W.ch;
+  int r0 = (int)ceil(rad), py, px;
+  int pa = y * W.ch > y0 + r0 ? y * W.ch : y0 + r0, pb = (y + 1) * W.ch < y1 - r0 ? (y + 1) * W.ch : y1 - r0;
+  for (py = pa; py < pb; py++) {	/* the sides */
+    if (py < 0 || py >= f->h) continue;
+    if (x0 >= 0 && x0 < f->w) f->px[(size_t)py * (size_t)f->w + (size_t)x0] = c;
+    if (x1 - 1 >= 0 && x1 - 1 < f->w) f->px[(size_t)py * (size_t)f->w + (size_t)(x1 - 1)] = c;
+  }
+  for (py = y0; py < y1; py += y1 - 1 - y0 > 0 ? y1 - 1 - y0 : 1) {	/* the top, the bottom */
+    if (py < y * W.ch || py >= (y + 1) * W.ch || py < 0 || py >= f->h) continue;
+    for (px = x0 + r0; px < x1 - r0; px++)
+      if (px >= 0 && px < f->w) f->px[(size_t)py * (size_t)f->w + (size_t)px] = c;
+  }
+}
+
+
+/* the round corners that are in row y, as grid has it (a corner drawn over since stays square); popups' edges */
 static void paint_round (int y, const ECell *grid) {
   int i, k;
-  if (W.radius < 1.0) return;
+  uint32_t ec = theme_hc() ? 0x1000000u : ui_color(C_MENU_SEP);	/* menu.border, as VS Code draws a popup's */
   for (i = 0; i < g_nround; i++) {
     const Round *r = &g_round[i];
     int x0 = r->x * W.cw, y0 = r->y * W.ch, x1 = (r->x + r->w) * W.cw, y1 = (r->y + r->h) * W.ch;
-    double rad = r->size == RR_BOX ? W.radius : W.radius / 2.0;
+    double rad = W.radius < 1.0 ? 0.0 : r->size == RR_BOX ? W.radius : W.radius / 2.0;
     if (y < r->y || y >= r->y + r->h) continue;
     if (rad > (x1 - x0) / 2.0) rad = (x1 - x0) / 2.0;
     if (rad > (y1 - y0) / 2.0) rad = (y1 - y0) / 2.0;
     if (rad > W.ch - 1) rad = W.ch - 1;	/* each corner in one row */
+    if (r->edge && ec <= 0xFFFFFF) paint_edge(r, y, rad < 1.0 ? 0.0 : rad, ec);
     if (rad < 1.0) continue;
     for (k = 0; k < 4; k++) {
       int cx = k & 1 ? r->x + r->w - 1 : r->x, cy = k & 2 ? r->y + r->h - 1 : r->y;
       if (!(r->corners & (1 << k)) || cy != y || grid[(size_t)cy * (size_t)S.cols + (size_t)cx].st != r->st[k]) continue;
-      round_corner(x0, y0, x1, y1, k, rad);
+      round_corner(x0, y0, x1, y1, k, rad, r->edge ? ec : 0x1000000u);
     }
   }
 }
