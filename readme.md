@@ -1482,7 +1482,12 @@ With no file open the editor shows the keys to start with.
   editor under 80 columns wide always has them), "n of m changes", with
   Stage Change, Revert
   Change, previous / next and close; a staged change's peek has Unstage
-  Change. The change under the mouse lights up, its bar wider. Its first
+  Change. A long change scrolls in it (the wheel, Up / Down, Page Up /
+  Page Down) and a wide one to the side, all its lines together
+  (Shift+wheel or a touchpad, Left / Right, Ctrl: further, Home / End),
+  the numbers staying; scrollbars show then, down its right edge and
+  along its bottom border, to drag or click.
+  The change under the mouse lights up, its bar wider. Its first
   line ends with its lines added and deleted, dim in green and red against
   the text's right edge (`+3 -1`, `-5` at a red square; staged fainter),
   only where the line leaves room; they follow the typing. The square's

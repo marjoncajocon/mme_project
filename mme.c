@@ -351,6 +351,7 @@ static void draw_dirty_peek (void);
 static void conflict_row (int sy, size_t y, int gw, size_t from, int other);
 static int dirty_key (int k);
 static int dirty_click (Mouse *m);
+static int dirty_drag (Mouse *m);
 static int conflict_click (Mouse *m);
 static void conflict_reset (void);
 static long hunk_at (const QHunk *h, size_t n, size_t y);
@@ -17646,8 +17647,12 @@ static struct {
   int staged;	/* it shows a staged change (HEAD -> the index): Unstage instead of Stage and Revert */
   size_t hi;	/* the change shown (of its kind) */
   size_t top;	/* its first line shown: a long one scrolls */
+  size_t left;	/* its first column shown: a wide one scrolls to the side (all its lines together) */
+  size_t cols;	/* as drawn: the widest line's columns */
+  int tw;	/* and the columns of text a line shows (side by side: the narrower half's) */
   int x, y, w, h;	/* where it was drawn */
   int stage_x, revert_x, prev_x, next_x, close_x;
+  int vdrag, hdrag;	/* a scrollbar's thumb taken: 1 + where in it */
 } DP;
 
 
@@ -18100,6 +18105,7 @@ static void dirty_show (int staged, long i) {
   DP.staged = staged;
   DP.hi = (size_t)i;
   DP.top = 0;
+  DP.left = 0;
   T->sel = 0;
   T->nmc = 0;
   p.y = y;
@@ -18163,17 +18169,22 @@ static void view_blocks_update (int other) {
 }
 
 
-/* a line of text for a box: tabs as spaces, cut at w columns */
-static void put_plain (int x, int y, int w, const char *s, size_t n, int st) {
+/* a line of text for a box from its column left: tabs as spaces, cut at w columns */
+static void put_plain (int x, int y, int w, const char *s, size_t n, size_t left, int st) {
   Buf b;
-  size_t i;
+  size_t i, c = 0, len;
   buf_init(&b);
-  for (i = 0; i < n; i++) {
-    if (s[i] == '\t') {
-      int k;
-      for (k = 0; k < TABW; k++) buf_putc(&b, ' ');
+  for (i = 0; i < n; i += len ? len : 1) {
+    uint32_t cp = utf8_decode(s + i, n - i, &len);
+    int cw = cp == '\t' ? TABW : uc_width(cp), k;
+    if (c >= left) {
+      if (cp == '\t')
+        for (k = 0; k < TABW; k++) buf_putc(&b, ' ');
+      else buf_putn(&b, s + i, len ? len : 1);
     }
-    else buf_putc(&b, s[i]);
+    else if (c + (size_t)cw > left)	/* a tab or a wide character cut by the side: what shows of it is blank */
+      for (k = 0; k < (int)(c + (size_t)cw - left); k++) buf_putc(&b, ' ');
+    c += (size_t)cw;
   }
   buf_putc(&b, '\0');
   scr_putsw(x, y, w, b.s, st);
@@ -18202,6 +18213,7 @@ static int plain_col (const char *s, size_t off) {
 ** (in order) brighter.
 */
 static void peek_line (int x, int sy, int w, const QHunk *h, int to_new, size_t i, int nw, int sign) {
+  int left = (int)DP.left;
   size_t len = 0, line = (to_new ? h->n0 : h->o0) + i, rr[2 * 16], nr = 0, q;
   const char *s = change_line(DP.staged, to_new, line, &len);
   int st = to_new ? S_DIFF_ADD : S_DIFF_DEL, tx = x + nw + (sign ? 2 : 1), tw = x + w - tx - 1;
@@ -18211,7 +18223,7 @@ static void peek_line (int x, int sy, int w, const QHunk *h, int to_new, size_t 
   scr_puts(x, sy, num, S_DIFF_NUM);
   if (sign) scr_put(x + nw, sy, to_new ? '+' : '-', st);
   if (tw <= 0) return;
-  put_plain(tx, sy, tw, s, len, st);
+  put_plain(tx, sy, tw, s, len, DP.left, st);
   if (i < h->on && i < h->nn) {
     size_t la, lb;
     const char *a = change_line(DP.staged, 0, h->o0 + i, &la), *b = change_line(DP.staged, 1, h->n0 + i, &lb);
@@ -18219,9 +18231,52 @@ static void peek_line (int x, int sy, int w, const QHunk *h, int to_new, size_t 
     else chars_diff(a, la, b, lb, rr, &nr, NULL, NULL, 16, NULL);
   }
   for (q = 0; q < nr; q++) {
-    int c0 = plain_col(s, rr[2 * q] < len ? rr[2 * q] : len), c1 = plain_col(s, rr[2 * q + 1] < len ? rr[2 * q + 1] : len), c;
-    for (c = c0; c < c1 && c < tw; c++) scr_set_bg(tx + c, sy, ui_color(to_new ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
+    int c0 = plain_col(s, rr[2 * q] < len ? rr[2 * q] : len) - left, c1 = plain_col(s, rr[2 * q + 1] < len ? rr[2 * q + 1] : len) - left, c;
+    for (c = c0 < 0 ? 0 : c0; c < c1 && c < tw; c++) scr_set_bg(tx + c, sy, ui_color(to_new ? C_DIFF_ADD_HI : C_DIFF_DEL_HI));
   }
+}
+
+
+/* the columns the widest line of the change takes (tabs as spaces) */
+static size_t dirty_cols (const QHunk *h) {
+  size_t i, len, w = 0, c;
+  for (i = 0; i < h->on + h->nn; i++) {
+    const char *s = i < h->on ? change_line(DP.staged, 0, h->o0 + i, &len) : change_line(DP.staged, 1, h->n0 + i - h->on, &len);
+    if (s && (c = (size_t)plain_col(s, len)) > w) w = c;
+  }
+  return w;
+}
+
+
+/* the peek's farthest first column: the widest line's end in sight */
+static size_t dirty_left_max (void) {
+  return DP.tw > 0 && DP.cols + 1 > (size_t)DP.tw ? DP.cols + 1 - (size_t)DP.tw : 0;
+}
+
+
+/* its scrollbars' thumbs: the vertical one's rows (0: none, all in sight), the horizontal one's columns */
+static int dirty_vthumb (size_t total, int *pos) {
+  int body = DP.h - 2, size;
+  *pos = 0;
+  if (body < 1 || total <= (size_t)body) return 0;
+  size = (int)((size_t)body * (size_t)body / total);
+  if (size < 1) size = 1;
+  *pos = (int)((double)DP.top * (double)(body - size) / (double)(total - (size_t)body) + 0.5);
+  if (*pos > body - size) *pos = body - size;
+  return size;
+}
+
+
+static int dirty_hthumb (int *pos) {
+  int w = DP.w - 1, size;	/* the bottom border, but its last cell (the vertical bar's) */
+  size_t mx = dirty_left_max();
+  *pos = 0;
+  if (mx == 0 || w < 4) return 0;
+  size = (int)((size_t)w * (size_t)DP.tw / (DP.cols + 1));
+  if (size < 2) size = 2;
+  *pos = (int)((double)DP.left * (double)(w - size) / (double)mx + 0.5);
+  if (*pos > w - size) *pos = w - size;
+  return size;
 }
 
 
@@ -18253,6 +18308,13 @@ static void draw_dirty_peek (void) {
   DP.y = y0;
   DP.h = ph;
   if (DP.top + (size_t)(ph - 2) > total) DP.top = total > (size_t)(ph - 2) ? total - (size_t)(ph - 2) : 0;
+  DP.cols = dirty_cols(h);
+  if (peek_side()) {	/* what peek_line leaves for the text: the narrower half's */
+    int hw = (DP.w - 1) / 2;
+    DP.tw = hw - nw - 2;
+  }
+  else DP.tw = DP.w - nw - 3;
+  if (DP.left > dirty_left_max()) DP.left = dirty_left_max();
   scr_fill(DP.x, y0, DP.w, S_BOX);
   rank = qc_rank(DP.staged, DP.hi, &all);
   {
@@ -18302,6 +18364,20 @@ static void draw_dirty_peek (void) {
     else peek_line(DP.x, sy, DP.w, h, 1, k - h->on, nw, 1);
   }
   for (k = 0; k < (size_t)DP.w; k++) scr_put(DP.x + (int)k, y0 + ph - 1, 0x2500, S_BOX_DIM);
+  {	/* the scrollbars when a part is out of sight: down its right edge, along its bottom border */
+    int pos, size = dirty_vthumb(total, &pos), hov;
+    uint32_t bg;
+    if (size > 0) {
+      hov = mouse_over_text(DP.x + DP.w - 1, y0 + 1, 1, ph - 2);
+      bg = ui_color(DP.vdrag ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB);
+      for (i = pos; i < pos + size; i++) scr_put_rgb(DP.x + DP.w - 1, y0 + 1 + i, ' ', bg, bg, 0);
+    }
+    if ((size = dirty_hthumb(&pos)) > 0) {
+      hov = mouse_over_text(DP.x, y0 + ph - 1, DP.w - 1, 1);
+      bg = ui_color(DP.hdrag ? C_THUMB_ACTIVE : hov ? C_THUMB_ON : C_THUMB);
+      for (i = pos; i < pos + size; i++) scr_put_rgb(DP.x + i, y0 + ph - 1, 0x2584, bg, ui_color(C_EDITOR_BG), 0);
+    }
+  }
 }
 
 
@@ -18323,18 +18399,95 @@ static int dirty_key (int k) {
     case K_DOWN: if (DP.top + body < total) DP.top++; return 1;
     case K_PGUP: DP.top = DP.top > body ? DP.top - body : 0; return 1;
     case K_PGDN: DP.top += body; return 1;
+    case K_LEFT: {	/* to the side; Ctrl: further */
+      size_t st = k & KM_CTRL ? 8 : 1;
+      DP.left = DP.left > st ? DP.left - st : 0;
+      return 1;
+    }
+    case K_RIGHT:
+      DP.left += k & KM_CTRL ? 8 : 1;
+      if (DP.left > dirty_left_max()) DP.left = dirty_left_max();
+      return 1;
+    case K_HOME: DP.left = 0; return 1;
+    case K_END: DP.left = dirty_left_max(); return 1;
   }
   DP.open = 0;	/* another key: the peek goes, the key is the editor's */
   return 0;
 }
 
 
+/* the peek's vertical scrollbar at row ry of its text: its thumb follows */
+static void dirty_vbar (int ry) {
+  size_t line, last, total;
+  QHunk h;
+  int pos, size, body = DP.h - 2;
+  if (!qc_get(DP.staged, DP.hi, &line, &last, &h)) return;
+  total = dirty_rows(&h);
+  if ((size = dirty_vthumb(total, &pos)) == 0) return;
+  if (!DP.vdrag) DP.vdrag = ry >= pos && ry < pos + size ? 1 + (ry - pos) : 1 + size / 2;	/* elsewhere: it jumps there */
+  ry -= DP.vdrag - 1;
+  if (ry < 0) ry = 0;
+  DP.top = body - size > 0 ? (size_t)((double)ry * (double)(total - (size_t)body) / (double)(body - size) + 0.5) : 0;
+  if (DP.top > total - (size_t)body) DP.top = total - (size_t)body;
+}
+
+
+/* the horizontal one at column rx of the bottom border: its thumb follows */
+static void dirty_hbar (int rx) {
+  int pos, size = dirty_hthumb(&pos), w = DP.w - 1;
+  size_t mx = dirty_left_max();
+  if (size == 0) return;
+  rx -= DP.hdrag - 1;
+  if (rx < 0) rx = 0;
+  DP.left = w - size > 0 ? (size_t)((double)rx * (double)mx / (double)(w - size) + 0.5) : 0;
+  if (DP.left > mx) DP.left = mx;
+}
+
+
+/* a scrollbar of the peek held: the mouse is its until the button comes up; 1 when it was */
+static int dirty_drag (Mouse *m) {
+  if (!DP.vdrag && !DP.hdrag) return 0;
+  if (!DP.open) DP.vdrag = DP.hdrag = 0;
+  else if (m->drag && !m->wheel) {
+    if (DP.vdrag) dirty_vbar(m->y - DP.y - 1);
+    else dirty_hbar(m->x - DP.x);
+  }
+  else if (!m->press) DP.vdrag = DP.hdrag = 0;
+  return 1;
+}
+
+
 static int dirty_click (Mouse *m) {
   if (!DP.open || m->y < DP.y || m->y >= DP.y + DP.h || m->x < DP.x || m->x >= DP.x + DP.w) return 0;
+  if (m->wheel && (m->mods & KM_SHIFT)) {	/* Shift+wheel, a touchpad's across: to the side */
+    size_t st = (size_t)(2 * wheel_step(0));
+    if (m->wheel < 0) DP.left = DP.left > st ? DP.left - st : 0;
+    else if ((DP.left += st) > dirty_left_max()) DP.left = dirty_left_max();
+    return 1;
+  }
   if (m->wheel) {
     size_t st = (size_t)wheel_step(m->mods);
     if (m->wheel < 0) DP.top = DP.top > st ? DP.top - st : 0;
     else DP.top += st;
+    return 1;
+  }
+  if (m->button == 0 && m->press && !m->drag && m->y > DP.y && m->y < DP.y + DP.h - 1 && m->x == DP.x + DP.w - 1) {
+    int pos;	/* the vertical scrollbar */
+    size_t line, last;
+    QHunk h;
+    if (qc_get(DP.staged, DP.hi, &line, &last, &h) && dirty_vthumb(dirty_rows(&h), &pos) > 0) {
+      dirty_vbar(m->y - DP.y - 1);
+      return 1;
+    }
+  }
+  if (m->button == 0 && m->press && !m->drag && m->y == DP.y + DP.h - 1 && m->x < DP.x + DP.w - 1) {
+    int pos, size = dirty_hthumb(&pos), rx = m->x - DP.x;	/* the horizontal one: its thumb is taken, beside it a page */
+    if (size > 0 && rx >= pos && rx < pos + size) {
+      DP.hdrag = 1 + (rx - pos);
+      dirty_hbar(rx);
+    }
+    else if (size > 0 && rx < pos) DP.left = DP.left > (size_t)DP.tw ? DP.left - (size_t)DP.tw : 0;
+    else if (size > 0 && (DP.left += (size_t)DP.tw) > dirty_left_max()) DP.left = dirty_left_max();
     return 1;
   }
   if (!(m->button == 0 && m->press && !m->drag) || m->y != DP.y) return 1;
@@ -24046,6 +24199,7 @@ static void on_mouse (void) {
     panel_mouse(m, 1, &lk);
     return;
   }
+  if (dirty_drag(&zm)) return;	/* the dirty diff peek's scrollbar held */
   if (L.aux_w > 0 && (press || m->wheel) && m->x >= L.aux_x && m->x < L.aux_x + L.aux_w && m->y >= L.body_y &&
       m->y < L.body_y + L.side_h) {	/* the Chat view */
     if (press) E.focus = F_CHAT;
