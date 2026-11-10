@@ -552,12 +552,23 @@ static int load_enc (Doc *d, const char *native, int enc) {
     return 1;
   }
   if (st.is_dir) return -1;
-  s = load_bytes(native, &enc, &crlf, &len, &bom);
+  {
+    int pg = 0;
+    if (st.size > (8 << 20)) {	/* a big one: the screen says so before it holds the editor */
+      char what[300];
+      snprintf(what, sizeof(what), "Opening %s (%lld MB)...", path_basename(native), (long long)(st.size >> 20));
+      pg = prog_begin(PG_EDITOR, PGF_STATUS | PGF_NOW, what);
+    }
+    s = load_bytes(native, &enc, &crlf, &len, &bom);
+    if (s != NULL) {
+      d->enc = asked < 0 && d->ec.enc >= 0 ? d->ec.enc : enc;	/* and it is saved in it */
+      if (!bom && (enc == ENC_UTF16LE || enc == ENC_UTF16BE)) nobom_set(d, enc);
+      d->crlf = crlf;
+      doc_set_text(d, s, len);
+    }
+    prog_end(pg);
+  }
   if (s == NULL) return -1;
-  d->enc = asked < 0 && d->ec.enc >= 0 ? d->ec.enc : enc;	/* and it is saved in it */
-  if (!bom && (enc == ENC_UTF16LE || enc == ENC_UTF16BE)) nobom_set(d, enc);
-  d->crlf = crlf;
-  doc_set_text(d, s, len);
   free(s);
   {	/* a first line (#!) may say another language */
     const Syntax *sx = syntax_detect(native, d);

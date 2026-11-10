@@ -18,6 +18,7 @@
 #include "SDL.h"
 #include "SDL_syswm.h"
 
+#define EDRAW_PIXELS	1	/* edraw.c: progress bars are pixels here */
 #define scr_flush scr_flush_vt	/* edraw.c's own: the terminal's escape sequences, not used here */
 #define scr_cell_px scr_cell_px_vt
 #define scr_bitmap scr_bitmap_vt
@@ -856,6 +857,39 @@ static void paint_round (int y, const ECell *grid) {
 }
 
 
+/* the progress bars along the bottom of row y (scr_progress): progressBar.background, focusBorder's blue */
+static void paint_pbars (int y) {
+  int i, t = (int)(2.0f * W.scale + 0.5f);
+  if (t < 2) t = 2;
+  for (i = 0; i < g_npbar; i++) {
+    const PBar *p = &g_pbar[i];
+    int x0 = p->x * W.cw + (int)((long)p->a * p->w * W.cw / 1000), x1 = p->x * W.cw + (int)((long)p->b * p->w * W.cw / 1000);
+    if (p->y != y || x1 <= x0) continue;
+    fill(&W.fr, x0, (y + 1) * W.ch - t, x1 - x0, t, ui_color(C_ACCENT));
+  }
+}
+
+
+/* the rows whose bars moved, came or went since the last picture: into rows (painted again) */
+static void pbars_changed (unsigned char *rows) {
+  static PBar was[MAX_PBAR];
+  static int nwas;
+  int i, k;
+  for (i = 0; i < g_npbar; i++) {
+    for (k = 0; k < nwas; k++)
+      if (memcmp(&was[k], &g_pbar[i], sizeof(PBar)) == 0) break;
+    if (k == nwas && g_pbar[i].y < S.rows) rows[g_pbar[i].y] = 1;
+  }
+  for (k = 0; k < nwas; k++) {
+    for (i = 0; i < g_npbar; i++)
+      if (memcmp(&was[k], &g_pbar[i], sizeof(PBar)) == 0) break;
+    if (i == g_npbar && was[k].y < S.rows) rows[was[k].y] = 1;
+  }
+  memcpy(was, g_pbar, sizeof(was));
+  nwas = g_npbar;
+}
+
+
 /*
 ** The window's own corners (a window without a frame): Windows 11 rounds
 ** them itself, smooth, its shadow kept (DWMWA_WINDOW_CORNER_PREFERENCE);
@@ -1096,6 +1130,7 @@ static void paint_row (int y, const ECell *grid) {
   bm_paint_row(y, grid);
   if (theme_hc()) paint_outlines(grid, S.cols, S.rows, y, 0, y * W.ch, W.cw, W.ch);
   paint_round(y, grid);
+  paint_pbars(y);
   if (y == 0 && W.borderless) tb_paint(b);	/* the title bar's buttons, over its right end */
   if (W.car_on && W.car_py < (y + 1) * W.ch && W.car_py + W.car_ph > y * W.ch) W.car_on = 0;	/* painted over */
   mark(y);
@@ -1955,6 +1990,7 @@ void scr_flush (void) {
   picture_size();
   if (W.up0 > S.rows) W.up0 = S.rows;
   zones_changed();
+  pbars_changed(g_zrow);
   bm_frame(g_zrow);	/* (the rows of a picture gone: painted again, as a zone's) */
   for (y = 0; y < S.rows; y++) {
     if (!S.full && !g_zrow[y] && !row_changed(y) && !(theme_hc() && (row_changed(y - 1) || row_changed(y + 1))))

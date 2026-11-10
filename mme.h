@@ -626,6 +626,7 @@ void scr_box (int x, int y, int w, int h, int st);	/* a filled rectangle */
 enum { RC_TL = 1, RC_TR = 2, RC_BL = 4, RC_BR = 8, RC_ALL = 15 };
 enum { RR_BOX, RR_SMALL };	/* a popup's radius (mme.ui.cornerRadius), half of it (buttons, tabs, boxes to type in) */
 void scr_round (int x, int y, int w, int h, int corners, int size);	/* those cells, drawn now, with round corners (mme-sdl) */
+void scr_progress (int x, int y, int w, int pct);	/* a progress bar along row y's bottom, w cells from x: pct done, -1 not known (a part that goes along) */
 void scr_restyle (int x, int y, int w, int st);	/* the colors of cells, not their text */
 void scr_cursor (int x, int y);
 void scr_cursor_shape (int decscusr);	/* 1 .. 6: block, underline, bar; blinking or not */
@@ -1336,6 +1337,7 @@ int git_async_idle (void);	/* the main loop's: a refresh read on the worker goes
 int git_busy (void);	/* a refresh or a command on a worker is running */
 typedef struct GitAsync GitAsync;
 GitAsync *git_async (const char *const *args);	/* git args in the repository, on a worker; NULL: it could not */
+GitAsync *git_async_err (const char *const *args);	/* the same, git's messages (stderr) in its output too */
 int git_async_done (GitAsync *a);	/* 1: it has ended */
 int git_async_take (GitAsync *a, Buf *out);	/* its output (waited for), its exit code; a is freed */
 void git_stop (void);	/* the editor ends: the worker's git first */
@@ -1455,6 +1457,26 @@ void blame_clear (void);
 int git_blame_idle (void);	/* the blame git was asked for, read when nothing else is to do */
 int git_blame_busy (void);	/* one is asked for or running */
 int git_counts_idle (void);
+int git_job_busy (void);	/* a refresh reads git on the worker */
+int git_op_busy (void);	/* egitlog.c: a pull, push, fetch or checkout runs on a worker */
+void git_op_idle (void);	/* egitlog.c: the main loop's: one that ended reports */
+int quick_busy (const Doc *d);	/* equick.c: git's copies of d are being read */
+int ext_job (char *what, size_t n);	/* eext.c: an extension is being installed or uninstalled ("Installing x...") */
+
+/*
+** mme.c: progress, as VS Code shows it: a thin line under the editor's
+** tabs (PG_EDITOR) or a view's title, the status bar's spinning item
+** (PGF_STATUS), a notification for a long one (PGF_NOTE). PGF_NOW: the
+** screen is drawn at once, before work that holds the editor.
+*/
+enum { PG_EDITOR, PG_SCM, PG_SEARCH, PG_EXT, PG_STATUS_ONLY, PG_N };
+#define PGF_STATUS	1
+#define PGF_NOTE	2
+#define PGF_NOW		4
+int prog_begin (int where, int flags, const char *text);	/* its id (0: none) */
+void prog_text (int id, const char *text, int pct);	/* what it says now; pct -1: not known */
+void prog_end (int id);
+int prog_note (int i, char *text, size_t n, int *pct);	/* emenu.c: the i-th notification of one running; 0: no more */
 void git_stage_all (int on);	/* Git: Stage All Changes (1), Unstage All Changes (0) */
 void git_discard_all (void);	/* Git: Discard All Changes (asked first) */
 void git_discard_file (const char *path);	/* Git: Discard Changes of path (asked first) */	/* egit.c: the Source Control counts a refresh left out, asked for when all else is read; 1 started */

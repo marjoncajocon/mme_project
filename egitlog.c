@@ -1154,6 +1154,11 @@ static char *ask_branch (const char *title, const char *init) {
 
 
 /* the result of a git command: its error, or "done" and the views and files anew */
+enum { OP_THEN_NONE, OP_THEN_PUSH };	/* what comes after a command on a worker, when it went well (Sync: the push) */
+static int op_start (const char *what, const char *fail, const char *done, int then, int net, const char *const *args);
+static int push (void);
+
+
 static int report (int r, Buf *b, const char *fallback, const char *done) {
   if (r != 0) git_error(b, fallback);
   else if (done) toast(0, "%s", done);
@@ -1189,7 +1194,6 @@ static void checkout (void) {
   Ref *v = refs_load(7, &n);
   Pick p;
   int r;
-  Buf b;
   char msg[300];
   pick_init(&p, "Select a branch or tag to checkout");
   pick_add(&p, "Create new branch...", NULL, 0xEA60);	/* codicon add */
@@ -1208,8 +1212,11 @@ static void checkout (void) {
     char *ref = pick_ref("Select a ref to checkout in detached mode", 7, NULL);
     refs_free(v, n);
     if (ref == NULL) return;
-    buf_init(&b);
-    report(gitv(&b, 1, "checkout", "-q", "--detach", ref, NULL), &b, "Checkout failed", NULL);
+    {
+      const char *a[] = {"checkout", "-q", "--detach", NULL, NULL};
+      a[3] = ref;
+      op_start("Checking out...", "Checkout failed", NULL, OP_THEN_NONE, 0, a);
+    }
     free(ref);
     return;
   }
@@ -1219,23 +1226,25 @@ static void checkout (void) {
   }
   {
     const Ref *f = &v[r - 3];
-    buf_init(&b);
+    const char *a[] = {"checkout", "-q", NULL, NULL, NULL};
     if (f->kind == 1) {	/* a remote one: a local branch that tracks it, as VS Code does */
       const char *slash = strchr(f->name, '/');
       const char *local = slash ? slash + 1 : f->name;
       Buf t;
       buf_init(&t);
-      if (gitv(&t, 0, "rev-parse", "--verify", "-q", local, NULL) == 0)
-        r = gitv(&b, 1, "checkout", "-q", local, NULL);
-      else r = gitv(&b, 1, "checkout", "-q", "--track", f->name, NULL);
+      if (gitv(&t, 0, "rev-parse", "--verify", "-q", local, NULL) == 0) a[2] = local;
+      else {
+        a[2] = "--track";
+        a[3] = f->name;
+      }
       buf_free(&t);
       snprintf(msg, sizeof(msg), "Switched to branch '%s'", local);
     }
     else {
-      r = gitv(&b, 1, "checkout", "-q", f->name, NULL);
+      a[2] = f->name;
       snprintf(msg, sizeof(msg), f->kind == 2 ? "HEAD is now at tag '%s'" : "Switched to branch '%s'", f->name);
     }
-    report(r, &b, "Checkout failed", msg);
+    op_start("Checking out...", "Checkout failed", msg, OP_THEN_NONE, 0, a);	/* (it copies the names) */
   }
   refs_free(v, n);
 }
@@ -1481,10 +1490,13 @@ void git_graph_action (int what, size_t i, SideAct *act) {
   if (i >= g_ncm) return;
   switch (what) {
     case GA_CHECKOUT:
-      buf_init(&b);
+    {
+      const char *a[] = {"checkout", "-q", "--detach", NULL, NULL};
+      a[3] = g_cm[i].hash;
       snprintf(msg, sizeof(msg), "HEAD is now at %.7s", g_cm[i].hash);
-      report(gitv(&b, 1, "checkout", "-q", "--detach", g_cm[i].hash, NULL), &b, "Checkout failed", msg);
+      op_start("Checking out...", "Checkout failed", msg, OP_THEN_NONE, 0, a);
       break;
+    }
     case GA_BRANCH: {
       char *name = ask_branch("Please provide a new branch name (Press 'Enter' to confirm or 'Escape' to cancel)", "");
       if (name == NULL) break;
@@ -1518,36 +1530,103 @@ void git_graph_action (int what, size_t i, SideAct *act) {
 ** ssh does not ask, and a host that does not answer is given up on:
 ** git's error says why, as VS Code's does.
 */
-static int slow (Buf *b, const char *what, const char *a0, const char *a1, const char *a2, const char *a3) {
-  char *was = os_getenv("GIT_SSH_COMMAND");
-  int rc;
-  toast(0, "%s", what);
-  toast_draw();
-  scr_flush();
-  if (was == NULL) os_setenv("GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o ConnectTimeout=20");
-  rc = gitv(b, 1, a0, a1, a2, a3, NULL);
-  if (was == NULL) os_setenv("GIT_SSH_COMMAND", NULL);
+/*
+** {==================================================================
+** Commands on a worker: a pull, a push, a fetch, a checkout
+** ===================================================================
+**
+** They take seconds (the network, a big tree) and held the editor: they
+** run on a worker now, the editor goes on, the status bar says what runs
+** (its sync item spinning), Source Control's bar goes along, and a long
+** one has a notification. When one ends it reports (git_op_idle). One at
+** a time, as VS Code runs them.
+*/
+
+static struct {
+  GitAsync *a;	/* running; NULL: none */
+  int prog, then;
+  char what[80], fail[80], done[200];
+} OP;
+
+
+int git_op_busy (void) {
+  return OP.a != NULL;
+}
+
+
+/*
+** args on a worker, "what..." said meanwhile; its report: fail's or done's
+** (""): nothing). net: it talks to a remote - ssh never asks for a password
+** there, it would wait for ever (BatchMode). 0: started; -1: another runs.
+*/
+static int op_start (const char *what, const char *fail, const char *done, int then, int net, const char *const *args) {
+  const char *a[24];
+  char *was = net ? os_getenv("GIT_SSH_COMMAND") : NULL;
+  int n = 0, i;
+  if (OP.a) {
+    toast(0, "Git is busy: %s", OP.what);
+    free(was);
+    return -1;
+  }
+  if (net && was == NULL) {	/* the user's own GIT_SSH_COMMAND wins */
+    a[n++] = "-c";
+    a[n++] = "core.sshCommand=ssh -o BatchMode=yes -o ConnectTimeout=20";
+  }
   free(was);
-  return rc;
+  for (i = 0; args[i] && n < 23; i++) a[n++] = args[i];
+  a[n] = NULL;
+  snprintf(OP.what, sizeof(OP.what), "%s", what);
+  snprintf(OP.fail, sizeof(OP.fail), "%s", fail);
+  snprintf(OP.done, sizeof(OP.done), "%s", done ? done : "");
+  OP.then = then;
+  if ((OP.a = git_async_err(a)) == NULL) {	/* no thread: here, as before */
+    Buf b;
+    int r;
+    buf_init(&b);
+    r = report(git_exec(&b, 1, a), &b, OP.fail, OP.done[0] ? OP.done : NULL);
+    if (r == 0 && then == OP_THEN_PUSH) push();
+    return 0;
+  }
+  OP.prog = prog_begin(PG_SCM, PGF_STATUS | PGF_NOTE, what);
+  return 0;
+}
+
+
+/* the main loop's: the command that ended reports, and what comes after it starts */
+void git_op_idle (void) {
+  Buf b;
+  int r;
+  if (OP.a == NULL || !git_async_done(OP.a)) return;
+  buf_init(&b);
+  r = git_async_take(OP.a, &b);
+  OP.a = NULL;
+  prog_end(OP.prog);
+  OP.prog = 0;
+  r = report(r, &b, OP.fail, OP.done[0] ? OP.done : NULL);
+  if (r == 0 && OP.then == OP_THEN_PUSH) push();
 }
 
 
 /* git pull; merging (VS Code's git.rebaseWhenSync off) when pull.rebase is not set */
-static int pull (Buf *b, const char *what) {
+static int pull (const char *what, const char *done, int then) {
   Buf c;
   int set;
+  const char *a[] = {"pull", NULL, NULL};
   buf_init(&c);
   set = gitv(&c, 0, "config", "--get", "pull.rebase", NULL) == 0;
   buf_free(&c);
-  return slow(b, what, "pull", set ? NULL : "--no-rebase", NULL, NULL);
+  if (!set) a[1] = "--no-rebase";
+  return op_start(what, "Pull failed", done, then, 1, a);
 }
+
+/* }================================================================== */
 
 
 static int push (void) {
-  Buf b;
-  int r;
-  buf_init(&b);
-  if (git_has_upstream()) r = slow(&b, "Pushing...", "push", NULL, NULL, NULL);
+  if (git_has_upstream()) {
+    const char *a[] = {"push", NULL};
+    return op_start("Pushing...", "Push failed", "Pushed", OP_THEN_NONE, 1, a);
+  }
   else {	/* VS Code: publish the branch to the remote */
     Buf rm;
     char remote[128] = "origin";
@@ -1561,14 +1640,15 @@ static int push (void) {
     }
     else {
       buf_free(&rm);
-      buf_free(&b);
       toast(1, "Git: Your repository has no remotes configured to push to.");
       return -1;
     }
     buf_free(&rm);
-    r = slow(&b, "Publishing branch...", "push", "-u", remote, git_branch());
+    {
+      const char *a[] = {"push", "-u", remote, git_branch(), NULL};
+      return op_start("Publishing branch...", "Push failed", "Pushed", OP_THEN_NONE, 1, a);
+    }
   }
-  return report(r, &b, "Push failed", "Pushed");
 }
 
 
@@ -2076,8 +2156,7 @@ void git_publish (void) {
     toast(1, "The folder currently open doesn't have a git repository.");
     return;
   }
-  push();
-  changed();
+  push();	/* it reports, and refreshes, when it is done */
 }
 
 
@@ -2170,13 +2249,20 @@ void git_command (int cmd, const char *path, SideAct *act) {
     case CMD_GIT_DELETE_BRANCH: delete_branch(); break;
     case CMD_GIT_RENAME_BRANCH: rename_branch(); break;
     case CMD_GIT_MERGE: merge_branch(); break;
-    case CMD_GIT_PULL: report(pull(&b, "Pulling..."), &b, "Pull failed", "Pulled"); return;
-    case CMD_GIT_FETCH:
-      report(slow(&b, "Fetching...", "fetch", "--all", NULL, NULL), &b, "Fetch failed", "Fetched");
+    case CMD_GIT_PULL:
+      buf_free(&b);
+      pull("Pulling...", "Pulled", OP_THEN_NONE);
       return;
+    case CMD_GIT_FETCH: {
+      const char *a[] = {"fetch", "--all", NULL};
+      buf_free(&b);
+      op_start("Fetching...", "Fetch failed", "Fetched", OP_THEN_NONE, 1, a);
+      return;
+    }
     case CMD_GIT_PUSH: push(); break;
-    case CMD_GIT_SYNC:
-      if (report(pull(&b, "Syncing (pull)..."), &b, "Pull failed", NULL) == 0) push();
+    case CMD_GIT_SYNC:	/* the pull, then the push when it went well */
+      buf_free(&b);
+      pull("Syncing (pull)...", NULL, OP_THEN_PUSH);
       return;
     case CMD_GIT_STASH: {
       Buf s;
@@ -2233,7 +2319,12 @@ void git_command (int cmd, const char *path, SideAct *act) {
     case CMD_GIT_CHERRY_PICK: cherry_pick(NULL); break;
     case CMD_GIT_TAG_CREATE: create_tag(NULL); break;
     case CMD_GIT_TAG_DELETE: delete_tag(); break;
-    case CMD_GIT_TAG_PUSH: report(slow(&b, "Pushing tags...", "push", "--tags", NULL, NULL), &b, "Push failed", "Pushed the tags"); return;
+    case CMD_GIT_TAG_PUSH: {
+      const char *a[] = {"push", "--tags", NULL};
+      buf_free(&b);
+      op_start("Pushing tags...", "Push failed", "Pushed the tags", OP_THEN_NONE, 1, a);
+      return;
+    }
     case CMD_GIT_REMOTE_ADD: add_remote(); break;
     case CMD_GIT_REMOTE_REMOVE: remove_remote(); break;
   }

@@ -179,9 +179,38 @@ static char *argv_key (char **argv, int n, int err) {
 }
 
 
+static int g_in_refresh;	/* git_refresh_now runs: its reads are not shown one by one */
+
+/* a command that changes the repository (and takes a while): "git commit" in the status bar while it runs */
+static int changes_repo (const char *const *args) {
+  static const char *const cmd[] = {"add", "commit", "checkout", "switch", "merge", "rebase", "cherry-pick", "stash",
+                                    "reset", "revert", "restore", "rm", "pull", "push", "fetch", "clone", NULL};
+  int i;
+  if (g_in_refresh || args[0] == NULL) return 0;
+  for (i = 0; cmd[i]; i++)
+    if (strcmp(args[0], cmd[i]) == 0) return 1;
+  return 0;
+}
+
+
 /* git -C dir with the arguments of args (NULL ends them); err: stderr into out too; magic: a pathspec may be
    ":(exclude)x" (else a file named "[ab].txt" or "*.c" is only that file) */
+static int git_run_now (const char *dir, Buf *out, int err, int magic, const char *const *args);
+
 static int git_run (const char *dir, Buf *out, int err, int magic, const char *const *args) {
+  int rc, pg = 0;
+  if (changes_repo(args)) {
+    char what[64];
+    snprintf(what, sizeof(what), "git %s", args[0]);
+    pg = prog_begin(PG_SCM, PGF_STATUS | PGF_NOW, what);
+  }
+  rc = git_run_now(dir, out, err, magic, args);
+  prog_end(pg);
+  return rc;
+}
+
+
+static int git_run_now (const char *dir, Buf *out, int err, int magic, const char *const *args) {
   char **argv;
   int n, rc = -1, i, done = 0;
   size_t from = out->len, w;
@@ -1521,6 +1550,7 @@ static void git_refresh_now (void) {
       nold++;
     }
   }
+  g_in_refresh = 1;
   lsp_watch_nudge();	/* a checkout, a pull, a stash: the servers watching files hear of them soon */
   blame_clear();	/* read again when it is asked for */
   quick_clear();
@@ -1538,6 +1568,7 @@ static void git_refresh_now (void) {
     g_status_gen++;
     for (i = 0; i < nold; i++) free(old[i].rel);
     free(old);
+    g_in_refresh = 0;
     return;
   }
   {	/* the top, and the git folder: what git is in the middle of */
@@ -1608,6 +1639,7 @@ static void git_refresh_now (void) {
   g_status_gen++;
   for (i = 0; i < nold; i++) free(old[i].rel);
   free(old);
+  g_in_refresh = 0;
   if (!from_worker && opt.scm_counts && g_top && have_git() && g_nrepo > 0) {
     static int asking;	/* a worker that cannot start refreshes here again: not over and over */
     if (!asking) {
@@ -1876,10 +1908,18 @@ static void job_free (GJob *j) {
 
 /* git status and the graph read again, now (after a commit, a stage: what the user did shows at once) */
 void git_refresh (void) {
+  int pg = g_top ? prog_begin(PG_SCM, PGF_NOW, NULL) : 0;	/* Source Control's bar, still: the editor waits */
   if (g_job) g_job->stale = 1;	/* what it reads is older than this */
   free(g_finger);
   g_finger = NULL;
   git_refresh_now();
+  prog_end(pg);
+}
+
+
+/* a refresh reads git on the worker: Source Control's bar goes */
+int git_job_busy (void) {
+  return g_job != NULL && g_job->ctop == NULL;
 }
 
 
@@ -1927,6 +1967,7 @@ void git_refresh_async (void) {
 struct GitAsync {
   char **argv;	/* its own copies */
   int n, rc;
+  int err;	/* stderr into out too (git_async_err) */
   Mutex *mx;
   int done;	/* under mx */
   Thread *th;
@@ -1940,7 +1981,7 @@ static int g_nasync;	/* started and not taken */
 static void async_main (void *ud) {
   GitAsync *a = (GitAsync *)ud;
   long long t0 = os_now_us();
-  a->rc = run_capture(a->argv, &a->out);
+  a->rc = a->err ? run_capture_err(a->argv, &a->out) : run_capture(a->argv, &a->out);
   a->ms = (long)((os_now_us() - t0) / 1000);
   mx_lock(a->mx);
   a->done = 1;
@@ -1948,8 +1989,21 @@ static void async_main (void *ud) {
 }
 
 
+static GitAsync *async_start (const char *const *args, int err);
+
 /* git args (NULL ends them) in the repository on a worker; NULL: no repository, no git, no thread */
 GitAsync *git_async (const char *const *args) {
+  return async_start(args, 0);
+}
+
+
+/* the same, git's messages (stderr) in its output too: a pull, a push, a checkout */
+GitAsync *git_async_err (const char *const *args) {
+  return async_start(args, 1);
+}
+
+
+static GitAsync *async_start (const char *const *args, int err) {
   GitAsync *a;
   char **argv;
   int i;
@@ -1957,6 +2011,7 @@ GitAsync *git_async (const char *const *args) {
   argv = git_argv(g_git, g_top, 0, args, &i);
   a = (GitAsync *)xmalloc(sizeof(GitAsync));
   memset(a, 0, sizeof(*a));
+  a->err = err;
   a->n = i;
   a->argv = (char **)xmalloc(((size_t)i + 1) * sizeof(char *));
   for (i = 0; i < a->n; i++) a->argv[i] = xstrdup(argv[i]);
@@ -2080,6 +2135,7 @@ static void counts_take (GJob *j) {
 int git_async_idle (void) {
   GJob *j = g_job;
   int done, changed = 0;
+  git_op_idle();	/* a pull, a push ... that ended: its report */
   if (j == NULL) return 0;
   mx_lock(j->mx);
   done = j->done;

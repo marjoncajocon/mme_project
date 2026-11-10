@@ -1757,6 +1757,17 @@ int ext_idle (void) {
 ** ===================================================================
 */
 
+/* an extension being installed or uninstalled: what it is ("Installing x..."); 0: none */
+int ext_job (char *what, size_t n) {
+  if (g_inst.kind == JOB_NONE) return 0;
+  if (what)
+    snprintf(what, n, "%s %s...", g_inst.kind == JOB_REMOVE ? "Uninstalling" : "Installing",
+             g_inst.kind == JOB_REMOVE ? (g_inst.file ? g_inst.file : "the extension")
+                                       : g_inst.file ? path_basename(g_inst.file) : "the extension");
+  return 1;
+}
+
+
 static int busy_for (const char *id) {
   return g_inst.kind != JOB_NONE && g_inst.id && strcmp(g_inst.id, id) == 0;
 }

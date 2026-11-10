@@ -764,6 +764,17 @@ With no file open the editor shows the keys to start with.
   when there are new ones) opens the notification center: the notifications
   so far, the newest on top; Delete or its x clears one, the icon on top
   clears them all.
+- **Progress** — as VS Code shows it: a thin blue line under the editor's
+  tabs while git's copy of the file and its blame are read (switching
+  tabs) or a big file opens; under a view's title while Source Control
+  refreshes or runs a command, Search searches, an extension installs; a
+  spinner and what runs in the status bar ("git commit", "Pulling...",
+  "Activating Extensions...", the sync item spinning); and a notification
+  with its bar for one that runs more than two seconds. A bar shows after
+  300 ms, so what is quick does not flicker; one that waits for nothing
+  goes along, one the editor waits for stands still. Pull, push, fetch,
+  sync, publish and checkout run on a worker: the editor goes on while git
+  talks to the remote, one command at a time.
 - **Languages** — about sixty, each with VS Code's language id (for
   snippets, language servers and extensions): C, C++, C#, Objective-C, Java,
   Kotlin, Scala, Swift, Dart, JavaScript, TypeScript, Go, Rust, Zig, Odin, V,

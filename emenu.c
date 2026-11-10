@@ -2181,9 +2181,29 @@ void note_center (void) {
 
 
 void toast_draw (void) {
-  int cols = scr_cols(), rows = scr_rows(), bottom = rows - 2, w;
+  int cols = scr_cols(), rows = scr_rows(), bottom = rows - 2, w, i;
   long long left = g_t.sev >= 2 ? TOAST_ERR_TIME : TOAST_TIME;
+  char what[200];
+  int pct;
   TG.w = TG.tw = 0;
+  for (i = 0; i < 3 && prog_note(i, what, sizeof(what), &pct); i++) {	/* what runs a while: VS Code's notification with its progress */
+    int top, x;
+    char t[240];
+    w = (int)str_cols(what) + 10;
+    if (w < 40) w = 40;
+    if (w > 64) w = 64;
+    if (w > cols - 2) w = cols - 2;
+    top = bottom - 2;
+    if (top < 1 || w < 10) break;
+    x = cols - w - 1;
+    scr_box(x, top, w, 3, S_TOAST);
+    scr_put(x + 2, top + 1, 0xEA74, S_TOAST);	/* codicon info */
+    if (pct >= 0) snprintf(t, sizeof(t), "%s %d%%", what, pct);
+    else snprintf(t, sizeof(t), "%s", what);
+    scr_putsw(x + 5, top + 1, w - 7, t, S_TOAST);
+    scr_progress(x + 1, top + 2, w - 2, pct);	/* along its bottom */
+    bottom = top - 1;
+  }
   if (g_nask > 0) {	/* the first question: until it is answered */
     const Ask *a = &g_ask[0];
     int top, h;

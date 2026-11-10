@@ -4038,6 +4038,8 @@ static void sb_text (char *out, size_t n, uint32_t icon, const char *text) {
 
 
 /* mme's own items, as VS Code has them */
+static void prog_status (void);
+
 static void status_items (void) {
   char t[200], tip[200];
   const char *br = git_branch();
@@ -4053,10 +4055,12 @@ static void status_items (void) {
     snprintf(tip, sizeof(tip), "%s (Git) - Checkout Branch/Tag...", br);
     status_add("status.scm.branch", "Source Control Checkout", 0, 90, t, tip, CMD_GIT_CHECKOUT);
   }
-  if (br[0] && git_has_upstream()) {	/* VS Code's sync item: behind and ahead */
-    sb_text(t, sizeof(t), 0xEA77, git_sync_text());
+  if (br[0] && git_has_upstream()) {	/* VS Code's sync item: behind and ahead (spinning while git talks to the remote) */
+    if (git_op_busy()) snprintf(t, sizeof(t), "%s %s", ui_spinner(), git_sync_text());
+    else sb_text(t, sizeof(t), 0xEA77, git_sync_text());
     status_add("status.scm.sync", "Source Control Sync", 0, 80, t, "Synchronize Changes", CMD_GIT_SYNC);
   }
+  prog_status();
   {	/* the problems: VS Code's error and warning counts */
     int ne, nw;
     lsp_counts(&ne, &nw);
@@ -5785,7 +5789,190 @@ static void panel_hover_title (void) {
 }
 
 
+/*
+** {==================================================================
+** Progress (VS Code's progress bars)
+** ===================================================================
+**
+** What runs shows where it is for: a thin line under the editor's tabs
+** (git's copies of the file, its blame, a big file opening), under a
+** view's title (Source Control's refresh and its commands, Search, an
+** extension installed), a spinning item in the status bar, and for a long
+** one a notification. Work on a worker is asked about each frame
+** (pg_busy); what the editor itself does says so with prog_begin, and
+** PGF_NOW draws the screen before it starts - nothing can be drawn while
+** it holds the editor, so that bar stands still. A bar shows after a
+** moment (PG_DELAY): what is quick does not flicker.
+*/
+
+#define PG_DELAY	300000	/* us: a bar shows once it ran this long */
+#define PG_NOTE_DELAY	2000000	/* and a notification */
+#define PG_MAX	16
+
+typedef struct {
+  int id, where, flags, pct;
+  long long t0;
+  char text[160];
+} Prog;
+
+static Prog g_pg[PG_MAX];
+static int g_npg, g_pg_id;
+static int g_pg_ready;	/* the window is open: it can be drawn */
+static int g_pg_drawing;	/* compose runs: not again from inside it */
+static int g_pg_anim;	/* the last picture had a bar going along (or a spinner): drawn again soon */
+static long long g_pg_since[PG_N];	/* pg_busy's: since when; 0: not busy */
+
+static void background (void);
+
+/* the screen now, before work that holds the editor (its bar still) */
+static void prog_now (void) {
+  if (!g_pg_ready || g_pg_drawing) return;
+  background();
+  scr_flush();
+}
+
+
+int prog_begin (int where, int flags, const char *text) {
+  Prog *p;
+  if (g_npg == PG_MAX) return 0;
+  p = &g_pg[g_npg++];
+  p->id = ++g_pg_id;
+  p->where = where;
+  p->flags = flags;
+  p->pct = -1;
+  p->t0 = os_now_us();
+  snprintf(p->text, sizeof(p->text), "%s", text ? text : "");
+  if (flags & PGF_NOW) prog_now();
+  return p->id;
+}
+
+
+void prog_text (int id, const char *text, int pct) {
+  int i;
+  for (i = 0; i < g_npg; i++)
+    if (g_pg[i].id == id) {
+      if (text) snprintf(g_pg[i].text, sizeof(g_pg[i].text), "%s", text);
+      g_pg[i].pct = pct;
+    }
+}
+
+
+void prog_end (int id) {
+  int i;
+  if (id == 0) return;
+  for (i = 0; i < g_npg; i++)
+    if (g_pg[i].id == id) {
+      memmove(&g_pg[i], &g_pg[i + 1], (size_t)(g_npg - i - 1) * sizeof(Prog));
+      g_npg--;
+      return;
+    }
+}
+
+
+/* what runs on a worker for where, asked each frame */
+static int pg_busy (int where) {
+  switch (where) {
+    case PG_EDITOR:	/* the file in front: git's copies of it, its blame */
+      return HAS_DOC && !G->diff && !T->page && T->real && git_root() && (quick_busy(T->doc) || git_blame_busy());
+    case PG_SCM: return git_job_busy() || git_op_busy();
+    case PG_SEARCH: return search_busy();
+    case PG_EXT: return ext_job(NULL, 0);
+  }
+  return 0;
+}
+
+
+/* where's bar shows (*pct: its part done, -1 not known) */
+static int pg_shown (int where, int *pct) {
+  long long now = os_now_us();
+  int i, on = 0;
+  *pct = -1;
+  if (pg_busy(where)) {
+    if (g_pg_since[where] == 0) g_pg_since[where] = now;
+    if (now - g_pg_since[where] >= PG_DELAY) on = 1;
+  }
+  else g_pg_since[where] = 0;
+  for (i = 0; i < g_npg; i++)
+    if (g_pg[i].where == where && ((g_pg[i].flags & PGF_NOW) || now - g_pg[i].t0 >= PG_DELAY)) {
+      on = 1;
+      if (g_pg[i].pct >= 0) *pct = g_pg[i].pct;
+    }
+  return on;
+}
+
+
+/* where's bar along row y's bottom, w cells from x, when it shows */
+static void prog_bar (int where, int x, int y, int w) {
+  int pct;
+  if (!pg_shown(where, &pct)) return;
+  scr_progress(x, y, w, pct);
+  if (pct < 0) g_pg_anim = 1;
+}
+
+
+/* the status bar's: each one that says what it does, a spinner before it (VS Code's window progress) */
+static void prog_status (void) {
+  long long now = os_now_us();
+  char t[200], what[160];
+  int i;
+  for (i = 0; i < g_npg; i++) {
+    const Prog *p = &g_pg[i];
+    char id[32];
+    if (!(p->flags & PGF_STATUS) || !p->text[0] || (!(p->flags & PGF_NOW) && now - p->t0 < PG_DELAY)) continue;
+    snprintf(id, sizeof(id), "status.progress.%d", i);
+    if (p->pct >= 0) snprintf(t, sizeof(t), "%s %s %d%%", ui_spinner(), p->text, p->pct);
+    else snprintf(t, sizeof(t), "%s %s", ui_spinner(), p->text);
+    status_add(id, "Progress", 0, 75, t, p->text, CMD_NONE);
+    g_pg_anim = 1;
+  }
+  if (ext_job(what, sizeof(what))) {	/* an extension installed: in the status bar too */
+    snprintf(t, sizeof(t), "%s %s", ui_spinner(), what);
+    status_add("status.progress.ext", "Progress", 0, 74, t, what, CMD_NONE);
+    g_pg_anim = 1;
+  }
+  if (lsp_state("*ext", NULL, 0) == LS_STARTING) {	/* VS Code's "Activating Extensions..." */
+    snprintf(t, sizeof(t), "%s Activating Extensions...", ui_spinner());
+    status_add("status.progress.exthost", "Progress", 0, 73, t, "The extension host is starting", CMD_NONE);
+    g_pg_anim = 1;
+  }
+}
+
+
+/* the i-th notification of one running a while (PGF_NOTE; an extension installed); 0: no more */
+int prog_note (int i, char *text, size_t n, int *pct) {
+  long long now = os_now_us();
+  int k, at = 0;
+  static long long ext_since;
+  char what[160];
+  for (k = 0; k < g_npg; k++) {
+    const Prog *p = &g_pg[k];
+    if (!(p->flags & PGF_NOTE) || now - p->t0 < PG_NOTE_DELAY) continue;
+    if (at++ == i) {
+      snprintf(text, n, "%s", p->text);
+      *pct = p->pct;
+      g_pg_anim = 1;
+      return 1;
+    }
+  }
+  if (ext_job(what, sizeof(what))) {
+    if (ext_since == 0) ext_since = now;
+    if (now - ext_since >= PG_NOTE_DELAY && at++ == i) {
+      snprintf(text, n, "%s", what);
+      *pct = -1;
+      g_pg_anim = 1;
+      return 1;
+    }
+  }
+  else ext_since = 0;
+  return 0;
+}
+
+/* }================================================================== */
+
+
 static void compose (void) {
+  g_pg_drawing = 1;
+  g_pg_anim = 0;
   vw_fix();	/* the views shown are where they are */
   layout();
   update_title();
@@ -5800,6 +5987,10 @@ static void compose (void) {
       pview_draw_side(mv_pv(E.view - VIEW_MOVED), L.side_x, L.body_y, L.side_w - 1, L.side_h, E.focus == F_SIDE);
     else view_draw_side(E.view, L.side_x, L.body_y, L.side_w - 1, L.side_h, E.focus == F_SIDE, L.body_h);
     side_hover(L.side_x, L.body_y, L.side_w - 1, L.side_h, ui_color(C_SIDE_BG));
+    {	/* its progress, under its title */
+      int pw = E.view == VIEW_GIT ? PG_SCM : E.view == VIEW_SEARCH ? PG_SEARCH : E.view == VIEW_EXT ? PG_EXT : -1;
+      if (pw >= 0) prog_bar(pw, L.side_x, L.body_y, L.side_w - 1);
+    }
     for (ey = 0; ey < L.side_h; ey++)	/* the edge that drags */
       scr_put(L.edge_x, L.body_y + ey, 0x2502, E.resizing || mouse_over(L.edge_x, L.body_y, 1, L.side_h) ? S_TOGGLE_ON : S_BORDER);
   }
@@ -5815,6 +6006,7 @@ static void compose (void) {
       clamp_view();
       draw_group(other);
       draw_group_edges(g);
+      if (!other && L.text_y > L.ed_y) prog_bar(PG_EDITOR, L.ed_x, L.text_y - 1, L.ed_w);	/* over the text's top */
     }
     if (E.tdrag == 2) draw_drop();
     G = &g_grp[cur];
@@ -5849,6 +6041,7 @@ static void compose (void) {
   }
   toast_draw();
   tip_draw();
+  g_pg_drawing = 0;
 }
 
 
@@ -24973,6 +25166,7 @@ int main (int argc, char **argv) {
     return 1;
   }
   atexit(cleanup);
+  g_pg_ready = 1;	/* progress can be drawn from now on */
   win_register(g_session ? (ws_active() ? ws_file() : side_root()) : "", term_can_raise());	/* the other windows see this one */
   sync_init();
   ports_init();	/* a remote mme: devcontainer.json's forwardPorts */
@@ -25023,7 +25217,8 @@ int main (int argc, char **argv) {
     }
     git_async_idle();	/* a refresh git did on the worker */
     draw();
-    k = term_key(search_busy() || git_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20 : 100);	/* the walk, the size, the shell, the servers */
+    k = term_key(search_busy() || git_busy() ? 30 : (panel_alive() || dbg_active() || nb_busy() || (HAS_DOC && lsp_active(T->doc))) ? 20
+                 : g_pg_anim || g_npg ? 60 : 100);	/* the walk, the size, the shell, the servers; a progress bar going along */
     if (lsp_doc) {	/* the window is there: the file's language server */
       if (HAS_DOC && T->doc == lsp_doc && !T->page) lsp_open(T->doc, T->sx ? syntax_name(T->sx) : NULL);
       lsp_doc = NULL;

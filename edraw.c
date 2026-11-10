@@ -209,6 +209,23 @@ typedef struct {
 static Round g_round[MAX_ROUND];
 static int g_nround;
 
+/*
+** Progress bars (scr_progress): mme-sdl paints a line of pixels along the
+** bottom of the row (esdl.c), a terminal a row of lower eighths.
+*/
+#ifndef EDRAW_PIXELS
+#define EDRAW_PIXELS	0
+#endif
+#define MAX_PBAR	8
+
+typedef struct {
+  int x, y, w;
+  int a, b;	/* its lit part: from a to b thousandths of w */
+} PBar;
+
+static PBar g_pbar[MAX_PBAR];
+static int g_npbar;
+
 
 /*
 ** A style's escape; a high contrast theme's outlines (mme-sdl paints them
@@ -342,6 +359,7 @@ static void cells_clear (ECell *c, size_t n, int st) {
 void scr_clear (int st) {
   int k;
   g_nround = 0;	/* a new picture: its own round corners */
+  g_npbar = 0;	/* and its progress bars */
   cells_clear(S.back, (size_t)S.cols * (size_t)S.rows, st);
   for (k = 0; k < MAX_ZONE; k++)
     if (Z[k].on) cells_clear(Z[k].back, (size_t)Z[k].cols * (size_t)Z[k].rows, st);
@@ -575,6 +593,40 @@ void scr_round (int x, int y, int w, int h, int corners, int size) {
     int cx = k & 1 ? x + w - 1 : x, cy = k & 2 ? y + h - 1 : y;
     r->st[k] = S.back[(size_t)cy * (size_t)S.cols + (size_t)cx].st;
   }
+}
+
+
+void scr_progress (int x, int y, int w, int pct) {
+  int a, b;
+  if (w < 1 || y < 0 || y >= S.rows) return;
+  if (pct >= 0) {
+    a = 0;
+    b = (pct > 100 ? 100 : pct) * 10;
+  }
+  else {	/* VS Code's infinite progress: a part of it goes along, again and again */
+    int t = (int)(os_now_us() / 1000 % 1600), seg = 220;
+    a = t * (1000 + seg) / 1600 - seg;
+    b = a + seg;
+    if (a < 0) a = 0;
+    if (b > 1000) b = 1000;
+  }
+  if (b <= a) return;
+#if EDRAW_PIXELS
+  if (g_npbar < MAX_PBAR) {
+    PBar *p = &g_pbar[g_npbar++];
+    p->x = x;
+    p->y = y;
+    p->w = w;
+    p->a = a;
+    p->b = b;
+  }
+#else
+  {
+    int i, c0 = x + a * w / 1000, c1 = x + (b * w + 999) / 1000;
+    for (i = c0; i < c1 && i < x + w; i++) scr_glyph(i, y, 0x2581, ui_color(C_ACCENT));	/* lower one eighth block */
+    (void)g_pbar;	/* mme-sdl's */
+  }
+#endif
 }
 
 

@@ -278,6 +278,15 @@ static QDoc *entry (Doc *d, const char *path, int sync) {
 }
 
 
+/* git's copies of d are being read (the editor's progress bar) */
+int quick_busy (const Doc *d) {
+  int i;
+  for (i = 0; i < NQ; i++)
+    if (g_q[i].d == d && (g_q[i].ja || g_q[i].want)) return 1;
+  return 0;
+}
+
+
 /* the editor is quiet: the copies read are taken, one asked for is started; 1 when one was, or is being read */
 int quick_idle (void) {
   int i, busy = 0;
